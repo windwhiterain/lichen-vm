@@ -1,4 +1,4 @@
-//! The `table { k ==> v }` literal and the `t <== k` read, which compiles
+//! The `table(k ==> v)` literal and the `t <== k` read, which compiles
 //! straight to `TableGet`. See record-program.md.
 
 use lichen_highlevel::diagnostic::DiagKind;
@@ -46,13 +46,13 @@ fn a_table_literal_checks_and_reads_by_deep_key() {
     // The query key is a separate node group; deep-content keys make them equal.
     assert_eq!(
         usize_of(&evaluate(
-            "t = table { [1, 2] ==> 3, [4, 5] ==> 6 }; t <== [1, 2]"
+            "t = table([1, 2] ==> 3, [4, 5] ==> 6); t <== [1, 2]"
         )),
         3
     );
     assert_eq!(
         usize_of(&evaluate(
-            "t = table { [1, 2] ==> 3, [4, 5] ==> 6 }; t <== [4, 5]"
+            "t = table([1, 2] ==> 3, [4, 5] ==> 6); t <== [4, 5]"
         )),
         6
     );
@@ -60,14 +60,14 @@ fn a_table_literal_checks_and_reads_by_deep_key() {
 
 #[test]
 fn an_empty_table_misses() {
-    let d = diags("t = table {}; t <== 1");
+    let d = diags("t = table(); t <== 1");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::TableMiss);
 }
 
 #[test]
 fn a_miss_is_a_recorded_error() {
-    let d = diags("t = table { [1, 2] ==> 3 }; t <== [7, 8]");
+    let d = diags("t = table([1, 2] ==> 3); t <== [7, 8]");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::TableMiss);
 }
@@ -76,7 +76,7 @@ fn a_miss_is_a_recorded_error() {
 fn an_undecided_key_is_dropped_with_an_error() {
     // A key reading the parameter cannot be forced concrete at build time.
     assert!(has_check_kind(
-        "f = x => table{ x ==> 1 }; f 5",
+        "f = x => table(x ==> 1); f 5",
         DiagKind::TableKeyUndecided
     ));
 }
@@ -84,7 +84,7 @@ fn an_undecided_key_is_dropped_with_an_error() {
 #[test]
 fn table_keys_share_one_type() {
     assert!(has_check_kind(
-        "t = table { [1, 2] ==> 3, [1, 2, 3] ==> 4 }",
+        "t = table([1, 2] ==> 3, [1, 2, 3] ==> 4)",
         DiagKind::TableKey
     ));
 }
@@ -92,7 +92,7 @@ fn table_keys_share_one_type() {
 #[test]
 fn table_values_share_one_type() {
     assert!(has_check_kind(
-        "t = table { [1, 2] ==> 3, [4, 5] ==> Int }",
+        "t = table([1, 2] ==> 3, [4, 5] ==> Int)",
         DiagKind::TableValue
     ));
 }
@@ -107,7 +107,7 @@ fn a_find_on_a_concretely_non_table_container_is_a_guard_error() {
 fn a_table_flows_through_a_function() {
     // The apply clones the table, re-pointing its entries at the call's clones.
     assert_eq!(
-        usize_of(&evaluate("f = x => table{ 1 ==> x }; (f 5) <== 1")),
+        usize_of(&evaluate("f = x => table(1 ==> x); (f 5) <== 1")),
         5
     );
 }
@@ -116,9 +116,7 @@ fn a_table_flows_through_a_function() {
 fn a_table_behind_a_parameter_reads_through_tableget() {
     // The lookup's pin fixes `t`'s undecided type; the argument unify binds its cells.
     assert_eq!(
-        usize_of(&evaluate(
-            "get = t => t <== 1; t = table { 1 ==> 7 }; get t"
-        )),
+        usize_of(&evaluate("get = t => t <== 1; t = table(1 ==> 7); get t")),
         7
     );
 }
@@ -126,14 +124,14 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
 #[test]
 fn a_failed_read_key_never_phantom_matches() {
     // Both keys are failed reads: the build drops its entry and the lookup misses.
-    let source = "t = table{[1,2][5] ==> 3}\nt <== [9][7]";
+    let source = "t = table([1,2][5] ==> 3)\nt <== [9][7]";
     assert!(has_check_kind(source, DiagKind::TableKeyUndecided));
     assert!(has_check_kind(source, DiagKind::TableMiss));
 }
 
 #[test]
 fn a_non_pair_entry_is_a_parse_error() {
-    let d = diags("t = table { 5 }; 0");
+    let d = diags("t = table(5); 0");
     assert!(
         d.iter().any(|diag| diag.check.is_none()),
         "the malformed entry is a parse diagnostic: {d:?}"

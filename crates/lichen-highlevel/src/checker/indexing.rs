@@ -282,10 +282,10 @@ where
         pair
     }
 
-    /// A set `set{a, b, …}` typed by the **set kind**, not by `array{T, n}`.
+    /// A set `set(a, b, …)` typed by the **set kind**, not by `array{T, n}`.
     ///
     /// # Invariant
-    /// The shape is the element type alone, so `set{a}` and `set{a, b}` are one
+    /// The shape is the element type alone, so `set(a)` and `set(a, b)` are one
     /// type; the separate kind keeps a set from flowing into an `array{T, n}`
     /// and makes `s[i]` a refusal. See [`crate::set`].
     pub(super) fn check_set_term(&mut self, e: ExprId) -> NodeId {
@@ -317,7 +317,7 @@ where
         pair
     }
 
-    /// A constant table literal `table { k1 ==> v1, … }`, typed by
+    /// A constant table literal `table(k1 ==> v1, …)`, typed by
     /// `[[key type, value type], [TypeTable, Type]]`.
     ///
     /// # Invariant
@@ -492,6 +492,43 @@ where
         let element = self.element_slot_of(element_type);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
+        let pair = self.array_node(self.current_block, &[shape, kind]);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
+        pair
+    }
+
+    /// The set type `set{E}`: the shape is the element **slot** alone.
+    ///
+    /// # Invariant
+    /// [`Self::check_set_term`]'s members are checked against exactly this slot;
+    /// one element position serves every member, as an array's does, so a pin
+    /// stated here is enforced on each member.
+    pub(super) fn check_set_type(&mut self, e: ExprId) -> NodeId {
+        let elements = self.range_children(e);
+        let element = elements[0];
+        let slot = self.element_slot_of(element);
+        let shape = self.array_node(self.current_block, &[slot]);
+        let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
+        let pair = self.array_node(self.current_block, &[shape, kind]);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
+        pair
+    }
+
+    /// The table type `table{K, V}`: the key and value **slots**.
+    ///
+    /// # Invariant
+    /// The two positions are the same slots the value form builds, so a table
+    /// type and a table value are one type however each is spelled.
+    pub(super) fn check_table_type(&mut self, e: ExprId) -> NodeId {
+        let elements = self.range_children(e);
+        let key = self.element_slot_of(elements[0]);
+        let value = self.element_slot_of(elements[1]);
+        let shape = self.array_node(self.current_block, &[key, value]);
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);

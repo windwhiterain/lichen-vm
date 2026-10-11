@@ -304,7 +304,7 @@ graph fact — a 2-element array one of whose elements points back at its own cl
 - **Block-level GC.** Values are collected by block (`garbage_collect(block_root)`),
   following the block's reachable nodes and dropping the rest; the static arena is
   never moved or compacted.
-- **Tables** (`table{…}` / `t <== k`) are immutable and built once (`build_table`).
+- **Tables** (`table(…)` / `t <== k`) are immutable and built once (`build_table`).
   Each entry stores its key's precomputed deep-content hash, the items are sorted
   by that hash, and a read binary-searches and verifies the equal-hash run with
   `key_eq`.

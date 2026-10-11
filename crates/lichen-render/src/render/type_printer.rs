@@ -280,11 +280,11 @@ where
                         && let s = unsafe { shape.items() }
                         && s.len() == 1
                     {
-                        return format!("set<{}>", self.slot_any(s[0].node));
+                        return format!("set{{{}}}", self.slot_any(s[0].node));
                     }
                 }
                 Some(m) if m == P::Value::table_type_marker() => {
-                    // shape = [key slot, value slot] — render `table<K, V>`.
+                    // shape = [key slot, value slot] — render `table{K, V}`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         // SAFETY: `shape` is the payload of a value read from
@@ -293,7 +293,7 @@ where
                         && s.len() == 2
                     {
                         return format!(
-                            "table<{}, {}>",
+                            "table{{{}, {}}}",
                             self.slot_any(s[0].node),
                             self.slot_any(s[1].node)
                         );
@@ -656,6 +656,47 @@ where
                                 None => self.static_any(s[0].node, visiting),
                             },
                             self.static_any(s[1].node, visiting)
+                        );
+                    }
+                }
+                Some(m) if m == P::Value::set_type_marker() => {
+                    // A set has no length, so its one position is the element
+                    // slot.
+                    if let Some(shape) = self.module.node_value(elements[0].node)
+                        && let Some(LowValue::Array(shape)) = shape.as_enum()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
+                        && s.len() == 1
+                    {
+                        return format!(
+                            "set{{{}}}",
+                            match self.slot_type_any(s[0].node) {
+                                Some(ty) => self.static_any(ty, visiting),
+                                None => self.static_any(s[0].node, visiting),
+                            }
+                        );
+                    }
+                }
+                Some(m) if m == P::Value::table_type_marker() => {
+                    // shape = [key slot, value slot] — render `table{K, V}`.
+                    if let Some(shape) = self.module.node_value(elements[0].node)
+                        && let Some(LowValue::Array(shape)) = shape.as_enum()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
+                        && s.len() == 2
+                    {
+                        return format!(
+                            "table{{{}, {}}}",
+                            match self.slot_type_any(s[0].node) {
+                                Some(ty) => self.static_any(ty, visiting),
+                                None => self.static_any(s[0].node, visiting),
+                            },
+                            match self.slot_type_any(s[1].node) {
+                                Some(ty) => self.static_any(ty, visiting),
+                                None => self.static_any(s[1].node, visiting),
+                            }
                         );
                     }
                 }

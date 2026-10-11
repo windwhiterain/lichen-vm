@@ -63,7 +63,7 @@ macro_rules! for_each_kind_marker {
             /// `[key type, value type]`.
             TypeTable { 6, "TypeTable", table_type_marker, table_type_marker_node }
             /// The kind marker of set type expressions: the **element type alone**, so
-            /// `set{a}` and `set{a, b}` share one type.
+            /// `set(a)` and `set(a, b)` share one type.
             TypeSet { 10, "SetType", set_type_marker, set_type_marker_node }
         }
     };

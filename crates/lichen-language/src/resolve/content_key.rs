@@ -8,9 +8,10 @@ use super::*;
 ///
 /// Adding an [`Expr`] variant or changing any tag bumps this constant; there is
 /// no compatibility path, so the bump invalidates every cached key. `6` seeded
-/// the prelude, which renumbers every program's binders.
+/// the prelude, which renumbers every program's binders; `8` added the
+/// `Expr::TypeSet` and `Expr::TypeTable` variants, tags 36 and 37.
 /// See docs/notes/incremental-update.md §6.1.
-const KEY_FORMAT_VERSION: u64 = 7;
+const KEY_FORMAT_VERSION: u64 = 8;
 
 /// The **resolved content key** of a resolved program.
 ///
@@ -333,6 +334,15 @@ impl KeyWriter {
                 for member in members {
                     self.expr(member);
                 }
+            }
+            Expr::TypeSet(element, _) => {
+                self.u(36);
+                self.expr(element);
+            }
+            Expr::TypeTable { key, value, .. } => {
+                self.u(37);
+                self.expr(key);
+                self.expr(value);
             }
             Expr::StructType(fields, _) => {
                 self.u(18);

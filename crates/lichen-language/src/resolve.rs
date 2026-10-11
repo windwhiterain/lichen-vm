@@ -359,6 +359,11 @@ impl Resolver {
                     self.resolve_expr(v);
                 }
             }
+            Expr::TypeSet(element, _) => self.resolve_expr(element),
+            Expr::TypeTable { key, value, .. } => {
+                self.resolve_expr(key);
+                self.resolve_expr(value);
+            }
             Expr::Shallow(inner, _, _) => self.resolve_expr(inner),
             Expr::TypeArray {
                 element_type,

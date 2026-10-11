@@ -39,13 +39,24 @@ fn tokens_of_a_small_program() {
 #[test]
 fn a_table_arrow_separates_a_table_entry() {
     assert_eq!(
-        kinds("table{ 1 ==> 2 }"),
+        kinds("table( 1 ==> 2 )"),
         vec![
             TokenKind::KwTable,
-            TokenKind::LBrace,
+            TokenKind::LParen,
             TokenKind::Int(1),
             TokenKind::TableArrow,
             TokenKind::Int(2),
+            TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds("table{ Int, string }"),
+        vec![
+            TokenKind::KwTable,
+            TokenKind::LBrace,
+            TokenKind::KwInt,
+            TokenKind::KwString,
             TokenKind::RBrace,
             TokenKind::Eof,
         ]

@@ -17,7 +17,7 @@
 ## 1. The module
 
 ```lichen
-Num = set{Int, Float}
+Num = set(Int, Float)
 in_num = t => t @in Num
 add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 -- …and one binding per remaining polymorphic operator

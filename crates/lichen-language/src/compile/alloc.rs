@@ -24,6 +24,16 @@ impl Compiler {
         self.spans.push(Some(*span));
         id
     }
+    pub(super) fn alloc_type_set(&mut self, element: ExprId, span: &Span) -> ExprId {
+        let id = self.ir.alloc_type_set(element);
+        self.spans.push(Some(*span));
+        id
+    }
+    pub(super) fn alloc_type_table(&mut self, key: ExprId, value: ExprId, span: &Span) -> ExprId {
+        let id = self.ir.alloc_type_table(key, value);
+        self.spans.push(Some(*span));
+        id
+    }
     pub(super) fn alloc_type_struct(
         &mut self,
         fields: &[(ExprId, Option<&'static str>)],

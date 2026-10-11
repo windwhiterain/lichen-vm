@@ -140,7 +140,7 @@ type value against an `Int`) is a check-time `BinOp` error.
 ## Why `==>` for tables, and `<==` for the read
 
 The table literal used to separate key/value with `::`.  Now that `::` is the named type
-access's glued postfix, the table separator is spelled `==>` (`table { k ==> v }`), so the
+access's glued postfix, the table separator is spelled `==>` (`table(k ==> v)`), so the
 two are never ambiguous.  The table *read* is the infix `t <== k` — the loosest binary
 level, left-associative — which is what freed the glued `{` for the positional type access
 `X{n}`.

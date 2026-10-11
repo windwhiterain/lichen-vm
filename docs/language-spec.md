@@ -71,12 +71,14 @@ primary  := int_literal
           | '(' expr ')'                            -- grouping (transparent)
           | '(' expr (sep expr)* sep? ')'           -- tuple value (always a Tuple)
           | '[' element (sep element)* ']'          -- array literal
-          | 'table' '{' pair (sep pair)* '}'        -- constant table literal
-          | 'set' '{' expr (sep expr)* '}'          -- set value (members are values; the instance is a Set, not an array)
+          | 'table' '(' pair (sep pair)* ')'        -- constant table value
+          | 'set' '(' expr (sep expr)* ')'          -- set value (members are values; the instance is a Set, not an array)
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | 'tuple' '{' expr (sep expr)* sep? '}'   -- tuple type: a *slot* per element
           | 'struct' '{' sfield (sep sfield)* '}'   -- struct type  (nominal, optional field names)
           | 'array' '{' expr sep expr '}'           -- array type  (element type, then length)
+          | 'set' '{' expr sep? '}'                 -- set type  (the one element slot)
+          | 'table' '{' expr sep expr sep? '}'      -- table type  (the key slot, then the value slot)
           | 'if' expr 'then' expr 'else' expr       -- conditional
 block    := (bstmt sep)* ['return' expr]            -- statements + an explicit tail (`return` anywhere)
           | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
@@ -193,7 +195,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   annotation chain, an annotated parameter, and a compound type's element, field,
   or function-type side — so `x : tuple{(_ ! in_num), (_ ! in_num)}` refines both
   components of a 2-tuple, and each is enforced (`f ("a", 2)` is refused).  That is
-  where a *class* contract belongs (`Num = set{Int, Float}; in_num = t => t @in
+  where a *class* contract belongs (`Num = set(Int, Float); in_num = t => t @in
   Num`), and the type it names is the type expression's **denotation** — the
   annotated expression's own term — so the annotation binds the position's type to
   the type, not to the `[type, …, attribute]` group the attribute lives in.  The
@@ -247,23 +249,30 @@ farg     := '.' name expr                         -- named instantiation argumen
   branches extend maximally like a lambda body.  It desugars to the lazy index
   `[e2, e1][cond]` — the condition (`0`/`1`) selects the branch, and the
   untaken branch is never evaluated.
-- **Tables.**  `table { k1 ==> v1, k2 ==> v2, … }` is a constant table literal;
+- **Tables.**  `table(k1 ==> v1, k2 ==> v2, …)` is a constant table value;
   each entry is a deep-equal `key ==> value` pair (the table arrow is not part
   of the expression grammar, so it unambiguously separates the pair).
-  `table {}` is the empty table.  `t <== k` is the table read
-  returning the entry whose stored key is deep-content-equal to `k`.
-- **Sets.**  `set{a, b, …}` is a set of ordinary values — a *value* form led by a
-  word, exactly like the table literal, because a set's members are values.  The
+  `table()` is the empty table.  `t <== k` is the table read
+  returning the entry whose stored key is deep-content-equal to `k`.  The
+  **table type** is the braced `table{K, V}` — the key slot and the value slot,
+  the same shape the value form builds, so a table value checks against a
+  `table{Int, string}` annotation exactly as it did against the printer's old
+  `table<K, V>` notation.
+- **Sets.**  `set(a, b, …)` is a set of ordinary values — a *value* form led by a
+  word, exactly like the table value, because a set's members are values.  The
   members are full
   expressions and share one element type (a set is homogeneous, like an array
-  literal); `set{}` is the empty set.  A set's **value is its members**, and what
+  literal); `set()` is the empty set.  A set's **value is its members**, and what
   makes it a set is its **type**, whose shape is the element type
-  *alone* (the printer spells it `set<T>`): a set has no length, so `set{a}` and `set{a, b}` are one type.  That is
+  *alone*: a set has no length, so `set(a)` and `set(a, b)` are one type.  The
+  **set type** is the braced `set{E}`, one element *slot* that pairs with every
+  member: `set{Int}` is the set of `Int`, `set{Int # 2}` states an element
+  requirement, and a pin `set{5 : Int}` accepts only the member `5`.  That is
   what separates it from `array{T, n}`: a set is not indexable (`s[i]` is a
   diagnostic — the container unify refuses it exactly as it refuses `t <== k` on an
   array) and can never flow into an `array{T, n}` parameter.  A set of *type
   values* is how a contract names the classes it admits:
-  `Num = set{Int, Float}` ([operator-polymorphism](notes/operator-polymorphism.md)
+  `Num = set(Int, Float)` ([operator-polymorphism](notes/operator-polymorphism.md)
   §3).
 - **Shallow markers.**  Inside an array literal, an element may be prefixed
   with `@shallow` (`@shallow e`, `@shallow(2) e`): a *shallow* marker that keeps
@@ -357,7 +366,8 @@ delimiter is a fresh atom — an argument of an application:
   to `k`.  It is an **infix operator**, not a postfix form: it is the loosest
   binary level and left-associative, so its key is a whole comparison expression
   (`t <== k + 1` reads the key `k + 1`) and `t <== a <== b` reads `(t <== a) <== b`.
-  A table literal (`table{…}`), a set value (`set{…}`), a struct type
+  A table value (`table(…)`), a set value (`set(…)`), a table type
+  (`table{K, V}`), a set type (`set{E}`), a struct type
   (`struct{…}`) and an array type (`array{…}`) are *keyword-led*, so their
   delimiter sits directly after the keyword.
 
@@ -598,10 +608,10 @@ maps every span back to the original file.
 
   A member is matched **by the class it denotes when it denotes one, and by the
   language's own value equality otherwise**.  A set of *type values* — the class
-  domain a contract is written over (`Num = set{Int, Float}`) — is therefore
+  domain a contract is written over (`Num = set(Int, Float)`) — is therefore
   compared structurally, so a class out of another module matches (`ValueExt::value_eq`
   cannot answer this case: it compares array *handles*).  A set of ordinary
-  values is compared by value: `2 @in set{1, 2}` is `1` and `3 @in set{1, 2}` is
+  values is compared by value: `2 @in set(1, 2)` is `1` and `3 @in set(1, 2)` is
   `0`.  See [operator-polymorphism](notes/operator-polymorphism.md) §3.
 - **Indexing.**  `e[i]` reads the `i`-th element of an **array**, and `a(k)` —
   the adjacent single-expression paren — reads position `k` of a **tuple**
@@ -838,7 +848,9 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `[e1, @shallow e2, @shallow(2) e3]` | `ShallowArray { range, depths }` — any `@shallow`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `@shallow`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `e ~ "text"` | **no kind at all** — a mark is an entry in `IR::marks` keyed by `e`'s `ExprId`, and the expression lowers to what it would lower to without it.  An annotation node is allocated only when the chain also spells a type, a perspective, a refinement or a doc |
 | `array{T, n}` | `TypeArray { element_type, length }` |
-| `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
+| `set{E}` | `TypeSet(range)` — the one child is the element **slot**; the shape is that slot alone, so a `set{…}` type and its `set(…)` members pair one slot to every member |
+| `table{K, V}` | `TypeTable(range)` — the two children are the key and value **slots**, exactly what `Table(range)` writes, so a table type and a table value are one type |
+| `table(k1 ==> v1, …)` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t <== k` | `Find { container, key }` — the infix table read; the entry whose stored key is deep-content-equal to `k` |
 | `X{n}` | `TypeAccess { container, index }` — a type access of a **tuple type value**'s component: the container's type is unified against the tuple kind, so a non-tuple container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |

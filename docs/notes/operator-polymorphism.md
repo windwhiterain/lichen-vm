@@ -6,7 +6,7 @@
 > **refinement** — one predicate function that must evaluate to `1`, carried in an
 > ordinary attribute and enforced by the ordinary assert channel. The
 > implementation is an ordinary lichen function that selects a per-class leaf. The
-> domain the predicate consults is a **set value**, `set{Int, Float}`. The surface
+> domain the predicate consults is a **set value**, `set(Int, Float)`. The surface
 > operators **route** onto the prelude's bindings
 > ([core-prelude](core-prelude.md)), so a program's `+` *is* the library binding.
 > The routing's three costs are measured, closed and pinned in §7.1 — no test is
@@ -194,23 +194,24 @@ polymorphism.
 ### 3.2 The domain: a set value
 
 The predicate's domain is **data**: a **set** of type values, written
-`set{Int, Float}`.
+`set(Int, Float)`.
 
 - A set's *value* is its members — an ordinary array node, **no tag**.
-- A set's *type* is `set<T>`, a kinded type whose shape is the element type
+- A set's *type* is `set{T}`, a kinded type whose shape is the element type
   **alone** (`TypeSet`), so a set has no length and is not an `array{T, n}`.
 
 The separate kind is a soundness requirement rather than a convenience: an
 array-typed set passed into an `array{T, n}` parameter and indexed inside the
 callee would read its element 0, and a value-level tag is invisible there.
-`set{Int, Float}[0]` is refused by the ordinary container unify, at the caller. A
-set's members are homogeneous, like an array literal: `set{1, "a"}` is refused.
-`set{…}` is led by a word exactly like `table{…}`, because angle brackets are the
-spelling of an expression in *type* position and a set is not one; `set` is
-therefore a reserved word, the form's one breaking change.
+`set(Int, Float)[0]` is refused by the ordinary container unify, at the caller. A
+set's members are homogeneous, like an array literal: `set(1, "a")` is refused.
+`set(…)` is a **value** form led by a word exactly like `table(…)`; the set
+*type* is the braced `set{T}`, holding the element slot, which is what makes a
+set's element requirement writable; `set` is therefore a reserved word, the
+form's one breaking change.
 
 There is **no privileged `default` member**. A reader that must commit to one
-class takes the set's **first member** — for `set{Int, Float}` that is `Int`, the
+class takes the set's **first member** — for `set(Int, Float)` that is `Int`, the
 arithmetic operators' historical default, visible in the source. That is a
 convention of the reading, not a stored element.
 
@@ -241,7 +242,7 @@ the builtin contract consult the domain through the identical operator.
 
 - Its **right operand is pinned to a set** (`Guard`, the same container pin
   `e[i]` applies): with `Num = 7`, `Int @in Num` is refused with
-  `expected set<?a>, found Int`.
+  `expected set{?a}, found Int`.
 - Its **left operand is deliberately unconstrained** — no unify against the set's
   element cell. A membership test is a fact about a *value*, and a check-time
   unify would write the argument's class and make the predicate mono-class:
@@ -374,7 +375,7 @@ expressible, the refinement makes it safe.
 The contract's end state, as the prelude writes it:
 
 ```lichen
-Num     = set{Int, Float}
+Num     = set(Int, Float)
 in_num  = t => t @in Num
 add     = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 ```
@@ -579,10 +580,10 @@ workstream's, for cost 1).
    refinement's enforcement is an assert and a parameter refinement rides the
    desugar — but the operator's end state plus a perspective on one parameter
    would. Generalising the slot to a per-marker set is the fix.
-7. *(Closed — landed.)* **A class domain's surface form**: **`set{a, b, …}`** — a
-   set of ordinary values, led by a word exactly like `table{…}`, because a class
+7. *(Closed — landed.)* **A class domain's surface form**: **`set(a, b, …)`** — a
+   set of ordinary values, led by a word exactly like `table(…)`, because a class
    domain is a *value*, not an expression in *type* position.
-   `Num = set{Int, Float}` is a plain binding, so the contract can leave Rust.
+   `Num = set(Int, Float)` is a plain binding, so the contract can leave Rust.
    The three options weighed: `domain<Int, Float>` (rejected: `<…>` was the
    type-position spelling, and a set is a *value*); `$domain(Int, Float)` (no new
    syntax, but `$` is the *plugin-private* sigil, so it works only for a source
@@ -652,8 +653,8 @@ the contract's path now that the class refinement needs no read and is visible a
 §7.1 cost 2's `raw[?a, ?b]`; the two cross-module diagnostics (a refusal inside
 the prelude reads the generic wording, and the diagnostic names the built-in's
 line rather than the application — [core-prelude](core-prelude.md) §5); and the
-editor grammar, which still spells the assert as the prefix `!`, has no `set{…}`
-and has no `@in`.
+editor grammar, which still spells the assert as the prefix `!` and still models
+the retired `set{…}` / `table{…}` forms, so it has neither `set(…)` nor `@in`.
 
 ## Recovered measurements
 
@@ -665,7 +666,7 @@ and has no `@in`.
 - When neither operand of a scalar operation has stated a class, the two type cells
   are unified into one open class and a refinement `left ∈ {Int, Float}` is
   registered as an assert on it.  That domain is a *set's value* — the members
-  themselves — which is exactly what `Num = set{Int, Float}` lowers to, so the check
+  themselves — which is exactly what `Num = set(Int, Float)` lowers to, so the check
   reads the same graph a library-written contract will.
 - A class conversion is the one operator kind typed as the other class: the operand
   is checked against the direction's **source** class (`Int` for `int2float`,
@@ -723,9 +724,9 @@ and has no `@in`.
   this module, so that case cannot arise and staying silent is the conservative
   answer rather than inventing a node.
 - `set::contains` is both the class-domain read and the source form's meaning
-  (`value @in set`).  A set of ordinary values (`set{1, 2}`) is compared with
+  (`value @in set`).  A set of ordinary values (`set(1, 2)`) is compared with
   `ValueExt::value_eq`, which for a machine scalar *is* the value itself, so
-  `2 @in set{1, 2}` holds and `3 @in set{1, 2}` does not; a member the low type
+  `2 @in set(1, 2)` holds and `3 @in set(1, 2)` does not; a member the low type
   vocabulary cannot classify stays on this side too, which is what keeps a `string`
   type a non-member of a class domain (`add "a" "b"`).  `members` returns `None` when
   the value is not an array, so it is not a set's value at all — a set's membership

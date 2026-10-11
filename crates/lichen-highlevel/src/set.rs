@@ -1,4 +1,4 @@
-//! The set value `set{a, b, …}` and its membership read. See
+//! The set value `set(a, b, …)` and its membership read. See
 //! `docs/notes/operator-polymorphism.md` §3.2.
 
 use lichen_lowlevel::{AnyNodeId, LowShape, Module, Program, ValueExt};

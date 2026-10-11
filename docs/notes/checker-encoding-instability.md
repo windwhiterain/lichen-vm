@@ -310,8 +310,8 @@ the two functions' cells when it reaches one.
 ### The set instance's exact encoding
 
 A set instance is typed `[members, [[element type], [TypeSet, Type]]]`, whose
-shape is the element type *alone* — a set has no length, so `set{a}` and
-`set{a, b}` share one type, and that is what separates the set kind from
+shape is the element type *alone* — a set has no length, so `set(a)` and
+`set(a, b)` share one type, and that is what separates the set kind from
 `array{T, n}`. The value is an ordinary array node, exactly the node an array
 literal's elements make, and nothing tags it.
 

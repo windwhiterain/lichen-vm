@@ -192,11 +192,11 @@ where
             ));
         } else if marker == P::Value::set_type_marker() && shape.len() == 1 {
             // A set type value: the shape is the element **slot** alone.
-            return Some(format!("set<{}>", self.printer.slot_any(shape[0].node)));
+            return Some(format!("set{{{}}}", self.printer.slot_any(shape[0].node)));
         } else if marker == P::Value::table_type_marker() && shape.len() == 2 {
             // A table type value: the shape is the key and value **slots**.
             return Some(format!(
-                "table<{}, {}>",
+                "table{{{}, {}}}",
                 self.printer.slot_any(shape[0].node),
                 self.printer.slot_any(shape[1].node)
             ));
@@ -206,12 +206,12 @@ where
         None
     }
 
-    /// A table instance: the handle's entries, `table{k ==> v, …}`.
+    /// A table instance: the handle's entries, `table(k ==> v, …)`.
     ///
     /// # Invariant
     /// The shape is `[key slot, value slot]`, so an entry's key and value read
     /// against their slots' type positions; a table with no entry reads
-    /// `table{}`, and an undecided payload is not a table at all.
+    /// `table()`, and an undecided payload is not a table at all.
     fn table_instance(&mut self, value: P::Value, shape: &[ArrayItem]) -> Option<String> {
         let Some(LowValue::Table(table)) = value.as_enum() else {
             return None;
@@ -236,7 +236,7 @@ where
             let entry = self.element_any(item.value, value_ty);
             entries.push(format!("{key} ==> {entry}"));
         }
-        Some(format!("table{{{}}}", entries.join(", ")))
+        Some(format!("table({})", entries.join(", ")))
     }
 
     /// A term of a tuple, array, or struct type: the elements read against the
@@ -317,7 +317,7 @@ where
             for v in values {
                 out.push(self.element_any(v.node, element_ty));
             }
-            return Some(format!("set{{{}}}", out.join(", ")));
+            return Some(format!("set({})", out.join(", ")));
         }
         // `[payload, TypeStruct]`: checking the tag, not the shape, keeps
         // another kind's value from reading as a struct.
