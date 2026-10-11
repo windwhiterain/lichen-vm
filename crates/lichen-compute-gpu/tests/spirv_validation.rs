@@ -10,6 +10,9 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
+use lichen_compute_gpu::LOCAL_SIZE_X;
+use lichen_fusion::{BinaryOp, Reduction};
+use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
     KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator,
@@ -999,6 +1002,209 @@ fn the_two_conversions_validate_in_a_float_module() {
         );
         validate(what, &words);
     }
+}
+
+/// A folded body, per lane and tiled, as the emitter reads it.
+///
+/// # Invariant
+/// The two bodies a declared reduction produces are the emitter's input, so a refusal here is the
+/// emitter's own statement about a shape the transform produces rather than a device's.
+#[test]
+fn a_folded_reduction_validates() {
+    for (what, body, tiled) in [
+        (
+            "per-lane",
+            Folding::new(
+                &Reduction {
+                    combine: BinaryOp::Add,
+                    identity: 0.0,
+                },
+                600,
+                Element::Buffer { position: 0 },
+                ScalarClass::Int,
+            )
+            .expect("a sum tiles")
+            .per_lane(),
+            false,
+        ),
+        (
+            "tiled",
+            Folding::new(
+                &Reduction {
+                    combine: BinaryOp::Add,
+                    identity: 0.0,
+                },
+                600,
+                Element::Buffer { position: 0 },
+                ScalarClass::Int,
+            )
+            .expect("a sum tiles")
+            .tiled(LOCAL_SIZE_X, 0)
+            .expect("it tiles")
+            .into_body(),
+            true,
+        ),
+    ] {
+        let fragment = folded_fragment(body, tiled);
+        for (index, block) in fragment.body.blocks.iter().enumerate() {
+            println!(
+                "=== {what} block {index}: instrs {:?} term {:?}",
+                block.instrs, block.terminator
+            );
+        }
+        println!(
+            "=== {what}: arity {} params {:?} results {}",
+            fragment.param_shape.flat_arity(),
+            fragment.body.parameters(),
+            fragment.result_classes.len()
+        );
+        fragment
+            .body
+            .validate()
+            .unwrap_or_else(|broken| panic!("the {what} body is well formed: {broken}"));
+        for (index, value) in fragment.body.values.iter().enumerate() {
+            println!("=== {what} value {index}: {value:?}");
+        }
+        let words = spirv::compile(
+            &LaunchSet::single(&fragment),
+            Binding {
+                inputs: 1,
+                outputs: 1,
+            },
+        )
+        .map_err(|refusal| {
+            panic!(
+                "the {what} body is emitted: {refusal} [arity {} params {:?} class {:?} terms {}]",
+                fragment.param_shape.flat_arity(),
+                fragment.body.parameters(),
+                fragment.input_classes,
+                fragment.body.blocks.len()
+            )
+        })
+        .expect("the body is emitted");
+        assert!(!words.is_empty(), "the {what} body emitted nothing");
+    }
+}
+
+/// The fragment a folded body is dispatched as, for the emitter alone.
+fn folded_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(LOCAL_SIZE_X),
+        },
+        slices: if tiled {
+            vec![Slice {
+                class: ScalarClass::Int,
+                count: LOCAL_SIZE_X,
+                space: Space::Shared,
+            }]
+        } else {
+            Vec::new()
+        },
+        marks: Vec::new(),
+    }
+}
+
+/// A hand-built loop of three iterations, to pin what the emitter does with a bound above one.
+///
+/// # Invariant
+/// The body is the shape `Loop::run` produces: a header carrying a count, a step incrementing it,
+/// and a merge leaving the block. The test says whether a bound of three is emitted.
+#[test]
+fn a_hand_built_loop_validates() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    body.add_param(entry);
+    let stop = body.add_const(entry, ScalarClass::Int, 3);
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, stop],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, one],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined],
+        }),
+    );
+    body.set_terminator(
+        merged,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+    let fragment = folded_fragment(body, false);
+    fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the hand-built loop is well formed: {broken}"));
+    let words = spirv::compile(
+        &LaunchSet::single(&fragment),
+        Binding {
+            inputs: 1,
+            outputs: 1,
+        },
+    )
+    .unwrap_or_else(|refusal| panic!("the hand-built loop is emitted: {refusal}"));
+    assert!(!words.is_empty(), "the hand-built loop emitted nothing");
 }
 
 /// `out[i] = in[i] + a`, over `(n, a, index)` — the launch's runtime scalar.

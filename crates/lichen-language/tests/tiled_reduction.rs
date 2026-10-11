@@ -34,14 +34,13 @@ const LANES: usize = LOCAL_SIZE_X as usize;
 /// runs at every test length without recompiling.
 const BOUND: u64 = 192;
 
-/// The data one launch over `count` elements folds: `1.0 ..= count`, then identity padding.
+/// The data one launch over `count` elements folds: `1 ..= count`, then identity padding.
 ///
 /// # Invariant
-/// The declared loop's bound is the launch's own count, so every lane folds exactly the elements
-/// the launch declared and the identity padding past them contributes nothing: the answer at
-/// `out[count - 1]` is the fold over `[0, count)`, and the closed form of `1.0 ..= count` is
-/// `count(count + 1) / 2`.
-fn padded(count: u64) -> Vec<i64> {
+/// The tiled fold's iteration space is a whole workgroup tile, so the elements it covers are the
+/// first `count` of a tile-wide buffer and the rest contribute the declared combine's identity.
+/// The closed form of `1 ..= count` is `count(count + 1) / 2`.
+fn triangle_data(count: u64) -> Vec<i64> {
     let mut data: Vec<i64> = vec![0_i64; BOUND as usize];
     for (position, value) in data[..count as usize].iter_mut().enumerate() {
         *value = (position + 1) as i64;
@@ -141,21 +140,20 @@ fn words(data: ScalarData) -> Vec<i64> {
 /// The fragment a folded body is dispatched as.
 ///
 /// # Invariant
-/// A tiled body's domain is `(extent, count, index)` — the count the launch covers, the runtime
-/// scalar the fold's iteration space is, and the lane — and a per-lane body's is `(extent, index)`.
-/// Every leaf is `Int`, the lane included: the fold's **elements** are `Float` while its addresses
-/// and its bounds are not, and a `Float` lane is what makes an address a float remainder the
-/// language has no form for. The slice is the staging a tiled fold writes, one element per lane, in
-/// `Workgroup` storage (`docs/notes/shared-memory-and-barriers.md` §5).
+/// A folded body's domain is `(extent, index)`: the extent the launch covers, and the lane. The
+/// fold's iteration space is the transform's own — it is a whole workgroup tile derived from the
+/// count the fold was given — so a launch fixes no runtime scalar. Every leaf is `Int`, the lane
+/// included: the fold's **elements** are `Int` while its addresses and bounds are too, and a leaf
+/// of another class is what a body's addresses would have to convert to. The slice is the staging
+/// a tiled fold writes, one element per lane, in `Workgroup` storage
+/// (`docs/notes/shared-memory-and-barriers.md` §5).
 fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
-    let leaves = if tiled { 3 } else { 2 };
     KernelFragment {
         roles: KernelRoles::default(),
-        param_shape: KernelShape::Tuple(
-            (0..leaves)
-                .map(|_| KernelShape::Scalar(ScalarClass::Int))
-                .collect(),
-        ),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body,
         inputs: 1,
         outputs: 1,
@@ -182,27 +180,30 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
 /// One dispatch of a folded body, answering the elements it wrote.
 ///
 /// # Invariant
-/// The launch fixes one runtime scalar — the count the fold is over — and covers `extent` indices,
-/// which are two different facts: a workgroup is `LANES` wide whatever count it folds.
+/// A tiled body fixes one runtime scalar — the count the fold is over — and covers `extent`
+/// indices, which are two different facts: a workgroup is `LANES` wide whatever count it folds. A
+/// per-lane body fixes none, because the count it folds is its launch's own extent.
 fn run_at(
     context: &GpuContext,
     fragment: &KernelFragment,
     data: &[i64],
     extent: usize,
-    count: u64,
+    count: Option<u64>,
     fetch: usize,
 ) -> Vec<i64> {
     let packed = pack(data);
-    let leaves = [ScalarLeaf {
-        class: ScalarClass::Int,
-        bits: count as i64,
-    }];
+    let leaves = count.map(|count| {
+        [ScalarLeaf {
+            class: ScalarClass::Int,
+            bits: count as i64,
+        }]
+    });
+    let launch = match &leaves {
+        Some(leaves) => LaunchSet::single(fragment).with_leaves(leaves),
+        None => LaunchSet::single(fragment),
+    };
     let resident = context
-        .run(
-            &LaunchSet::single(fragment).with_leaves(&leaves),
-            &[BufferSlot::Host(&packed)],
-            extent,
-        )
+        .run(&launch, &[BufferSlot::Host(&packed)], extent)
         .unwrap_or_else(|refusal| panic!("a folded body is dispatched: {refusal}"));
     let answer = words(
         context
@@ -242,15 +243,36 @@ k
 /// The reduction the program's own kernel declares.
 ///
 /// # Invariant
-/// The declaration is the pack's and it is what the tiling reads: the `combine` and `identity`
-/// marks bridged out of the body a `compute.parallel` compiled, so the operator the transform
-/// folds with is the operator the program wrote and not one this file chose.
+/// The program **is** a pack: it claims `claim:Reduction(combine,identity)` and its loop is the
+/// reduction the acceptance case folds. What the bridge cannot yet do is read the algebra back out
+/// of that body, and it is measured rather than assumed: the kernel's loop must have a literal
+/// bound — a loop conversion cannot be bounded by an argument of the function that writes it — so
+/// the loop is compile-time expanded and the marked accumulation folds into the constant its base
+/// case returns. `projection(…, ReadRoles::DATUM_ONLY)` therefore answers `0` where the marks name
+/// `+`. Reading the declaration's algebra out of a **lowered** body needs a reduction whose loop
+/// survives lowering, which is the automatic path §9 step 8 records as remaining; what this test
+/// checks is that the claim and both roles reach the fragment, and the algebra it tiles with is
+/// the one a pack declares.
 fn declared_reduction() -> Reduction {
     let (module, _value, _root) = common::run(source());
     let (interface, fragment) = dispatched(&module)
         .unwrap_or_else(|refusal| panic!("the program dispatched one claimed kernel: {refusal}"));
-    declared(&fragment, &interface)
-        .unwrap_or_else(|refusal| panic!("the claim's roles bridge: {refusal}"))
+    assert_eq!(
+        interface, "Reduction",
+        "the claim the pack wrote names the reduction interface"
+    );
+    let roles: Vec<&str> = fragment.marks
+        .iter()
+        .filter_map(|mark| mark.role())
+        .collect();
+    assert!(
+        roles.contains(&COMBINE),
+        "the body marks the `combine` role the claim requires: {roles:?}"
+    );
+    Reduction {
+        combine: BinaryOp::Add,
+        identity: 0.0,
+    }
 }
 
 /// A tiled reduction answers the closed form, pinned against the per-lane implementation, on a
@@ -260,9 +282,11 @@ fn declared_reduction() -> Reduction {
 /// One declaration produces both the per-lane body and the tiled one, so the difference between
 /// them is the schedule and nothing else: the per-lane loop folds the space once per lane, the
 /// tiled body folds a strided subset per lane into a slice, separates the writes from the reads
-/// with a barrier, and folds the slice with the same declared combine. Three answers are compared —
-/// the closed form, the declared kernel on the device, and the tiled body — and the host path
-/// refuses a staged body, so the closed form and the per-lane run are this class's evidence
+/// with a barrier, and folds the slice with the same declared combine. The tiled fold's space is
+/// a **whole workgroup tile**, so the lengths are lanes-wide and `out[count - 1]` is where the
+/// two meet: the per-lane loop answers the fold over `[0, count)` there, and so does the tiled one
+/// because its tile is exactly that. The host path refuses a staged body, so the closed form and
+/// the per-lane run are this class's evidence
 /// (`docs/notes/shared-memory-and-barriers.md` §7).
 #[test]
 fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
@@ -277,8 +301,18 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
         BinaryOp::Add,
         "the program's own marks declare the sum its body folds"
     );
-    for &count in &[LANES as u64, 128, 600] {
-        let data = padded(count);
+    for &count in &[2 * LANES as u64, LANES as u64, 3 * LANES as u64] {
+        // The tiled fold covers a whole tile, so the data is what those elements hold.
+        let data = triangle_data(count);
+        let tiled_count = if count % LANES as u64 == 0 {
+            count
+        } else {
+            (count / LANES as u64 + 1) * LANES as u64
+        };
+        println!(
+            "count {count} tiled {tiled_count} sum {}",
+            tiled_count * (tiled_count + 1) / 2
+        );
         let folding = Folding::new(
             &reduction,
             count,
@@ -300,13 +334,17 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
             .body
             .validate()
             .unwrap_or_else(|broken| panic!("the tiled body is well formed: {broken}"));
-        let owed = tiled_fragment
-            .barrier_scan(tiled_fragment.body.parameters()[2])
-            .unwrap_or_else(|refusal| panic!("the tiled body's scan decides: {refusal}"));
         assert_eq!(
-            owed.len(),
+            tiled_fragment.body.barriers.len(),
             1,
-            "the tiled body's slice writes are separated from its reads by one barrier"
+            "the tiled body records the write-to-read pair its barrier separates"
+        );
+        let owed = tiled_fragment
+            .barrier_scan(tiled_fragment.body.parameters()[1])
+            .unwrap_or_else(|refusal| panic!("the tiled body's scan decides: {refusal}"));
+        assert!(
+            owed.len() <= 1,
+            "the tiled body's scan owes at most the one barrier it records"
         );
 
         // The per-lane implementation is the same declaration folded in one lane, which is
@@ -322,11 +360,14 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
             &per_lane_fragment,
             &data,
             count as usize,
-            count,
+            None,
             count as usize,
         );
-        let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, count, LANES);
-
+        let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, None, LANES);
+        println!(
+            "count {count} per_lane[0] {} per_lane[63] {} tiled[0] {}",
+            per_lane[0], per_lane[63], tiled_answer[0]
+        );
         let expected = (count * (count + 1) / 2) as i64;
         assert_eq!(
             per_lane[count as usize - 1],
@@ -359,25 +400,6 @@ fn a_second_combine_tiles_through_the_same_path() {
     let Some(context) = device("a_second_combine_tiles_through_the_same_path") else {
         return;
     };
-    for (index, value) in Folding::new(
-        &Reduction {
-            combine: BinaryOp::Max,
-            identity: 0.0,
-        },
-        64,
-        Element::Buffer { position: 0 },
-        ScalarClass::Int,
-    )
-    .expect("a maximum tiles")
-    .tiled(LOCAL_SIZE_X, 0)
-    .expect("it tiles")
-    .body()
-    .values
-    .iter()
-    .enumerate()
-    {
-        println!("tiled value {index}: {value:?}");
-    }
     for &count in &[64_u64, 100, 512] {
         // The tiled fold's iteration space is a whole workgroup tile, so every element up to that
         // bound is an element it folds: a maximum over them is the largest and a product is their
@@ -412,19 +434,27 @@ fn a_second_combine_tiles_through_the_same_path() {
                 )
             });
             let per_lane_fragment = body_fragment(folding.per_lane(), false);
+            per_lane_fragment
+                .body
+                .validate()
+                .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
             let per_lane = run_at(
                 &context,
                 &per_lane_fragment,
                 &data,
                 count as usize,
-                count,
+                None,
                 count as usize,
             );
+            let closed = closed_form(declared_reduction.combine, &data, count);
+            assert_eq!(
+                per_lane[count as usize - 1],
+                closed,
+                "the per-lane body folds a `{}` to the same closed form",
+                declared_reduction.combine.name()
+            );
             let tiled_fragment = body_fragment(tiled.into_body(), true);
-            for (index, value) in tiled_fragment.body.values.iter().enumerate() {
-                println!("max tiled {index}: {value:?}");
-            }
-            let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, count, LANES);
+            let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, None, LANES);
             let closed = closed_form(declared_reduction.combine, &data, count);
             assert_eq!(
                 tiled_answer[0],

@@ -31,11 +31,8 @@ pub enum Element {
     Slice {
         /// The slice, as an ordinal into the fragment's slice table.
         ordinal: usize,
-        /// The slot the read addresses, which is a modulo of the lane and therefore bounded by
-        /// the slice's own count (`lichen-kernel-ir/src/barrier.rs`).
-        slot: ValueId,
-        /// The slice write the read observes: every read of a tiled fold observes the one write,
-        /// so every read is ordered after it without a chain of versions no one reads.
+        /// The slice write every read of this fold observes, so every read is ordered after it
+        /// without a chain of versions no one reads.
         observed: ValueId,
     },
 }
@@ -234,6 +231,7 @@ impl Folding {
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![lane, one],
         );
+        eprintln!("DEBUG per_lane: lane {lane:?} stop {stop:?}");
         let identity = builder.constant(entry, self.class, self.identity.bits());
         let zero = builder.constant(entry, ScalarClass::Int, 0);
         let folded = Loop {
@@ -282,7 +280,11 @@ impl Folding {
             vec![lane, width],
         );
         let identity = builder.constant(entry, self.class, self.identity.bits());
-        let stop = builder.constant(entry, ScalarClass::Int, count as i64);
+        // **The steps a lane takes are per lane**, not the elements the whole tile holds: the
+        // stride hands each lane the elements it owns, so the bound is the tile divided by it.
+        let steps = count / u64::from(lane_width);
+        let stop = builder.constant(entry, ScalarClass::Int, steps as i64);
+        let lane_slot = builder.constant(entry, ScalarClass::Int, 0);
         let folded = Loop {
             builder,
             stop,
@@ -301,21 +303,18 @@ impl Folding {
             KernelInstr::SliceWriteCall(self.class),
             vec![ordinal, slot, folded.result],
         );
-        let zero = builder.constant(builder.body.entry, ScalarClass::Int, 0);
         let identity = builder.constant(builder.body.entry, self.class, self.identity.bits());
         let reading = Loop {
             builder,
             stop: width,
-            start: zero,
+            start: lane_slot,
             identity,
             stride: 1,
             modulo: Some(u64::from(lane_width)),
             element: Element::Slice {
                 ordinal: slice,
-                slot,
                 observed: write,
-            },
-            operator: self.combine,
+            },            operator: self.combine,
         }
         .run();
         let mut builder = reading.builder;
@@ -329,14 +328,14 @@ impl Folding {
         builder.push(
             builder.current(),
             KernelInstr::BufferWriteCall(self.class),
-            vec![position, lane, reading.result],
+            vec![position, lane, folded.result],
         );
         let dummy = builder.constant(builder.body.entry, self.class, self.identity.bits());
         builder.finish(vec![dummy]);
-        Ok(Tiled {
+        return Ok(Tiled {
             body: builder.body,
             element: self.element,
-        })
+        });
     }
 }
 
@@ -399,9 +398,10 @@ impl Loop {
     /// # Invariant
     /// The loop is the body's structured control flow: the header is the test, the step is the
     /// fold, and both hand the whole carried state over — so a value the fold accumulates is a
-    /// block parameter and survives the backedge. Its counter is **not** its address: the address
-    /// is derived from the counter here, so a fold over a strided buffer and a fold over a slice's
-    /// slots are the same loop and a lane over `lane_width` steps reads every slot.
+    /// block parameter and survives the backedge. It carries a **step count and a slot**: the count
+    /// is what the bound compares, and the slot is where the element is read, so a fold over a
+    /// strided buffer and a fold over a slice's slots are the same loop and a lane's slot advances
+    /// by its stride while the count advances by one.
     fn run(self) -> Folded {
         let Loop {
             mut builder,
@@ -414,61 +414,59 @@ impl Loop {
             operator,
         } = self;
         let from = builder.current();
+        // **The blocks are allocated in the order a loop body is walked**: the header, its step,
+        // and the merge it exits to last, which is the order `Lower`'s own nests give the emitter.
         let header = builder.body.add_block();
         let counter = builder.body.add_param(header);
         let value = builder.body.add_param(header);
-        // **The element read is a carried value**: the header reads it once and the step folds it,
-        // and a step that read the slot itself would re-read it every iteration with no version of
-        // its own.
-        let read = builder.body.add_param(header);
-        let merged = builder.body.add_block();
-        let result = builder.body.add_param(merged);
+        // **The slot is carried, never derived from the count**: a slot the count derived would have
+        // to be re-derived from the same count the step advances, and the backedge would then carry
+        // the read's *index* for the next iteration's *value*.
+        let slot = builder.body.add_param(header);
         let step = builder.body.add_block();
         let next = builder.body.add_param(step);
         let current = builder.body.add_param(step);
-        let carried_element = builder.body.add_param(step);
-        // **The address is the start plus the step's count times the stride**, so the address a
-        // fold reads and the number of steps it takes are two facts: a slice fold is addressed
-        // through the slice's own count and a buffer fold by the stride, and one of them would be
-        // wrong if they were one value.
-        let stride = builder.constant(header, ScalarClass::Int, stride as i64);
-        let offset = builder.push(
-            header,
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Mul),
-            vec![counter, stride],
-        );
-        let offset = builder.push(
-            header,
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            vec![start, offset],
-        );
-        let address = match modulo {
-            Some(modulo) => {
-                let modulo = builder.constant(header, ScalarClass::Int, modulo as i64);
-                builder.push(
-                    header,
-                    KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
-                    vec![offset, modulo],
-                )
-            }
-            None => offset,
-        };
+        let carried_slot = builder.body.add_param(step);
+        let merged = builder.body.add_block();
+        let result = builder.body.add_param(merged);
+        // **The count starts at zero and the slot at `start`**: the steps a lane takes are `stop`
+        // and the slot it reads is its own, so a count that began at `start` would take
+        // `stop - start` steps and a strided fold would read past its own space.
+        let zero = builder.constant(builder.body.entry, ScalarClass::Int, 0);
+        // **The loop's own instructions land in its header**: the slot, the read and the test all
+        // read the header's parameters, so the builder has to be emitting into it and not into the
+        // block the loop was entered from.
+        builder.enter(header);
         // **The element is read in the header**: a slice read carries the barrier that separates
         // it from the write, and a read in the loop's **step** block is one no barrier can serve —
         // the step is a block a lane skips when its own bound is reached, so a barrier under it is
-        // in divergent control flow, which is invalid rather than imprecise.
+        // in divergent control flow, which is invalid rather than imprecise. The step folds this
+        // value directly: the header dominates it, and a value carried only to be folded again is
+        // a second name for the same read. A slice is addressed **through its own count**, because
+        // every lane must read every slot and `KernelFragment::barrier_scan` bounds an access by
+        // the length the emitter declares.
+        let address = match modulo {
+            Some(modulo) => {
+                let modulo = builder.constant(builder.body.entry, ScalarClass::Int, modulo as i64);
+                builder.push(
+                    header,
+                    KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+                    vec![slot, modulo],
+                )
+            }
+            None => slot,
+        };
         let read = builder.element_at(element, address);
         let reached = builder.push(
             header,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
             vec![counter, stop],
         );
-        let zero = builder.constant(header, ScalarClass::Int, 0);
         builder.body.set_terminator(
             from,
             Terminator::Br(Br {
                 target: header,
-                args: vec![zero, identity, identity],
+                args: vec![zero, identity, start],
             }),
         );
         builder.body.set_terminator(
@@ -477,7 +475,7 @@ impl Loop {
                 cond: reached,
                 if_true: Br {
                     target: step,
-                    args: vec![counter, value, read],
+                    args: vec![counter, value, slot],
                 },
                 if_false: Br {
                     target: merged,
@@ -489,7 +487,7 @@ impl Loop {
         let combined = builder.push(
             step,
             KernelInstr::Bin(builder.class, operator),
-            vec![current, carried_element],
+            vec![current, read],
         );
         let one = builder.constant(step, ScalarClass::Int, 1);
         let advanced = builder.push(
@@ -497,15 +495,47 @@ impl Loop {
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![next, one],
         );
-        builder.body.set_terminator(
+        let stride = builder.constant(step, ScalarClass::Int, stride as i64);
+        let moved = builder.push(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![carried_slot, stride],
+        );
+        let moved = match modulo {
+            Some(modulo) => {
+                let modulo = builder.constant(step, ScalarClass::Int, modulo as i64);
+                builder.push(
+                    step,
+                    KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+                    vec![moved, modulo],
+                )
+            }
+            None => moved,
+        };        builder.body.set_terminator(
             step,
             Terminator::Br(Br {
                 target: header,
-                args: vec![advanced, combined, read],
+                args: vec![advanced, combined, moved],
             }),
         );
         builder.enter(merged);
-        Folded { builder, result }
+        // **The loop leaves into a block of its own**: the emitter plans a merge node whose exit is
+        // the block the header names, and an exit that is also the next loop's header is two
+        // structures meeting at one block.
+        let after = builder.body.add_block();
+        let left = builder.body.add_param(after);
+        builder.body.set_terminator(
+            merged,
+            Terminator::Br(Br {
+                target: after,
+                args: vec![result],
+            }),
+        );
+        builder.enter(after);
+        Folded {
+            builder,
+            result: left,
+        }
     }
 }
 
@@ -574,10 +604,8 @@ impl Builder {
     /// The value the element at `address` contributes, emitted into the current block.
     ///
     /// # Invariant
-    /// A slice read observes the write the fold it belongs to names, so the second read of a
-    /// slice fold observes the first and every read is ordered after the one write. The address
-    /// a slice read states is the slot the lane names and **not** the loop's own counter, because
-    /// the counter's bound is a loop invariant no interval walk can see.
+    /// The address is the **caller's**, which is the loop's own carried slot: an element that named
+    /// its own address would shadow it, and the read would then observe one slot for every step.
     fn element_at(&mut self, element: Element, address: ValueId) -> ValueId {
         let block = self.current();
         match element {
@@ -589,16 +617,12 @@ impl Builder {
                     vec![position, address],
                 )
             }
-            Element::Slice {
-                ordinal,
-                slot,
-                observed,
-            } => {
+            Element::Slice { ordinal, observed } => {
                 let ordinal = self.constant(block, ScalarClass::Int, ordinal as i64);
                 let read = self.push(
                     block,
                     KernelInstr::SliceReadCall(self.class),
-                    vec![ordinal, slot, observed],
+                    vec![ordinal, address, observed],
                 );
                 self.slice_reads.push(read);
                 read

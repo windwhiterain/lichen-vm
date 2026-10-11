@@ -26,3 +26,7 @@ lichen-kernel-ir.workspace = true
 # than so the backend can see a graph.
 [dev-dependencies]
 lichen-graph-ir = { path = "../lichen-graph-ir" }
+# The acceptance case's bodies: a declared reduction tiled across the workgroup, checked against
+# the emitter here and run on a device from `lichen-language`'s own tests.
+lichen-fusion = { path = "../lichen-fusion" }
+lichen-fusion-bridge = { path = "../lichen-fusion-bridge" }

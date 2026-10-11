@@ -707,6 +707,8 @@ name = "lichen-compute-gpu"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "lichen-fusion",
+ "lichen-fusion-bridge",
  "lichen-graph-ir",
  "lichen-kernel-ir",
 ]
