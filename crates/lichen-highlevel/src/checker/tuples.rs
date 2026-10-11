@@ -23,6 +23,8 @@ where
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        // A concrete type node is what a clone references in place.
+        self.module.evaluate_node_deep(ty_node, None);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);

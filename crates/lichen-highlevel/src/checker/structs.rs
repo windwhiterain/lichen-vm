@@ -131,11 +131,24 @@ where
                     Some(shape_ops),
                 );
                 let ty_ops = self.array_node(self.current_block, &[shape, key]);
-                self.op_node(
+                let element = self.op_node(
                     self.current_block,
                     P::Operator::from(LowOperator::Index),
                     Some(ty_ops),
-                )
+                );
+                // A slot container's element is a slot, so the field's type is
+                // its type position — one level further in.
+                match elements {
+                    shape::ShapeElements::Types => element,
+                    shape::ShapeElements::Slots => {
+                        let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
+                        self.op_node(
+                            self.current_block,
+                            P::Operator::from(LowOperator::Index),
+                            Some(slot_ops),
+                        )
+                    }
+                }
             }
         };
         (value_node, ty_node)
