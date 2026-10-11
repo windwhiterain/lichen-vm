@@ -1046,25 +1046,10 @@ fn a_folded_reduction_validates() {
         ),
     ] {
         let fragment = folded_fragment(body, tiled);
-        for (index, block) in fragment.body.blocks.iter().enumerate() {
-            println!(
-                "=== {what} block {index}: instrs {:?} term {:?}",
-                block.instrs, block.terminator
-            );
-        }
-        println!(
-            "=== {what}: arity {} params {:?} results {}",
-            fragment.param_shape.flat_arity(),
-            fragment.body.parameters(),
-            fragment.result_classes.len()
-        );
         fragment
             .body
             .validate()
             .unwrap_or_else(|broken| panic!("the {what} body is well formed: {broken}"));
-        for (index, value) in fragment.body.values.iter().enumerate() {
-            println!("=== {what} value {index}: {value:?}");
-        }
         let words = spirv::compile(
             &LaunchSet::single(&fragment),
             Binding {
@@ -1072,17 +1057,12 @@ fn a_folded_reduction_validates() {
                 outputs: 1,
             },
         )
-        .map_err(|refusal| {
-            panic!(
-                "the {what} body is emitted: {refusal} [arity {} params {:?} class {:?} terms {}]",
-                fragment.param_shape.flat_arity(),
-                fragment.body.parameters(),
-                fragment.input_classes,
-                fragment.body.blocks.len()
-            )
-        })
-        .expect("the body is emitted");
+        .unwrap_or_else(|refusal| panic!("the {what} body is emitted: {refusal}"));
         assert!(!words.is_empty(), "the {what} body emitted nothing");
+        assert!(
+            validate(&format!("a folded reduction's {what} body"), &words),
+            "`{VALIDATOR}` accepted the {what} body"
+        );
     }
 }
 

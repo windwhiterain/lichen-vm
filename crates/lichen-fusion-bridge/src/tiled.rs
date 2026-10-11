@@ -538,7 +538,6 @@ impl Loop {
         }
     }
 }
-
 /// A body being built, with the block its instructions land in and what it has emitted.
 struct Builder {
     body: KernelBody,
