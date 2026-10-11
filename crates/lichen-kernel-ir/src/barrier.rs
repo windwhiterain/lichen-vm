@@ -1,0 +1,383 @@
+//! The barrier scan: the pairs a body's shared accesses separate.
+//! See `docs/notes/shared-memory-and-barriers.md` §4.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::{Barrier, KernelBin, KernelBody, KernelInstr, ScalarClass, ValueDef, ValueId};
+
+/// A conservative bound on the slot index an expression takes over the lanes.
+///
+/// # Invariant
+/// The index every lane computes lies inside `[low, high]`, so two intervals that do not
+/// intersect are two access sets that cannot meet — which is the only way this is read.
+#[derive(Clone, Copy)]
+struct Interval {
+    low: u64,
+    high: u64,
+}
+
+impl Interval {
+    /// The whole index space: what an expression with no derivable range answers.
+    const UNBOUNDED: Interval = Interval {
+        low: 0,
+        high: u64::MAX,
+    };
+
+    fn intersects(self, other: Interval) -> bool {
+        self.low <= other.high && other.low <= self.high
+    }
+}
+
+impl KernelBody {
+    /// The pairs this body's shared accesses need a barrier between.
+    ///
+    /// # Invariant
+    /// `lane` is the parameter the invocation index arrives as, which a body cannot name and the
+    /// caller states. A pair is returned when the read observes the write, the writer may be
+    /// another lane, the addresses may coincide, and no recorded barrier between them settles it.
+    /// A shared write whose index's definition cone excludes `lane` is refused.
+    pub fn barrier_scan(&self, lane: ValueId) -> Result<Vec<Barrier>, String> {
+        let order = self.walk_order();
+        let position: HashMap<ValueId, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(at, &value)| (value, at))
+            .collect();
+        let incoming = self.incoming_arguments();
+        self.refuse_bad_shared_accesses(&order, lane, &incoming)?;
+        let mut memo = HashMap::new();
+        // **A recorded barrier is already between them**: the scan is a function of the body, not
+        // of how often it has run.
+        let mut separated: HashMap<u64, usize> = HashMap::new();
+        for pair in &self.barriers {
+            if let (Some(slot), Some(&at)) = (self.shared_slot(pair.read), position.get(&pair.read))
+            {
+                separated
+                    .entry(slot)
+                    .and_modify(|held| *held = (*held).max(at))
+                    .or_insert(at);
+            }
+        }
+        let mut pairs = Vec::new();
+        for &read in &order {
+            let Some(ValueDef::Instr {
+                op: KernelInstr::SharedReadCall(_),
+                args,
+                ..
+            }) = self.values.get(read.0 as usize)
+            else {
+                continue;
+            };
+            let (Some(&write), Some(&read_index)) = (args.get(2), args.get(1)) else {
+                continue;
+            };
+            let Some(ValueDef::Instr {
+                args: write_args, ..
+            }) = self.values.get(write.0 as usize)
+            else {
+                continue;
+            };
+            let Some(&write_index) = write_args.get(1) else {
+                continue;
+            };
+            // **The reader is the writing lane**: it observes its own earlier write in program
+            // order, whatever the address is.
+            if write_index == read_index {
+                continue;
+            }
+            let write_slot = self.shared_slot(write);
+            let read_slot = self.shared_slot(read);
+            if matches!(
+                (write_slot, read_slot),
+                (Some(written), Some(addressed)) if written != addressed
+            ) {
+                continue;
+            }
+            let read_at = position.get(&read).copied();
+            let settled = match (position.get(&write).copied(), read_at, read_slot) {
+                (Some(write_at), Some(this_read_at), Some(slot)) => separated
+                    .get(&slot)
+                    .is_some_and(|&barrier| write_at < barrier && barrier <= this_read_at),
+                _ => false,
+            };
+            if settled {
+                continue;
+            }
+            if !self
+                .interval(write_index, &mut memo)
+                .intersects(self.interval(read_index, &mut memo))
+            {
+                continue;
+            }
+            pairs.push(Barrier { write, read });
+            if let (Some(slot), Some(read_at)) = (read_slot, read_at) {
+                separated.insert(slot, read_at);
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// The shared accesses a barrier decision cannot be made from, refused by name.
+    ///
+    /// # Invariant
+    /// Run before any pair is recorded, so a contended write is named rather than reported as
+    /// an owed barrier and every read this scan pairs observes a real write — the obligation
+    /// [`Self::validate`] could not discharge, because it only sees recorded pairs.
+    fn refuse_bad_shared_accesses(
+        &self,
+        order: &[ValueId],
+        lane: ValueId,
+        incoming: &[Vec<Vec<ValueId>>],
+    ) -> Result<(), String> {
+        for &value in order {
+            let Some(ValueDef::Instr { op, args, .. }) = self.values.get(value.0 as usize) else {
+                continue;
+            };
+            match op {
+                KernelInstr::SharedWriteCall(_) => {
+                    let Some(&index) = args.get(1) else {
+                        continue;
+                    };
+                    if !self.depends_on(index, lane, incoming) {
+                        return Err(format!(
+                            "the shared write {value:?} is contended: its index {index:?} does \
+                             not depend on the lane parameter, so every lane writes the one slot \
+                             and no barrier can order them \
+                             (`docs/notes/shared-memory-and-barriers.md` §4)"
+                        ));
+                    }
+                }
+                KernelInstr::SharedReadCall(_) => {
+                    let observed = args.get(2).copied();
+                    let names_a_write = observed.is_some_and(|observed| {
+                        matches!(
+                            self.values.get(observed.0 as usize),
+                            Some(ValueDef::Instr {
+                                op: KernelInstr::SharedWriteCall(_),
+                                ..
+                            })
+                        )
+                    });
+                    if !names_a_write {
+                        return Err(format!(
+                            "the shared read {value:?} observes no shared write: its version \
+                             operand is {observed:?}, and the scan owes the pairing \
+                             [`Self::validate`] cannot require \
+                             (`docs/notes/shared-memory-and-barriers.md` §9)"
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `value`'s definition cone reaches `lane`.
+    ///
+    /// # Invariant
+    /// A block parameter is defined by the values **all** its incoming branches hand it, so a
+    /// carried lane is seen through a loop's parameter rather than read as invariant. An
+    /// operand a branch does not hand over counts as a dependence; `validate` refuses that body.
+    fn depends_on(&self, value: ValueId, lane: ValueId, incoming: &[Vec<Vec<ValueId>>]) -> bool {
+        let mut stack = vec![value];
+        let mut seen: HashSet<ValueId> = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if current == lane {
+                return true;
+            }
+            if !seen.insert(current) {
+                continue;
+            }
+            match self.values.get(current.0 as usize) {
+                Some(ValueDef::Instr { args, .. }) => stack.extend(args.iter().copied()),
+                Some(ValueDef::BlockParam { block, index }) => {
+                    for arguments in incoming.get(*block).into_iter().flatten() {
+                        match arguments.get(*index as usize) {
+                            Some(argument) => stack.push(*argument),
+                            None => return true,
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        false
+    }
+
+    /// Every value each block receives, one list per incoming branch.
+    ///
+    /// # Invariant
+    /// A block parameter is defined by all its incoming branches and not by one, so a cone
+    /// walk following a single edge would call a carried lane invariant.
+    fn incoming_arguments(&self) -> Vec<Vec<Vec<ValueId>>> {
+        let mut incoming: Vec<Vec<Vec<ValueId>>> = vec![Vec::new(); self.blocks.len()];
+        for block in &self.blocks {
+            for branch in block.branches() {
+                if let Some(arguments) = incoming.get_mut(branch.target) {
+                    arguments.push(branch.args.clone());
+                }
+            }
+        }
+        incoming
+    }
+
+    /// Every instruction this body lists, in the walk's program order.
+    ///
+    /// # Invariant
+    /// Depth first from `entry`, each block's branches taken in the order it names them, so a
+    /// dominator is visited before a block it dominates and the order is deterministic.
+    fn walk_order(&self) -> Vec<ValueId> {
+        let mut order = Vec::new();
+        let mut seen = vec![false; self.blocks.len()];
+        let mut stack = vec![self.entry];
+        while let Some(block) = stack.pop() {
+            if block >= self.blocks.len() || std::mem::replace(&mut seen[block], true) {
+                continue;
+            }
+            order.extend(self.blocks[block].instrs.iter().copied());
+            for branch in self.blocks[block].branches().into_iter().rev() {
+                stack.push(branch.target);
+            }
+        }
+        order
+    }
+
+    /// The slot ordinal a shared access addresses, when its operand is the constant it must be.
+    ///
+    /// # Invariant
+    /// A slot is a compile-time ordinal, so an operand that is not an integer constant states
+    /// no slot — and a caller that cannot resolve one must not read the `None` as "another
+    /// slot", because that is the answer that drops a barrier.
+    fn shared_slot(&self, value: ValueId) -> Option<u64> {
+        let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
+            return None;
+        };
+        self.constant(args.first().copied())
+    }
+
+    /// The integer constant `value` is, when it is one.
+    fn constant(&self, value: Option<ValueId>) -> Option<u64> {
+        match self.values.get(value?.0 as usize) {
+            Some(ValueDef::Instr {
+                op: KernelInstr::Const(ScalarClass::Int, bits),
+                ..
+            }) => Some(*bits as u64),
+            _ => None,
+        }
+    }
+
+    /// A conservative bound on the index `value` takes, over every lane.
+    ///
+    /// # Invariant
+    /// The value every lane computes lies inside the answer, which is therefore a superset of
+    /// the addresses at stake: disjoint answers are disjoint addresses.
+    fn interval(&self, value: ValueId, memo: &mut HashMap<ValueId, Interval>) -> Interval {
+        if let Some(&known) = memo.get(&value) {
+            return known;
+        }
+        // **A value is bounded before its own cone is walked**: a cone reaching back to it answers
+        // the whole space.
+        memo.insert(value, Interval::UNBOUNDED);
+        let answer = match self.values.get(value.0 as usize) {
+            Some(ValueDef::Instr {
+                op: KernelInstr::Const(ScalarClass::Int, bits),
+                ..
+            }) => {
+                let bound = *bits as u64;
+                Interval {
+                    low: bound,
+                    high: bound,
+                }
+            }
+            Some(ValueDef::Instr { op, args, .. }) => self.interval_of(op, args, memo),
+            _ => Interval::UNBOUNDED,
+        };
+        memo.insert(value, answer);
+        answer
+    }
+
+    /// [`Self::interval`]'s arithmetic, over one instruction's operands.
+    ///
+    /// # Invariant
+    /// An operator the IR does not bound — a conversion, a buffer read, a wrapping subtraction
+    /// — answers [`Interval::UNBOUNDED`] rather than a guess, because a bound that excludes a
+    /// reachable slot is how a barrier goes missing.
+    fn interval_of(
+        &self,
+        op: &KernelInstr,
+        args: &[ValueId],
+        memo: &mut HashMap<ValueId, Interval>,
+    ) -> Interval {
+        let operand = |position: usize, memo: &mut HashMap<ValueId, Interval>| {
+            args.get(position)
+                .map(|&value| self.interval(value, memo))
+                .unwrap_or(Interval::UNBOUNDED)
+        };
+        match *op {
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add) => {
+                let (left, right) = (operand(0, memo), operand(1, memo));
+                match (
+                    left.low.checked_add(right.low),
+                    left.high.checked_add(right.high),
+                ) {
+                    (Some(low), Some(high)) => Interval { low, high },
+                    _ => Interval::UNBOUNDED,
+                }
+            }
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Mul) => {
+                let (left, right) = (operand(0, memo), operand(1, memo));
+                match (
+                    left.low.checked_mul(right.low),
+                    left.high.checked_mul(right.high),
+                ) {
+                    (Some(low), Some(high)) => Interval { low, high },
+                    _ => Interval::UNBOUNDED,
+                }
+            }
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem) => {
+                let left = operand(0, memo);
+                match self.constant(args.get(1).copied()) {
+                    Some(modulus) if modulus > 0 => Interval {
+                        low: 0,
+                        high: left.high.min(modulus - 1),
+                    },
+                    _ => Interval {
+                        low: 0,
+                        high: left.high,
+                    },
+                }
+            }
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Div) => Interval {
+                low: 0,
+                high: operand(0, memo).high,
+            },
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Max) => {
+                let (left, right) = (operand(0, memo), operand(1, memo));
+                Interval {
+                    low: left.low.max(right.low),
+                    high: left.high.max(right.high),
+                }
+            }
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Min) => {
+                let (left, right) = (operand(0, memo), operand(1, memo));
+                Interval {
+                    low: left.low.min(right.low),
+                    high: left.high.min(right.high),
+                }
+            }
+            KernelInstr::Bin(ScalarClass::Int, operator) if operator.is_comparison() => {
+                Interval { low: 0, high: 1 }
+            }
+            KernelInstr::I32WrapI64 => Interval { low: 0, high: 1 },
+            KernelInstr::Select => {
+                let (left, right) = (operand(1, memo), operand(2, memo));
+                Interval {
+                    low: left.low.min(right.low),
+                    high: left.high.max(right.high),
+                }
+            }
+            _ => Interval::UNBOUNDED,
+        }
+    }
+}

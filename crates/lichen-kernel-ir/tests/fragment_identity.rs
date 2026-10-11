@@ -1,9 +1,9 @@
-//! The crate's stated invariants — the digest, and the body's well-formedness gate — through its
-//! public surface.
+//! The crate's stated invariants — the digest, the body's gate, and the barrier scan — through
+//! its public surface.
 
 use lichen_kernel_ir::{
-    Barrier, Br, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, ScalarClass, TargetFacts, Terminator,
+    Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
+    KernelShape, LaneWidth, ScalarClass, TargetFacts, Terminator, ValueDef, ValueId, from_flat,
 };
 
 /// A one-parameter body: `p0 + first`, in SSA.
@@ -288,4 +288,103 @@ fn a_barrier_whose_read_every_lane_reaches_is_accepted() {
     body.barriers.push(pair);
     body.validate()
         .expect("a read on every path to the return carries a uniform barrier");
+}
+
+/// The `ValueId`s of a body's shared accesses of one kind, in the order they are defined.
+///
+/// # Invariant
+/// A `from_flat` body numbers its values in the order its steps define them, so this names the
+/// access a test wrote there without counting the ids it happens to take.
+fn shared_accesses(body: &KernelBody, write: bool) -> Vec<ValueId> {
+    body.values
+        .iter()
+        .enumerate()
+        .filter_map(|(at, def)| {
+            let ValueDef::Instr { op, .. } = def else {
+                return None;
+            };
+            let shared = match op {
+                KernelInstr::SharedWriteCall(_) => write,
+                KernelInstr::SharedReadCall(_) => !write,
+                _ => return None,
+            };
+            shared.then_some(ValueId(at as u32))
+        })
+        .collect()
+}
+
+/// A write and a read at two different indices may meet across lanes, so they are separated.
+#[test]
+fn a_shared_write_and_a_read_by_another_index_are_a_pair() {
+    let body = from_flat(
+        1,
+        &[
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Read(0),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)),
+            FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Read(0),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
+            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+        ],
+    );
+    let lane = body.parameters()[0];
+    let pairs = body
+        .barrier_scan(lane)
+        .expect("a lane-dependent write and a read at another index are well formed");
+    assert_eq!(
+        pairs,
+        vec![Barrier {
+            write: shared_accesses(&body, true)[0],
+            read: shared_accesses(&body, false)[0],
+        }]
+    );
+}
+
+/// A lane reads the address it wrote itself, in program order, so nothing is owed.
+#[test]
+fn a_shared_write_and_a_read_by_the_same_index_are_no_pair() {
+    let body = from_flat(
+        1,
+        &[
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Read(0),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Read(0),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
+            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+        ],
+    );
+    let lane = body.parameters()[0];
+    assert!(
+        body.barrier_scan(lane)
+            .expect("a lane-dependent write and the same read index are well formed")
+            .is_empty()
+    );
+}
+
+/// A shared write every lane makes to one slot is contended, and no barrier can order it.
+#[test]
+fn a_shared_write_whose_index_excludes_the_lane_is_refused() {
+    let body = from_flat(
+        1,
+        &[
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
+            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+        ],
+    );
+    let lane = body.parameters()[0];
+    let refusal = body
+        .barrier_scan(lane)
+        .expect_err("every lane writes one slot, so the write is refused");
+    assert!(refusal.contains("contended"), "names the cause: {refusal}");
+    assert!(
+        refusal.contains("lane parameter"),
+        "names what it excludes: {refusal}"
+    );
 }

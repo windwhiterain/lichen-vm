@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod barrier;
 mod body;
 mod marks;
 mod unary;
