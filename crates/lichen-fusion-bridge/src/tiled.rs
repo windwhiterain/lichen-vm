@@ -231,7 +231,6 @@ impl Folding {
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![lane, one],
         );
-        eprintln!("DEBUG per_lane: lane {lane:?} stop {stop:?}");
         let identity = builder.constant(entry, self.class, self.identity.bits());
         let zero = builder.constant(entry, ScalarClass::Int, 0);
         let folded = Loop {
