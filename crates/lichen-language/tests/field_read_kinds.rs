@@ -24,25 +24,25 @@ fn output(source: &str) -> String {
 
 // --- `a(k)` is the tuple read --------------------------------------------
 
-/// A parameter container: the apply that supplies it reconciles the pin —
-/// the `Runtime` tier, not a `Guard`.
+/// A parameter container: the apply reconciles the requirement's assert, as the
+/// named read's does.
 #[test]
 fn a_paren_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x(0)\nf [10, 20]");
-    assert_eq!(kind, DiagKind::Runtime);
+    assert_eq!(kind, DiagKind::Assert);
     assert!(
-        message.contains("expected <?a, …>") && message.contains("array<Int, 2>"),
-        "the requirement is the open tuple type, the found side the array: {message}"
+        message.contains("expected a tuple type") && message.contains("array<Int, 2>"),
+        "the requirement is the tuple kind, the found side the array: {message}"
     );
 }
 
-/// A decided container is refused where it stands.
+/// A decided container is refused where it stands, naming both **kinds**.
 #[test]
 fn a_paren_read_of_a_decided_array_is_refused() {
     let (message, kind) = refused("l = [10, 20]\nl(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
-        message.contains("expected <?a, …>") && message.contains("array<Int, 2>"),
+        message.contains("TypeTuple") && message.contains("TypeArray"),
         "the same stated requirement: {message}"
     );
 }
@@ -53,8 +53,8 @@ fn a_paren_read_of_a_struct_instance_is_refused() {
     let (message, kind) = refused("S = struct<.x Int, .y Type>\ns = S(.x 1, .y Int)\ns(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
-        message.contains("expected <?a, …>") && message.contains("struct<.x Int, .y Type>"),
-        "the requirement is the tuple type, the found side the struct: {message}"
+        message.contains("TypeTuple") && message.contains("TypeStruct"),
+        "the requirement is the tuple kind, the found side the struct's: {message}"
     );
 }
 

@@ -178,15 +178,15 @@ consequences of taking that seriously:
   once it resolves, so the elements resolve with it: `lazy_infinite` reads
   `(1, 2, 3): <Int, Int, Int>` where a read through the pattern gave
   `(raw 1, raw 2, raw 3): <?a, ?b, ?c>`.
-- **The kind requirement is load-bearing.** Consistency is about the *slots*, not
-  about the kind: an open container's positions are readable whatever it turns
-  out to be, so dropping the requirement accepts `l(0)` on an array and `s(0)` on
-  a struct instance (both measured, both must be refused). *Recording* the
-  requirement instead of unifying it is not a substitute either: the guard's
-  structural pattern then re-checks per unrolling step and `gcd` fails with
-  `expected <?a, …>, found <Int, Int>`. A kind-shaped requirement — as the named
-  read's `AssertSpelling::StructKind` already is — would state it without binding
-  the container, and that is the shape a follow-up should take.
+- **The requirement is the container's *kind*, never its type.** Naming the kind
+  (`checker::tuple_kind_requirement` for a decided container, a registered
+  `TypeOperator::IsTupleType` assert for an open one, spelled
+  `AssertSpelling::TupleKind`) leaves the container's own type cell free, so the
+  read's elements resolve with the container; the named read's `StructKind` is the
+  same shape. Consistency is about the *slots*, not the kind, so the requirement
+  is load-bearing: without it `l(0)` on an array and `s(0)` on a struct instance
+  are accepted (measured), because an open container's positions are readable
+  whatever it turns out to be.
 
 The pattern is therefore built only where the requirement must be stated, so a
 read of a decided tuple type allocates nothing.

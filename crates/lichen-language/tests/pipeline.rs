@@ -1538,16 +1538,15 @@ fn a_positional_read_of_a_struct_instance_is_refused() {
     // The paren read is the *tuple* read, so the positional form on a
     // struct instance is refused.
 
-    // The requirement is the open tuple type the container would have to be,
-    // and the caret is the container.
+    // The requirement is the tuple **kind** the container would have to have, and
+    // the caret is the container.
     let d = diags("s = struct<.f Int, .t Type>; a = s(1, Int); a(0)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
     assert!(
-        d[0].message.contains("expected <?a, …>")
-            && d[0].message.contains("struct<.f Int, .t Type>"),
-        "the requirement is the open tuple type, the found side the struct: {}",
+        d[0].message.contains("TypeTuple") && d[0].message.contains("TypeStruct"),
+        "the requirement is the tuple kind, the found side the struct's: {}",
         d[0].message
     );
     assert_eq!(
