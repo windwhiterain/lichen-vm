@@ -603,10 +603,16 @@ workgroups must exchange cannot be one kernel, so the answer is that the region 
 fuse and the graph keeps two nodes. That is the graph's decision and not a kernel's, which
 is why the plan's staging has two values and not three — a plan asking for `global` is
 asking the engine to place a value in the one space that costs a kernel boundary.
-**`registers` is not a placement either**: it is the assertion that no staging is owed,
-which the facts confirm rather than believe.
+**`registers` is not a placement for a value, and it is one for a slice.** A value no other
+lane reads is a scalar SSA value, so what the walk concludes at step 1 below is that nothing is
+owed — the facts confirm that rather than believe it. A slice placed in registers is not that
+statement: the author asked for an owned array and the placement answers *one array per lane*,
+which is why the plan may state it, why `Space` has the member, and why `spirv.rs` refuses it
+by name today. The two are asked of different objects — the walk asks whether a **value** is
+exchanged, the space answers where a **slice's** elements live — and reading one as the other is
+what the row above this paragraph corrects.
 
-So the plan's real content is *which* values are staged, *where* (shared), and *which*
+So the plan's real content is *which* values are staged, *where* (a space), and *which*
 barriers — and the automatic plan is the walk that decides it:
 
 **The walk's input is a value that already crosses lanes**, which is worth stating because

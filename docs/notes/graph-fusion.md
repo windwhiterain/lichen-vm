@@ -479,7 +479,7 @@ three spaces, and the choice is not free:
 
 | space | who sees it | what it costs |
 |---|---|---|
-| **registers** | the lane that wrote it | nothing |
+| **registers** | the lane that wrote it | nothing to synchronise — a **value** no other lane reads; a **slice** placed here is a per-lane array, which the GPU target refuses by name today |
 | **shared** | the workgroup | a barrier between a cross-lane write and its read |
 | **global** | every workgroup | a second graph node — the graph's business, not a kernel's |
 
@@ -588,8 +588,10 @@ lane width — that keep being read as one.
 The refusals this interface owes, each naming its cause: `PlanContradicted` (a
 declared plan the three facts refute), `UncertifiedCrossLaneRead` (a cross-lane
 value with neither a barrier nor a uniformity certificate),
-`StagingNotOnThisBackend` (the host path refuses `Shared` and barriers — the
-memory note's §7 decision — so a plan that needs them is GPU-only and says so),
+`StagingNotOnThisBackend` (a target that cannot honour a space refuses it **by
+name** — the host path refuses `Shared` and barriers by the memory note's §7
+decision, and the GPU target refuses a `Register`-placed slice — so a plan that
+needs either learns it and which),
 and `StagingWidthNotAWidth` (the divisibility lattice against a device's
 lane-group width). Naming them is this note's; **implementing each is the
 mechanism's**, and [shared-memory-and-barriers](shared-memory-and-barriers.md) §9
