@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_kernel_ir::{
-    Barrier, Br, KernelBin, KernelBody, KernelInstr, ScalarClass, Terminator, ValueId,
+    Barrier, Br, KernelBin, KernelBody, KernelInstr, KernelMark, MarkField, ScalarClass,
+    Terminator, ValueId,
 };
 
 use crate::operators::lowered;
@@ -321,18 +322,20 @@ impl Folding {
         );
         let dummy = builder.constant(self.class, self.identity.bits());
         builder.finish(vec![dummy]);
-        return Ok(Tiled {
+        Ok(Tiled {
             body: builder.body,
             element: self.element,
-        });
+            staged: write,
+        })
     }
 }
 
-/// A tiled fold's body, with the element source it folded.
+/// A tiled fold's body, the element source it folded, and the value it staged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tiled {
     body: KernelBody,
     element: Element,
+    staged: ValueId,
 }
 
 impl Tiled {
@@ -344,6 +347,32 @@ impl Tiled {
     /// The element source the body folds.
     pub fn element(&self) -> Element {
         self.element
+    }
+
+    /// The slice write's result: the value the body staged into the slice.
+    ///
+    /// # Invariant
+    /// The result of the body's own `SliceWriteCall`, so `KernelBody::staged_slice`
+    /// answers that write's slice and a mark on this value names the staging itself
+    /// (`docs/notes/graph-fusion.md` §5).
+    pub fn staged(&self) -> ValueId {
+        self.staged
+    }
+
+    /// The marks publishing `name` for the staged value.
+    ///
+    /// # Invariant
+    /// One mark in the shape the channel already uses — a single unnamed field — attached to
+    /// the slice write's result, so a plan naming `name` resolves to the staging and never to
+    /// a value the fold read (`docs/notes/graph-fusion.md` §5).
+    pub fn marks(&self, name: &str) -> Vec<KernelMark> {
+        vec![KernelMark {
+            value: self.staged,
+            payload: vec![MarkField {
+                name: None,
+                text: name.to_string(),
+            }],
+        }]
     }
 
     /// The body, taken.
