@@ -335,11 +335,21 @@ Two measurements outlive that decision and are recorded here rather than lost:
   that program is ordinary — which is what D17's sentence already said, and is now what
   the lowering does.
 
-**The enforcement question is unanswered and is now the sharpest open one.** Nothing
-in the tree forbids reading the original `b` after writing it, which is a silently
-unordered read; `KernelBody::validate` has no read/write ordering check and cannot
-have one, because it cannot tell an input buffer from an output. The token never
-provided this either — `read` does not consume it. [§10](#10-what-is-open) item 3.
+**The enforcement question is answered for global buffers, and by two refusals rather
+than by a check.** It used to be that nothing forbade reading the original `b` after
+writing it — a silently unordered read — and `KernelBody::validate` could not forbid it,
+because it cannot tell an input buffer from an output. It does not need to. A read's
+`.from` resolves against `roles.inputs` and a write's `.to` against `roles.outputs`, and
+those two path lists are **disjoint by construction**: `parallel_roles` gives each leaf
+one role by which top-level field it sits under (`named("in")` and `named("out")`, two
+different positions), and a `Buf`-shaped leaf under neither is refused outright ("a
+buffer outside `.in`/`.out`"). So no global buffer is both read and written by one body,
+and the unordered pair is not forbidden but **unspellable**. Both halves are measured: a
+read of an output, or of a write's result, is refused
+([compute-buffer-wrapper](compute-buffer-wrapper.md#the-chain-walk-what-it-measures-and-what-it-cannot-answer)),
+and a write naming an input is refused by the same resolver from the other side. The
+token never provided this either — `read` does not consume it. [§10](#10-what-is-open)
+item 3.
 
 ## 4. What decides a barrier, and it is three facts
 
@@ -829,13 +839,19 @@ Still open:
    that captures a buffer captures some version, and the question is whether
    capturing a stale one is refused or silently unordered. Today a closure captures a
    handle whose writes are not versions, which is why this never arose.
-3. **The enforcement question — narrower now, and no longer hypothetical.** Reading a
+3. **The enforcement question — closed for global buffers, open only for `Shared`.**
+   Reading a
    write's result, or an output buffer at all, is **refused by name** inside a body:
    `param_path` resolves either to a path that is not in `roles.inputs`, and
    `parallel_buffer_pos` answers nothing. That was not true until the fix recorded in
    [compute-buffer-wrapper](compute-buffer-wrapper.md#the-chain-walk-what-it-measures-and-what-it-cannot-answer);
    before it, both spellings silently answered from input position 0, and so did a read
-   of the *second* of two inputs. What is still open is the case step 4 creates: once a
+   of the *second* of two inputs. **The write side now refuses from the other direction
+   too**: a `.to` naming an input buffer, a scalar, or nothing at all is refused by
+   `parallel_output_pos`, and since `roles.inputs` and `roles.outputs` are disjoint by
+   construction (§3's closing paragraph) no global buffer is both read and written by one
+   body — the unordered pair is *unspellable*, not merely checked. What is still open is
+   the case step 4 creates: once a
    `Shared` slot **is** readable, a read has to name the version it observes, and
    nothing today distinguishes "ordered after the write" from "not".
    `KernelBody::validate` cannot host that check — it cannot tell an input buffer from
