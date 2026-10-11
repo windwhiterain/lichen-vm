@@ -178,9 +178,10 @@ where
                 .collect();
             return Some(format!("<{}>", fields.join(", ")));
         } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
+            // The element position is a **slot**, read as source.
             return Some(format!(
                 "array<{}, {}>",
-                self.printer.any_node(shape[0].node),
+                self.printer.slot_any(shape[0].node),
                 self.printer.any_node(shape[1].node)
             ));
         } else if marker == P::Value::set_type_marker() && shape.len() == 1 {
@@ -237,9 +238,15 @@ where
             if shape.len() != 2 {
                 return None;
             }
+            // The element position is a slot: the element's type is its type
+            // position, and one slot serves every element.
+            let element_ty = self
+                .printer
+                .slot_type_any(shape[0].node)
+                .unwrap_or(shape[0].node);
             let mut out = Vec::with_capacity(values.len());
             for v in values {
-                out.push(self.element_any(v.node, shape[0].node));
+                out.push(self.element_any(v.node, element_ty));
             }
             return Some(format!("[{}]", out.join(", ")));
         }

@@ -1,12 +1,12 @@
 # Compound element slots
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
-> (`8b2fa7a`); the **tuple** and **struct** steps are complete — every compound's
-> element is a full `[value, type, attrs…]` slot, both construction sites, the
-> readers, the printers, the element-attribute and value-pin reconciliation, the
-> wildcard literal `@any`, a value-less annotation `: T # a`, the spelled-out
-> `tuple{…}` form, and `ShapeElements` gone. The step order is tuple, struct,
-> array, then table/set.
+> (`8b2fa7a`); the **tuple**, **struct**, and **array** steps are complete — every
+> compound's element is a full `[value, type, attrs…]` slot, both construction
+> sites, the readers, the printers, the element-attribute and value-pin
+> reconciliation, the wildcard literal `@any`, a value-less annotation `: T # a`,
+> the spelled-out `tuple{…}` form, and `ShapeElements` gone. What remains is
+> table/set, and releasing `<>` for the keyword-led forms.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -191,6 +191,20 @@ consequences of taking that seriously:
 The pattern is therefore built only where the requirement must be stated, so a
 read of a decided tuple type allocates nothing.
 
+## The array step
+
+An array's element position is **one slot serving every element**, so the two
+rules that need a count are stated once each:
+
+- `check_array_type` (`array<T, n>`), `check_array_term`, and `check_index`'s pin
+  build `[element slot, length]`; `low_type_of_array` and both printers read the
+  slot's type position.
+- The element walk pairs a **single** type element with *each* value element
+  (`checker::element_pairs`), which is what a pin on an array's element means:
+  `[1, 2] : array<5 : Int, 2>` is refused twice, once per element, and
+  `[1 # 4, 2] : array<Int # 2, 2>` holds while `[1 # 2, 2] : array<Int # 4, 2>` is
+  refused. A one-element tuple pairs the same way, so the rule needs no kind test.
+
 ## What is open
 
 - **An element's attribute is not rendered.** A pinned element now reads
@@ -199,8 +213,11 @@ read of a decided tuple type allocates nothing.
   need each attribute extension's source sigil (`#`, `?`, `!`), which
   `AttrSpec` does not state today, so the spelling is a wider change than the
   pin's was.
-- **The array and table/set steps.** Each repeats the tuple's shape: a
-  construction site, the readers, the printers, and its own wide tests. An array's
-  element slot is one slot for every element, so its `@any` value position is
-  already the only spelling that can work there; a struct's spelled-out form
-  (`struct{.f …}`) and its own pin/attribute walk ride with the struct step.
+- **The table and set steps.** Both are bare layouts: a set's shape is the element
+  type alone and a table's is `[key, value]`. Each repeats the tuple's shape —
+  construction site, readers, printers, wide tests — and a set's single element
+  slot is the array's rule again.
+- **The array *read*'s requirement is still a structural pattern.** `check_index`
+  pins its container against `[slot cell, length cell]` rather than naming the
+  array kind, so the same resolution question the tuple read answered could be
+  asked of it; nothing measured so far needs it.

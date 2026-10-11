@@ -481,13 +481,15 @@ fn real_array_type_is_type_and_length() {
         Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
-    // The value is the instance [type, length].
+    // The value is the instance [element slot, length].
     let shape = b.state[arr].val.unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
+    // The element is a slot, so its type is the slot's type position.
+    let element_slot = array_ids(&b, shape_ids[0]);
     assert!(
-        is_int_type(&b, shape_ids[0]),
-        "instance[0] is the element type"
+        is_int_type(&b, element_slot[1]),
+        "instance[0] is the element slot, whose type is Int"
     );
     assert!(
         matches!(
@@ -564,8 +566,10 @@ fn array_literal_is_homogeneous() {
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
+    // The element position is a slot: the shared element type unifies to int.
+    let element_slot = array_ids(&b, shape_ids[0]);
     assert!(
-        is_int_type(&b, shape_ids[0]),
+        is_int_type(&b, element_slot[1]),
         "the shared element type unifies to int"
     );
     assert!(

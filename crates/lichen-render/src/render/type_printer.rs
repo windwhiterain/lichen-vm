@@ -244,7 +244,8 @@ where
                     };
                 }
                 Some(m) if m == P::Value::array_type_marker() => {
-                    // shape = [element type, length] — render `array<T, len>`.
+                    // shape = [element slot, length] — render `array<T, len>`,
+                    // the element as source so a pin is stated.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         // SAFETY: `shape` is the payload of a value read from
@@ -254,7 +255,7 @@ where
                     {
                         return format!(
                             "array<{}, {}>",
-                            self.any_node(s[0].node),
+                            self.slot_any(s[0].node),
                             self.any_node(s[1].node)
                         );
                     }
@@ -586,7 +587,10 @@ where
                     {
                         return format!(
                             "array<{}, {}>",
-                            self.static_any(s[0].node, visiting),
+                            match self.slot_type_any(s[0].node) {
+                                Some(ty) => self.static_any(ty, visiting),
+                                None => self.static_any(s[0].node, visiting),
+                            },
                             self.static_any(s[1].node, visiting)
                         );
                     }
