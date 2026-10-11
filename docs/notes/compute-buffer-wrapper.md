@@ -75,14 +75,17 @@ collect = (b : (Buf _))   => $collect(b)
   precisely.
 - `Read`/`Write` keep their `_` instantiation spelling at the call sites
   (`(compute.Read _)(…)`): the element cell is what the buffer's `.element` binds.
-- **`Buf` carries no length, and that is the bound/owned distinction rather than an
-  omission.** A buffer is sized by whoever binds it — the host — so a body never names
-  that, which is why a `Read` needs only `.element`. A **staging slice** is the other
-  case: it has no binder, so the body states its element class *and* its count, and that
-  is the whole of the asymmetry between `Buf` and the designed
-  `Shared = T => struct<.native _, .element T, .n Int>`. Where a slice *lives* —
-  registers, shared, global — is a **placement** and not part of its identity, which is
-  why the name of one space was the wrong name for the thing
+- **A buffer's type carries `(element, length, DP)`, and its length is stated only where
+  nothing binds it.** That is the bound/owned distinction rather than an omission: a buffer
+  is sized by whoever binds it — the host — so a body never names that, which is why a
+  `Read` needs only `.element`; a **staging slice** is the other case, has no binder, and
+  the body states its element class *and* its count. The `DP` is the type's other argument,
+  and it is what distinguishes the paper's cases — `grid[1]` for a host-bound buffer
+  (`ptr(T, N)`), `block[1]` for a slice (`shared(T, N)`), `view(T, N, DP)` with the argument
+  written — so `Shared = T => struct<.native _, .element T, .n Int>` is not a second
+  nominal: it is this one type at `block[1]`. Where a slice *lives* — registers or shared
+  within that scope — is a **placement** and not part of its identity, which is why the
+  name of one space was the wrong name for the thing
   ([shared-memory-and-barriers](shared-memory-and-barriers.md) §5).
 
 ## The parameter is a named struct, and its `.out` group is the result

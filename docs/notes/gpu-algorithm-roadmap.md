@@ -352,30 +352,37 @@ the unroll, and it is the largest single item in this roadmap:
 > overlap and the lanes differ; and the memory hierarchy belongs in the type
 > rather than in a new buffer *kind*, because a buffer is already a struct
 > wrapper. The one bullet below that the note **corrects** is "a new buffer
-> kind": it is a second wrapper, `Shared = T => struct<.native _, .element T,
-> .n Int>`.
+> kind": it is not a second wrapper but the one buffer type at `block[1]`,
+> `Shared = T => struct<.native _, .element T, .n Int>` — the paper's
+> `view(T, N, DP)` with the argument written. The note removes that bullet's
+> other two shapes as well: the language layer keeps one `write` and one
+> `read`, because a space is the plan's and the `DP` is the type's and neither
+> is an op (§5); and a barrier is data the scan records rather than an
+> instruction (§4).
 >
 > **A code audit then corrected the note twice**, and both corrections shrink
 > this item; its [§9](shared-memory-and-barriers.md#9-the-staging) is the
-> staging that follows. First, the overlap judgement is **not** `DP`: it is the
-> nominal wrapper (which says whether a slot is block-shared at all) plus a
-> def-cone query over the body, and the **conservative** form of that query is the
-> body's alone. Its **exact** form needs the group's lane count — a target fact, but
-> a fragment may *declare* one on `int_width`'s template, which is what keeps the
-> whole scan in `lichen-kernel-ir` and what makes the width a
+> staging that follows. First, the overlap judgement is **not** a check of the
+> `UP` lattice: it is the buffer type's `DP` (which says whether the elements
+> are block-shared at all) plus a def-cone query over the body, and the
+> **conservative** form of that query is the body's alone. Its **exact** form
+> needs the group's lane count — a target fact, but a fragment may *declare* one
+> on `int_width`'s template, which is what keeps the whole scan in
+> `lichen-kernel-ir` and what makes the width a
 > [staging step](shared-memory-and-barriers.md#9-the-staging) in its own right
-> rather than a backend's business. The audit first drew the other conclusion from
-> it and was wrong; §4 of that note records the correction. That width has a second
-> consumer, the one this axis is *not* about: it decides whether `i % 64` is one
-> slot per lane or one slot for every lane, which is what chooses **where a
-> cross-lane value lives**. `UP`/`DP` is a
-> precision upgrade on a refusal that already works, so growing the `UP` lattice
-> with a **level** component — which is what this callout used to say the item
-> needs *first* — is deferred to a trigger that has not arrived. Second, the
-> expensive half is not the analysis but the **host backend**: a barrier makes
-> the body a function of a workgroup rather than of an index, so the first
-> landing refuses `Shared` on the CPU path and loses `gpu_matches_cpu` coverage
-> for this class of algorithm.
+> rather than a backend's business. The audit first drew the other conclusion
+> from it and was wrong; §4 of that note records the correction. That width has
+> a second consumer, the one this axis is *not* about: it decides whether
+> `i % 64` is one slot per lane or one slot for every lane, which is what
+> chooses **where a cross-lane value lives**. `UP` is a precision upgrade on a
+> refusal that already works, while `DP` is the type's kind; growing the `UP`
+> lattice with a **level** component — which is what this callout used to say
+> the item needs *first* — is now due rather than deferred, because a `DP`
+> written in a type has to name a level. Second, the expensive half is not the
+> analysis but the **host backend**: a barrier makes the body a function of a
+> workgroup rather than of an index, so the first landing refuses a **staged**
+> body on the CPU path and loses `gpu_matches_cpu` coverage for this class of
+> algorithm.
 
 - **The surface is a native plugin** (a new operator, a new buffer kind bound at
   a group scope, a barrier op) — but the *IR* must grow, because a fragment has

@@ -556,7 +556,7 @@ The item stays in the file rather than being deleted because the *measurement* i
 worth keeping: two writes to one output with only the second reachable do answer
 with the second's value and no complaint, and anyone who later makes outputs
 readable inside a body — which
-[§9 step 4](shared-memory-and-barriers.md#9-the-staging) does, for `Shared` — has to
+[§9 step 4](shared-memory-and-barriers.md#9-the-staging) does, for a `block[1]` slice — has to
 decide again whether an unreturned write is dead, because at that point it has a
 reader. `D17` answers it for global buffers only.
 
@@ -1072,10 +1072,10 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   refusal for a program whose declared outputs are all correctly written.
 
   **The scope of this decision is global buffers.** [§9 step
-  4](shared-memory-and-barriers.md#9-the-staging) makes a `Shared` slot readable
-  inside the body that writes it, and at that point an unreturned `swrite` *does* have
-  a reader — another lane's `sread` — so "dead" stops being the right answer for it.
-  Whoever lands step 4 has to decide it again for `Shared`, and the honest default
-  there is the opposite one: a shared write is reachable from any lane of the
-  workgroup, so reachability from the codomain is not the test.
+  4](shared-memory-and-barriers.md#9-the-staging) makes a `block[1]` slice readable
+  inside the body that writes it, and at that point an unreturned `SliceWriteCall` *does*
+  have a reader — another lane's `SliceReadCall` — so "dead" stops being the right answer
+  for it. Whoever lands step 4 has to decide it again for a `block[1]` scope, and the
+  honest default there is the opposite one: a staged write is reachable from any lane of
+  the workgroup, so reachability from the codomain is not the test.
 

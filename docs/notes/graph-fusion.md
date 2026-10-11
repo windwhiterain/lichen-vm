@@ -485,7 +485,7 @@ three spaces, and the choice is not free:
 
 Which one a value *may* use is decided by who reads it and how uniform it is over
 the lanes; the second half is what `# p` ([attributes](attributes.md)) certifies.
-The mechanism — the nominal wrapper, the three facts that decide a barrier, the
+The mechanism — the buffer type's `DP`, the three facts that decide a barrier, the
 scan that inserts them — is
 [shared-memory-and-barriers](shared-memory-and-barriers.md)'s and is not restated
 here. What this note owes is the **interface**: what a pack may say about the
@@ -570,16 +570,19 @@ kernel     = cfg => { …dataflow, and the staged values it exchanges. It names 
                         space: a slice is a thing, a space is where it lives. … } "gpu"
 plan       = {
   -- `value` is a mark the body published: the plan's only stable way to name one.
-  -- `.n` is a **constraint on this placement** — the group width the facts are checked
-  -- against — and not the origin of a length: a slice's element count is the body's.
-  staging = [ { value = "tile", space = Shared(.n 64) } ]   -- Register | Shared
+  -- `space` is a plan value — `Register | Shared` — and names no length.
+  -- `group_width` is a **constraint on this placement** — the group width the facts
+  -- are checked against — and not the origin of a length: a slice's element count is
+  -- the body's, and a plan's width is the plan's own group width.
+  staging = [ { value = "tile", space = Shared, group_width = 64 } ]
   -- `auto` is the scan. An explicit sync names the two marks it separates, never a
   -- position: a position drifts under re-spelling.
   sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
 }
 ```
 
-**This block is the only place above the IR that names a space**, and that is the rule the
+**This block is the only place above the IR that names a space** — the buffer's **type** names
+the `DP`, and a space is what the plan puts inside it — and that is the rule the
 mechanism is built on rather than a convention of this note:
 [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 states it with the layer table,
 and with the three quantities — a slice's element count, a staging group's width, a device's
@@ -589,8 +592,8 @@ The refusals this interface owes, each naming its cause: `PlanContradicted` (a
 declared plan the three facts refute), `UncertifiedCrossLaneRead` (a cross-lane
 value with neither a barrier nor a uniformity certificate),
 `StagingNotOnThisBackend` (a target that cannot honour a space refuses it **by
-name** — the host path refuses `Shared` and barriers by the memory note's §7
-decision, and the GPU target refuses a `Register`-placed slice — so a plan that
+name** — the host path refuses any staged body by the memory note's §7 decision,
+and the GPU target refuses a `Register`-placed slice — so a plan that
 needs either learns it and which),
 and `StagingWidthNotAWidth` (the divisibility lattice against a device's
 lane-group width). Naming them is this note's; **implementing each is the

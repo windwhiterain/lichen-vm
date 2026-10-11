@@ -489,12 +489,12 @@ There is no barrier in the emitter today; that section records where one goes.
 
 **What the padding does not discharge is what the surplus lanes *write*, and the
 launch refuses the count that would make it observable.** A padded lane runs the whole
-shader, so it runs every `swrite` too, at the index its own invocation id computes —
-and a shared slot is not an ABI output whose surplus element is never read back: a
-real lane's read can reach an element only a surplus lane wrote, and then the staged
-value is the padding's. So a launch set that stages is dispatched over a whole number of
-its root's declared lane width's workgroups only, refused by name with the count and the
-width otherwise — which leaves the slot's **content** as the author's obligation,
+shader, so it runs every staged write — every `SliceWriteCall` — too, at the index its own
+invocation id computes — and a staged slot is not an ABI output whose surplus element is
+never read back: a real lane's read can reach an element only a surplus lane wrote, and then
+the staged value is the padding's. So a launch set that stages is dispatched over a whole
+number of its root's declared lane width's workgroups only, refused by name with the count
+and the width otherwise — which leaves the slot's **content** as the author's obligation,
 recorded with the staged exchange that shows it in
 [shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-convergence-is-free-the-slots-content-is-not);
 no barrier and no `spirv-val` run can see it.

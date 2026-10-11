@@ -149,12 +149,14 @@ which also records a mismatch this lattice has and that axis would expose:
 no lane group is six wide.
 
 **A third consumer has since been named, and it needs the lattice's precision rather
-than its coarse half: the legality of a placement.** A value's uniformity is what
+than its coarse half: how much staging a placement needs.** A value's uniformity is what
 decides whether it needs *staging* at all — a value uniform over the group is one every
 lane computes, so nothing is exchanged — and a value uniform over `n < group` needs
-staging only where a reader sits outside the writer's own `n`-subgroup. That makes the
-certificate the **permission** for a placement and not an optimisation of one, and it is
-stated as a seam of the memory plan in
+staging only where a reader sits outside the writer's own `n`-subgroup. Where a value
+*is* placed is not this attribute's: the buffer **type** carries the `DP` (`block[1]` /
+`grid[1]`), and §4's def-cone query is what refutes a wrong one. So the certificate is a
+**precision upgrade on a rule that already works** and not the permission for a
+placement, and it is stated as a seam of the memory plan in
 [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5,
 feeding the walk in
 [shared-memory-and-barriers](shared-memory-and-barriers.md) §5. The lattice is

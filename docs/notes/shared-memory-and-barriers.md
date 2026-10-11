@@ -37,8 +37,9 @@
 > half ([Typed Perspectives](../reference/Modular%20GPU%20Programming%20with%20Typed%20Perspectives.pdf),
 > read in Chinese in
 > [the walkthrough](../reference/类型系统验证底层%20GPU%20语言：Perspective.md)).
-> [§6.1](#61-dp-deferred-the-nominal-wrapper-already-answers-it) records why
-> lichen does not need to build it yet.
+> [§6.1](#61-dp-is-the-types-and-up-is-the-annotation) records where the `DP`
+> lives — on the buffer's type — and why the level component a written `DP`
+> needs is due rather than deferred.
 >
 > Points at: `crates/lichen-compute/src/compute.lichen` (the algebra),
 > `crates/lichen-compute/src/compute.rs` (`ComputeValue`, `ComputeOperator`,
@@ -51,8 +52,8 @@
 > refusals it owes),
 > `crates/lichen-compute-gpu/src/spirv.rs` (`LOCAL_SIZE_X`),
 > `crates/lichen-compute-gpu/src/dispatch.rs` (the padding that makes a barrier
-> safe), `crates/lichen-perspective/src/perspective.rs` (the `UP` lattice §6.1
-> defers changing).
+> safe), `crates/lichen-perspective/src/perspective.rs` (the `UP` lattice that
+> gains the level component §6.1 makes due).
 >
 > Companions: [compute-buffer-wrapper](compute-buffer-wrapper.md) (the ABI this
 > extends, and the determinism theorem §3 scopes to `Buf`),
@@ -393,7 +394,7 @@ the index expressions are affine over `%`, `/`, `+` and the lane count is the
 fragment's `LOCAL_SIZE_X` (64, `spirv.rs:150`) — so it is O(1) integer
 arithmetic, not a prover.
 
-### All three facts are a def-cone query in the IR, and none of them is `DP`
+### All three facts are a def-cone query in the IR, and the kind is the type's `DP`
 
 This is the audit's second correction, and it is what makes the staging of §9
 possible. The value graph alone cannot answer fact 1 — it knows `k` is an `Int`
@@ -420,7 +421,7 @@ and the crate is forbidden from learning it.
 | fact 1, **conservative** | the two index intervals intersect at all, a lane's own interval being the whole unsigned range — so an operation that may overflow answers *unbounded*, because a wrapped index is not inside the sum of the bounds | O(1) integers per expression | the IR, from the body |
 | fact 1, **exact** | the same question **decided** rather than bounded: does a lane other than the writer reach this slot | not bounds — arithmetic over the per-lane function, a modulo/periodicity question | the IR, and the width is its **domain and not its answer**: `lane_width` alone does not close it |
 | fact 3, already separated | a **position** latch and not a boolean: a recorded barrier separates a pair when its read sits strictly after the write and no later than the read, and that walk order stands for a path order only because `validate` makes such a barrier's read dominate every reachable `Return` | a comparison | the IR |
-| the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slot is `Shared` | the same cone walk | the IR, and it must stay there |
+| the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slice's buffer type says `block[1]` | the same cone walk | the IR, and it must stay there |
 
 The refusal stays above the backends because it is a **program** property, not a target
 limitation: on a host that runs invocations in order a contended write has a defined
@@ -497,11 +498,11 @@ decides each row:
 |---|---|---|---|
 | `0` | one slot, all 64 lanes colliding | no barrier helps — this is the **error**, refused | the def cone (and `UP` for the incomplete cases) |
 | `i % 64` | one slot, one per lane | depends on the reader's interval | fact 1's interval arithmetic |
-| `i` (a global address) | one slot, one per lane | no — the disjointness the buffer map already has | the nominal wrapper: `Buf`, not `Shared` |
+| `i` (a global address) | one slot, one per lane | no — the disjointness the buffer map already has | the buffer type's `DP`: `grid[1]` |
 
 The last row is also the **scope** of the analysis: a barrier is needed for
-*shared* memory because one workgroup's lanes see each other, and a `Buf`'s
-disjointness means a global write needs no barrier at all — cross-dispatch
+*shared* memory because one workgroup's lanes see each other, and a `grid[1]`
+buffer's disjointness means a global write needs no barrier at all — cross-dispatch
 ordering is the graph's job and the trailing `SHADER_WRITE → SHADER_READ |
 TRANSFER_READ` barrier's ([lichen-compute-gpu](lichen-compute-gpu.md#invariants-a-graph-must-not-break)),
 not a kernel's.
@@ -958,7 +959,7 @@ to get there:
 
 | | what it is | what it costs | what it loses |
 |---|---|---|---|
-| **refuse** | `Shared` and `Barrier` are named refusals on the wasm/CPU path | one refusal and one diagnostic | `gpu_matches_cpu` cannot cover shared-memory algorithms |
+| **refuse** | a **staged** body — either space, and every recorded barrier — is a named refusal on the wasm/CPU path | one refusal and one diagnostic | `gpu_matches_cpu` cannot cover shared-memory algorithms |
 | **segment** | split the body at its barriers, export one wasm function per segment, put the slices in wasm linear memory at `[slot_base + lane × len]`, and make the host loop per-group × per-segment | a second emitter shape, a new host loop, and a shared-scratch layout that must agree with SPIR-V's | nothing — the CPU/GPU agreement survives |
 
 **Decision: refuse, GPU only.** The segment path is the right eventual answer and
@@ -1016,7 +1017,7 @@ output and so bills a nest's own write as a second one (`compute.rs:2335`). A
 shared slice in a loop has to be admissible at both, *and* at `WriteInsideLoop`
 for the output case that stays refused. That is the concrete meaning of "a
 genuine relaxation": three refusals have to learn to tell a slice from an
-ABI output, and the fact that lets them is the nominal wrapper (§6.1), not a new
+ABI output, and the fact that lets them is the buffer type's `DP` (§6.1), not a new
 flag.
 
 That is a genuine relaxation of a stated invariant and is recorded as one, not as
@@ -1088,11 +1089,11 @@ mergeable and leaves the tree green.
 | | step | crate(s) | note |
 |---|---|---|---|
 | **1** | **revert the token**: `ScalarClass::State`, `ComputeValue::State`, `Lower.state` and the loop-nest carry, `StateWhereAValueBelongs`, `BridgeRefusal::StateClass`, the ~20 `Const(State, 0)` seeds, `State = struct<>`; `BufferWriteCall` back to `produces() == 0`, `arity() == 3`, and `Write`'s `run` arm back to lazy | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-graph-ir`, `lichen-fusion-bridge`, `lichen-language` (tests) | §6.2 is the inventory. Coordinates with `356fc4a`, which adapted the fusion bridge to the variant — and fixes a latent defect there while it does (`read_position` reads `args.first()`, which the token made the state). **Nothing replaces it on global buffers**: §3's ABI wall |
-| **2** | **the lane-group width as a fragment fact** — **landed** at `c7223fc` as `KernelFragment::target.lane_width`, declared by the lowering, hashed whole as `TargetFacts`, and refused by name by a target that cannot schedule it (`SpirvRefusal::UnsupportedLaneWidth`) | `lichen-kernel-ir`, `lichen-compute-gpu`, `lichen-compute` | Independent of 3–5, and it is what moves fact 1's *exact* judgement and the uniformity check out of a backend without the crate depending on any backend's constant (§4). It landed **one** refusal, not the two this cell first claimed: `StagingWidthNotAWidth` is a plan-level refusal that needs step 7, and `StagingNotOnThisBackend` is a backend's refusal of a space it cannot honour — step 6's for the host and `Shared`, and now `spirv.rs`'s for `Register` (§5). What landed is a *target*'s refusal of the fragment's own declared width, which is `UnsupportedIntWidth`'s mirror |
+| **2** | **the lane-group width as a fragment fact** — **landed** at `c7223fc` as `KernelFragment::target.lane_width`, declared by the lowering, hashed whole as `TargetFacts`, and refused by name by a target that cannot schedule it (`SpirvRefusal::UnsupportedLaneWidth`) | `lichen-kernel-ir`, `lichen-compute-gpu`, `lichen-compute` | Independent of 3–5, and it is what moves fact 1's *exact* judgement and the uniformity check out of a backend without the crate depending on any backend's constant (§4). It landed **one** refusal, not the two this cell first claimed: `StagingWidthNotAWidth` is a plan-level refusal that needs step 7, and `StagingNotOnThisBackend` is a backend's refusal of a space it cannot honour — step 6's for the host, which refuses any staged body (§7), and now `spirv.rs`'s for `Register` (§5). What landed is a *target*'s refusal of the fragment's own declared width, which is `UnsupportedIntWidth`'s mirror |
 | **3** | staging vocabulary: `SliceReadCall` and `SliceWriteCall` as *additive* variants — `[slice, index, value]` and `[slice, index, version]`, each arity 3 and each producing one value — the slice set (`KernelFragment::slices`, one `Slice { class, count, space }` per ordinal with `space: Space = Register | Shared`) hashed in `fragment_digest`, and **the barrier as data** — the separated `(write, read)` pairs on `KernelBody::barriers`, recorded as `ValueId`s and never as positions — **landed** | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-fusion-bridge` | **`SliceReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move — but they are **not answerless**: every exhaustive `match` on `KernelInstr` must now say something, so the four paths that cannot stage refuse by name *here* rather than at steps 5–6. The fusion bridge refuses a projection that reaches a slice (`BridgeRefusal::SliceAccess`), the wasm emitter refuses the whole shape because the host calls once per index (§7), the differential test's own interpreter refuses rather than no-op, and `spirv.rs` refuses because it still has no `Workgroup` storage and no `OpControlBarrier` (`SpirvRefusal::StagingNotEmitted`, which was step 5's and is now deleted, not §5's `StagingNotOnThisBackend`). The divergent-placement refusal is `validate`'s and is dominance, below. A `Barrier` *instruction* is rejected by measurement, §4: thirteen sites against five, and the five semantic ones all sit in targets that will never have a barrier. Values and not positions because the one restructuring in the tree shifts positions silently, and because a pair is already the shape a plan's `sync` has. **Renamed in place, and the space became a field**: `SharedSlot`, `shared_slots` and the two `Shared*Call` variants are `Slice`, `slices` and `Slice*Call`, so the name no longer asserts a home; a slice states its space (`Space = Register | Shared`), and `spirv.rs` dispatches on it and refuses `Register` **by name** (`SpirvRefusal::StagingNotOnThisBackend`) rather than emitting `Workgroup` storage for it |
 | **4** | **the barrier scan**: the walk over a body that **already states** slice accesses, recording the pairs that must be separated, and the contended-write and index-escape refusals — **landed** in `barrier.rs` | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language. **The scan landed**, conservative fact 1 first, and it takes `lane` as an argument because a body cannot name its own invocation index (§4). **It is not the selection, which this row first said.** §5's three-step walk takes as its input *a value that already crosses lanes*, and in the automatic path nothing creates one until step 8 — so the walk is steps 7 and 8's rule, and this step consumes a body that states its space (a pack's, or the one step 8 generates). The divergent-placement refusal landed in step 3, where `validate` lives: it needs dominance over the CFG rather than a look at one terminator. **And this step owed an obligation it could not inherit**, which the scan now produces: step 3's `validate` checks a pair that is *recorded* and cannot require that a bare `SliceReadCall` names a real write, so a read whose version operand names no slice write is refused by name in the scan's own first pass. What stays open is §4's exact fact 1 |
 | **5** | **the lowering, and the GPU half of it**: the plan's space carried from match to emit, a staged access emitted for a buffer whose type says `block[1]`, and the backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slice layout) | `lichen-compute`, `lichen-compute-gpu` | **There is no new language surface, and this row claimed one for two revisions.** The language layer keeps one `write` and one `read`; the buffer's type carries the `DP` that says the elements are block-visible, and the *plan* says which space implements it (§5). §3's conclusion holds: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0` — and the version operand is the lowering's to introduce rather than a surface spelling (`.from`). The descriptor set and binding layout do not change — shared memory is not bound |
-| **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses `Shared` and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
+| **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses a **staged** body — either space, and every barrier — and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
 | **7** | **the plan interface**: a pack's plan matched by schema, **checked against the three facts rather than believed**, carried from match to emit, with the refusals the interface owes | `lichen-language` (match), `lichen-kernel-ir` (check) | [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5 is the interface; this step is where it becomes checkable. The plan never enters the *schema* hash and its **effect** enters `fragment_digest` through the fragment — which is why step 3's slice field and step 2's width are the same kind of fact and land in the same place. **§5's three-step walk belongs to this step**: a declared plan is a proposal about which values cross lanes and where they are staged, and the walk is what decides whether the facts allow the proposal |
 | **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | **This step is where a value comes to cross lanes at all**, and therefore where §5's walk is *run rather than obeyed*: the walk is not applied to a body that has the crossing, it decides to create one by tiling. That is why step 4 can be a scan over stated accesses while the selection lives here. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so there is nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better. What shows it works is the acceptance case below: the same triangle-number reduction, judged against its closed form **and** against the per-lane implementation this row replaces |
 | **9** | the level component on `Perspective`, which a `DP` in a type needs | `lichen-perspective`, `lichen-highlevel` (`AttrExt`) | **due, not deferred**: §6.1 held it as an option while the hierarchy was carried by two nominals, and §5's merge removes that carrier. Its price is itemised in §6.1 |
@@ -1121,11 +1122,14 @@ answer to the second question is a second reading of the same interval rather th
 computation: `KernelFragment::barrier_scan` refuses a slice access whose index interval may reach
 `count`, which is well defined only because the bound and the declared array are one number. The
 automatic path derives the count from `target.lane_width` — the only length a fragment can supply
-while the surface that names one (`Shared(.n)`, [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over)
-§5's plan field) is unbuilt — and states it in the field rather than leaving the emitter to read
-the width, so a declared length is checkable, two lengths are two digests, and the bound and the
-declared array cannot drift. `i % 64` against a count of 64 stays accepted; the global invocation
-id against it does not. **A length of zero is refused by the fragment's own gate now** —
+while the surface that names a slice's own length is unbuilt, that surface being the `DP` on the
+buffer's type, whereas a plan's field
+([graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5) names the
+**space** and carries the plan's own **group width** rather than this count — and it states the
+count in the field rather than leaving the emitter to read the width, so a declared length is
+checkable, two lengths are two digests, and the bound and the declared array cannot drift.
+`i % 64` against a count of 64 stays accepted; the global invocation id against it does not.
+**A length of zero is refused by the fragment's own gate now** —
 `KernelFragment::validate`, the answer to §10 item 4 — because a zero-length `OpTypeArray` has no
 type to declare and no index it could bound; `barrier_scan` runs that gate before it reads the
 count as a bound. And the launch carries the other half of §8: a launch set that stages, at a count
@@ -1210,7 +1214,7 @@ something else:
   **not** associative must not be tiled, and that case is worth pinning beside this one.
 
 One consequence for how it can be verified, from §7: a barrier makes the body a function of
-a workgroup rather than of an index, so the host path refuses `Shared` and
+a workgroup rather than of an index, so the host path refuses any staged body and
 `gpu_matches_cpu` cannot carry this class. Its verification is the closed form **plus** the
 per-lane reference, and not CPU against device.
 
@@ -1226,7 +1230,9 @@ before it can be differenced against, and that is why the reduction goes first.
 Settled by the audit and the staging above, and recorded so they are not
 re-litigated:
 
-- **Where the level lives** — nowhere yet. §6.1: deferred, with the trigger named.
+- **Where the level lives** — **in `Perspective`, and due rather than deferred.** §6.1: a
+  `DP` written in a type has to name a level, so the fold is a prerequisite for writing one
+  at all, and §9 step 9 is where it lands.
 - **Automatic insertion, or an explicit barrier with a checked placement** —
   **automatic**. The original note preferred an explicit `compute.barrier` first,
   on the grounds that the paper's automatic insertion needs a **scope** perspective
@@ -1250,17 +1256,19 @@ re-litigated:
   cell, and neither the checker nor the lowering reads the operator's answer, so
   `ComputeOperator::Write` goes back to lazy and no `ComputeValue` variant is needed
   for a version. A token needed a *value*; a version needs only a *node*.
-- **Where the spine lands** — **with `Shared`, not before it** (§9 step 4). §3's ABI
-  wall: a read-back with no data path compiles and silently answers `0`, so the edge,
-  its operand and its data path arrive together or not at all.
+- **Where the spine lands** — **with the staged landing, not before it** (§9 step 4). §3's
+  ABI wall: a read-back with no data path compiles and silently answers `0`, so the edge,
+  its operand and its data path arrive together or not at all — and it is the staged
+  landing that makes them readable, because there the buffer's type says `block[1]`.
 - **Whether the read grows an operand** — **yes, either way.** §3 measured that a
   version needs it just as a token did, because `BufferReadCall`'s operands are
   `[position, index]` and the write's `ValueId` has nowhere to travel. What a version
   buys is the operand's *content*, not its absence.
-- **`DP` on `Buf`** — additive and deferred: `Buf` stays what it means today, and
-  only `Shared` narrows it. Whether the top is the *honest* `DP` for a global
-  buffer is still an open question, and it is now a question about a later landing
-  rather than about this one.
+- **`DP` on the buffer's type** — **decided, and the other way.** There is one nominal and
+  the `DP` is one of its arguments: `Buf` is that type at `grid[1]`, and what was called
+  `Shared` was never a second nominal but the same type at `block[1]` (§6.1). What remains
+  is the *spelling* — a `DP` written in a type needs the level component (§9 step 9) — and
+  not the decision.
 
 Still open:
 
@@ -1269,15 +1277,15 @@ Still open:
    (`partition(data, P, offset)` in, `claim(data, thread[1])` for the degenerate
    case), and `offset`'s disjointness is the user's to prove in the paper as well.
    Whether lichen needs both, or only the degenerate one, is not settled. **This is
-   also §6.1's trigger**: it is the first thing that needs a level the nominal type
-   cannot supply.
+   also where §6.1's level component binds**: narrowing a `DP` is the first thing that
+   needs a level the `Perspective` lattice has to name.
 2. **Whether a closure must name the version it captures.** §3's one surviving
    objection to a buffer-valued write, and versioning makes it concrete rather than
    hypothetical: threading *is* the surface now (`read (.from w1, …)`), so a closure
    that captures a buffer captures some version, and the question is whether
    capturing a stale one is refused or silently unordered. Today a closure captures a
    handle whose writes are not versions, which is why this never arose.
-3. **The enforcement question — closed for global buffers, open only for `Shared`.**
+3. **The enforcement question — closed for global buffers, open for a `block[1]` scope.**
    Reading a
    write's result, or an output buffer at all, is **refused by name** inside a body:
    `param_path` resolves either to a path that is not in `roles.inputs`, and
@@ -1289,9 +1297,9 @@ Still open:
    `parallel_output_pos`, and since `roles.inputs` and `roles.outputs` are disjoint by
    construction (§3's closing paragraph) no global buffer is both read and written by one
    body — the unordered pair is *unspellable*, not merely checked. What is still open is
-   the case step 4 creates: once a
-   `Shared` slot **is** readable, a read has to name the version it observes, and
-   nothing today distinguishes "ordered after the write" from "not".
+   the case step 4 creates: once a `block[1]` slice **is** readable by another lane, a read
+   has to name the version it observes, and nothing today distinguishes "ordered after the
+   write" from "not".
    `KernelBody::validate` cannot host that check — it cannot tell an input buffer from
    an output — so it belongs where the roles are known. The token never provided it
    either, because `read` did not consume it.
@@ -1328,14 +1336,14 @@ elements into 3 buckets, answered `(1, 1, 1)` on **both** backends with no
 diagnostic and no refusal
 ([gpu-algorithms-ladder](gpu-algorithms-ladder.md#5-a-scatter-accumulate-is-silently-wrong))
 — is a contended write that is *expressible today*: the same shape a naive
-a `SliceWriteCall` at index `0` has. That is the sharpest available evidence that the missing
+`SliceWriteCall` at index `0` has. That is the sharpest available evidence that the missing
 half is a **judgement** and not an instruction: the program runs, both backends
 agree, and the answer is wrong. A barrier would not have fixed it.
 
 What notices it is the def-cone query of §4: that write's index has a cone
 that excludes the lane parameter, so the write is the same slot in all 64 lanes,
 so it is contended, so it is refused. **The original note credited `DP` with this,
-and that was too strong** — `DP` would notice *more* of them (`i % 1`, and any
+and that was too strong** — `UP` would notice *more* of them (`i % 1`, and any
 expression `UP` can prove uniform whose cone still contains the lane), which is
 why §4 calls the perspective attribute a precision upgrade and §10 item 6 asks for
 the two causes to be told apart in the diagnostic.
