@@ -113,8 +113,8 @@ impl KeyWriter {
     ///
     /// Tags are unique across [`Expr`] variants and every list writes its
     /// length, so the encoding is injective; adding a variant or changing a tag
-    /// bumps [`KEY_FORMAT_VERSION`]. `#[stacksafe]`: one stack frame per nested
-    /// expression.
+    /// bumps [`KEY_FORMAT_VERSION`]. Tag `27` retired with the raw index and is
+    /// never reused. `#[stacksafe]`: one stack frame per nested expression.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {

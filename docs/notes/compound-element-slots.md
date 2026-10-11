@@ -130,8 +130,9 @@ t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in t
 ```
 
 The angle spellings this note was written against (`<a, b>`, `struct<.f a>`,
-`array<T, n>`) were retired afterwards; measurements recorded before that
-retirement keep its spelling.
+`array<T, n>`) were retired afterwards, and so was the raw index `X<e>` — the only
+remaining use of the angle token, which is now `<`/`>` as comparisons alone;
+measurements recorded before those retirements keep their spelling.
 
 A pin cannot be enforced by the lowlevel compare — a value's element slots hold
 the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)
@@ -241,5 +242,3 @@ arm) rather than a new one.
 - **`tree-sitter-lichen/grammar.js` still models the retired forms.** Regenerating
   and validating it needs the tree-sitter CLI, which this checkout cannot run;
   `docs/notes/operators.md` §10 records the gap.
-- **The raw index `X<e>` keeps its angle token**, which is why `<`/`>` remain in
-  the lexer and the glued-index rule stays.
