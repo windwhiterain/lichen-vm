@@ -130,13 +130,18 @@ t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in t
 A pin cannot be enforced by the lowlevel compare — a value's element slots hold
 the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)
 exactly as an attribute is, and `@any : T`'s arm is vacuous because a wildcard's
-own class accepts everything.
+own class accepts everything. Both printers read a slot back as source, so a pin
+is visible: `(5, 2) : tuple{5 : Int, Int}` renders `(5, 2): <5 : Int, Int>`,
+while `@any`'s own position renders as no pin at all.
 
 ## What is open
 
-- **A pin is invisible to the type printer.** A pinned type renders its elements'
-  types, so `tuple{5 : Int}` prints `<Int>`; the rendering could state the pin
-  (`<5 : Int>`) now that the syntax can, and nothing else needs to change.
+- **An element's attribute is not rendered.** A pinned element now reads
+  `5 : Int`, but a *requirement* — `tuple{Int # 2, Int}`, whose attribute sits in
+  the slot's dense position — still renders as `<Int, Int>`. The printer would
+  need each attribute extension's source sigil (`#`, `?`, `!`), which
+  `AttrSpec` does not state today, so the spelling is a wider change than the
+  pin's was.
 - **The struct, array, and table/set steps.** Each repeats the tuple's shape: a
   construction site, the readers, the printers, and its own wide tests. The
   struct's spelled-out form (`struct{.f …}`) and its own pin/attribute walk ride

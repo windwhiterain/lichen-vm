@@ -171,13 +171,10 @@ where
             }
         } else if marker == P::Value::tuple_type_marker() {
             // A tuple type's shape is its element-**slot** list, so each element
-            // reads its slot's type position.
+            // reads as source: a pin stated, the wildcard not.
             let fields: Vec<String> = shape
                 .iter()
-                .map(|item| match self.printer.slot_type_any(item.node) {
-                    Some(ty) => self.printer.any_node(ty),
-                    None => self.printer.any_node(item.node),
-                })
+                .map(|item| self.printer.slot_any(item.node))
                 .collect();
             return Some(format!("<{}>", fields.join(", ")));
         } else if marker == P::Value::array_type_marker() && shape.len() == 2 {

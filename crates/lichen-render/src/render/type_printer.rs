@@ -418,8 +418,8 @@ where
         }
     }
 
-    /// [`Self::fields_any`] over an element-**slot** list: each element's type
-    /// position.
+    /// [`Self::fields_any`] over an element-**slot** list: each element read as
+    /// source, a pin stated and the wildcard not.
     fn slot_fields_any(&mut self, shape: AnyNodeId) -> Vec<String> {
         if let Some(LowValue::Array(array)) =
             self.module.node_value(shape).and_then(|v| v.as_enum())
@@ -428,13 +428,46 @@ where
             // node `shape`.
             unsafe { array.items() }
                 .iter()
-                .map(|item| match self.slot_type_any(item.node) {
-                    Some(ty) => self.any_node(ty),
-                    None => self.any_node(item.node),
-                })
+                .map(|item| self.slot_any(item.node))
                 .collect()
         } else {
             vec![self.any_node(shape)]
+        }
+    }
+
+    /// An element slot read as source: a pin stated, the wildcard not.
+    ///
+    /// # Invariant
+    /// An element that spells no value holds the wildcard, which constrains
+    /// nothing, so source states no value either; anything else is a pin and
+    /// states it. See `docs/notes/compound-element-slots.md`.
+    pub(crate) fn slot_any(&mut self, slot: AnyNodeId) -> String {
+        let Some(ty) = self.slot_type_any(slot) else {
+            return self.any_node(slot);
+        };
+        let ty = self.any_node(ty);
+        match self.slot_value_any(slot) {
+            Some(value) => format!("{} : {ty}", self.any_node(value)),
+            None => ty,
+        }
+    }
+
+    /// An element slot's value position, when it holds a **pin** rather than the
+    /// wildcard.
+    fn slot_value_any(&self, slot: AnyNodeId) -> Option<AnyNodeId> {
+        let LowValue::Array(array) = self.module.node_value(slot)?.as_enum()? else {
+            return None;
+        };
+        // SAFETY: `array` is the payload of the value read from the live node
+        // `slot`.
+        let value = unsafe { array.items() }.first()?.node;
+        match self
+            .module
+            .node_value(value)
+            .and_then(|value| value.as_enum())
+        {
+            Some(LowValue::Any) => None,
+            _ => Some(value),
         }
     }
 
