@@ -213,30 +213,46 @@ versions at all. **Versions are the cure for it**: `w1 = write(b, …)` and
 partial order, where a token threaded in emission position imposes a total one
 ([§10](#10-what-is-open) item 5).
 
-**So the spine is a buffer version, not a token — but a spike measured the price,
-and it is not the one this section assumed.** `write` returns a new version of the
-buffer it wrote and `read` consumes it through the `.from` field it already has;
-that much holds, and the annotation is simply `: x.to` —
-`write = (x : (Write _)) => $write(x.to, x.at, x.value): x.to` — which type-checks
-and needs no `ComputeValue` at all. `ComputeOperator::Write` can go back to
-**lazy**, because a `: T` annotation writes the type cell and neither the checker nor
-the lowering reads the operator's answer (`check_ann`,
+**So the spine is a buffer version, not a token — but two rounds of measurement put
+the price considerably higher than this section first assumed.** `write` returns a new
+version of the buffer it wrote and `read` consumes it through the `.from` field it
+already has; that much holds, and it needs no `ComputeValue` at all —
+`ComputeOperator::Write` stays **lazy**, because a `: T` annotation writes the type
+cell and neither the checker nor the lowering reads the operator's answer (`check_ann`,
 `lichen-highlevel/src/checker/annotations.rs:274`; `NativeOp::build` for `Write`
-already answers `decided: false`). This is also what *purifying* the write means —
-the body becomes a function of buffer values — and a token was never that, because a
-token is consumed and never read.
+already answers `decided: false`). This is also what *purifying* the write means — the
+body becomes a function of buffer values — and a token was never that, because a token
+is consumed and never read.
 
-**What the spike refutes is "no extra operand on the read".** The edge exists at the
-**lichen node** level — a read's `.from` operand *is* the write's result node, and a
-small structural walk resolves it to that write's `.to` position, in exactly
-`write_value_node`'s shape. It does **not** exist in the lowered IR:
-`BufferReadCall`'s operands are `vec![position, index]`, where `position` is a fresh
-`emit_const` ordinal (`body.rs:1548`), so the write's `ValueId` has nowhere to
-travel. A version therefore needs the same IR change a token needed — the read grows
-an operand — and step 3's scan, which reads the *lowered* body, cannot see the edge
-without it. What a version buys over a token is not the absence of that operand but
-its **content**: an operand naming a buffer version lets the scan tell a read of `A`
-after a write to `B` from a read of `A` after a write to `A`, which an opaque token
+**The annotation is not the unlock, and that was measured rather than assumed.**
+`: x.to` type-checks, and it changes **nothing observable**: `read (.from <a write's
+result>, .at i)` compiles and lowers identically with and without it, because
+`write`'s result type is *undecided* today and an undecided cell unifies with `Read`'s
+`.from (Buf T)`. So the wiring the JIT reads is already there — which is exactly the
+point of `$read`/`$write` being no-op placeholder operators whose only job is to be
+recognised, and it is correct — and what is missing is not a type but everything
+downstream of the wire.
+
+**What the spike refutes is "no extra operand on the read"; what the probe then found
+is worse.** The edge exists at the **lichen node** level — a read's `.from` operand
+*is* the write's result node — but `parallel_buffer_pos` neither refuses it nor sees
+through it: it resolves it to an **input position**, and the program silently reads the
+wrong buffer. Measured on `dev@be3dcf8`, `"cpu"`, input seeded `[0, 1, 2, 3]`: a body
+that writes `i + 7` to `k.out.z`, reads it back and writes `r + 1` answers
+`[1, 2, 3, 4]` where it means `[8, 9, 10, 11]`, with no diagnostic at all. That is
+[code-audit P1-43](code-audit.md), and it is high rather than medium precisely because
+this spelling is what the spine is made of. A small structural walk — exactly
+`write_value_node`'s shape — is what turns the mis-resolution into the right answer,
+and until the ABI can read an output at all the honest interim is a named refusal.
+
+The edge also does **not** exist in the lowered IR: `BufferReadCall`'s operands are
+`vec![position, index]`, where `position` is a fresh `emit_const` ordinal
+(`body.rs:1548`), so the write's `ValueId` has nowhere to travel. A version therefore
+needs the same IR change a token needed — the read grows an operand — and step 3's
+scan, which reads the *lowered* body, cannot see the edge without it. What a version
+buys over a token is not the absence of that operand but its **content**: an operand
+naming a buffer version lets the scan tell a read of `A` after a write to `B` from a
+read of `A` after a write to `A`, which an opaque token
 cannot.
 
 **And behind that is a wall, which is the real reason to restage.** Reading back
@@ -719,7 +735,13 @@ re-litigated:
   placement.
 - **What the spine is spelled as** — **a buffer version, not a token.** §3. The
   token landed first (`4a41a71`) and is reverted; §6.2 stays as the record of what
-  it cost. The annotation that expresses a version is `: x.to`, and it type-checks.
+  it cost. `: x.to` is the annotation that expresses a version and it type-checks,
+  but §3 measures that it changes **nothing observable**: `write`'s result type is
+  undecided today and an undecided cell unifies with `Read`'s `.from (Buf T)`, so the
+  wiring already exists and the annotation is not what unlocks it. It is worth having
+  for honesty's sake; it is not step 4's blocker, and it must not land alone, because
+  the thing downstream of the wire mis-resolves today
+  ([code-audit P1-43](code-audit.md)).
 - **Whether `write` must be eager** — **no.** A `: T` annotation writes the type
   cell, and neither the checker nor the lowering reads the operator's answer, so
   `ComputeOperator::Write` goes back to lazy and no `ComputeValue` variant is needed
@@ -751,13 +773,17 @@ Still open:
    that captures a buffer captures some version, and the question is whether
    capturing a stale one is refused or silently unordered. Today a closure captures a
    handle whose writes are not versions, which is why this never arose.
-3. **The enforcement question, and it is the sharpest one.** Nothing in the tree
-   forbids reading the original `b` after writing it, which is a silently unordered
-   read. `KernelBody::validate` cannot host the check — it cannot tell an input
-   buffer from an output — so it belongs where the roles are known: the lowering, or
-   a fragment-level validate. Until it exists, a version chain is an *opportunity* to
-   be ordered rather than a *guarantee* that it is, and the token never provided one
-   either, because `read` did not consume it.
+3. **The enforcement question, and it is the sharpest one — and no longer
+   hypothetical.** Nothing in the tree forbids reading a write's result, and what
+   happens instead is measured: [code-audit P1-43](code-audit.md). The read does not
+   merely go unordered, it **resolves to an input position** and silently answers with
+   the wrong buffer. `KernelBody::validate` cannot host the check — it cannot tell an
+   input buffer from an output — so it belongs where the roles are known:
+   `parallel_buffer_pos`, which already has them, or a fragment-level validate. Until
+   it exists, a version chain is an *opportunity* to be ordered rather than a
+   *guarantee* that it is, and the token never provided one either, because `read` did
+   not consume it. The interim refusal P1-43 asks for is the same check the spine
+   needs, which is why it is worth landing before step 4 rather than inside it.
 4. **Whether `KernelFragment` needs a `validate` at all.** The token made this
    concrete and then went away: `KernelFragment` has no validate, so a fragment
    declaring `result_classes: [State]` reached `type_of`'s `unreachable!` and panicked
