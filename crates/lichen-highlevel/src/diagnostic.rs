@@ -228,6 +228,27 @@ pub enum AssertSpelling {
     /// clone re-checks it per call (`docs/notes/eval-before-unify.md` §6.2 option
     /// 1).
     StructKind { container: NodeId },
+    /// A positional read's container-kind requirement: `a(k)`'s container must be
+    /// a tuple type. See [`Self::StructKind`].
+    TupleKind { container: NodeId },
+}
+
+impl AssertSpelling {
+    /// The same spelling with its **subject** re-pointed at a per-call clone's own
+    /// operand.
+    ///
+    /// # Invariant
+    /// A kind requirement is registered against the template's cell, whose class
+    /// is still undecided, while the failing clone's operand 0 is the actual
+    /// argument's type cell; only the container-carrying spellings are
+    /// re-pointed, and every other spelling is already source-blind.
+    pub(crate) fn with_container(self, container: NodeId) -> Self {
+        match self {
+            AssertSpelling::StructKind { .. } => AssertSpelling::StructKind { container },
+            AssertSpelling::TupleKind { .. } => AssertSpelling::TupleKind { container },
+            other => other,
+        }
+    }
 }
 
 /// A structured diagnostic: the highlevel emits *facts*, never a rendered
@@ -457,14 +478,11 @@ where
                 // The registered spelling, with a read-kind requirement's
                 // subject resolved against the *failing* condition.
                 let assert_spelling = match self.assert_spellings.get(&template) {
-                    Some(AssertSpelling::StructKind { container }) => {
-                        Some(AssertSpelling::StructKind {
-                            container: self
-                                .read_assert_subject(err.condition)
-                                .unwrap_or(*container),
-                        })
-                    }
-                    spelling => spelling.copied(),
+                    Some(spelling) => Some(
+                        self.read_assert_subject(err.condition)
+                            .map_or(*spelling, |container| spelling.with_container(container)),
+                    ),
+                    None => None,
                 };
                 out.push(Diag {
                     assert_value: Some(err.value),
@@ -518,12 +536,11 @@ where
     /// condition, the container's type.
     ///
     /// # Invariant
-    /// The operand layout is `TypeOperator::IsStructType`'s: `[type value,
-    /// universe]`.  The *failing* condition is read rather than the registered
+    /// The operand layout is `TypeOperator::IsStructType`'s and `IsTupleType`'s:
+    /// `[type value, universe]`. The *failing* condition is read rather than the
     /// template, because a per-call clone's operand 0 is the actual argument's
-    /// type cell while the template's own cell is still undecided; `None` when
-    /// the condition is not such an operation, in which case the registered node
-    /// answers.
+    /// type cell while the template's own is undecided; `None` when the condition
+    /// is not such an operation, then the registered node answers.
     fn read_assert_subject(&self, condition: NodeId) -> Option<NodeId> {
         let operand = self.module.node_operation(condition)?.operand?;
         // SAFETY: `operand` is the failing condition's own operand edge, a live

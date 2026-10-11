@@ -3472,6 +3472,8 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         // The same reading of a named read's container kind: a check-time/
         // per-apply *assert*, never a value a kernel computes.
         TypeOperator::IsStructType => return None,
+        // The positional read's container kind is the same reading.
+        TypeOperator::IsTupleType => return None,
         TypeOperator::Fresh => return None,
     })
 }

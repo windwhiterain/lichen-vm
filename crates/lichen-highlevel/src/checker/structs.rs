@@ -21,50 +21,45 @@ where
     /// `docs/notes/eval-before-unify.md` §2.2.
     ///
     /// # Invariant
-    /// A decided container is refused outright; an undecided one is pinned to a
-    /// fresh tuple type, so the refusal is the application's argument unify, per
-    /// call. A struct instance reads by name, so a struct type reaching this
-    /// form is refused like any other non-tuple.
+    /// A decided container is refused outright; an undecided one is registered as
+    /// a per-apply assert on its kind. A struct instance reads by name, so a
+    /// struct type reaching this form is refused like any other non-tuple.
     pub(super) fn check_field(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
-        // `kind_of` answers only for a decided term; a cell has none, which is
-        // the case the pin exists for.
-        let read_ty = match shape::kind_of(&self.module, AnyNodeId::Dynamic(container_ty)) {
-            Some(container_kind) => {
-                if !shape::kind_marker_is_any(
-                    &mut self.module,
-                    self.type_expr,
-                    container_kind,
-                    P::Value::tuple_type_marker(),
-                ) {
-                    // Recorded, not unified: stating the requirement beside it keeps
-                    // the found side the container's own type.
-                    let tuple_ty = self.tuple_type_pattern();
-                    self.record_guard(
-                        container_ty,
-                        tuple_ty,
-                        self.loc(container, 1),
-                        DiagKind::Guard,
-                        None,
-                    );
-                }
-                container_ty
-            }
-            None => {
-                // A unify, not a recorded guard: an open container's positions
-                // read whatever its kind is.
-                let tuple_ty = self.tuple_type_pattern();
-                self.check_unify(
-                    container_ty,
-                    tuple_ty,
-                    self.loc(container, 1),
-                    DiagKind::Guard,
-                );
-                tuple_ty
-            }
-        };
+        // The requirement names the container's **kind**, never its type.
+        if self.type_is_concrete(container_ty) {
+            let kind = self.tuple_kind_requirement();
+            let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
+            // The kind read runs first: an unevaluated `Index` holds no value, so
+            // a unify writes into its class and asks nothing.
+            self.module
+                .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
+            self.check_unify(
+                container_kind,
+                kind,
+                self.loc(container, 1),
+                DiagKind::Guard,
+            );
+        } else {
+            // An undecided container is registered as an assert condition,
+            // re-checked per apply clone (`eval-before-unify.md` §6.2).
+            let operands = self.array_node(self.current_block, &[container_ty, self.type_expr]);
+            let condition = self.op_node(
+                self.current_block,
+                P::Operator::from(TypeOperator::IsTupleType),
+                Some(operands),
+            );
+            self.register_assert(
+                condition,
+                self.loc(container, 1),
+                true,
+                AssertSpelling::TupleKind {
+                    container: container_ty,
+                },
+            );
+        }
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
@@ -78,19 +73,6 @@ where
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         pair
-    }
-
-    /// The **tuple-type pattern** a pinned read unifies its container against: a
-    /// fresh shape cell and the tuple kind.
-    ///
-    /// # Invariant
-    /// Only the undecided path and the refused decided path build it, so a read
-    /// of a decided tuple type allocates nothing to state a requirement its
-    /// container already satisfies.
-    fn tuple_type_pattern(&mut self) -> NodeId {
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let shape_cell = self.fresh_cell();
-        self.array_node(self.current_block, &[shape_cell, kind])
     }
 
     /// The structural slot read shared by `a(k)` and `a.name`.

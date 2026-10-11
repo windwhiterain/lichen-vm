@@ -649,6 +649,13 @@ pub enum TypeOperator {
     /// slot. The decode is `shape::is_struct_type_any`, the reader the checker
     /// judges a decided container with. An undecided operand stays lazy.
     IsStructType,
+    /// Whether a type value is a **tuple type**, answering `USize(0/1)`.
+    ///
+    /// # Invariant
+    /// The operand layout is [`TypeOperator::IsStructType`]'s; the decode is
+    /// `shape::is_tuple_type_any`, so a struct type answers `0` here just as a
+    /// tuple type answers `0` there.
+    IsTupleType,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -779,6 +786,7 @@ define_type_operator_codec! {
     Exp = 21;
     Sqrt = 22;
     Floor = 23;
+    IsTupleType = 24;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -928,7 +936,8 @@ where
             | TypeOperator::BitOr
             | TypeOperator::BitXor
             | TypeOperator::InDomain
-            | TypeOperator::IsStructType => {
+            | TypeOperator::IsStructType
+            | TypeOperator::IsTupleType => {
                 // An undecided operand never reaches this operator.
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
@@ -1077,6 +1086,15 @@ where
                             crate::shape::is_struct_type_any(module, universe, operands[0].node);
                         Some(P::Value::from(LowValue::USize(is_struct as usize)))
                     }
+                    // The positional read's container requirement, the same way.
+                    TypeOperator::IsTupleType => {
+                        let AnyNodeId::Dynamic(universe) = operands[1].node else {
+                            return None;
+                        };
+                        let is_tuple =
+                            crate::shape::is_tuple_type_any(module, universe, operands[0].node);
+                        Some(P::Value::from(LowValue::USize(is_tuple as usize)))
+                    }
                 }
             }
         })()
@@ -1127,6 +1145,7 @@ where
             // The same `0`/`1`: a read's container-kind requirement is asked of
             // type values and answered by the assert channel.
             TypeOperator::IsStructType => Some(LowShape::USize),
+            TypeOperator::IsTupleType => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }

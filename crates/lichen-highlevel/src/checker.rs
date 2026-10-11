@@ -883,6 +883,11 @@ where
         self.kind_expr(self.current_block, marker)
     }
 
+    /// The **tuple kind** a positional read requires of its container.
+    fn tuple_kind_requirement(&mut self) -> NodeId {
+        self.kind_expr(self.current_block, self.markers.tuple_type_marker)
+    }
+
     /// A struct type's nominal id node: the [`TypeOperator::Fresh`] call one
     /// written struct type occurrence makes.
     ///

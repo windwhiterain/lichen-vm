@@ -380,6 +380,30 @@ where
         && is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node)
 }
 
+/// Whether `ty` is a **tuple type** `[shape, [marker, K]]`, its kind carrying
+/// the tuple marker.
+pub fn is_tuple_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
+        return false;
+    };
+    items.len() == 2
+        && kind_marker_is_any(
+            module,
+            universe,
+            items[TYPE_KIND_SLOT].node,
+            P::Value::tuple_type_marker(),
+        )
+}
+
 /// Whether a value is a struct marker: the pair `[payload, TypeStruct]`.
 ///
 /// # Invariant

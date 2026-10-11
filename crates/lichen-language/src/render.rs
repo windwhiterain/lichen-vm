@@ -302,6 +302,11 @@ where
                 "expected a struct type, found {}",
                 printer.node(container)
             ),
+            // The positional read's half of the same requirement.
+            Some(AssertSpelling::TupleKind { container }) => format!(
+                "expected a tuple type, found {}",
+                printer.node(container)
+            ),
             // An explicit `@assert e`: the condition's own failed value.
             _ => {
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
