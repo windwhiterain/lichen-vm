@@ -5,8 +5,10 @@
 > tuple, struct, array, table, and set — with both construction sites, the
 > readers, the printers, the element-attribute and value-pin reconciliation, the
 > wildcard literal `@any`, a value-less annotation `: T # a`, `ShapeElements`
-> gone, and the angle spellings retired for `tuple{…}` / `struct{…}` /
-> `array{T, n}`. What remains is in the open list below.
+> gone, the angle spellings retired (`tuple{…}` / `struct{…}` / `array{T, n}`),
+> the type-component read back as `X{n}` with the table read at `e <== key`, and
+> set/table types spelled `set{E}` / `table{K, V}` against their `set(…)` /
+> `table(…)` values. What remains is in the open list below.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -226,21 +228,22 @@ rules that need a count are stated once each:
 ## The table and set steps
 
 A set's shape is its element **slot** alone and a table's is `[key slot, value
-slot]`, built by `check_set_term`, `check_table_term`, `check_table_find`'s pin,
-and the `@in` pin; `low_type_of`'s table arm and both printers read the slots'
-type positions, and a table type value now renders `table<K, V>` where it used to
-render `raw[…]`/`?`.
+slot]`, built by the value forms (`check_set_term`, `check_table_term`, the
+`table <==` read's pin, and the `@in` pin) **and** the type forms `set{E}` /
+`table{K, V}` (`check_set_type`, `check_table_type`), which read the same slots
+through the one element rule; `low_type_of`'s table arm and both printers read the
+slots' type positions.
 
-Neither has a *type* spelling, so an element requirement cannot be written for
-them yet and the element walk has no type expression to pair with — nothing is
-lost, and adding one later is the array's rule (`element_pairs`' single-element
-arm) rather than a new one.
+Both have a *type* spelling, so an element requirement is written for them like
+any other compound's: `set(1 # 4, 2) : set{Int # 2}` holds, `set(1 # 2, 2) :
+set{Int # 4}` is refused, and `set(1, 2) : set{1 : Int}` is refused on the second
+member — the set's single slot pairs with every member through `element_pairs`'
+single-element arm, the array's rule. `table{K, V}` pairs its key and value slots
+with each entry's, so a pin or requirement inside either position is enforced
+per entry.
 
 ## What is open
 
-- **`set<…>` and `table<…>` are renderer notation, not source.** Neither kind has
-  a *type* syntax, and their braced form would collide with the set/table
-  *literal*: the language spec says the printer spells them this way.
 - **`tree-sitter-lichen/grammar.js` still models the retired forms.** Regenerating
   and validating it needs the tree-sitter CLI, which this checkout cannot run;
   `docs/notes/operators.md` §10 records the gap.
