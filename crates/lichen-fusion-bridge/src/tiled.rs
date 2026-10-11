@@ -326,6 +326,7 @@ impl Folding {
             body: builder.body,
             element: self.element,
             staged: write,
+            staged_count: lane_width,
         })
     }
 }
@@ -336,6 +337,7 @@ pub struct Tiled {
     body: KernelBody,
     element: Element,
     staged: ValueId,
+    staged_count: u32,
 }
 
 impl Tiled {
@@ -357,6 +359,17 @@ impl Tiled {
     /// (`docs/notes/graph-fusion.md` §5).
     pub fn staged(&self) -> ValueId {
         self.staged
+    }
+
+    /// The element count of the slice the body stages into.
+    ///
+    /// # Invariant
+    /// One element per lane, so the count is the lane width the fold was tiled at. A caller
+    /// declares the fragment's slice with **this** count and the plan's space: a slice's count is
+    /// the body's and a plan's group width is the plan's, and reading one off the other is right
+    /// only in the case where they coincide (`docs/notes/shared-memory-and-barriers.md` §5).
+    pub fn staged_count(&self) -> u32 {
+        self.staged_count
     }
 
     /// The marks publishing `name` for the staged value.

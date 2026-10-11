@@ -170,10 +170,15 @@ fn plan(name: &str, space: Space, group_width: u32) -> Plan {
 /// The fragment a tiled body is dispatched as, staging `plan`'s entry.
 ///
 /// # Invariant
-/// The slice states the plan's own space and the plan's own group width as its length — one element
-/// per lane, which is the reduction's case, where the algorithm's count and the plan's width
-/// coincide — so the fragment and the plan disagree only where a case makes them.
-fn staged_fragment(body: KernelBody, plan: &Plan, marks: Vec<KernelMark>) -> KernelFragment {
+/// The space is the plan's and the length is the tiling's own count — two different quantities,
+/// which is why they are read from two places and not one: reading a slice's count off a plan's
+/// group width is right only where the case makes them coincide.
+fn staged_fragment(
+    body: KernelBody,
+    plan: &Plan,
+    count: u32,
+    marks: Vec<KernelMark>,
+) -> KernelFragment {
     let staging = plan
         .staging
         .first()
@@ -196,7 +201,7 @@ fn staged_fragment(body: KernelBody, plan: &Plan, marks: Vec<KernelMark>) -> Ker
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
-            count: staging.group_width,
+            count,
             space: staging.space,
         }],
         marks,
@@ -257,7 +262,12 @@ fn a_declared_plan_stages_the_reduction_and_answers_the_closed_form() {
             .tiled(LOCAL_SIZE_X, 0)
             .unwrap_or_else(|refusal| panic!("{count} element(s) tile: {refusal}"));
         let declared = plan(&staged_name, Space::Shared, LOCAL_SIZE_X);
-        let fragment = staged_fragment(tiled.body().clone(), &declared, tiled.marks(&staged_name));
+        let fragment = staged_fragment(
+            tiled.body().clone(),
+            &declared,
+            tiled.staged_count(),
+            tiled.marks(&staged_name),
+        );
         fragment
             .check_plan(&declared)
             .unwrap_or_else(|refusal| panic!("the fragment stages what the plan says: {refusal}"));
@@ -302,7 +312,12 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
 
     // A group narrower than the workgroup is not a width this target has.
     let narrowed = plan(&staged_name, Space::Shared, LOCAL_SIZE_X / 2);
-    let fragment = staged_fragment(tiled.body().clone(), &declared, tiled.marks(&staged_name));
+    let fragment = staged_fragment(
+        tiled.body().clone(),
+        &declared,
+        tiled.staged_count(),
+        tiled.marks(&staged_name),
+    );
     let refusal = fragment
         .check_plan(&narrowed)
         .expect_err("a group of half a workgroup is not a width this target has");
@@ -322,7 +337,12 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
 
     // A name no mark published names no value.
     let unknown = plan("unpublished", Space::Shared, LOCAL_SIZE_X);
-    let fragment = staged_fragment(tiled.body().clone(), &declared, tiled.marks(&staged_name));
+    let fragment = staged_fragment(
+        tiled.body().clone(),
+        &declared,
+        tiled.staged_count(),
+        tiled.marks(&staged_name),
+    );
     let refusal = fragment
         .check_plan(&unknown)
         .expect_err("a name no mark published names no value");
@@ -337,7 +357,12 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
 
     // A slice the fragment placed in registers while the plan asks for shared memory.
     let registers = plan(&staged_name, Space::Register, LOCAL_SIZE_X);
-    let fragment = staged_fragment(tiled.body().clone(), &registers, tiled.marks(&staged_name));
+    let fragment = staged_fragment(
+        tiled.body().clone(),
+        &registers,
+        tiled.staged_count(),
+        tiled.marks(&staged_name),
+    );
     let refusal = fragment
         .check_plan(&declared)
         .expect_err("a plan the fragment contradicts is not reported as applied");
@@ -359,7 +384,12 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
             text: staged_name.clone(),
         }],
     });
-    let fragment = staged_fragment(tiled.body().clone(), &declared, duplicated);
+    let fragment = staged_fragment(
+        tiled.body().clone(),
+        &declared,
+        tiled.staged_count(),
+        duplicated,
+    );
     let refusal = fragment
         .check_plan(&declared)
         .expect_err("two values carrying one name is an ambiguity, not a value");
