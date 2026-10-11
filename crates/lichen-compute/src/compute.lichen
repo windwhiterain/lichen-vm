@@ -16,5 +16,6 @@ Write = T => struct<.to (Buf T), .at Int, .value T>
 read = (x : (Read _)) => $read(x.from, x.at): x.from.element
 write = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
+buffer = (xs : array<_, _>) => ($buffer(xs) : (Buf _))
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)

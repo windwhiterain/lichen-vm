@@ -582,6 +582,8 @@ where
 /// The diagnostic categories this plugin records through the extension channel.
 const JIT_DIAGNOSTIC: &str = "compute.jit";
 const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
+/// Making a buffer out of a program array: the `Buffer` arm.
+const BUFFER_DIAGNOSTIC: &str = "compute.buffer";
 /// Running an already-compiled kernel: the `Launch` and `Call` arms.
 ///
 /// # Invariant
@@ -899,6 +901,13 @@ pub enum ComputeOperator {
     Write,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
+    /// `[array]` operand — a copy of the array's elements as a `Buf` payload.
+    ///
+    /// # Invariant
+    /// The array's own element type is the buffer's element class, so this is the one
+    /// buffer-producing operation whose class is not a fresh cell. See
+    /// docs/notes/gpu-algorithm-roadmap.md §4.3.
+    Buffer,
     /// `[function]` — record the dispatches that function performs, and hand back
     /// a `Graph`.
     ///
@@ -1002,6 +1011,7 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Write
             | ComputeOperator::Graph
             | ComputeOperator::GraphRun
+            | ComputeOperator::Buffer
             | ComputeOperator::BufferCollect => Err(
                 "this package is not cached: it holds a compute operation, and a compute \
                  operation is a runtime form with no on-disk representation"
@@ -1616,6 +1626,45 @@ where
                     let handle = module.alloc_array(&items, block);
                     Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
                 }
+                ComputeOperator::Buffer => {
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Buffer expects an operand array of [array]")
+                    };
+                    // SAFETY: `operands` is the array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(entry) = operands.first().map(|item| item.node) else {
+                        return None;
+                    };
+                    let Some(LowValue::Array(elements)) = module
+                        .node_value(entry)
+                        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+                    else {
+                        return not_an_array::<P>(module, entry);
+                    };
+                    // SAFETY: `elements` was read out of a live node of `module` on
+                    // this borrow, so its home block is alive for the copy below.
+                    let elements = unsafe { elements.items() };
+                    let Some((class, words)) = buffer_words::<P>(module, elements) else {
+                        return None;
+                    };
+                    let payload = module.alloc_payload(&pack_elements(class, &words), block);
+                    let payload = AnyNodeId::Dynamic(module.add_node(
+                        block,
+                        None,
+                        Some(<P::Value as From<ComputeValue>>::from(
+                            ComputeValue::Buffer(payload, class),
+                        )),
+                    ));
+                    // The wrapper is the value: its `.native` slot is the payload and
+                    // its `.element` slot the class's type, which is what makes a read
+                    // of it typed.
+                    let Some(wrapper) = buf_value::<P>(module, block, payload, class) else {
+                        return None;
+                    };
+                    module.node_value(AnyNodeId::Dynamic(wrapper))
+                }
                 ComputeOperator::Graph => {
                     // The operand is already evaluated here, so the function is reached
                     // through the deep value.
@@ -1669,6 +1718,9 @@ where
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
             | ComputeOperator::Write
+            // A buffer's element class comes from the array it was made of, which the
+            // operator answers rather than this table.
+            | ComputeOperator::Buffer
             // `Graph` is host-owned and `GraphRun`'s length is the graph's own
             // return: both decline like `Jit`/`BufferCollect`.
             | ComputeOperator::Graph
@@ -4136,8 +4188,9 @@ where
 ///
 /// # Invariant
 /// A refusal: the undecided answer it replaces was a silent no-op. A program array
-/// *is* decided, and there is no way to make a buffer out of a program value, so the
-/// honest answer names that rather than waiting for a buffer that will not arrive.
+/// *is* decided, and it is not a buffer — `compute.buffer` is what makes one out of
+/// it, so the honest answer names the operation rather than waiting for a buffer that
+/// will not arrive.
 fn not_a_buffer<P>(
     module: &mut Module<P>,
     node: AnyNodeId,
@@ -4153,7 +4206,109 @@ where
         None,
         format!(
             "{subject}, and {at} holds {}. A buffer is what a `compute.plrun` or a \
-             `compute.graphrun` hands back, and there is no way to make one out of a program value",
+             `compute.graphrun` hands back, or what `compute.buffer` makes of an array",
+            what_this_is(module, node)
+        ),
+    );
+    None
+}
+
+/// The element class of an array's items and their words, or the refusal that stopped it.
+///
+/// # Invariant
+/// The class is the array's own element class, read off an element rather than declared, so
+/// an `Int` array is an `Int` buffer and a `Float` array a `Float` one. A position that is
+/// not a scalar of the class the first position fixed is refused by name: a buffer's
+/// elements are homogeneous, so there is no encoding for a mixture or for a compound.
+fn buffer_words<P>(
+    module: &mut Module<P>,
+    elements: &[ArrayItem],
+) -> Option<(ScalarClass, Vec<i64>)>
+where
+    P: Program,
+    P::Value: AsEnum<LowValue>,
+{
+    let mut class: Option<ScalarClass> = None;
+    let mut words = Vec::with_capacity(elements.len());
+    for (position, item) in elements.iter().enumerate() {
+        let Some(value) = module
+            .node_value(item.node)
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        else {
+            module.record_extension_diagnostic(
+                BUFFER_DIAGNOSTIC,
+                None,
+                format!(
+                    "argument element {position} is undecided, and `compute.buffer` copies \
+                     elements whose class it can read: give the array a value before it is \
+                     handed over"
+                ),
+            );
+            return None;
+        };
+        let (position_class, word) = match value {
+            LowValue::USize(word) => (ScalarClass::Int, word as i64),
+            LowValue::Float(word) => (ScalarClass::Float, float_bits(word)),
+            _ => {
+                module.record_extension_diagnostic(
+                    BUFFER_DIAGNOSTIC,
+                    None,
+                    format!(
+                        "argument element {position} is not a scalar, and a buffer's elements \
+                         are: an `Int` array becomes an `Int` buffer and a `Float` array a \
+                         `Float` one"
+                    ),
+                );
+                return None;
+            }
+        };
+        match class {
+            None => class = Some(position_class),
+            Some(fixed) if fixed != position_class => {
+                module.record_extension_diagnostic(
+                    BUFFER_DIAGNOSTIC,
+                    None,
+                    format!(
+                        "argument element {position} is {} where the first element is {}, and \
+                         a buffer's elements are one class: `compute.buffer` copies an array \
+                         of one element class",
+                        class_name(position_class),
+                        class_name(fixed)
+                    ),
+                );
+                return None;
+            }
+            Some(_) => {}
+        }
+        words.push(word);
+    }
+    // An empty array states no element at all, so it takes the ABI's integer default —
+    // the same answer `element_class` gives a fragment that declared none.
+    Some((class.unwrap_or(ScalarClass::Int), words))
+}
+
+/// A class as a refusal spells it.
+fn class_name(class: ScalarClass) -> &'static str {
+    match class {
+        ScalarClass::Int => "Int",
+        ScalarClass::Float => "Float",
+        ScalarClass::State => {
+            unreachable!("a state token carries nothing, so it is never a buffer element")
+        }
+    }
+}
+
+/// A `compute.buffer` handed something that is not an array.
+fn not_an_array<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<P::Value>
+where
+    P: Program,
+    P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    module.record_extension_diagnostic(
+        BUFFER_DIAGNOSTIC,
+        None,
+        format!(
+            "`compute.buffer` copies an array's elements, and its argument holds {}",
             what_this_is(module, node)
         ),
     );
@@ -6313,6 +6468,7 @@ macro_rules! compute_native_ops {
         static READ: $crate::ReadOp = $crate::ReadOp;
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
+        static BUFFER: $crate::BufferOp = $crate::BufferOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
         static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
@@ -6325,6 +6481,7 @@ macro_rules! compute_native_ops {
             ("read", &READ as &dyn $crate::NativeOp<$program>),
             ("write", &WRITE as &dyn $crate::NativeOp<$program>),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
+            ("buffer", &BUFFER as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
             ("graphrun", &GRAPHRUN as &dyn $crate::NativeOp<$program>),
         ];
@@ -6465,6 +6622,15 @@ pub struct WriteOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
 pub struct BufferCollectOp;
+
+/// `$buffer(array)` — copy an array's elements into a `Buf` payload.
+///
+/// # Invariant
+/// The result is the `Buf` wrapper itself, whose `.element` slot is the array's element
+/// type, so a buffer made here is the one buffer whose class is not a fresh cell. The
+/// wrapper's `.native` slot is the `Buffer` node, exactly as `compute.plrun`'s is: the
+/// read/write role walk and `buf_payload` know one carrier, not two.
+pub struct BufferOp;
 
 /// `$graph(f)` — record `f`'s dispatches into a graph instead of running them.
 ///
@@ -6657,6 +6823,35 @@ where
             P::Operator::from(ComputeOperator::BufferCollect),
             Some(operands),
         );
+        NativeApply {
+            value: op,
+            decided: false,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for BufferOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$buffer(xs)` — copy `xs`'s elements into a `Buf`.
+    ///
+    /// # Invariant
+    /// The op states no type, as every native operator does; what it does state is that the
+    /// result **is** the wrapper, so the `.element` slot the wrapper reads is the class the
+    /// run copies the elements in.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        let xs = &args[0];
+        let operands = ctx.array_node(&[xs.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Buffer), Some(operands));
         NativeApply {
             value: op,
             decided: false,
