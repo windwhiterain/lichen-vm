@@ -2,12 +2,18 @@
 //! which is where its state is documented.
 
 use super::*;
-impl<'a, P: HighProgram> ValuePrinter<'a, P>
+impl<'a, P: HighProgram + 'static> ValuePrinter<'a, P>
 where
     P::Value: ValueType,
 {
     pub fn new(module: &'a Module<P>) -> Self {
         Self::new_with_ext(module, None)
+    }
+
+    /// Spell element slots' attributes through `attrs`; see
+    /// [`TypePrinter::show_attributes`].
+    pub fn show_attributes(&mut self, attrs: Attrs<'a, P>) {
+        self.printer.show_attributes(attrs);
     }
 
     /// A printer that renders an extension vocabulary's variants through

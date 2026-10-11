@@ -8,6 +8,7 @@ use lichen_compute::ComputeValue;
 use lichen_utils::extend::AsEnum;
 
 use crate::diag::Diag;
+use crate::lang_attr_ext;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
@@ -46,19 +47,27 @@ where
 /// [`print_type`] with the language's extension vocabulary.
 pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
 where
-    P: HighProgram + 'static,
+    P: crate::LangProgramShape + 'static,
     P::Value: ValueType + AsEnum<ComputeValue> + 'static,
+    P::Operator: From<crate::program::GcdOp>,
 {
-    TypePrinter::new_with_ext(module, Some(lang_render_ext::<P>())).node(root)
+    let attrs = lang_attr_ext::<P>();
+    let mut printer = TypePrinter::new_with_ext(module, Some(lang_render_ext::<P>()));
+    printer.show_attributes(&*attrs);
+    printer.node(root)
 }
 
 /// [`print_value`] with the language's extension vocabulary.
 pub fn print_value_lang<P>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
-    P: HighProgram + 'static,
+    P: crate::LangProgramShape + 'static,
     P::Value: ValueType + AsEnum<ComputeValue> + 'static,
+    P::Operator: From<crate::program::GcdOp>,
 {
-    ValuePrinter::new_with_ext(module, Some(lang_render_ext::<P>())).print(value, ty)
+    let attrs = lang_attr_ext::<P>();
+    let mut printer = ValuePrinter::new_with_ext(module, Some(lang_render_ext::<P>()));
+    printer.show_attributes(&*attrs);
+    printer.print(value, ty)
 }
 
 // --- the caret shell ---------------------------------------------------------

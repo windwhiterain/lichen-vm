@@ -2,7 +2,7 @@
 //! which is where its state is documented.
 
 use super::*;
-impl<'a, P: HighProgram> TypePrinter<'a, P>
+impl<'a, P: HighProgram + 'static> TypePrinter<'a, P>
 where
     P::Value: ValueType,
 {
@@ -38,8 +38,20 @@ where
             next: 0,
             path: AncestorNodes::new(),
             render_ext,
+            attrs: None,
             show_struct_id: false,
         }
+    }
+
+    /// Spell each element slot's attributes through `attrs`, the registry
+    /// [`render_attributes`](super::render_attributes) reads. Without it a slot
+    /// spells its type alone.
+    ///
+    /// # Invariant
+    /// An attribute spells itself, so a position the source left unspelled
+    /// answers `None` and contributes nothing.
+    pub fn show_attributes(&mut self, attrs: Attrs<'a, P>) {
+        self.attrs = Some(attrs);
     }
 
     /// Turn the nominal-id suffix on, so two structs of one field shape stay
@@ -447,10 +459,48 @@ where
             return self.any_node(slot);
         };
         let ty = self.any_node(ty);
-        match self.slot_value_any(slot) {
+        let mut out = match self.slot_value_any(slot) {
             Some(value) => format!("{} : {ty}", self.any_node(value)),
             None => ty,
+        };
+        for spelling in self.slot_attributes(slot) {
+            out.push(' ');
+            out.push_str(&spelling);
         }
+        out
+    }
+
+    /// An element slot's attribute **spellings**, in the canonical order.
+    ///
+    /// # Invariant
+    /// Position `i` of the slot holds `P::Attr::ORDER`'s `i`-th extension's own
+    /// value, and [`AttrExt::render`] answers `None` for a position the source
+    /// left unspelled — the wildcard included — so an element reads back as it
+    /// was written.
+    fn slot_attributes(&mut self, slot: AnyNodeId) -> Vec<String> {
+        let Some(attrs) = self.attrs else {
+            return Vec::new();
+        };
+        let Some(LowValue::Array(items)) = self.module.node_value(slot).and_then(|v| v.as_enum())
+        else {
+            return Vec::new();
+        };
+        // SAFETY: `items` is the payload of the value read from the live node
+        // `slot`.
+        let items = unsafe { items.items() };
+        let mut out = Vec::new();
+        for marker in P::Attr::ORDER {
+            let Some(item) = items.get(shape::attr_slot(marker.order_index())) else {
+                continue;
+            };
+            let AnyNodeId::Dynamic(node) = item.node else {
+                continue;
+            };
+            if let Some(spelling) = attrs(marker).render(self.module, node, attrs) {
+                out.push(spelling);
+            }
+        }
+        out
     }
 
     /// An element slot's value position, when it holds a **pin** rather than the

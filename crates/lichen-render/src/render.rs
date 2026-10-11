@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_highlevel::attr::AttrExt;
+use lichen_highlevel::attr::{AttrExt, AttrSet};
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_highlevel::shape;
 use lichen_lowlevel::ancestors::AncestorNodes;
@@ -27,7 +27,7 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// struct its field tuple.  An opaque chain — an undecided cell, an extension
 /// type — falls back to the raw layout, and every reading of it is marked:
 /// `raw[…]`, `raw 6` / `raw Int`.  A dump never spells itself like a read.
-pub fn print_value<P: HighProgram>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
+pub fn print_value<P: HighProgram + 'static>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
     P::Value: ValueType,
 {
@@ -41,7 +41,7 @@ where
 /// Undecided cells get stable `?a`, `?b`, … names, shared within a unification
 /// class, so the type shows which parts are linked; cycles are cut at `…`; a node
 /// the walk cannot read as a form renders as its marked raw layout.
-pub fn print_type<P: HighProgram>(module: &Module<P>, root: NodeId) -> String
+pub fn print_type<P: HighProgram + 'static>(module: &Module<P>, root: NodeId) -> String
 where
     P::Value: ValueType,
 {
@@ -145,7 +145,7 @@ where
 
 /// The shared pretty type printer, stateful across calls so one instance names
 /// classes consistently within a diagnostic.
-pub struct TypePrinter<'a, P: HighProgram>
+pub struct TypePrinter<'a, P: HighProgram + 'static>
 where
     P::Value: ValueType,
 {
@@ -163,13 +163,20 @@ where
     path: AncestorNodes<NodeId>,
     /// The extension's own value variants; `None` leaves them `?`.
     render_ext: Option<RenderExt<'a, P::Value>>,
+    /// The attribute registry, the same callback [`render_attributes`] reads;
+    /// `None` spells no element attribute.
+    attrs: Option<Attrs<'a, P>>,
     /// Render a struct type's nominal id as `struct<…>#n`, on for the diagnostic
     /// printer only.
     show_struct_id: bool,
 }
 
+/// The **attribute registry** a printer spells element attributes through: one
+/// extension per marker, exactly what [`render_attributes`] takes.
+pub type Attrs<'a, P> = &'a dyn Fn(&<P as HighProgram>::Attr) -> &'static dyn AttrExt<P>;
+
 /// The pretty value printer: renders a runtime value against its type chain.
-pub struct ValuePrinter<'a, P: HighProgram>
+pub struct ValuePrinter<'a, P: HighProgram + 'static>
 where
     P::Value: ValueType,
 {
@@ -516,7 +523,7 @@ fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -
 ///
 /// The renderer walks the *type chain*, so the names come from the type, never a
 /// hardcoded shape; `None` when the value and type do not form a struct instance.
-pub fn render_struct_fields_named<P: HighProgram>(
+pub fn render_struct_fields_named<P: HighProgram + 'static>(
     module: &Module<P>,
     value_node: AnyNodeId,
     ty_node: AnyNodeId,
