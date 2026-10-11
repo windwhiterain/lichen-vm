@@ -234,16 +234,23 @@ recognised, and it is correct — and what is missing is not a type but everythi
 downstream of the wire.
 
 **What the spike refutes is "no extra operand on the read"; what the probe then found
-is worse.** The edge exists at the **lichen node** level — a read's `.from` operand
-*is* the write's result node — but `parallel_buffer_pos` neither refuses it nor sees
-through it: it resolves it to an **input position**, and the program silently reads the
-wrong buffer. Measured on `dev@be3dcf8`, `"cpu"`, input seeded `[0, 1, 2, 3]`: a body
-that writes `i + 7` to `k.out.z`, reads it back and writes `r + 1` answers
-`[1, 2, 3, 4]` where it means `[8, 9, 10, 11]`, with no diagnostic at all. That is
-[code-audit P1-43](code-audit.md), and it is high rather than medium precisely because
-this spelling is what the spine is made of. A small structural walk — exactly
-`write_value_node`'s shape — is what turns the mis-resolution into the right answer,
-and until the ABI can read an output at all the honest interim is a named refusal.
+was a bug, and it is now fixed.** The edge exists at the **lichen node** level — a
+read's `.from` operand *is* the write's result node — but `parallel_buffer_pos`
+neither refused it nor saw through it: it resolved it to an **input position**, and the
+program silently read the wrong buffer. Measured on `dev@be3dcf8`, `"cpu"`, input seeded
+`[0, 1, 2, 3]`: a body that writes `i + 7` to `k.out.z`, reads it back and writes
+`r + 1` answered `[1, 2, 3, 4]` where it means `[8, 9, 10, 11]`, with no diagnostic at
+all. The cause was not the write. It was a **second route** in that function, reading
+the path off the `Read` wrapper's own projection chain — which is the same for every
+read, whatever buffer the author named — and suffix-matching it against `roles.inputs`.
+It answered input position 0 for **every** struct-form read, so a kernel reading its
+second input silently read the first, and a read of an output silently read an input.
+The route is deleted, `named_path` with it, and the measurement is recorded in
+[compute-buffer-wrapper](compute-buffer-wrapper.md#the-chain-walk-what-it-measures-and-what-it-cannot-answer).
+What the spine still needs is the part that was never there: a small structural walk,
+exactly `write_value_node`'s shape, resolving a read of a write's result to that write's
+`.to` position — and until the ABI can read an output at all, that spelling is refused
+by name, which is what it now is.
 
 The edge also does **not** exist in the lowered IR: `BufferReadCall`'s operands are
 `vec![position, index]`, where `position` is a fresh `emit_const` ordinal
@@ -739,9 +746,11 @@ re-litigated:
   but §3 measures that it changes **nothing observable**: `write`'s result type is
   undecided today and an undecided cell unifies with `Read`'s `.from (Buf T)`, so the
   wiring already exists and the annotation is not what unlocks it. It is worth having
-  for honesty's sake; it is not step 4's blocker, and it must not land alone, because
-  the thing downstream of the wire mis-resolves today
-  ([code-audit P1-43](code-audit.md)).
+  for honesty's sake, and it is not step 4's blocker: the thing downstream of the wire
+  that mis-resolved is **fixed**
+  ([compute-buffer-wrapper](compute-buffer-wrapper.md#the-chain-walk-what-it-measures-and-what-it-cannot-answer)),
+  and a read of a write's result is now refused by name instead of being silently
+  answered from an input.
 - **Whether `write` must be eager** — **no.** A `: T` annotation writes the type
   cell, and neither the checker nor the lowering reads the operator's answer, so
   `ComputeOperator::Write` goes back to lazy and no `ComputeValue` variant is needed
@@ -773,17 +782,18 @@ Still open:
    that captures a buffer captures some version, and the question is whether
    capturing a stale one is refused or silently unordered. Today a closure captures a
    handle whose writes are not versions, which is why this never arose.
-3. **The enforcement question, and it is the sharpest one — and no longer
-   hypothetical.** Nothing in the tree forbids reading a write's result, and what
-   happens instead is measured: [code-audit P1-43](code-audit.md). The read does not
-   merely go unordered, it **resolves to an input position** and silently answers with
-   the wrong buffer. `KernelBody::validate` cannot host the check — it cannot tell an
-   input buffer from an output — so it belongs where the roles are known:
-   `parallel_buffer_pos`, which already has them, or a fragment-level validate. Until
-   it exists, a version chain is an *opportunity* to be ordered rather than a
-   *guarantee* that it is, and the token never provided one either, because `read` did
-   not consume it. The interim refusal P1-43 asks for is the same check the spine
-   needs, which is why it is worth landing before step 4 rather than inside it.
+3. **The enforcement question — narrower now, and no longer hypothetical.** Reading a
+   write's result, or an output buffer at all, is **refused by name** inside a body:
+   `param_path` resolves either to a path that is not in `roles.inputs`, and
+   `parallel_buffer_pos` answers nothing. That was not true until the fix recorded in
+   [compute-buffer-wrapper](compute-buffer-wrapper.md#the-chain-walk-what-it-measures-and-what-it-cannot-answer);
+   before it, both spellings silently answered from input position 0, and so did a read
+   of the *second* of two inputs. What is still open is the case step 4 creates: once a
+   `Shared` slot **is** readable, a read has to name the version it observes, and
+   nothing today distinguishes "ordered after the write" from "not".
+   `KernelBody::validate` cannot host that check — it cannot tell an input buffer from
+   an output — so it belongs where the roles are known. The token never provided it
+   either, because `read` did not consume it.
 4. **Whether `KernelFragment` needs a `validate` at all.** The token made this
    concrete and then went away: `KernelFragment` has no validate, so a fragment
    declaring `result_classes: [State]` reached `type_of`'s `unreachable!` and panicked

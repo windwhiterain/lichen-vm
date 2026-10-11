@@ -3379,7 +3379,6 @@ fn parallel_buffer_pos<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: impl Into<AnyNodeId>,
-    unpeeled: AnyNodeId,
 ) -> Result<Option<usize>, String>
 where
     P: Program,
@@ -3395,35 +3394,17 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A struct field read is read by the path on its own chain**, from the *unpeeled*
-        // operand.
-        let positions = unpeeled
-            .dynamic()
-            .and_then(|unpeeled| named_path(module, unpeeled));
-        if let Some(positions) = positions.as_deref() {
-            for (position, candidate) in roles.inputs.iter().enumerate() {
-                // **The chain is the role path's tail**: the relation is a suffix, with the
-                // chain's own head dropped.
-                let Some(tail) = positions.get(1..).filter(|tail| !tail.is_empty()) else {
-                    continue;
-                };
-                if candidate.ends_with(tail) {
-                    return Ok(Some(position));
-                }
-            }
-        }
-        // **The chain walk is the fallback**, for a positional parameter read where the role
-        // table is empty.
+        // The peeled node names the buffer; the wrapper's own projection chain does not.
         let path = param_path(module, slot.pair, node)?;
-        if let Some(path) = path {
-            let mut as_field = vec![0];
-            as_field.extend(path.iter().copied());
-            if let Some(position) = roles.input_pos(&as_field) {
-                return Ok(Some(position));
-            }
-            return Ok(roles.input_pos(&path));
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let mut as_field = vec![0];
+        as_field.extend(path.iter().copied());
+        if let Some(position) = roles.input_pos(&as_field) {
+            return Ok(Some(position));
         }
-        return Ok(None);
+        return Ok(roles.input_pos(&path));
     }
     let cfg_value = slot.value;
     let operation = match module.node_operation(node) {
@@ -3898,43 +3879,6 @@ where
     // SAFETY: `node` is a live node of `module`.
     let items = unsafe { module.array_items(node) }?;
     dyn_node(items.first()?.node).ok()
-}
-
-/// The field-type list of a parameter's value, and the positions a read's chain names.
-///
-/// # Invariant
-/// A named read reaches a lowering already resolved — `TableGet(names, "in")` is
-/// specialised into `Index(field, 0)` — so a chain carries positions, and they are
-/// the role table's own.
-fn named_path<P>(module: &Module<P>, node: NodeId) -> Option<Vec<usize>>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let mut positions = Vec::new();
-    let mut cursor = node;
-    for _ in 0..MAX_PARAMETER_DEPTH {
-        let Some(operation) = module.node_operation(cursor) else {
-            // The chain ends here. **An empty chain names nothing**, which is the
-            // whole-parameter read and not a field.
-            return (!positions.is_empty()).then_some(positions);
-        };
-        if !matches!(
-            AsEnum::<LowOperator>::as_enum(&operation.operator),
-            Some(LowOperator::Index)
-        ) {
-            return None;
-        }
-        let (target, selector) = operand_pair(module, operation.operand).ok()?;
-        let step = usize_value(module, selector);
-        positions.push(step?);
-        let Some(target) = target.dynamic() else {
-            return None;
-        };
-        cursor = target;
-    }
-    None
 }
 
 /// Flatten a parameter index `path` to a wasm local index, using the domain

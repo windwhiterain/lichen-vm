@@ -1288,6 +1288,76 @@ compute.collect out.z
     );
 }
 
+/// A body reads the input buffer it **names**, not the first one declared.
+///
+/// # Invariant
+/// The position comes from the peeled buffer node's own parameter path, so two
+/// inputs of one parameter are two positions. Reading the role path off the
+/// `Read` wrapper's projection instead answers the same position for every read
+/// (compute-buffer-wrapper.md, "The chain walk").
+#[test]
+fn a_kernel_reads_the_input_buffer_it_names() {
+    let (module, value, _root_ty) = run(r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.b (compute.Buf _), .c (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  v = compute.read ((compute.Read _)(.from k.in.c, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
+}
+ones = compute.buffer [1, 1, 1, 1]
+twos = compute.buffer [2, 2, 2, 2]
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b ones, .c twos))) : Out)
+compute.collect out.z
+"#);
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![2, 2, 2, 2],
+        "the read named .c, so the answer is .c's elements and not .b's"
+    );
+}
+
+/// A read of what the same body wrote is refused, not silently answered.
+///
+/// # Invariant
+/// A `compute.write` is the value of an **output** position (code-audit D17), and
+/// the ABI has no read path for an output inside the body that writes it, so the
+/// honest answer is a refusal naming the inputs the parameter does declare.
+#[test]
+fn a_read_of_a_writes_result_is_refused_by_name() {
+    let messages = fail(
+        r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.b (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
+  r = compute.read ((compute.Read _)(.from w, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value r + 1))
+}
+data = compute.buffer [0, 0, 0, 0]
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
+compute.collect out.z
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one unreadable buffer is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("compute.parallel") && message.contains("not an input buffer"),
+        "the refusal must name its own cause: {message:?}"
+    );
+}
+
 /// A compound position is one local, so its argument is refused at launch.
 /// See floating-point.md §4.4.
 #[test]

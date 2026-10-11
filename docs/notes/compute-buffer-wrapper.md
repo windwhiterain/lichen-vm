@@ -242,11 +242,15 @@ specialised — which is what the evaluator hands the emitter — it is
 
 Three measurements, because two rounds went the other way.
 
-**A struct field read is read by the path on its own chain, not from the
-parameter.** Walking *up* from the parameter cannot answer it: the parameter's
-value half is an alias with no operation, and the link between it and a read is the
-equality class rather than the shape. Walking **down** from a read can, because the
-chain *is* the read. Measured on `a_struct_parameter_..._carrying_wrapper`:
+**A struct field read is answered by `param_path`, walking down from the read — and
+the second route that used to answer it first was wrong and is deleted.** This section
+recorded three measurements and a conclusion. The measurements stand; the conclusion
+was right about *where* to walk and wrong about *what to match*, and it cost a silent
+wrong answer on every multi-input kernel.
+
+Walking *up* from the parameter cannot answer a specialised field read, because the
+parameter's value half is an alias with no operation and the link between it and a read
+is the equality class rather than the shape:
 
 ```
 chain[0] Index(921, 952)      // 952 is a *static* selector — a name
@@ -255,43 +259,52 @@ chain[2] 923: no operation     // the alias carries the field's class
 param_pair: 22                 // never reached
 ```
 
-so the caller searches the role table's own paths for the one whose node is
-class-equal to the read — see `parallel_buffer_pos`. And the head of the chain and
-the head of the role path disagree by one:
+`param_path` answers it by testing the **equality class** at the innermost step rather
+than node identity, which is what a chain ending in a bare cell needs. Measured on the
+four shapes that matter, it resolves `k.in.b` → `[1, 0]`, a second input `k.in.c` →
+`[1, 1]`, an output `k.out.z` → `[2, 0]`, and a node that is no parameter read at all →
+nothing.
+
+**The deleted route read the path off the *unpeeled* operand** — the `Read` wrapper's
+own field projection — and suffix-matched it against `roles.inputs`. It was added
+because `param_path` could not answer at the time, and it was never removed after
+`param_path` could. The measurement it was tuned on is the one that hid the defect:
 
 ```
-positions on the read's chain = [0, 0]
+positions on the read's chain = [0, 0]     <- the same for EVERY struct-form read
 roles.inputs                   = [[1, 0]]
 ```
 
-`.in` is field **1** of the parameter struct and the chain says 0, so either the
-chain indexes the value's own fields rather than the struct's, or the role table
-counts the struct's. **Which of the two is right is the next thing to read**, and it
-is a fact about the checker's parameter layout rather than a rule the walk can
-decide.
+The chain is the wrapper's projection, so it is `[0, 0]` whatever buffer the author
+named, and its tail `[0]` was matched against the role paths with `ends_with`. The
+original note took "comparing `[0]` matches exactly one input" as the check. It is not
+a check, it is a coincidence of one test's layout: with two inputs `[[1, 0], [1, 1]]`
+the tail `[0]` still matches only the first, so **a read of the second input silently
+read the first**. The same route made a read of an *output* buffer, and a read of a
+`compute.write`'s result, answer silently from input 0 instead of refusing — which is
+what [shared-memory-and-barriers](shared-memory-and-barriers.md#why-the-witness-was-the-wrong-answer-and-what-replaces-it)
+§3 ran into while asking what a buffer *version* would order.
 
-**The chain is the role path's tail, so the relation is a suffix.** Two levels of
-the chain are not levels of the path. The first is the wrapper's slot-read
-destructuring — the step `peeled_argument` resolves, which is why the path is read
-from the *unpeeled* operand. The second is `.in`, which the alias consumed:
+Nothing in the suite caught it because every multi-buffer test declares multiple
+**outputs** and no test read a second **input**.
 
-```
-1103: Index(0) -> 1105: Index(0) -> 1107: bare cell
-roles.inputs[0] = [1, 0]
-```
+`named_path` went with the route, and `parallel_buffer_pos` now takes only the peeled
+node — the buffer the author named. Measured after the deletion: a read of the second
+of two inputs answers with the second's data (`[2, 2, 2, 2]`, not `[1, 1, 1, 1]`), and
+a read of an output or of a write's result is refused by name with the input list in
+the message. All 65 end-to-end tests pass either way, which is the sharpest statement
+of the defect: the route was not load-bearing, it was load-*removing*.
 
-1107 is the aliased `.in` cell, so no `Index` states it. What remains is `[0]`, and
-`[1, 0]` ends with `[0]`; comparing `[0, 0]` against `[1, 0]` matches nothing, and
-comparing `[0]` matches exactly one input.
-
-**A bare value cell ends the chain; it does not void it.** Two different things
-stop there: a whole-parameter read, matched by comparing the cell's class against
-the slot's, and a **struct field read**, whose `TableGet` the evaluator *aliased* to
-the field it resolved (`Module::alias_read`) — so the node is a bare cell carrying
-the field's class rather than an operation. Returning "not a parameter path" threw
-both away for a node that plainly is one; the steps collected so far are kept, and
-whether they name the field is the caller's question, which it has the role table
-to ask it with.
+The two facts the deleted route was built on are still true, and are why the peel
+looks the way it does. **A bare value cell ends the chain; it does not void it**: two
+different things stop there — a whole-parameter read, matched by comparing the cell's
+class against the slot's, and a **struct field read** whose `TableGet` the evaluator
+*aliased* to the field it resolved (`Module::alias_read`), so the node is a bare cell
+carrying the field's class rather than an operation. Returning "not a parameter path"
+would throw both away for a node that plainly is one, so the steps collected so far are
+kept. And **the head of the wrapper's projection chain is the wrapper's own
+slot-read destructuring** — the step `peeled_argument` resolves — which is exactly why
+the peeled node names a buffer and the unpeeled operand does not.
 
 Two consequences of that shape, both of them reasons the code reads as it does.
 Stepping **into the pair's value** is required for a struct parameter's fields,

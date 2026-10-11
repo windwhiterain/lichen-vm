@@ -40,7 +40,6 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
 | P1-40 | medium | lowlevel | The apply budget refuses a long **terminating** loop as non-terminating | todo |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
-| P1-43 | high | compute | A `read` whose `.from` is a `compute.write`'s result compiles and silently reads an **input** buffer | todo |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -551,66 +550,6 @@ readable inside a body — which
 [§9 step 4](shared-memory-and-barriers.md#9-the-staging) does, for `Shared` — has to
 decide again whether an unreturned write is dead, because at that point it has a
 reader. `D17` answers it for global buffers only.
-
-### P1-43 — A `read` of a `write`'s result silently reads an input buffer `verified`
-
-`verified` at `dev@be3dcf8`, measured end to end on the `"cpu"` backend with a
-throwaway probe (since deleted; the program below reproduces it).
-
-```text
-In  = struct<.b (compute.Buf _)>
-Out = struct<.z (compute.Buf _)>
-Par = compute.P (compute.KT _)(.I In, .O Out)
-f = (k : Par) => {
-  i = compute.range k.n
-  w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
-  r = compute.read  ((compute.Read _)(.from w,       .at i))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value r + 1))
-}
--- input b seeded [0, 1, 2, 3]; the program means [8, 9, 10, 11]
--- measured output: [1, 2, 3, 4]
-```
-
-`[1, 2, 3, 4]` is `in.b[i] + 1`. **The read resolved to input position 0**, not to
-the output the write wrote, and nothing was recorded: no diagnostic, no refusal, both
-the check and the lowering answered.
-
-**The type layer does not catch it, and cannot as things stand.** `write`'s result
-type is undecided, and an undecided cell unifies with `Read`'s `.from (Buf T)`. That
-was measured both ways: annotating `write` with `: x.to`, which gives its result a
-decided `Buf` type, changes **nothing observable** — the same program type-checks and
-answers `[1, 2, 3, 4]` with or without the annotation. So the annotation is not a fix
-and not the cause; the missing check is below it.
-
-**Which route in `parallel_buffer_pos` answers is not yet established**, and that is
-the first thing a fix needs. The function has two routes to a position — a
-`named_path` suffix match against `roles.inputs`, and a `param_path` chain-walk
-fallback — and one of them matched a node that is a `ComputeOperator::Write` result
-rather than a parameter read. The measurement says the answer was position `0` with
-one input declared, which is consistent with either.
-
-**Why it is high rather than medium.** It is the same failure class as the ladder's
-histogram and as `P1-39` — the program runs, both backends would agree, the answer is
-wrong, nothing speaks — but it is worse placed: `read (.from <a write's result>, …)`
-is *the* construct
-[shared-memory-and-barriers](shared-memory-and-barriers.md#why-the-witness-was-the-wrong-answer-and-what-replaces-it)
-§3 makes the spine out of. The whole barrier analysis walks that edge. So the spelling
-the design depends on does not merely lack support today, it **mis-resolves**, and
-§9's step 4 has to fix the resolution before it can build on it.
-
-**The honest answer until then is a refusal, and `D17` says why.** A `compute.write`
-is the value of an output position, so a read of it is a read of an output — and the
-ABI has no read path for an output inside the body that writes it (the host `read`
-import reads `state.inputs` only, `compute.rs`, with `.unwrap_or(0)`). So
-`parallel_buffer_pos` should refuse by name when the node it is asked about is a
-`ComputeOperator::Write` result, saying that a body cannot yet read what it wrote,
-rather than falling through to an input position. Step 4 removes the refusal by
-making a `Shared` slot readable, which is the point of that landing.
-
-A control measured alongside it, which is *not* a bug: chaining two writes —
-`w = write(…); write ((Write _)(.to w, …))` — answers with the second write's value
-and no diagnostic, because the first write is not reachable from the codomain and so
-is never emitted. That is `D17` behaving as decided.
 
 ## P4 — optimization
 

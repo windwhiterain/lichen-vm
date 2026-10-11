@@ -1544,10 +1544,8 @@ where
         };
         // The buffer operand comes through the wrapper's slot-read
         // destructuring, so resolve it to the actual buffer node.
-        let unpeeled = AnyNodeId::Dynamic(*buffer);
-        let buffer = peeled_argument(self.module, unpeeled)?;
-        let pos = parallel_buffer_pos(self.module, self.params, buffer, unpeeled)?
-            .ok_or_else(|| {
+        let buffer = peeled_argument(self.module, AnyNodeId::Dynamic(*buffer))?;
+        let pos = parallel_buffer_pos(self.module, self.params, buffer)?.ok_or_else(|| {
             let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
                 Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
                 None => "the parameter declares no inputs".to_string(),
