@@ -163,7 +163,7 @@ where
     path: AncestorNodes<NodeId>,
     /// The extension's own value variants; `None` leaves them `?`.
     render_ext: Option<RenderExt<'a, P::Value>>,
-    /// Render a struct type's nominal id as `struct<…>#n`, on for the diagnostic
+    /// Render a struct type's nominal id as `struct{…}#n`, on for the diagnostic
     /// printer only.
     show_struct_id: bool,
 }

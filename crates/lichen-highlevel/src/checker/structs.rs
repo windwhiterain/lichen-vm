@@ -144,7 +144,7 @@ where
     /// The container's **type** must be a TypeStruct kind, stated as a unify:
     /// a decided container is refused where it stands, an undecided one is
     /// pinned. The read is the element's own pair, so its type is the field's
-    /// type *value* — `struct<.a Int, .b string>::a` is `Int : Type`.
+    /// type *value* — `struct{.a Int, .b string}::a` is `Int : Type`.
     pub(super) fn check_raw_named_field(
         &mut self,
         e: ExprId,

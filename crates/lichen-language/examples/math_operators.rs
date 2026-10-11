@@ -233,15 +233,15 @@ fn math_program(operator: &str, backend: &str, elements: &str, length: usize) ->
 ---
   compute = import "compute.lichen"
 ---
-In   = struct<.d (compute.Buf Float)>
-Out  = struct<.z (compute.Buf Float)>
+In   = struct{{.d (compute.Buf Float)}}
+Out  = struct{{.z (compute.Buf Float)}}
 Par  = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {{
   i = compute.range k.n
   d = compute.read ((compute.Read _)(.from k.in.d, .at i))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value {operator} d))
 }}
-data = (compute.buffer ([{elements}] : array<Float, {length}>) : (compute.Buf _))
+data = (compute.buffer ([{elements}] : array{{Float, {length}}}) : (compute.Buf _))
 k = compute.parallel f "{backend}"
 out = (compute.plrun k ((compute.A In)(.n {length}, .I In(.d data))) : Out)
 compute.collect out.z

@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "(0, 1): <Int, Int>"
+  output = "(0, 1): tuple{Int, Int}"
 ---
 is_even = x => [is_old (x - 1), 1][x == 0]
 is_old = x => [is_even (x - 1), 0][x == 0]

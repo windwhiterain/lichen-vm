@@ -195,7 +195,7 @@ five findings, and what this one did with each:
   payload is still a string rather than a record: text is what keeps the mark out of
   the pair layout, so a record payload is a later decision, not a smaller one.
 - **A scalar element kernel's class is its body's** — *unchanged, and not the mark
-  channel's business*. `(p : <Float, Float>) => p(0) * p(1)` lowers its leaves in
+  channel's business*. `(p : tuple{Float, Float}) => p(0) * p(1)` lowers its leaves in
   `Int`, because the body states no concrete float operand, so the bridge refuses the
   projection by name (see [floating-point](floating-point.md) §5.1). An element
   function that must be `Float` has to carry a float operand of its own.

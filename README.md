@@ -52,7 +52,7 @@ A minimal language built over highlevel.
 
 Since lichen-highlevel preserve the consistancy of `value : type` pair, as long as input `value : type` pairs are consistant, any evaluated `value : type` pair are.
 
-Warning: lichen has no subtyping, and a compound type is typed by its kind rather than by `Type` (`array<Int, 3> : Type` does not check), so what `Type : Type` buys is that types are ordinary values and a recursive type is an ordinary cyclic one — the cost is that the decidability of a lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
+Warning: lichen has no subtyping, and a compound type is typed by its kind rather than by `Type` (`array{Int, 3} : Type` does not check), so what `Type : Type` buys is that types are ordinary values and a recursive type is an ordinary cyclic one — the cost is that the decidability of a lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
 
 ## Quick start
 
@@ -107,9 +107,9 @@ This section is generated from [`examples`](examples) by `cargo run -p lichen-to
 ```text
 ---
   order = "0"
-  output = "[1, 2, 3]: array<Int, 3>"
+  output = "[1, 2, 3]: array{Int, 3}"
 ---
-[1, 2, 3] : array<Int, 3>
+[1, 2, 3] : array{Int, 3}
 ```
 
 ### `tuple.lichen`
@@ -117,9 +117,9 @@ This section is generated from [`examples`](examples) by `cargo run -p lichen-to
 ```text
 ---
   order = "0"
-  output = "(1, Int): <Int, Type>"
+  output = "(1, Int): tuple{Int, Type}"
 ---
-(1, Int) : <Int, Type>
+(1, Int) : tuple{Int, Type}
 ```
 
 ### `index.lichen`
@@ -127,7 +127,7 @@ This section is generated from [`examples`](examples) by `cargo run -p lichen-to
 ```text
 ---
   order = "1"
-  output = "(1, 2, 1, Int): <Int, Int, Int, Type>"
+  output = "(1, 2, 1, Int): tuple{Int, Int, Int, Type}"
 ---
 a = [1, 2]
 b = (1, Int)
@@ -139,7 +139,7 @@ b = (1, Int)
 ```text
 ---
   order = "2"
-  output = "[1, 2, 3, 4]: array<Int, 4>"
+  output = "[1, 2, 3, 4]: array{Int, 4}"
 ---
 a = 1
 f1 = x => {
@@ -155,7 +155,7 @@ f1 3 4
 ```text
 ---
   order = "2"
-  output = "(1, Int): <Int, Type>"
+  output = "(1, Int): tuple{Int, Type}"
 ---
 a = x => (1, Int)(x)
 (a 0, a 1)
@@ -166,7 +166,7 @@ a = x => (1, Int)(x)
 ```text
 ---
   order = "2"
-  output = "(1, 2, 3): <Int, Int, Int>"
+  output = "(1, 2, 3): tuple{Int, Int, Int}"
 ---
 f = x => [x, @shallow f (x + 1)]
 inf = f 0
@@ -178,7 +178,7 @@ inf = f 0
 ```text
 ---
   order = "2"
-  output = "(Function, 1, Int): <?a -> ?a, Int, Type>"
+  output = "(Function, 1, Int): tuple{?a -> ?a, Int, Type}"
 ---
 f = x => x
 (f, f 1, f Int)
@@ -189,7 +189,7 @@ f = x => x
 ```text
 ---
   order = "2"
-  output = "(0, 1): <Int, Int>"
+  output = "(0, 1): tuple{Int, Int}"
 ---
 is_even = x => [is_old (x - 1), 1][x == 0]
 is_old = x => [is_even (x - 1), 0][x == 0]
@@ -201,7 +201,7 @@ is_old = x => [is_even (x - 1), 0][x == 0]
 ```text
 ---
   order = "2"
-  output = "[1, 1]: array<Int, 2>"
+  output = "[1, 1]: array{Int, 2}"
 ---
 f1 = x => {
     f2 = y => [y, y]
@@ -226,11 +226,11 @@ fib 10
 ```text
 ---
   order = "3"
-  output = "Function: <Type, Int> -> Int"
+  output = "Function: tuple{Type, Int} -> Int"
 ---
 f1 = x => x : Int
 f2 = x => {
-    x: <Type, _>
+    x: tuple{Type, _}
     f1 x(1)
 }
 f2
@@ -241,11 +241,11 @@ f2
 ```text
 ---
   order = "3"
-  output = "(struct<.x Int, .y Type>, (1, Int), 1, Int, struct<.x Int>, (1,), 1): <TypeStruct, struct<.x Int, .y Type>, Int, Type, TypeStruct, struct<.x Int>, Int>"
+  output = "(struct{.x Int, .y Type}, (1, Int), 1, Int, struct{.x Int}, (1,), 1): tuple{TypeStruct, struct{.x Int, .y Type}, Int, Type, TypeStruct, struct{.x Int}, Int}"
 ---
-A = struct<.x Int, .y Type>
+A = struct{.x Int, .y Type}
 a = A(.x 1, .y Int)
-B = struct<.x Int>
+B = struct{.x Int}
 b = B(.x 1,)
 (A, a, a.x, a.y, B, b, b.x)
 ```
@@ -255,10 +255,10 @@ b = B(.x 1,)
 ```text
 ---
   order = "3"
-  output = "(struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g struct<.f Type, .g …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g …>>>"
+  output = "(struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g struct{.f Type, .g …}}}, (1, (Int, (1, …))), (Int, (1, …))): tuple{TypeStruct, TypeStruct, struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g …}}}"
 ---
-A = struct<.f Int, .g B>
-B = struct<.f Type, .g A>
+A = struct{.f Int, .g B}
+B = struct{.f Type, .g A}
 a = A(1, b)
 b = B(Int, a)
 (A , B, a, b)
@@ -275,9 +275,9 @@ type — the `Fresh` id is per occurrence and shared, so `Box Int` and
 `Box Type` differ only in their field lists (the value shape), not in
 their type (the shared kind).  They therefore coexist in one homogeneous
 tuple."
-  output = "(struct<.f Int>, struct<.f Type>, struct<.f Int>): <TypeStruct, TypeStruct, TypeStruct>"
+  output = "(struct{.f Int}, struct{.f Type}, struct{.f Int}): tuple{TypeStruct, TypeStruct, TypeStruct}"
 ---
-Box = t => struct<.f t>
+Box = t => struct{.f t}
 (Box Int, Box Type, Box Int)
 ```
 
@@ -286,7 +286,7 @@ Box = t => struct<.f t>
 ```text
 ---
   order = "4"
-  output = "(10, 20): <Int, Int>"
+  output = "(10, 20): tuple{Int, Int}"
 ---
 t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 (t{[1, 2]}, t{[3, 4]})
@@ -299,7 +299,7 @@ t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
   order = "5"
   math = import "math.lichen"
   geo = import "geometry.lichen"
-  output = "(42, 10, 7): <Int, Int, Int>"
+  output = "(42, 10, 7): tuple{Int, Int, Int}"
 ---
 (math.succ 41, geo.double 5, geo.inc_twice 5)
 ```
@@ -309,7 +309,7 @@ t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 ```text
 ---
   order = "0"
-  output = "(Function, Function): struct<.succ Int -> Int, .add raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]>"
+  output = "(Function, Function): struct{.succ Int -> Int, .add raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]}"
 ---
 succ = x => x + 1
 add = x => y => x + y
@@ -321,7 +321,7 @@ add = x => y => x + y
 ---
   order = "1"
   math = import "math.lichen"
-  output = "(Function, Function): struct<.double raw[?a, ?b] -> raw[?a, ?b], .inc_twice Int -> Int>"
+  output = "(Function, Function): struct{.double raw[?a, ?b] -> raw[?a, ?b], .inc_twice Int -> Int}"
 ---
 double = x => math.add x x
 inc_twice = x => math.succ (math.succ x)
@@ -333,7 +333,7 @@ inc_twice = x => math.succ (math.succ x)
 ---
   order = "5"
   std = import "../lichen-std/_.lichen"
-  output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
+  output = "(Int, Type, Int, array{Int, 2}, Type, 5): tuple{Type, Type, Type, TypeArray, Type, Int}"
 ---
 f = std.type_of
 g = x => std.type_of x
@@ -356,7 +356,7 @@ n = 5 : std.type_of (1)
 ```text
 ---
   order = "7"
-  output = "(1, 5): <Int, Int>"
+  output = "(1, 5): tuple{Int, Int}"
 ---
 n = 5
 (@assert (n <= 5), n)
@@ -393,7 +393,7 @@ compute.launch k_outer 3
   order = "10"
   output = "5 # 4 ? tag = 7: Int"
 ---
-Doc = struct<.tag Int>
+Doc = struct{.tag Int}
 five = 5 # 8 ? Doc(.tag 7)
 five # 4
 ```
@@ -403,9 +403,9 @@ five # 4
 ```text
 ---
   order = "11"
-  output = "(Int, string, Int, string): <Type, Type, Type, Type>"
+  output = "(Int, string, Int, string): tuple{Type, Type, Type, Type}"
 ---
-(<Int, string><0>, <Int, string><1>, struct<.a Int, .b string>::a, struct<.a Int, .b string>::b)
+(tuple{Int, string}<0>, tuple{Int, string}<1>, struct{.a Int, .b string}::a, struct{.a Int, .b string}::b)
 ```
 
 ### `raw_field.lichen`
@@ -413,9 +413,9 @@ five # 4
 ```text
 ---
   order = "12"
-  output = "(Int, string, 1): <Type, Type, Int>"
+  output = "(Int, string, 1): tuple{Type, Type, Int}"
 ---
-S = struct<.a Int, .b string>
+S = struct{.a Int, .b string}
 s = S(.a 1, .b "h")
 (S::a, S::b, s.a)
 ```
@@ -429,12 +429,12 @@ s = S(.a 1, .b "h")
 whose base case is a comparison and whose step is a remainder.  The parameter is a
 pair, so the recursion carries both numbers.  A function's type is the function
 itself (`f : f`), and an annotation states one by binding that function's own two
-cells — so `: <Int, Int> -> Int` *is* the constraint rather than a check beside it,
+cells — so `: tuple{Int, Int} -> Int` *is* the constraint rather than a check beside it,
 and the self-recursive result's type follows from it (`6: Int`).  Nothing carries
 the `raw` mark, because the type is decided."
   output = "6: Int"
 ---
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
+gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 gcd (48, 18)
 ```
 
@@ -451,7 +451,7 @@ keywords, and the two precedence facts worth knowing: `* / %` bind tighter than
 compares type values too.  `max`, `min` and the three `Float`-only scalar
 operators `exp`, `sqrt` and `floor` take their operands by juxtaposition and
 leave a value of the operands' class, unlike a comparison."
-  output = "(7, 3, 1, 3, 0, 1, 2, 1, Int, 5, 3, 2.5, 1.0, 2.0, 1.0): <Int, Int, Int, Int, Int, Int, Int, Int, Type, Int, Int, Float, Float, Float, Float>"
+  output = "(7, 3, 1, 3, 0, 1, 2, 1, Int, 5, 3, 2.5, 1.0, 2.0, 1.0): tuple{Int, Int, Int, Int, Int, Int, Int, Int, Type, Int, Int, Float, Float, Float, Float}"
 ---
 (1 + 2 * 3, 7 / 2, 7 % 2, 1 | 2 ^ 3 & 1, (2 > 1) & (2 < 1), (1 < 2) == 1, 6 & 3, Int != string, Int, max 3 5, min 3 5, max 1.5 2.5, exp 0.0, sqrt 4.0, floor 1.75)
 ```
@@ -468,7 +468,7 @@ each checks its operand against its own **source** class and yields its own
 converts the `1` and not the sum. `float2int` truncates toward zero, and a float
 with no `Int` to truncate toward (`NaN`, an infinity, a negative) is refused at
 run time as `operator.out_of_range`."
-  output = "(3.0, 3, 1, 1.0, 3.0): <Float, Int, Int, Float, Float>"
+  output = "(3.0, 3, 1, 1.0, 3.0): tuple{Float, Int, Int, Float, Float}"
 ---
 half = int2float 1 + 2.0
 (int2float 3, float2int 3.7, float2int (3.0 / 2.0), int2float (2 > 1), half)

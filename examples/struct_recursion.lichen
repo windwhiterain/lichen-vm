@@ -1,9 +1,9 @@
 ---
   order = "3"
-  output = "(struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g struct<.f Type, .g …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g …>>>"
+  output = "(struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g struct{.f Type, .g …}}}, (1, (Int, (1, …))), (Int, (1, …))): tuple{TypeStruct, TypeStruct, struct{.f Int, .g struct{.f Type, .g struct{.f Int, .g …}}}, struct{.f Type, .g struct{.f Int, .g …}}}"
 ---
-A = struct<.f Int, .g B>
-B = struct<.f Type, .g A>
+A = struct{.f Int, .g B}
+B = struct{.f Type, .g A}
 a = A(1, b)
 b = B(Int, a)
 (A , B, a, b)

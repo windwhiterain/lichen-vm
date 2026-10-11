@@ -2,6 +2,6 @@
   order = "5"
   math = import "math.lichen"
   geo = import "geometry.lichen"
-  output = "(42, 10, 7): <Int, Int, Int>"
+  output = "(42, 10, 7): tuple{Int, Int, Int}"
 ---
 (math.succ 41, geo.double 5, geo.inc_twice 5)

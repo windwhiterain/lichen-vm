@@ -176,7 +176,7 @@ where
     ///
     /// # Invariant
     /// A term put in a type position unifies as its own value pair, which never
-    /// unifies with its type: `struct<.f Int, .g b>` fails, `struct<.f Int, .g B>`
+    /// unifies with its type: `struct{.f Int, .g b}` fails, `struct{.f Int, .g B}`
     /// works. An expression that carries attributes denotes the annotated value's
     /// term instead; see `docs/notes/operator-polymorphism.md` §3.
     pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {

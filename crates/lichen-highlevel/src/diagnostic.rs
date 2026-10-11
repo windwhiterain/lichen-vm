@@ -47,10 +47,10 @@ pub enum DiagKind {
     /// A `.name` argument in a struct instantiation against a struct type with
     /// no named fields.
     StructAnonymousField,
-    /// A struct **definition** with a field that has no name — `struct<Int, Type>`.
+    /// A struct **definition** with a field that has no name — `struct{Int, Type}`.
     ///
     /// # Invariant
-    /// Every struct field carries a name (`struct<.name T>`), because a struct
+    /// Every struct field carries a name (`struct{.name T}`), because a struct
     /// instance reads by name only; the positional form `a(k)` is the *tuple*
     /// read (`docs/language-spec.md` §Structs).  A *block*'s fields are its
     /// bindings and need no such check.

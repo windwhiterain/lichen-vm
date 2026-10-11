@@ -15,21 +15,21 @@
 ## 1. The disagreement
 
 ```lichen
-K = _x => struct<.x _>
+K = _x => struct{.x _}
 j1 = {T = _; 1: T; (K _)(.x T)}
 j1
 ```
 
 ```lichen
-K = _x => struct<.x _>
+K = _x => struct{.x _}
 j = x => {T = _; x: T; (K _)(.x T) }
 j 1
 ```
 
 | program | printed |
 |---|---|
-| block | `(Int,): struct<.x Type>` |
-| lambda | `(Int,): struct<.x raw[?a, ?b]>` |
+| block | `(Int,): struct{.x Type}` |
+| lambda | `(Int,): struct{.x raw[?a, ?b]}` |
 
 The block's answer is the wanted one. `raw[?a, ?b]` is the type printer's
 fallback and means the field's type node is not a readable type at all.
@@ -37,11 +37,11 @@ fallback and means the field's type node is not a readable type at all.
 Two smaller programs isolate the same hole without any lambda:
 
 ```lichen
-h  = X => struct<.x _>
-h Int        -- prints struct<.x raw[?a, ?b]>
+h  = X => struct{.x _}
+h Int        -- prints struct{.x raw[?a, ?b]}
 
-h2 = X => struct<.x X>
-h2 Int       -- prints struct<.x Int>
+h2 = X => struct{.x X}
+h2 Int       -- prints struct{.x Int}
 ```
 
 A struct type function whose field type is a hole (`_`) does not get that hole
@@ -63,7 +63,7 @@ to has a value at print time.
 
 ## 3. What was measured
 
-**The template is identical in both programs.** `K`'s body `struct<.x _>` builds
+**The template is identical in both programs.** `K`'s body `struct{.x _}` builds
 the same field pair (a value cell and a kind cell, each a singleton class) in the
 block and in the lambda, so the template cannot be where the two differ.
 
@@ -179,7 +179,7 @@ and writes `Type` into the field's value cell immediately.
 
 **The constraint survives per call exactly when its unify partner is a template
 member.** That is why the same body with no `K` at all works:
-`j = x => {T = _; x: T; struct<.x _>(.x T) }; j 1` prints `struct<.x Type>`,
+`j = x => {T = _; x: T; struct{.x _}(.x T) }; j 1` prints `struct{.x Type}`,
 because the field pair is a member of `j`'s own template and the topology rebuild
 re-establishes the check-time merge among the per-call clones.
 
@@ -235,14 +235,14 @@ concrete when its field cells bound at check time.
 
 | program | expected |
 |---|---|
-| `K = _x => struct<.x _>` / `j1 = {T = _; 1: T; (K _)(.x T)}` / `j1` | `(Int,): struct<.x Type>` (unchanged) |
-| the same body inside `j = x => {…}` / `j 1` | `(Int,): struct<.x Type>` (**the fix**) |
-| no `K`: `j = x => {T = _; x: T; struct<.x _>(.x T) }` / `j 1` | `(Int,): struct<.x Type>` (unchanged) |
-| `K = _x => struct<.x _>` / `j = x => {T = _; x: T; 1: T; (K _)(.x T) }` / `j 1` | `(Int,): struct<.x Type>` (unchanged) |
-| `K = _x => struct<.x Int>` / `j = x => (K _)(.x x)` / `j 1` | `(1,): struct<.x Int>` (unchanged) |
+| `K = _x => struct{.x _}` / `j1 = {T = _; 1: T; (K _)(.x T)}` / `j1` | `(Int,): struct{.x Type}` (unchanged) |
+| the same body inside `j = x => {…}` / `j 1` | `(Int,): struct{.x Type}` (**the fix**) |
+| no `K`: `j = x => {T = _; x: T; struct{.x _}(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
+| `K = _x => struct{.x _}` / `j = x => {T = _; x: T; 1: T; (K _)(.x T) }` / `j 1` | `(Int,): struct{.x Type}` (unchanged) |
+| `K = _x => struct{.x Int}` / `j = x => (K _)(.x x)` / `j 1` | `(1,): struct{.x Int}` (unchanged) |
 | the same / `j "s"` | `expected Int, found string` (unchanged) |
-| `h = X => struct<.x _>` / `h Int` | `struct<.x raw[?a, ?b]>: TypeStruct` (unchanged — a genuinely unconstrained hole stays raw) |
-| `h2 = X => struct<.x X>` / `h2 Int` | `struct<.x Int>: TypeStruct` (unchanged) |
+| `h = X => struct{.x _}` / `h Int` | `struct{.x raw[?a, ?b]}: TypeStruct` (unchanged — a genuinely unconstrained hole stays raw) |
+| `h2 = X => struct{.x X}` / `h2 Int` | `struct{.x Int}: TypeStruct` (unchanged) |
 
 ## 9. The alternatives, and what must keep working
 
@@ -263,7 +263,7 @@ block (a single batch, bound at check time), and the ascribe-before variant
 (`1: T` before the instantiate, inside the same body), where the check-time batch
 is bound, the deep pass proves the instantiate's value concrete, and the clone is
 baked rather than recomputed. And a genuinely unconstrained hole
-(`h = X => struct<.x _>; h Int`) must stay raw: nothing decides it, and the
+(`h = X => struct{.x _}; h Int`) must stay raw: nothing decides it, and the
 printer's mark is the honest answer.
 
 ## Recovered measurements
@@ -275,4 +275,4 @@ printer's mark is the honest answer.
   name list index-aligned, and the checker keeps the named positions alone. Nothing
   references a discarded statement's value node, so it is not evaluated either: the
   same laziness a statement nothing reads has anywhere else. A block's fields are
-  therefore always named, like a `struct<…>` declaration's.
+  therefore always named, like a `struct{…}` declaration's.

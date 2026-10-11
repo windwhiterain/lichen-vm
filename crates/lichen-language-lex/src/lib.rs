@@ -72,7 +72,7 @@ pub enum TokenKind {
     /// The `cache` keyword — a binding whose value is a retained cell
     /// (`docs/notes/incremental-update.md` §3).
     KwCache,
-    /// The `array` keyword — a keyword-led array type, `array<T, n>`.
+    /// The `array` keyword — a keyword-led array type, `array{T, n}`.
     KwArray,
     /// The `tuple` keyword — the spelled-out tuple type, `tuple{slot, …}`.
     KwTuple,
@@ -155,10 +155,10 @@ pub enum TokenKind {
     LBrace,
     /// '}'.
     RBrace,
-    /// '<' — a type delimiter, or the less-than comparison; Glue decides
+    /// '<' — the less-than comparison, or the glued raw-index delimiter
     /// (`docs/language-spec.md` §2.1).
     LAngle,
-    /// '>' — closes an angle bracket, or is the greater-than comparison.
+    /// '>' — the greater-than comparison, or the raw index's closer.
     RAngle,
     /// '~' — the mark sigil: `e ~ "payload"`.
     Tilde,
@@ -649,10 +649,11 @@ fn seed_prev_end(prev: &[Token], i: usize) -> Option<u32> {
 ///
 /// # Invariant
 /// `j` only advances, so a whole re-lex is `O(edit)`; a token before the old
-/// edit end `b` never matches.
+/// edit end `b - delta` never matches — `target` is in the old coordinates, so
+/// `b`, which is the new edit end, has to be projected back before comparing.
 fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> Option<usize> {
     let target = t.range.0 as isize - delta;
-    if target < b as isize {
+    if target < b as isize - delta {
         return None;
     }
     while *j < prev.len() && (prev[*j].range.1 as isize) < target {

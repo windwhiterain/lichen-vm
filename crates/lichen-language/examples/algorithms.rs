@@ -16,8 +16,8 @@ const PROGRAMS: &[(&str, &str)] = &[
         "1. fill — write a constant per index",
         r#"
 --- compute = import "compute.lichen" ---
-In  = struct<.a Int>
-Out = struct<.z (compute.Buf _)>
+In  = struct{.a Int}
+Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
@@ -32,8 +32,8 @@ compute.collect out.z
         "2. axpy — y = a*x + y, two inputs one output",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 mk = (k : Par1) => {
   i = compute.range k.n
@@ -43,8 +43,8 @@ kx = compute.parallel mk "BACKEND"
 x = (compute.plrun kx ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 ky = compute.parallel mk "BACKEND"
 y = (compute.plrun ky ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.x (compute.Buf _), .y (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.x (compute.Buf _), .y (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 axpy = (k : Par2) => {
   i = compute.range k.n
@@ -61,8 +61,8 @@ compute.collect out.z
         "3. transpose — gather, write index is not the read index",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -70,8 +70,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 tr = (k : Par2) => {
   i = compute.range k.n
@@ -87,8 +87,8 @@ compute.collect out.z
         "4. stencil — a neighbour read at a computed, clamped index",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -96,8 +96,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 st = (k : Par2) => {
   i = compute.range k.n
@@ -114,8 +114,8 @@ compute.collect out.z
         "5. select-into-read — clamp by arithmetic, no conditional",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -123,8 +123,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 st = (k : Par2) => {
   i = compute.range k.n
@@ -141,8 +141,8 @@ compute.collect out.z
         "6. dot4 — an unrolled 4-term reduction, fixed length",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -150,8 +150,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 dot = (k : Par2) => {
   i = compute.range k.n
@@ -170,8 +170,8 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
         "7. mat2 — a correct 2x2 multiply",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -179,8 +179,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
-In2  = struct<.a (compute.Buf _), .b (compute.Buf _)>
-Out2 = struct<.p (compute.Buf _), .q (compute.Buf _)>
+In2  = struct{.a (compute.Buf _), .b (compute.Buf _)}
+Out2 = struct{.p (compute.Buf _), .q (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 mm = (k : Par2) => {
   i = compute.range k.n
@@ -204,8 +204,8 @@ outs = (compute.plrun km ((compute.A In2)(.n 4, .I In2(.a src.z, .b src.z))) : O
         "8. reduction — a sum, the classic cross-index algorithm",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -213,8 +213,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 red = (k : Par2) => {
   i = compute.range k.n
@@ -230,8 +230,8 @@ compute.read ((compute.Read _)(.from out.z, .at 3))
         "9. two-buffer contraction — does a write and a read share an index space?",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -239,8 +239,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 mix = (k : Par2) => {
   i = compute.range k.n
@@ -257,8 +257,8 @@ compute.read ((compute.Read _)(.from out.z, .at 3))
         "8b. tree reduction — halve the length, four levels",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -266,8 +266,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 a = (compute.plrun k0 ((compute.A In1)(.n 16, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 pair = (k : Par2) => {
   i = compute.range k.n
@@ -287,8 +287,8 @@ compute.read ((compute.Read _)(.from e.z, .at 0))
         "8c. prefix sum — a scan, one write per index from many reads",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -296,8 +296,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 scan = (k : Par2) => {
   i = compute.range k.n
@@ -316,8 +316,8 @@ compute.collect out.z
         "8d. out-of-range read — is a bad index refused?",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -325,8 +325,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 oob = (k : Par2) => {
   i = compute.range k.n
@@ -342,8 +342,8 @@ compute.collect out.z
         "8e. scalar kernel parameter — is anything but a buffer allowed?",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -351,8 +351,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _), .k Int>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _), .k Int}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 sc = (k : Par2) => {
   i = compute.range k.n
@@ -369,8 +369,8 @@ compute.collect out.z
         r#"
 --- compute = import "compute.lichen" ---
 helper = compute.jit (v : Int => v * v : Int)
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -378,8 +378,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 use = (k : Par2) => {
   i = compute.range k.n
@@ -395,8 +395,8 @@ compute.collect out.z
         "9b. histogram — a scatter-accumulate into a shared slot",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 n0 = (k : Par1) => {
   i = compute.range k.n
@@ -404,8 +404,8 @@ n0 = (k : Par1) => {
 }
 k0 = compute.parallel n0 "BACKEND"
 src = (compute.plrun k0 ((compute.A In1)(.n 64, .I In1(.a 0))) : Out1)
-In2  = struct<.s (compute.Buf _)>
-Out2 = struct<.z (compute.Buf _)>
+In2  = struct{.s (compute.Buf _)}
+Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 hist = (k : Par2) => {
   i = compute.range k.n
@@ -422,8 +422,8 @@ out = (compute.plrun kh ((compute.A In2)(.n 64, .I In2(.s src.z))) : Out2)
         r#"
 --- compute = import "compute.lichen" ---
 data = [3, 1, 4, 1, 5, 9, 2, 6]
-In  = struct<.a (compute.Buf _)>
-Out = struct<.z (compute.Buf _)>
+In  = struct{.a (compute.Buf _)}
+Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
@@ -446,16 +446,16 @@ x + 1
         "12. graph — one submission for a two-link chain",
         r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "BACKEND"
-In2  = struct<.b (compute.Buf _)>
-Out2 = struct<.w (compute.Buf _)>
+In2  = struct{.b (compute.Buf _)}
+Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
@@ -463,7 +463,7 @@ f2 = (k : Par2) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "BACKEND"
-GArg = struct<.n Int, .in In1>
+GArg = struct{.n Int, .in In1}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))

@@ -19,7 +19,7 @@
 ## What a runtime scalar is, and why it is the point
 
 Moving a parallel kernel's parameter from the positional `cfg = (n, (buffers…))`
-to the named struct `struct<.n Int, .in …, .out …>` was for two things: a read
+to the named struct `struct{.n Int, .in …, .out …}` was for two things: a read
 that names its buffer, and **runtime scalars beside the count** — `k.alpha`, a
 number the host fixes at launch. The tuple form has since retired.
 
@@ -80,8 +80,8 @@ Scratch file, not to be committed (the example harness runs every file in
 ---
   compute = import "compute.lichen"
 ---
-In0  = struct<.a Int>
-Out0 = struct<.z (compute.Buf _)>
+In0  = struct{.a Int}
+Out0 = struct{.z (compute.Buf _)}
 Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
 g = (k : Par0) => {
   i = compute.range k.n
@@ -89,10 +89,10 @@ g = (k : Par0) => {
 }
 kg = compute.parallel g "cpu"
 inbuf = (compute.plrun kg ((compute.A In0)(.n 3, .I In0(.a 0))) : Out0)
-In   = struct<.b (compute.Buf _)>
-Out  = struct<.w (compute.Buf _)>
-Par  = struct<.n Int, .alpha Float, .in In, .out Out>
-Host = struct<.n Int, .alpha Float, .I In>
+In   = struct{.b (compute.Buf _)}
+Out  = struct{.w (compute.Buf _)}
+Par  = struct{.n Int, .alpha Float, .in In, .out Out}
+Host = struct{.n Int, .alpha Float, .I In}
 f = (k : Par) => {
   i = compute.range k.n
   v = compute.read ((compute.Read _)(.from k.in.b, .at i))
@@ -157,12 +157,12 @@ Two things had to land with the struct argument:
   argument's fields as positions. An undecided container keeps the lazy
   `TableGet`, which is the case the two-pass `param_path` exists for.
 
-**The types must be lambdas, not type values.** `Read = struct<.from _, .at _>` is
+**The types must be lambdas, not type values.** `Read = struct{.from _, .at _}` is
 a *value*: one occurrence, one pair of `_` cells, and the first instantiation
 specializes them — the next one fails, and the frozen-module path panicked
-outright. `KT = _x => struct<.I _, .O _>` is a *function*, so every `(KT _)`
+outright. `KT = _x => struct{.I _, .O _}` is a *function*, so every `(KT _)`
 clones its inner `_`. That is why the wrappers are written
-`Read = T => struct<.from (Buf T), .at Int>` and call sites are spelled
+`Read = T => struct{.from (Buf T), .at Int}` and call sites are spelled
 `compute.read ((compute.Read _)(.from buf, .at i))`.
 
 The `_` spelling at the instantiation site (`_(.from buf, .at i)`) is **not**

@@ -87,13 +87,13 @@ fn applying_a_lambda_checks_and_evaluates() {
 #[test]
 fn a_tuple_domain_parameter_read_checks_and_evaluates() {
     assert_eq!(
-        usize_of(&evaluate("(p : <Int, Int> => p(0)) (1, 2) : Int")),
+        usize_of(&evaluate("(p : tuple{Int, Int} => p(0)) (1, 2) : Int")),
         1
     );
     // The same program written as a top-level binding + a final line — the form
     // that failed through the compiler.
     assert_eq!(
-        usize_of(&evaluate("f = p : <Int, Int> => p(0)\nf (1, 2)")),
+        usize_of(&evaluate("f = p : tuple{Int, Int} => p(0)\nf (1, 2)")),
         1
     );
 }
@@ -112,7 +112,8 @@ fn a_binder_used_once_checks() {
 fn the_polymorphic_identity_checks() {
     // One binder used at Int and at Type — every lambda is automatically
     // let-polymorphic.
-    let (module, root) = run("(((id => ((id 5 : Int), (id Type : Type))) (x => x)) : <Int, Type>)");
+    let (module, root) =
+        run("(((id => ((id 5 : Int), (id Type : Type))) (x => x)) : tuple{Int, Type})");
     let mut module = module;
     let value = module.evaluate_node_deep(root, None).unwrap();
     let ids = array_ids(value);
@@ -154,7 +155,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
 
 #[test]
 fn an_array_literal_checks_against_its_array_type() {
-    assert_eq!(array_ids(evaluate("([1, 2, 3] : array<Int, 3>)")).len(), 3);
+    assert_eq!(array_ids(evaluate("([1, 2, 3] : array{Int, 3})")).len(), 3);
 }
 
 #[test]
@@ -282,7 +283,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
 /// frontend's own IR stamp drops the preserved slot.
 #[test]
 fn a_root_annotation_renders_the_merged_attribute_tail() {
-    let source = "Doc = struct<.tag Int>\nfive = 5 # 8 ? Doc(.tag 7)\nfive # 4";
+    let source = "Doc = struct{.tag Int}\nfive = 5 # 8 ? Doc(.tag 7)\nfive # 4";
     assert_eq!(
         lichen_language::run::evaluate(source).unwrap(),
         "5 # 4 ? tag = 7: Int"
@@ -420,7 +421,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     // `g` is one shared function node; each apply gets fresh clones, so it
     // checks at Int and at Type.
     let (module, root) =
-        run("(((x => {g = y => y; ((g x : Int), (g Type : Type))}) 5) : <Int, Type>)");
+        run("(((x => {g = y => y; ((g x : Int), (g Type : Type))}) 5) : tuple{Int, Type})");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -643,48 +644,48 @@ fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
     assert_eq!(usize_of(&evaluate("(x => float2int x) 4.5")), 4);
 }
 
-/// Two tokens are both a bracket and a comparison; the grammar tells them
-/// apart by the *shape* around them, not a mode.
+/// Two tokens are both a raw-index delimiter and a comparison; the shape
+/// around them tells the jobs apart, not a mode.
 #[test]
-fn comparisons_share_their_tokens_with_the_angle_bracket_forms() {
-    // An expression before the token, and an expression after it: a comparison.
+fn comparisons_share_their_tokens_with_the_raw_index() {
+    // An expression before the token, and an expression after it: a comparison
+    // (`1 < 2 > 0` is `(1 < 2) > 0`).
     assert_eq!(usize_of(&evaluate("2 > 1")), 1);
     assert_eq!(usize_of(&evaluate("2 >= 2")), 1);
-    assert_eq!(usize_of(&evaluate("1 < 2 > 0")), 1); // (1 < 2) > 0
-    // An angle bracket over a *tuple type* wins: the application is the
-    // tighter reading.
+    assert_eq!(usize_of(&evaluate("1 < 2 > 0")), 1);
+    // A glued `<` reads the component out of the value it follows — here a
+    // tuple type value, so the read is positional.
     assert_eq!(
-        usize_of(&evaluate("f = x => x<1>; f <Int, string> == string")),
+        usize_of(&evaluate("f = x => x<1>; f tuple{Int, string} == string")),
         1
     );
-    // A `>` with no expression after it closes the bracket it is in, so every
-    // angle-bracket form still parses.
+    // A `>` with no expression after it closes the raw index it is in.
 
     // The struct form states the *tuple* kind, so a struct type value is read
     // by name (`::a`) rather than positionally.
-    assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
+    assert_eq!(usize_of(&evaluate("tuple{Int, string}<1> == string")), 1);
     assert_eq!(
-        usize_of(&evaluate("struct<.a Int, .b string>::a == Int")),
+        usize_of(&evaluate("struct{.a Int, .b string}::a == Int")),
         1
     );
-    assert_eq!(usize_of(&evaluate("a = <Int, string>; a<0> == Int")), 1);
-    // The glued `(` of an instantiation belongs to the angle form, so the `>`
-    // before it is still a closer.
-
+    assert_eq!(
+        usize_of(&evaluate("a = tuple{Int, string}; a<0> == Int")),
+        1
+    );
     // The field is read by name `s.a`; the positional `s(0)` is the tuple read.
     assert_eq!(
         usize_of(&evaluate(
-            "s = struct<.a Int, .b string>(1, \"a\"); s.a == 1"
+            "s = struct{.a Int, .b string}(1, \"a\"); s.a == 1"
         )),
         1
     );
-    // The keyword-led array type's `>` closes as before.
-    let (module, value, _) = common::evaluate("[1, 2] : array<Int, 2>");
+    // The keyword-led array type checks and runs.
+    let (module, value, _) = common::evaluate("[1, 2] : array{Int, 2}");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
     // A `<` glued to the previous token is still the raw component read, so
     // a comparison needs a space before it.
     assert_eq!(
-        usize_of(&evaluate("f = x => x; f (<Int, string>)<0> == Int")),
+        usize_of(&evaluate("f = x => x; f (tuple{Int, string})<0> == Int")),
         1
     );
 }
@@ -983,7 +984,7 @@ fn a_self_referential_array_checks_without_overflow() {
 fn a_self_nested_struct_checks_without_overflow() {
     // The checker cuts the type-level cycle: a struct is a nominal type, not a
     // value, so its nominal id is allocated once.
-    let report = compile("s = struct<.f s>; s");
+    let report = compile("s = struct{.f s}; s");
     if let Some(s) = report.diagnostics.first() {
         assert_eq!(s.stage, Stage::Resolve, "{s:?}");
     }
@@ -1045,7 +1046,7 @@ fn a_deep_operator_chain_compiles_without_an_overflow() {
 fn a_struct_type_kinds_and_evaluates() {
     // A bare struct type is a well-typed program: the pair
     // `[[Int, Int], [TypeId(n), Type]]`.
-    run("struct<.f Int, .g Int>");
+    run("struct{.f Int, .g Int}");
 }
 
 #[test]
@@ -1054,7 +1055,7 @@ fn a_bound_struct_type_is_reusable() {
     // compiled node.
 
     // The checker compiles each expression once, so the nominal id survives.
-    let (module, root) = run("s = struct<.f Int>; [s, s]");
+    let (module, root) = run("s = struct{.f Int}; [s, s]");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1073,7 +1074,7 @@ fn two_struct_type_occurrences_do_not_unify() {
 
     // Two distinct occurrences have different ids, so an array of two is
     // heterogeneous and rejected.
-    let report = compile("[struct<.f Int>, struct<.f Int>]");
+    let report = compile("[struct{.f Int}, struct{.f Int}]");
     assert!(
         !report.ok(),
         "two distinct struct occurrences are different nominal types: {:?}",
@@ -1088,7 +1089,7 @@ fn a_struct_type_in_a_function_body_is_shared_across_applications() {
 
     // The apply clone therefore references the node in place: every
     // application of `f` shares one nominal id.
-    let report = compile("f = t => struct<.f t>; [f (Int), f (Int)]");
+    let report = compile("f = t => struct{.f t}; [f (Int), f (Int)]");
     assert!(
         report.ok(),
         "a body-local struct must be one nominal type across applications: {:?}",
@@ -1103,13 +1104,13 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
 
     // The id lives in the kind slot, the field types in the value
     // shape, so the same constructor still checks.
-    let report = compile("Box = t => struct<.f t>; [Box (Int), Box (Int)]");
+    let report = compile("Box = t => struct{.f t}; [Box (Int), Box (Int)]");
     assert!(
         report.ok(),
         "same constructor, same fields: {:?}",
         report.diagnostics
     );
-    let report = compile("Box = t => struct<.f t>; [Box (Int), Box (Type)]");
+    let report = compile("Box = t => struct{.f t}; [Box (Int), Box (Type)]");
     assert!(
         report.ok(),
         "same constructor (one nominal kind), fields differ only in the value: {:?}",
@@ -1124,8 +1125,8 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
 
     // Both halves matter — the nullary `Fresh` node and the name table
     // (`function-type-merge.md`).
-    let (module, root) = run("A = I => struct<.n Int, .I I>\n\
-         In = struct<.x _, .y _>\n\
+    let (module, root) = run("A = I => struct{.n Int, .I I}\n\
+         In = struct{.x _, .y _}\n\
          S1 = A In\n\
          S2 = A In\n\
          x = S1(.n 3, .I In(.x 10, .y 20))\n\
@@ -1165,7 +1166,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     );
     // The id is the *occurrence*, not the instantiation.
     let d = diags(
-        "A = I => struct<.n Int, .I I>\n\
+        "A = I => struct{.n Int, .I I}\n\
          S1 = A Int\n\
          S2 = A Float\n\
          x = S1(.n 3, .I 5)\n\
@@ -1181,7 +1182,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     // A pinned id alone does not fix this row — the copied name table is
     // what conflicts.
     let report = compile(
-        "A = I => struct<.n I>\n\
+        "A = I => struct{.n I}\n\
          S1 = A Int\n\
          S2 = A Int\n\
          f = v => (v : S2)\n\
@@ -1196,11 +1197,11 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
 
 #[test]
 fn a_named_struct_field_read_resolves_to_the_positional_index() {
-    // `A = struct<.x Int, .y Type>` carries a name→index table; `a.x`
+    // `A = struct{.x Int, .y Type}` carries a name→index table; `a.x`
     // reads field `x` (index 0), `a.y` field `y` (index 1).
-    let v = evaluate("A = struct<.x Int, .y Type>; a = A(1, Int); a.x");
+    let v = evaluate("A = struct{.x Int, .y Type}; a = A(1, Int); a.x");
     assert_eq!(v, LangValue::LowValue(LowValue::USize(1)));
-    let v = evaluate("A = struct<.x Int, .y Type>; a = A(1, Int); a.y");
+    let v = evaluate("A = struct{.x Int, .y Type}; a = A(1, Int); a.y");
     assert_eq!(v, LangValue::TypeValue(TypeValue::TypeInt));
 }
 
@@ -1215,13 +1216,13 @@ fn a_named_struct_field_read_resolves_to_the_positional_index() {
 #[test]
 fn a_field_reads_class_is_decided_where_the_container_type_is() {
     let named = evaluate(
-        "A = struct<.n Int, .alpha Float>\n\
+        "A = struct{.n Int, .alpha Float}\n\
          f = (x : A) => x.alpha + x.alpha\n\
          f (A(.n 1, .alpha 0.5))",
     );
     assert_eq!(named, LangValue::LowValue(LowValue::Float(1.0)));
     let positional = evaluate(
-        "f = (x : <Int, Float>) => x(1) + x(1)\n\
+        "f = (x : tuple{Int, Float}) => x(1) + x(1)\n\
          f (1, 0.5)",
     );
     assert_eq!(positional, LangValue::LowValue(LowValue::Float(1.0)));
@@ -1231,7 +1232,7 @@ fn a_field_reads_class_is_decided_where_the_container_type_is() {
 fn a_named_field_read_on_a_missing_field_is_rejected() {
     // `a.z` on a struct that has no field `z` is a reported type error (a
     // named-field miss), not a runtime panic.
-    let d = diags("A = struct<.x Int>; a = A(1,); a.z");
+    let d = diags("A = struct{.x Int}; a = A(1,); a.z");
     let check = d[0]
         .check
         .as_ref()
@@ -1243,7 +1244,7 @@ fn a_named_field_read_on_a_missing_field_is_rejected() {
 fn a_named_field_miss_suggests_a_close_field() {
     // The message appends the actually-close field name, so the editor can
     // suggest a fix and power field completion.
-    let d = diags("A = struct<.x Int, .sub Int>; a = A(1, 2); a.sux");
+    let d = diags("A = struct{.x Int, .sub Int}; a = A(1, 2); a.sux");
     let msg = &d[0].message;
     assert!(
         msg.contains("no field") && msg.contains("did you mean 'sub'?"),
@@ -1284,21 +1285,21 @@ fn a_raw_read_of_a_type_value_reads_the_components_pair() {
 
     // The positional read yields the element's value and its type.
     assert_eq!(
-        evaluate("<Int, string><0>"),
+        evaluate("tuple{Int, string}<0>"),
         LangValue::TypeValue(TypeValue::TypeInt)
     );
-    assert_eq!(usize_of(&evaluate("<Int, string><0> == Int")), 1);
+    assert_eq!(usize_of(&evaluate("tuple{Int, string}<0> == Int")), 1);
     // A struct type value states the *tuple* kind for `X<e>`, so its
     // components are read by name (`X::a`).
     assert_eq!(
-        usize_of(&evaluate("struct<.a Int, .b string>::b == string")),
+        usize_of(&evaluate("struct{.a Int, .b string}::b == string")),
         1
     );
     // The element's own *value* slot, which a `Type`-valued element carries.
-    assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
+    assert_eq!(usize_of(&evaluate("tuple{Int, string}<1> == string")), 1);
     // An undecided container stays lazy and resolves at the apply.
     assert_eq!(
-        usize_of(&evaluate("f = k => k<0>; f <Int, string> == Int")),
+        usize_of(&evaluate("f = k => k<0>; f tuple{Int, string} == Int")),
         1
     );
 }
@@ -1310,19 +1311,19 @@ fn a_raw_read_of_a_non_tuple_container_is_refused_by_kind() {
     let d = diags("[1, 2]<0>");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
     // A span, too — the container is what the user wrote.
     assert_eq!(d[0].span, Some((1, 1)));
     // The same read through a bound name is refused at the name.
     let d = diags("x = [1, 2]; x<0>");
-    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
     assert_eq!(d[0].span, Some((1, 5)));
     // A deferred parameter states the same requirement at the apply
     // that binds it.
     let d = diags("f = k => k<0>; f [1, 2]");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
-    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
     assert_eq!(d[0].span, Some((1, 18)));
     // A scalar is not a container at all, and gets the same kind refusal.
     let d = diags("5<0>");
@@ -1335,39 +1336,39 @@ fn a_raw_named_read_yields_the_field_type() {
     // `S::a` reads field `a`'s *type* as a value; `s.a` reads field `a`'s
     // *value* from the instance.
     assert_eq!(
-        evaluate("S = struct<.a Int, .b string>; S::a"),
+        evaluate("S = struct{.a Int, .b string}; S::a"),
         LangValue::TypeValue(TypeValue::TypeInt)
     );
     assert_eq!(
-        evaluate("S = struct<.a Int, .b string>; S::b"),
+        evaluate("S = struct{.a Int, .b string}; S::b"),
         LangValue::TypeValue(TypeValue::TypeString)
     );
     assert_eq!(
         usize_of(&evaluate(
-            "S = struct<.a Int, .b string>; s = S(.a 1, .b \"h\"); s.a"
+            "S = struct{.a Int, .b string}; s = S(.a 1, .b \"h\"); s.a"
         )),
         1
     );
     // The instance read is an Int, so `s.a == 1` is a valid int comparison.
     assert_eq!(
         usize_of(&evaluate(
-            "S = struct<.a Int, .b string>; s = S(.a 1, .b \"h\"); s.a == 1"
+            "S = struct{.a Int, .b string}; s = S(.a 1, .b \"h\"); s.a == 1"
         )),
         1
     );
     // `==` is generalized: a `Type`-typed value compares against a type
     // constant by value.
     assert_eq!(
-        usize_of(&evaluate("S = struct<.a Int, .b string>; S::a == Int")),
+        usize_of(&evaluate("S = struct{.a Int, .b string}; S::a == Int")),
         1
     );
     assert_eq!(
-        usize_of(&evaluate("S = struct<.a Int, .b string>; S::a == string")),
+        usize_of(&evaluate("S = struct{.a Int, .b string}; S::a == string")),
         0
     );
     // Comparing values of different types is still rejected.
     assert!(
-        diags("S = struct<.a Int, .b string>; S::a == 1")
+        diags("S = struct{.a Int, .b string}; S::a == 1")
             .iter()
             .any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::BinOp))
     );
@@ -1391,7 +1392,7 @@ fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error(
     // records it as `RuntimeIndexSubscript`.
 
     // The caret is on the subscript, the one node the raw read gives an edge.
-    let d = diags("a = <Int, string>\ni = \"x\"\na<i>");
+    let d = diags("a = tuple{Int, string}\ni = \"x\"\na<i>");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::RuntimeIndexSubscript);
@@ -1426,7 +1427,7 @@ fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
 
     // Only the program knows which values are callable
     // (`Program::is_callable`), so its answer refuses this one.
-    let report = compile("S = struct<.a Int>\nf = g => g 1\nf S(.a 1)");
+    let report = compile("S = struct{.a Int}\nf = g => g 1\nf S(.a 1)");
     assert!(
         !report.ok(),
         "an apply of a struct value must not be accepted: {:?}",
@@ -1444,7 +1445,7 @@ fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Each body's `Fresh` node is its own, so the nominal ids stay
     // distinct and `[f (Int), g (Int)]` is heterogeneous.
-    let report = compile("f = t => struct<.f t>; g = t => struct<.f t>; [f (Int), g (Int)]");
+    let report = compile("f = t => struct{.f t}; g = t => struct{.f t}; [f (Int), g (Int)]");
     assert!(
         !report.ok(),
         "distinct body-local structs must keep distinct nominal ids: {:?}",
@@ -1456,7 +1457,7 @@ fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
 fn an_annotation_against_a_struct_type_conflicts() {
     // An annotation compares whole type expressions, so a literal's
     // int type is not the struct type; `s(1, 2)` instantiates.
-    let d = diags("5 : struct<.f Int>");
+    let d = diags("5 : struct{.f Int}");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
@@ -1466,12 +1467,12 @@ fn an_annotation_against_a_struct_type_conflicts() {
 fn a_struct_type_application_is_an_instance() {
     // Applied to a positional tuple, the struct type compiles to
     // Instantiate; the element types meet the field types.
-    let (module, root) = run("struct<.f Int, .g Int>(1, 2)");
+    let (module, root) = run("struct{.f Int, .g Int}(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     // a bound struct type instantiates the same way
-    let (module, root) = run("s = struct<.f Int, .g Int>; s(1, 2)");
+    let (module, root) = run("s = struct{.f Int, .g Int}; s(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1480,22 +1481,22 @@ fn a_struct_type_application_is_an_instance() {
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
     // arity: two fields, one value
-    let d = diags("struct<.f Int>(1, 2)");
+    let d = diags("struct{.f Int}(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // field types: the tuple's Ints are not Type
-    let d = diags("struct<.f Type, .g Type>(1, 2)");
+    let d = diags("struct{.f Type, .g Type}(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // a different source occurrence is a different nominal type
-    let d = diags("s1 = struct<.f Int, .g Int>; s2 = struct<.f Int, .g Int>; [s1(1, 2), s2(1, 2)]");
+    let d = diags("s1 = struct{.f Int, .g Int}; s2 = struct{.f Int, .g Int}; [s1(1, 2), s2(1, 2)]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
     assert!(
-        d[0].message.contains("struct<.f Int, .g Int>#"),
+        d[0].message.contains("struct{.f Int, .g Int}#"),
         "the two struct occurrences must keep distinct nominal ids: {}",
         d[0].message
     );
@@ -1505,7 +1506,7 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
 fn a_struct_instance_reads_its_fields_by_name() {
     // A named read over an instance reads the wrapped tuple's elements,
     // each typed by the corresponding field type.
-    let (module, root) = run("s = struct<.f Int, .t Type>; a = s(1, Int); (a.f, a.t)");
+    let (module, root) = run("s = struct{.f Int, .t Type}; a = s(1, Int); (a.f, a.t)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1528,7 +1529,7 @@ fn a_struct_instance_reads_its_fields_by_name() {
 
     // The argument is parenthesized: `f s(1, Int)` would parse as
     // `(f s)(1, Int)`.
-    let (module, root) = run("f = a => a.f; s = struct<.f Int, .t Type>; f (s(1, Int)) : Int");
+    let (module, root) = run("f = a => a.f; s = struct{.f Int, .t Type}; f (s(1, Int)) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 1);
 }
@@ -1540,7 +1541,7 @@ fn a_positional_read_of_a_struct_instance_is_refused() {
 
     // The requirement is the tuple **kind** the container would have to have, and
     // the caret is the container.
-    let d = diags("s = struct<.f Int, .t Type>; a = s(1, Int); a(0)");
+    let d = diags("s = struct{.f Int, .t Type}; a = s(1, Int); a(0)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
@@ -1559,7 +1560,7 @@ fn a_positional_read_of_a_struct_instance_is_refused() {
 #[test]
 fn a_named_struct_instantiation_reorders_arguments() {
     // The named arguments are reordered to the definition's positional order.
-    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a.x, a.y)");
+    let (module, root) = run("S = struct{.x Int, .y Type}; a = S(.y Int, .x 1); (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1584,7 +1585,7 @@ fn a_named_struct_instantiation_reorders_arguments() {
 fn a_named_struct_instantiation_in_definition_order() {
     // S(.x 1, .y Int) — the named arguments in definition order evaluate to
     // the positional tuple (1, Int).
-    let value = evaluate("S = struct<.x Int, .y Type>; S(.x 1, .y Int)");
+    let value = evaluate("S = struct{.x Int, .y Type}; S(.x 1, .y Int)");
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2);
 }
@@ -1593,7 +1594,7 @@ fn a_named_struct_instantiation_in_definition_order() {
 fn a_named_struct_instantiation_mixes_positional_and_named() {
     // A bare positional argument fills the lowest-numbered unclaimed
     // definition position.
-    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a.x, a.y)");
+    let (module, root) = run("S = struct{.x Int, .y Type}; a = S(.y Int, 1); (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(
@@ -1613,7 +1614,7 @@ fn a_named_struct_instantiation_mixes_positional_and_named() {
 
 #[test]
 fn a_named_struct_instantiation_against_an_unknown_field_is_rejected() {
-    let d = diags("S = struct<.x Int, .y Type>; S(.z 1, .x 1, .y Int)");
+    let d = diags("S = struct{.x Int, .y Type}; S(.z 1, .x 1, .y Int)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::StructUnknownField);
     assert_eq!(check.field.as_deref(), Some("z"), "the unknown field name");
@@ -1626,7 +1627,7 @@ fn a_named_struct_instantiation_against_an_unknown_field_is_rejected() {
 
 #[test]
 fn a_named_struct_instantiation_against_a_duplicate_field_is_rejected() {
-    let d = diags("S = struct<.x Int, .y Type>; S(.x 1, .x 2, .y Int)");
+    let d = diags("S = struct{.x Int, .y Type}; S(.x 1, .x 2, .y Int)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::StructDuplicateField);
     assert_eq!(check.field.as_deref(), Some("x"));
@@ -1634,7 +1635,7 @@ fn a_named_struct_instantiation_against_a_duplicate_field_is_rejected() {
 
 #[test]
 fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
-    let d = diags("S = struct<.x Int, .y Type>; S(.x 1)");
+    let d = diags("S = struct{.x Int, .y Type}; S(.x 1)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::StructMissingField);
     assert_eq!(check.field.as_deref(), Some("y"), "the missing field name");
@@ -1644,7 +1645,7 @@ fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
 fn a_named_struct_instantiation_against_an_anonymous_struct_is_rejected() {
     // Every struct field must carry a name, because the positional `a(k)` form
     // is the tuple read.
-    let d = diags("S = struct<Int, Type>; S(.x 1, .y Int)");
+    let d = diags("S = struct{Int, Type}; S(.x 1, .y Int)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::StructFieldName);
 }
@@ -1653,7 +1654,7 @@ fn a_named_struct_instantiation_against_an_anonymous_struct_is_rejected() {
 fn a_named_struct_instantiation_with_a_wrong_field_type_is_rejected() {
     // After reordering, the element types are checked against the field
     // list, so a mismatch is an annotation failure.
-    let d = diags("S = struct<.x Int, .y Type>; S(.x Type, .y Int)");
+    let d = diags("S = struct{.x Int, .y Type}; S(.x Type, .y Int)");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::Annotation
@@ -1665,7 +1666,7 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
     // Lazy resolution through a parameter: the field resolves through the struct's
     // name table at the call.
     let report = compile(
-        "S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type",
+        "S = struct{.x Int, .y Type}; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type",
     );
     assert!(
         report.ok(),
@@ -1681,7 +1682,7 @@ fn a_lazy_named_read_over_an_anonymous_struct_is_refused() {
 
     // The refusal is a check diagnostic, never a panic and never a false
     // non-termination report from the read that follows.
-    let d = diags("S = struct<Int, Type>\na = S(1, Int)\napply = s => s.x\napply (a)");
+    let d = diags("S = struct{Int, Type}\na = S(1, Int)\napply = s => s.x\napply (a)");
     assert!(
         d.iter().any(|d| d
             .check
@@ -1702,10 +1703,10 @@ fn a_lazy_named_read_over_an_anonymous_struct_is_refused() {
 fn an_instantiation_through_a_call_result_checks() {
     // The checker forces the unevaluated call result and sees the concrete
     // struct type, where a panic used to be the answer.
-    let (module, value, _) = common::evaluate("mk = u => struct<.f Int, .g Int>\n(mk (Int))(1, 2)");
+    let (module, value, _) = common::evaluate("mk = u => struct{.f Int, .g Int}\n(mk (Int))(1, 2)");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
     let (module, value, _) =
-        common::evaluate("mk = u => struct<.f Int, .g Int>\nt = mk (Int)\nt(1, 2)");
+        common::evaluate("mk = u => struct{.f Int, .g Int}\nt = mk (Int)\nt(1, 2)");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
 }
 
@@ -1730,7 +1731,7 @@ fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
 fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
     // Structs are nominal: a tuple type and a function type cannot
     // instantiate, and the error points at the callee.
-    let d = diags("(<Int, Int>)(1, 2)");
+    let d = diags("(tuple{Int, Int})(1, 2)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::InstantiateCallee);
     assert!(
@@ -1754,7 +1755,7 @@ fn a_named_instantiation_through_a_parameter_reorders_when_the_type_resolves() {
     // The reorder is therefore a lazy read that resolves at the apply binding
     // `s` to `S`.
     let (module, root) =
-        run("S = struct<.x Int, .y Type>\nf = s => s(.y Int, .x 1)\na = f (S)\n(a.x, a.y)");
+        run("S = struct{.x Int, .y Type}\nf = s => s(.y Int, .x 1)\na = f (S)\n(a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1779,7 +1780,7 @@ fn a_named_instantiation_through_a_parameter_reorders_when_the_type_resolves() {
 fn a_named_instantiation_through_a_parameter_checks_the_field_types() {
     // The supplying lookup carries each argument's type beside its
     // name, so an unmatched field type is a miss there.
-    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x Int, .y 1)\nf (S)");
+    let d = diags("S = struct{.x Int, .y Type}\nf = s => s(.x Int, .y 1)\nf (S)");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::TableMiss,
@@ -1793,7 +1794,7 @@ fn a_deferred_instantiation_refusal_points_at_the_offending_argument() {
     // the caret comes from `Module::node_origin`.
 
     // That is the argument node the checker did attribute.
-    let d = diags("S = struct<.y Int>\nf = s => s(.x 1)\nf (S)");
+    let d = diags("S = struct{.y Int}\nf = s => s(.x 1)\nf (S)");
     assert_eq!(
         d[0].check.as_ref().expect("a checker diagnostic").kind,
         DiagKind::TableMiss,
@@ -1806,7 +1807,7 @@ fn a_deferred_instantiation_refusal_points_at_the_offending_argument() {
     );
     // `f = s => s(.x 1)` — column 15 is the `.x 1` argument in the lambda
     // body, not the `f (S)` call site on the next line.
-    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x string, .y 1)\nf (S)");
+    let d = diags("S = struct{.x Int, .y Type}\nf = s => s(.x string, .y 1)\nf (S)");
     let spans: Vec<_> = d.iter().map(|diag| diag.span).collect();
     assert_eq!(
         spans,
@@ -1824,7 +1825,7 @@ fn an_undecided_sibling_type_narrows_the_deferred_type_check() {
     // `string`-against-`Int` mismatch goes unchecked.
 
     // A per-argument key form would check it; that mechanism is not in place.
-    let report = compile("S = struct<.x Int, .y Type>\nf = s => s(.x string, .y _)\nf (S)");
+    let report = compile("S = struct{.x Int, .y Type}\nf = s => s(.x string, .y _)\nf (S)");
     assert!(
         report.ok(),
         "the undecided sibling suppresses the whole type check: {:?}",
@@ -1835,7 +1836,7 @@ fn an_undecided_sibling_type_narrows_the_deferred_type_check() {
 #[test]
 fn a_deferred_instantiation_of_a_concrete_argument_type_is_accepted() {
     // A parameter annotated with the struct type resolves the callee at the call.
-    let (module, root) = run("A = struct<.x Int, .y Int>\nf = x: A => x\nf (_(.x 1, .y 2))");
+    let (module, root) = run("A = struct{.x Int, .y Int}\nf = x: A => x\nf (_(.x 1, .y 2))");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1863,7 +1864,7 @@ fn a_deferred_instantiation_of_a_concrete_argument_type_is_accepted() {
 fn a_mixed_positional_and_named_instantiation_reorders() {
     // A positional argument fills the lowest-numbered unclaimed definition
     // position, so `.y 2, 1` gives `(.x = 1, .y = 2)`.
-    let (module, root) = run("A = struct<.x Int, .y Int>\nf = s => s(.y 2, 1)\nf (A)");
+    let (module, root) = run("A = struct{.x Int, .y Int}\nf = s => s(.y 2, 1)\nf (A)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
@@ -1907,7 +1908,7 @@ fn an_instantiation_through_a_parameter_at_a_non_struct_fails_at_the_call() {
 fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
     // The use of `c` captured the reserved placeholder before `c = b` compiled;
     // the alias re-points it to `b`'s node.
-    let (module, value, _) = common::evaluate("a = c(1, 2)\nb = struct<.f Int, .g Int>\nc = b\na");
+    let (module, value, _) = common::evaluate("a = c(1, 2)\nb = struct{.f Int, .g Int}\nc = b\na");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
 }
 
@@ -2050,8 +2051,8 @@ fn mutually_recursive_structs_check_and_evaluate() {
     // The checker's skeleton cuts the IR cycle and the deep pass the value
     // cycle.
     let report = compile(
-        "A = struct<.f Int, .g B>
-         B = struct<.f Type, .g A>
+        "A = struct{.f Int, .g B}
+         B = struct{.f Type, .g A}
          a = A(1, b)
          b = B(Int, a)
          (A, B, a, b)",
@@ -2080,7 +2081,7 @@ fn a_dependent_array_length_pins_the_parameter() {
     // pins it, so the parameter is monomorphized.
     assert_eq!(
         array_ids(evaluate(
-            "(((n => ([1, 2, 3] : array<Int, n>)) 3) : array<Int, 3>)"
+            "(((n => ([1, 2, 3] : array{Int, n})) 3) : array{Int, 3})"
         ))
         .len(),
         3
@@ -2090,7 +2091,7 @@ fn a_dependent_array_length_pins_the_parameter() {
 #[test]
 fn a_dependent_array_length_rejects_other_lengths() {
     // `n` is pinned to 3 by the annotation; applying 5 clashes at the apply.
-    let d = diags("((n => ([1, 2, 3] : array<Int, n>)) 5)");
+    let d = diags("((n => ([1, 2, 3] : array{Int, n})) 5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -2176,13 +2177,13 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
     // diagnostic points at the argument.
 
     // The highlevel `check.message` is raw (`[[TypeInt, TypeInt], TypeTuple]`).
-    let d = diags("g = (x : <Int, Int>) => x(0)\ng (5)");
+    let d = diags("g = (x : tuple{Int, Int}) => x(0)\ng (5)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].span, Some((2, 4)), "the caret is on the argument `5`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
     assert!(
-        d[0].message.contains("expected <Int, Int>, found Int"),
+        d[0].message.contains("expected tuple{Int, Int}, found Int"),
         "{}",
         d[0].message
     );
@@ -2252,7 +2253,7 @@ fn a_heterogeneous_array_is_rejected() {
 
 #[test]
 fn an_array_of_the_wrong_length_is_rejected() {
-    let d = diags("([1, 2] : array<Int, 3>)");
+    let d = diags("([1, 2] : array{Int, 3})");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
@@ -2344,8 +2345,8 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : array<Int, _> — the length is inferred from the literal.
-    let (module, value, _) = common::evaluate("[1, 2, 3] : array<Int, _>");
+    // [1, 2, 3] : array{Int, _} — the length is inferred from the literal.
+    let (module, value, _) = common::evaluate("[1, 2, 3] : array{Int, _}");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2, 3]);
 }
 

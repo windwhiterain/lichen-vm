@@ -56,7 +56,7 @@ fn imports_and_applies_a_function_package() {
 #[test]
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
-    write(&dir, "s.lichen", "struct<.f Int>\n");
+    write(&dir, "s.lichen", "struct{.f Int}\n");
     let main = "---s = import \"s.lichen\"---s(5,)\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
@@ -91,7 +91,7 @@ fn transitive_imports_apply_across_modules() {
 fn transitive_struct_types_flow_through_packages() {
     // The nominal id and the frozen type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
-    write(&dir, "inner.lichen", "struct<.f Int>\n");
+    write(&dir, "inner.lichen", "struct{.f Int}\n");
     write(
         &dir,
         "middle.lichen",
@@ -153,7 +153,7 @@ fn an_imported_deferred_instantiation_points_at_the_argument_the_caller_passed()
     // keeps no source record.
     let dir = temp_dir("imported-deferred");
     write(&dir, "f.lichen", "s => s(.x 1)\n");
-    let main = "---f = import \"f.lichen\"---\nS = struct<.y Int>\nf (S)\n";
+    let main = "---f = import \"f.lichen\"---\nS = struct{.y Int}\nf (S)\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     let diag = err.first().expect("a refusal");
@@ -185,7 +185,7 @@ fn an_imported_placeholder_instantiation_resolves_at_the_apply() {
 
     // The nominal id is per occurrence, so the importer cannot name it.
     let dir = temp_dir("imported-placeholder");
-    write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
+    write(&dir, "f.lichen", "f = x: struct{.x Int, .y Int} => x\n");
     let main = "---f = import \"f.lichen\"---\ntype_of = x => {t = _; x: t; t}\nv = f.f (_(.x 1, .y 2))\nT = type_of v\n(v, T::x == Int, T::y == Int)\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
@@ -210,7 +210,7 @@ fn two_applies_of_one_imported_placeholder_instantiation_stay_distinct() {
     // Each apply materializes its own clone, so the first call's binding
     // cannot stand in for the second's.
     let dir = temp_dir("imported-placeholder-twice");
-    write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
+    write(&dir, "f.lichen", "f = x: struct{.x Int, .y Int} => x\n");
     let main = "---f = import \"f.lichen\"---(f.f (_(.x 1, .y 2)), f.f (_(.x 3, .y 4)))\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
@@ -234,7 +234,7 @@ fn a_placeholder_instantiation_deferred_inside_an_imported_body_resolves_at_the_
     write(
         &dir,
         "g.lichen",
-        "g = s => { a = _(.x 1, .y 2)\n  p = a : struct<.x Int, .y Int>\n  a }\n",
+        "g = s => { a = _(.x 1, .y 2)\n  p = a : struct{.x Int, .y Int}\n  a }\n",
     );
     let main = "---g = import \"g.lichen\"---\ntype_of = x => {t = _; x: t; t}\nv = g.g 0\nT = type_of v\n(v.x, v.y, T::x == Int, T::y == Int)\n";
     let mut store = PackageStore::<LangProgram>::new();
@@ -266,7 +266,7 @@ fn two_applies_of_one_imported_function_resolve_their_own_struct_type() {
         "f.lichen",
         "f = x => { a = _(.x 1, .y 2)\n  p = a : x\n  a }\n",
     );
-    let main = "---f = import \"f.lichen\"---\nS = struct<.x Int, .y Int>\nT = struct<.y Int, .x Int>\n(f.f (S), f.f (T))\n";
+    let main = "---f = import \"f.lichen\"---\nS = struct{.x Int, .y Int}\nT = struct{.y Int, .x Int}\n(f.f (S), f.f (T))\n";
     let mut store = PackageStore::<LangProgram>::new();
     let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
     let calls = common::array_values(&module, &value);
@@ -425,7 +425,7 @@ fn a_raw_read_of_a_non_tuple_container_in_a_package_is_refused_by_kind() {
     assert!(
         err.iter().any(|d| d
             .message
-            .contains("expected TypeTuple, found array<array<Int, 1>, 1>")),
+            .contains("expected TypeTuple, found array{array{Int, 1}, 1}")),
         "the package's own failure is the one reported: {err:?}"
     );
     assert_eq!(

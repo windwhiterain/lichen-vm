@@ -431,9 +431,9 @@ than a second scan, so the text and the `(line, col)` name the same line.
 ### Running a program
 
 - **The output line** is `value<attributes>: type` — `5: Int`,
-  `[1, 2, 3]: array<Int, 3>` — formed in exactly one place so `evaluate` and
+  `[1, 2, 3]: array{Int, 3}` — formed in exactly one place so `evaluate` and
   `evaluate_raw` cannot drift. The value renders *against its type chain*: a
-  struct type value prints `struct<.f Int, .g Type>`, a tuple `(1, Int)`. A value
+  struct type value prints `struct{.f Int, .g Type}`, a tuple `(1, Int)`. A value
   one of whose attributes *names* it reads as that name, and that override is the
   general mechanism ([operator-polymorphism](operator-polymorphism.md) §8.1), not
   a rule about a particular attribute — it is what lets a value with no spelling

@@ -234,23 +234,23 @@ fn program() -> &'static str {
 ---
   compute = import "compute.lichen"
 ---
-In = struct<.d (compute.Buf Float)>
-Out = struct<.r (compute.Buf Float)>
+In = struct{.d (compute.Buf Float)}
+Out = struct{.r (compute.Buf Float)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 producer_raw = (k : Par) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine" ~ "accumulator"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-In2 = struct<.d (compute.Buf Float), .p (compute.Buf Float)>
-Out2 = struct<.z (compute.Buf Float)>
+In2 = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
+Out2 = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.p, .at 0))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-element_raw = (p : <Float, Float>) => (p(0) * p(1)) ~ "element"
+element_raw = (p : tuple{Float, Float}) => (p(0) * p(1)) ~ "element"
 (compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu",
  compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity)") "cpu",
  compute.jit (element_raw ~ "claim:Reduction(element)"))
@@ -268,8 +268,8 @@ fn incomplete_claim_program() -> &'static str {
 ---
   compute = import "compute.lichen"
 ---
-In = struct<.d (compute.Buf _)>
-Out = struct<.r (compute.Buf _)>
+In = struct{.d (compute.Buf _)}
+Out = struct{.r (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 producer_raw = (k : Par) => {
   i = compute.range k.n

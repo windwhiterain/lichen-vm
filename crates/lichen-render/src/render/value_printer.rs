@@ -65,7 +65,7 @@ where
                 .collect();
             let names = struct_field_names(self.module, tys, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
-            return format!("struct<{}>", fields.join(", "));
+            return format!("struct{{{}}}", fields.join(", "));
         }
         // A kind `[marker, K]`: the value is a compound type — render its
         // shape in type syntax.
@@ -176,11 +176,11 @@ where
                 .iter()
                 .map(|item| self.printer.slot_any(item.node))
                 .collect();
-            return Some(format!("<{}>", fields.join(", ")));
+            return Some(format!("tuple{{{}}}", fields.join(", ")));
         } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
             // The element position is a **slot**, read as source.
             return Some(format!(
-                "array<{}, {}>",
+                "array{{{}, {}}}",
                 self.printer.slot_any(shape[0].node),
                 self.printer.any_node(shape[1].node)
             ));
