@@ -1187,6 +1187,127 @@ fn a_hand_built_loop_validates() {
     assert!(!words.is_empty(), "the hand-built loop emitted nothing");
 }
 
+/// A hand-built loop whose accumulator is carried, to pin what the emitter does with it.
+///
+/// # Invariant
+/// The body is `Loop::run`'s shape with a bound of three and an accumulator the step advances, so
+/// a run answers whether a carried value survives the backedge.
+#[test]
+fn a_hand_built_accumulating_loop_validates() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    body.add_param(entry);
+    let stop = body.add_const(entry, ScalarClass::Int, 3);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, stop],
+        vec![ScalarClass::Int],
+    );
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, one],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined],
+        }),
+    );
+    body.set_terminator(
+        merged,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+    let fragment = folded_fragment(body, false);
+    fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the accumulating loop is well formed: {broken}"));
+    let words = spirv::compile(
+        &LaunchSet::single(&fragment),
+        Binding {
+            inputs: 1,
+            outputs: 1,
+        },
+    )
+    .unwrap_or_else(|refusal| panic!("the accumulating loop is emitted: {refusal}"));
+    assert!(!words.is_empty(), "the accumulating loop emitted nothing");
+}
+
+/// A two-step tiled body printed for comparison against the tree's own lowering.
+///
+/// # Invariant
+/// The emitted IR is the artefact a human has to read to see why a carried accumulator answers one
+/// step: one iteration boundary is enough, and a 64-step body hides it.
+#[test]
+fn a_two_step_tiled_loop_prints() {
+    let body = Folding::new(
+        &Reduction {
+            combine: BinaryOp::Add,
+            identity: 0.0,
+        },
+        u64::from(LOCAL_SIZE_X) * 2,
+        Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .tiled(LOCAL_SIZE_X, 0)
+    .expect("a tile folds")
+    .into_body();
+    for (index, block) in body.blocks.iter().enumerate() {
+        println!(
+            "T block {index}: params {:?} term {:?}",
+            block.params, block.terminator
+        );
+    }
+    for (index, value) in body.values.iter().enumerate() {
+        println!("T value {index}: {value:?}");
+    }
+}
+
 /// `out[i] = in[i] + a`, over `(n, a, index)` — the launch's runtime scalar.
 ///
 /// # Invariant

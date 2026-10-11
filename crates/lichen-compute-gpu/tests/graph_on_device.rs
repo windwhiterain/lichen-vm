@@ -11,14 +11,581 @@ mod common;
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    Barrier, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
+    Barrier, Br, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
     KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, Slice, Space,
     TargetFacts, Terminator,
 };
 
+/// Whether the emitter's loop machinery carries a value across the backedge at all.
+///
+/// # Invariant
+/// The body is the smallest loop with a carried accumulator: `n = 0; while n < 3 { n = n + 1 }`,
+/// answered in `out[0]`. A run answering 3 says a carried block parameter survives the backedge;
+/// anything else is the emitter's, not a tiling's.
+#[test]
+fn a_hand_built_loop_carries_its_accumulator_on_the_device() {
+    let Some(context) = common::context("a_hand_built_loop_carries_its_accumulator_on_the_device")
+    else {
+        return;
+    };
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    body.add_param(entry);
+    let stop = body.add_const(entry, ScalarClass::Int, 3);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, stop],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, one],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined],
+        }),
+    );
+    let output = body.add_const(entry, ScalarClass::Int, 0);
+    let writer = body.add_block();
+    let written = body.add_param(writer);
+    body.add_op(
+        writer,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![output, zero, written],
+        Vec::new(),
+    );
+    body.set_terminator(
+        writer,
+        Terminator::Return {
+            values: vec![output],
+        },
+    );
+    body.set_terminator(
+        merged,
+        Terminator::Br(Br {
+            target: writer,
+            args: vec![result],
+        }),
+    );
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    };
+    let resident = context
+        .run(&LaunchSet::single(&fragment), &[], 64)
+        .unwrap_or_else(|refusal| panic!("a hand-built loop is dispatched: {refusal}"));
+    let answer = words(context.fetch(resident[0], 1).expect("the answer comes back"));
+    context.release(resident[0]);
+    assert_eq!(
+        answer[0], 3,
+        "a carried accumulator counts three steps before its bound stops it"
+    );
+}
+
+/// The folded per-lane body's two-step case, run on the device.
+///
+/// # Invariant
+/// The body is built by the transform's own `Folding::per_lane`, so a run says whether *that*
+/// construction carries: lane 0 runs once and answers `data[0]`, lane 1 runs twice and answers
+/// `data[0] + data[1]`.
+#[test]
+fn a_two_step_folded_loop_carries_on_the_device() {
+    let Some(context) = common::context("a_two_step_folded_loop_carries_on_the_device") else {
+        return;
+    };
+    let body = lichen_fusion_bridge::Folding::new(
+        &lichen_fusion::Reduction {
+            combine: lichen_fusion::BinaryOp::Add,
+            identity: 0.0,
+        },
+        2,
+        lichen_fusion_bridge::Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .per_lane();
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    };
+    let data: Vec<i64> = vec![10, 20];
+    let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let resident = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            2,
+        )
+        .unwrap_or_else(|refusal| panic!("a folded loop is dispatched: {refusal}"));
+    let answer = words(context.fetch(resident[0], 2).expect("the answer comes back"));
+    context.release(resident[0]);
+    assert_eq!(
+        answer,
+        vec![10, 30],
+        "a two-step fold answers its running total, not its first read"
+    );
+}
+
+/// The folded **tiled** body's one-step case, run on the device.
+///
+/// # Invariant
+/// The body is built by the transform's own `Folding::tiled`, so a run says whether the slice
+/// path carries: `lane_width` elements, one per lane, and the workgroup folds the whole tile.
+#[test]
+fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
+    let Some(context) = common::context("a_one_step_tiled_loop_folds_the_tile_on_the_device") else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let body = lichen_fusion_bridge::Folding::new(
+        &lichen_fusion::Reduction {
+            combine: lichen_fusion::BinaryOp::Add,
+            identity: 0.0,
+        },
+        u64::from(tile),
+        lichen_fusion_bridge::Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .tiled(tile, 0)
+    .expect("a tile folds")
+    .into_body();
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(tile),
+        },
+        slices: vec![Slice {
+            class: ScalarClass::Int,
+            count: tile,
+            space: Space::Shared,
+        }],
+        marks: Vec::new(),
+    };
+    let data: Vec<i64> = (1..=i64::from(tile)).collect();
+    let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let resident = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            tile as usize,
+        )
+        .unwrap_or_else(|refusal| panic!("a tiled loop is dispatched: {refusal}"));
+    let answer = words(
+        context
+            .fetch(resident[0], tile as usize)
+            .expect("the answer comes back"),
+    );
+    context.release(resident[0]);
+    let expected: i64 = data.iter().sum();
+    assert_eq!(
+        answer[tile as usize - 1], expected,
+        "the workgroup folds the whole tile to its sum"
+    );
+}
+
+/// The slice fold alone: `slot[lane] = lane + 1`, barrier, then each lane sums every slot.
+///
+/// # Invariant
+/// The smallest body that reads a slice the way the tiling does — the read index is a **modulo of
+/// the loop's carried slot** — so a run separates the slice's addressing from the fold's.
+#[test]
+fn the_slice_fold_alone_sums_every_slot_on_the_device() {
+    let Some(context) = common::context("the_slice_fold_alone_sums_every_slot_on_the_device") else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    let lane = body.add_param(entry);
+    let width = body.add_const(entry, ScalarClass::Int, i64::from(tile));
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let slot = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![lane, width],
+        vec![ScalarClass::Int],
+    );
+    let written = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![lane, one],
+        vec![ScalarClass::Int],
+    );
+    let ordinal = body.add_const(entry, ScalarClass::Int, 0);
+    let write = body.add_op(
+        entry,
+        KernelInstr::SliceWriteCall(ScalarClass::Int),
+        vec![ordinal, slot, written],
+        vec![ScalarClass::Int],
+    );
+    // The read fold: counter 0 .. width, address `slot + counter` taken modulo the width.
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let address = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let carried_address = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+    let index = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![address, width],
+        vec![ScalarClass::Int],
+    );
+    let read = body.add_op(
+        header,
+        KernelInstr::SliceReadCall(ScalarClass::Int),
+        vec![ordinal, index, write],
+        vec![ScalarClass::Int],
+    );
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, width],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero, zero],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value, address],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, read],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    let moved = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![carried_address, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined, moved],
+        }),
+    );
+    let after = body.add_block();
+    let left = body.add_param(after);
+    body.set_terminator(
+        merged,
+        Terminator::Br(Br {
+            target: after,
+            args: vec![result],
+        }),
+    );
+    let position = body.add_const(entry, ScalarClass::Int, 0);
+    body.add_op(
+        after,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, lane, left],
+        Vec::new(),
+    );
+    body.set_terminator(
+        after,
+        Terminator::Return {
+            values: vec![position],
+        },
+    );
+    body.barriers.push(Barrier { write, read });
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(tile),
+        },
+        slices: vec![Slice {
+            class: ScalarClass::Int,
+            count: tile,
+            space: Space::Shared,
+        }],
+        marks: Vec::new(),
+    };
+    fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the slice fold is well formed: {broken}"));
+    let resident = context
+        .run(&LaunchSet::single(&fragment), &[], tile as usize)
+        .unwrap_or_else(|refusal| panic!("the slice fold is dispatched: {refusal}"));
+    let answer = words(
+        context
+            .fetch(resident[0], tile as usize)
+            .expect("the answer comes back"),
+    );
+    context.release(resident[0]);
+    let expected: i64 = (1..=i64::from(tile)).sum();
+    assert_eq!(
+        answer[tile as usize - 1], expected,
+        "every lane sums every slot: {answer:?}"
+    );
+}
+
+/// The folded **tiled** body's two-step case: does the per-lane fold take its second step?
+///
+/// # Invariant
+/// `lane i` folds `data[i]` and `data[i + 64]`, so its partial is `2i + 3` and the workgroup's
+/// total is their sum; a body that takes one step per lane answers the first step's sum instead.
+#[test]
+fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
+    let Some(context) = common::context("a_two_step_tiled_loop_folds_the_tile_on_the_device") else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let steps = 2;
+    let body = lichen_fusion_bridge::Folding::new(
+        &lichen_fusion::Reduction {
+            combine: lichen_fusion::BinaryOp::Add,
+            identity: 0.0,
+        },
+        tile as u64 * steps,
+        lichen_fusion_bridge::Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .tiled(tile, 0)
+    .expect("a tile folds")
+    .into_body();
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(tile),
+        },
+        slices: vec![Slice {
+            class: ScalarClass::Int,
+            count: tile,
+            space: Space::Shared,
+        }],
+        marks: Vec::new(),
+    };
+    let data: Vec<i64> = (0..(tile as i64 * steps as i64)).collect();
+    let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let resident = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            tile as usize,
+        )
+        .unwrap_or_else(|refusal| panic!("a two-step tiled loop is dispatched: {refusal}"));
+    let answer = words(
+        context
+            .fetch(resident[0], tile as usize)
+            .expect("the answer comes back"),
+    );
+    context.release(resident[0]);
+    let expected: i64 = data.iter().sum();
+    println!("two-step partials: {answer:?} expected total {expected}");
+    assert_eq!(
+        answer[tile as usize - 1], expected,
+        "the workgroup folds both steps of the tile"
+    );
+}
+
+/// Whether a **per-lane** fold takes two steps on the device.
+///
+/// # Invariant
+/// The same `Loop` the tiled body's first fold uses, with `stop` two instead of one: `lane 0`
+/// answers `data[0] + data[1]` and a body that stopped after one step answers `data[0]`.
+#[test]
+fn a_two_step_per_lane_fold_carries_on_the_device() {
+    let Some(context) = common::context("a_two_step_per_lane_fold_carries_on_the_device") else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let body = lichen_fusion_bridge::Folding::new(
+        &lichen_fusion::Reduction {
+            combine: lichen_fusion::BinaryOp::Add,
+            identity: 0.0,
+        },
+        tile as u64 * 2,
+        lichen_fusion_bridge::Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .per_lane();
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(tile),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    };
+    let data: Vec<i64> = (0..(tile as i64 * 2)).collect();
+    let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let resident = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            (tile * 2) as usize,
+        )
+        .unwrap_or_else(|refusal| panic!("a two-step per-lane fold is dispatched: {refusal}"));
+    let answer = words(
+        context
+            .fetch(resident[0], (tile * 2) as usize)
+            .expect("the answer comes back"),
+    );
+    context.release(resident[0]);
+    println!(
+        "per-lane two-step: [1] {} [0] {} [2] {}",
+        answer[1], answer[0], answer[2]
+    );
+    assert_eq!(
+        answer[1], 1,
+        "lane 1 folds two steps and answers their sum"
+    );
+}
+
 /// `out[i] = in[i] + in[i] + 1`.
-fn adds() -> KernelFragment {
-    KernelFragment {
+fn adds() -> KernelFragment {    KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),

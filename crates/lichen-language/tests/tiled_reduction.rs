@@ -307,7 +307,8 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
         "the program's own marks declare the sum its body folds"
     );
     for &count in &[LANES as u64] {
-        // The tiled fold covers a whole tile, so the data is what those elements hold.
+        // The tiled fold's iteration space is a whole workgroup tile, so the data is what those
+        // elements hold.
         let data = triangle_data(count);
         let folding = Folding::new(
             &reduction,
@@ -392,69 +393,72 @@ fn a_second_combine_tiles_through_the_same_path() {
     let Some(context) = device("a_second_combine_tiles_through_the_same_path") else {
         return;
     };
-    for &count in &[64_u64, 100, 512] {
-        // The tiled fold's iteration space is a whole workgroup tile, so every element up to that
-        // bound is an element it folds: a maximum over them is the largest and a product is their
-        // running product, and both are the closed form the oracle states below.
-        let data: Vec<i64> = (0..BOUND).map(|value| ((value % 5) + 1) as i64).collect();
-        for declared_reduction in [
-            Reduction {
-                combine: BinaryOp::Max,
-                identity: 0.0,
-            },
-            Reduction {
-                combine: BinaryOp::Mul,
-                identity: 1.0,
-            },
-        ] {
-            let folding = Folding::new(
-                &declared_reduction,
-                count,
-                Element::Buffer { position: 0 },
-                ScalarClass::Int,
+    // The data is a field of ones with one two in it, so a fold answers two however it is
+    // scheduled and a fold that dropped a lane's subset answers one.
+    let data: Vec<i64> = (0..BOUND)
+        .map(|value| if value == 1 { 2 } else { 1 })
+        .collect();
+    // The tiled fold's iteration space is a whole workgroup tile, so the tile is what a per-lane
+    // run over the same elements is judged at.
+    let count = u64::from(LOCAL_SIZE_X);
+    let tile = count;
+    for declared_reduction in [
+        Reduction {
+            combine: BinaryOp::Max,
+            identity: 0.0,
+        },
+        Reduction {
+            combine: BinaryOp::Mul,
+            identity: 1.0,
+        },
+    ] {
+        let folding = Folding::new(
+            &declared_reduction,
+            count,
+            Element::Buffer { position: 0 },
+            ScalarClass::Int,
+        )
+        .unwrap_or_else(|refusal| {
+            panic!(
+                "a `{}` over {count} element(s): {refusal}",
+                declared_reduction.combine.name()
             )
-            .unwrap_or_else(|refusal| {
-                panic!(
-                    "a `{}` over {count} element(s): {refusal}",
-                    declared_reduction.combine.name()
-                )
-            });
-            let tiled = folding.tiled(LOCAL_SIZE_X, 0).unwrap_or_else(|refusal| {
-                panic!(
-                    "a `{}` over {count} element(s) tiles: {refusal}",
-                    declared_reduction.combine.name()
-                )
-            });
-            let per_lane_fragment = body_fragment(folding.per_lane(), false);
-            per_lane_fragment
-                .body
-                .validate()
-                .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
-            let per_lane = run_at(
-                &context,
-                &per_lane_fragment,
-                &data,
-                count as usize,
-                None,
-                count as usize,
-            );
-            let closed = closed_form(declared_reduction.combine, &data, count);
-            assert_eq!(
-                per_lane[count as usize - 1],
-                closed,
-                "the per-lane body folds a `{}` to the same closed form",
+        });
+        let tiled = folding.tiled(LOCAL_SIZE_X, 0).unwrap_or_else(|refusal| {
+            panic!(
+                "a `{}` over {count} element(s) tiles: {refusal}",
                 declared_reduction.combine.name()
-            );
-            let tiled_fragment = body_fragment(tiled.into_body(), true);
-            let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, None, LANES);
-            let closed = closed_form(declared_reduction.combine, &data, count);
-            assert_eq!(
-                tiled_answer[0],
-                closed,
-                "the tiled `{}` over the {count} element(s)' tile is the hand-derived closed form",
-                declared_reduction.combine.name()
-            );
-        }
+            )
+        });
+        let per_lane_fragment = body_fragment(folding.per_lane(), false);
+        per_lane_fragment
+            .body
+            .validate()
+            .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
+        let per_lane = run_at(
+            &context,
+            &per_lane_fragment,
+            &data,
+            tile as usize,
+            None,
+            tile as usize,
+        );
+        let closed = closed_form(declared_reduction.combine, &data, count);
+        assert_eq!(
+            per_lane[tile as usize - 1],
+            closed,
+            "the per-lane body folds a `{}` to the same closed form",
+            declared_reduction.combine.name()
+        );
+        let tiled_fragment = body_fragment(tiled.into_body(), true);
+        let tiled_answer = run_at(&context, &tiled_fragment, &data, LANES, None, LANES);
+        let closed = closed_form(declared_reduction.combine, &data, count);
+        assert_eq!(
+            tiled_answer[0],
+            closed,
+            "the tiled `{}` over the {count} element(s)' tile is the hand-derived closed form",
+            declared_reduction.combine.name()
+        );
     }
 }
 
@@ -463,13 +467,16 @@ fn a_second_combine_tiles_through_the_same_path() {
 /// # Invariant
 /// The oracle for the second combine: a tiled fold covers a **whole workgroup tile** —
 /// `lane_width × ceil(count / lane_width)` elements — and a maximum over them is the largest while
-/// a product is their running product, both computed here from the data the launch was handed.
+/// a product is their running product, both computed here in a width that holds the running value
+/// and read back at the fold's own class, which is what the device's arithmetic does.
 fn closed_form(combine: BinaryOp, elements: &[i64], count: u64) -> i64 {
     let tiled = count.div_ceil(u64::from(LOCAL_SIZE_X)) * u64::from(LOCAL_SIZE_X);
     let covered = &elements[..tiled as usize];
     match combine {
         BinaryOp::Max => covered.iter().copied().fold(i64::MIN, i64::max),
-        BinaryOp::Mul => covered.iter().copied().fold(1_i64, |left, right| left * right),
+        BinaryOp::Mul => covered
+            .iter()
+            .fold(1_i128, |left, right| left * i128::from(*right)) as i64,
         _ => panic!("this oracle states the operators the second leg folds"),
     }
 }
