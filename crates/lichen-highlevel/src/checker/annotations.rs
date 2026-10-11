@@ -85,6 +85,8 @@ where
             } => vec![parameter, r#return],
             ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
+            | ExprKind::TypeSet(_)
+            | ExprKind::TypeTable(_)
             | ExprKind::Array(_)
             | ExprKind::Set(_)
             | ExprKind::Table(_)
@@ -332,9 +334,10 @@ where
     /// children once any annotation is peeled off.
     ///
     /// # Invariant
-    /// Only the compound kinds answer. A non-compound expression's children (an
-    /// apply's operands, a block's statements) are not element positions and must
-    /// not be paired with another kind's.
+    /// Only the compound kinds answer; other children, such as an apply's
+    /// operands, are not element positions. A set's and a table's type forms
+    /// write their elements directly, so a matching value pairs one for one; an
+    /// array's is the single element serving every value element.
     fn compound_children(&self, e: ExprId) -> Option<Vec<ExprId>> {
         let mut expr = e;
         while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
@@ -342,9 +345,16 @@ where
         }
         match self.ir[expr].kind {
             ExprKind::Tuple(_) | ExprKind::TypeTuple(_) => Some(self.range_children(expr)),
-            // An array's element position is one slot and the value side is its
-            // element list, so one slot pairs with each.
-            ExprKind::Array(_) | ExprKind::ShallowArray { .. } => Some(self.range_children(expr)),
+            // A value's elements: a set's members, a table's interleaved
+            // key/value list, an array's element list.
+            ExprKind::Array(_)
+            | ExprKind::Set(_)
+            | ExprKind::Table(_)
+            | ExprKind::ShallowArray { .. } => Some(self.range_children(expr)),
+            // The type forms: a set's one slot and a table's two, each of which
+            // pairs with the value's elements.
+            ExprKind::TypeSet(_) => Some(self.range_children(expr)),
+            ExprKind::TypeTable(_) => Some(self.range_children(expr)),
             ExprKind::TypeArray { element_type, .. } => Some(vec![element_type]),
             _ => None,
         }

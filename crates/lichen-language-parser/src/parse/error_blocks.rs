@@ -126,6 +126,11 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(el, out);
                 }
             }
+            Expr::TypeSet(element, _) => walk_expr(element, out),
+            Expr::TypeTable { key, value, .. } => {
+                walk_expr(key, out);
+                walk_expr(value, out);
+            }
             Expr::StructType(fields, _) => {
                 for field in fields {
                     walk_expr(&field.ty, out);

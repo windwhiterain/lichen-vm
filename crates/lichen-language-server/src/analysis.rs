@@ -1707,6 +1707,11 @@ impl<'a> NameClass<'a> {
                     self.expr(v);
                 }
             }
+            Expr::TypeSet(element, _) => self.expr(element),
+            Expr::TypeTable { key, value, .. } => {
+                self.expr(key);
+                self.expr(value);
+            }
             Expr::Shallow(inner, _, _) => self.expr(inner),
             Expr::TypeArray {
                 element_type,
@@ -2009,6 +2014,11 @@ impl Walk {
                     self.expr(k);
                     self.expr(v);
                 }
+            }
+            Expr::TypeSet(element, _) => self.expr(element),
+            Expr::TypeTable { key, value, .. } => {
+                self.expr(key);
+                self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
             Expr::TypeArray {
@@ -2341,6 +2351,11 @@ impl<'a> ScopeCapture<'a> {
                     self.expr(k);
                     self.expr(v);
                 }
+            }
+            Expr::TypeSet(element, _) => self.expr(element),
+            Expr::TypeTable { key, value, .. } => {
+                self.expr(key);
+                self.expr(value);
             }
             Expr::Shallow(inner, _, _) => self.expr(inner),
             Expr::TypeArray {

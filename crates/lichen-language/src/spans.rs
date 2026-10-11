@@ -155,6 +155,15 @@ pub(crate) fn shift_expr(
                 shift_expr(element, old_starts, new_starts, delta);
             }
         }
+        Expr::TypeSet(element, span) => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(element, old_starts, new_starts, delta);
+        }
+        Expr::TypeTable { key, value, span } => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(key, old_starts, new_starts, delta);
+            shift_expr(value, old_starts, new_starts, delta);
+        }
         Expr::StructType(fields, span) => {
             shift(span, old_starts, new_starts, delta);
             for field in fields {

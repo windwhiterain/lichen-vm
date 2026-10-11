@@ -243,6 +243,11 @@ fn walk(expr: &Expr, deps: &mut Deps) {
                 walk(value, deps);
             }
         }
+        Expr::TypeSet(element, _) => walk(element, deps),
+        Expr::TypeTable { key, value, .. } => {
+            walk(key, deps);
+            walk(value, deps);
+        }
         Expr::Shallow(inner, _, _) => walk(inner, deps),
         Expr::TypeArray {
             element_type,

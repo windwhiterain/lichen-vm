@@ -226,6 +226,11 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 push_index(&mut out, 2 * i as u32 + 1, value);
             }
         }
+        Expr::TypeSet(element, _) => push_index(&mut out, 0, element),
+        Expr::TypeTable { key, value, .. } => {
+            push_index(&mut out, 0, key);
+            push_index(&mut out, 1, value);
+        }
         Expr::Shallow(inner, _, _) => push_index(&mut out, 0, inner),
         Expr::TypeArray {
             element_type,

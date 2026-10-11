@@ -38,9 +38,11 @@ pub enum TokenKind {
     KwType,
     /// The struct keyword -- a nominal struct type.
     KwStruct,
-    /// The table keyword -- a constant table literal.
+    /// The `table` keyword — the table value `table(k ==> v)` and the table
+    /// type `table{K, V}` (`docs/language-spec.md` §2).
     KwTable,
-    /// The `set` keyword — a set value, `set{a, b}` (`docs/language-spec.md` §2).
+    /// The `set` keyword — the set value `set(a, b)` and the set type
+    /// `set{E}` (`docs/language-spec.md` §2).
     KwSet,
     /// The let keyword -- a restrictive binding.
     KwLet,
@@ -104,7 +106,7 @@ pub enum TokenKind {
     Colon,
     /// '::' -- the named type access on a TypeStruct value (`X::a`).
     DoubleColon,
-    /// '==>' -- the table literal's key/value separator (`table { k ==> v }`).
+    /// '==>' -- the table entry's key/value separator (`table(k ==> v)`).
     TableArrow,
     /// '<==' -- the table read's container/key separator (`t <== k`).
     TableFindArrow,

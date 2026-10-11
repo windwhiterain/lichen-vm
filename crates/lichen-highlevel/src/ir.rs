@@ -433,6 +433,20 @@ pub enum ExprKind<L> {
     /// A tuple type expression `[T1, ..., Tn]`, kinded `[[T1, …, Tn],
     /// [TupleType, Type]]`.
     TypeTuple(ChildRange),
+    /// A set type expression `set{E}`, kinded `[[element slot], [SetType,
+    /// Type]]`.
+    ///
+    /// # Invariant
+    /// The shape is the element **slot** alone, exactly what
+    /// [`Self::Set`]'s members are checked against.
+    TypeSet(ChildRange),
+    /// A table type expression `table{K, V}`, kinded `[[key slot, value slot],
+    /// [TypeTable, Type]]`.
+    ///
+    /// # Invariant
+    /// The two positions are the same key and value **slots** [`Self::Table`]
+    /// builds, so a table type and a table value are one type.
+    TypeTable(ChildRange),
     /// A struct type expression; `names` is the parallel range into
     /// [`IR::struct_names`].
     ///
@@ -448,14 +462,14 @@ pub enum ExprKind<L> {
     /// # Invariant
     /// Every element shares one type, unlike a [`Self::Tuple`]'s per-element slots.
     Array(ChildRange),
-    /// A set `set{a, b, …}`, homogeneous like an [`Self::Array`].
+    /// A set `set(a, b, …)`, homogeneous like an [`Self::Array`].
     ///
     /// # Invariant
     /// The instance is typed by the set kind, not by `array{T, n}`: the *value* is
     /// the members and the set's identity is its type, so no value-level tag is
     /// needed.
     Set(ChildRange),
-    /// A constant table `table { k1 ==> v1, … }`, interleaved in [`IR::children`].
+    /// A constant table `table(k1 ==> v1, …)`, interleaved in [`IR::children`].
     ///
     /// # Invariant
     /// Every key shares one key type and every value one value type. The checker
@@ -596,6 +610,8 @@ impl<L> ExprKind<L> {
             }
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
+            | ExprKind::TypeSet(range)
+            | ExprKind::TypeTable(range)
             | ExprKind::Array(range)
             | ExprKind::Set(range)
             | ExprKind::Table(range)
@@ -627,6 +643,8 @@ impl<L> ExprKind<L> {
             | ExprKind::Static { .. }
             | ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
+            | ExprKind::TypeSet(_)
+            | ExprKind::TypeTable(_)
             | ExprKind::TypeStruct { .. }
             | ExprKind::Array(_)
             | ExprKind::Set(_)
@@ -805,6 +823,17 @@ impl<A: AttrSpec, L> IR<A, L> {
 
     pub fn alloc_type_tuple(&mut self, elements: &[ExprId]) -> ExprId {
         self.alloc_variadic(elements, ExprKind::TypeTuple)
+    }
+
+    /// Allocate a set type `set{E}`: the element slot is the one child, and the
+    /// kind alone makes it a set type.
+    pub fn alloc_type_set(&mut self, element: ExprId) -> ExprId {
+        self.alloc_variadic(&[element], ExprKind::TypeSet)
+    }
+
+    /// Allocate a table type `table{K, V}`: the two slots are the children.
+    pub fn alloc_type_table(&mut self, key: ExprId, value: ExprId) -> ExprId {
+        self.alloc_variadic(&[key, value], ExprKind::TypeTable)
     }
 
     pub fn alloc_type_struct(&mut self, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {

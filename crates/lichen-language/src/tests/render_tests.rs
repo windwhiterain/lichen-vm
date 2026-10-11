@@ -147,6 +147,20 @@ fn a_compound_type_value_renders_in_type_syntax() {
     // A type expression's value is the type, so it reads in type syntax.
     assert_eq!(output("tuple{Int, Type}"), "tuple{Int, Type}: TypeTuple");
     assert_eq!(output("array{Int, 3}"), "array{Int, 3}: TypeArray");
+    assert_eq!(output("set{Int}"), "set{Int}: SetType");
+}
+
+#[test]
+fn a_set_and_a_table_value_render_their_own_syntax() {
+    assert_eq!(output("set(1, 2)"), "set(1, 2): set{Int}");
+    assert_eq!(
+        output("table(1 ==> \"a\")\ntable{Int, string}"),
+        "table{Int, string}: ?"
+    );
+    assert_eq!(
+        output("t = table(1 ==> \"a\")\nt"),
+        "table(1 ==> \"a\"): table{Int, string}"
+    );
 }
 
 #[test]

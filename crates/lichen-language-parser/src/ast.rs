@@ -207,8 +207,18 @@ pub enum Expr {
     },
     /// `(e1, ..., en)` — a tuple value (always; no type/value mode).
     Tuple(Vec<Expr>, Span),
-    /// `<T1, ..., Tn>` — a tuple type (angle brackets always produce one).
+    /// `tuple{T1, ..., Tn}` — a tuple type (the keyword-led form always produces
+    /// one).
     TypeTuple(Vec<Expr>, Span),
+    /// `set{E}` — a set type, whose one element is the element **slot**.
+    TypeSet(Box<Expr>, Span),
+    /// `table{K, V}` — a table type, whose two elements are the key and value
+    /// **slots**.
+    TypeTable {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        span: Span,
+    },
     /// `struct{.a Int, .b string}` — a nominal struct type; the field list is
     /// optional (`struct{}`).
     StructType(Vec<StructField>, Span),
@@ -221,10 +231,10 @@ pub enum Expr {
     },
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
-    /// `table { k ==> v }` — a constant table literal; a key that is not
+    /// `table(k ==> v)` — a constant table literal; a key that is not
     /// concrete is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
-    /// `set{a, b}` — a set of ordinary values
+    /// `set(a, b)` — a set of ordinary values
     /// (`docs/notes/operator-polymorphism.md` §3).
     Set(Vec<Expr>, Span),
     /// `@shallow e` — a shallow-marked position; `usize::MAX` is the bare form.
@@ -378,6 +388,8 @@ impl Expr {
             Expr::Arrow { span, .. } => *span,
             Expr::Tuple(_, s) => *s,
             Expr::TypeTuple(_, s) => *s,
+            Expr::TypeSet(_, s) => *s,
+            Expr::TypeTable { span, .. } => *span,
             Expr::StructType(_, s) => *s,
             Expr::StructInst { span, .. } => *span,
             Expr::Array(_, s) => *s,

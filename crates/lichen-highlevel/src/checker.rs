@@ -962,6 +962,8 @@ where
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
+            | ExprKind::TypeSet(range)
+            | ExprKind::TypeTable(range)
             | ExprKind::Array(range)
             | ExprKind::Set(range)
             | ExprKind::ShallowArray { range, .. }
@@ -1184,6 +1186,8 @@ where
                 element_type,
                 length,
             } => self.check_array_type(e, element_type, length),
+            ExprKind::TypeSet(_) => self.check_set_type(e),
+            ExprKind::TypeTable(_) => self.check_table_type(e),
             ExprKind::Static { export } => {
                 // Imported package export: the package's final `[value, type]` pair.
                 let pair = self.module.materialize_leaf(export, self.current_block);

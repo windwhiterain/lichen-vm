@@ -859,7 +859,149 @@ fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    let primary = token(TokenKind::Glue)
+    kw_atom(tokens, expr.clone())
+        .or(postfix_atom(tokens, expr).labelled("an expression"))
+        .boxed()
+}
+
+/// The `set` and `table` atoms: the parenthesised **value** and the braced
+/// **type** each keyword leads.
+///
+/// # Invariant
+/// A bracket-led keyword leads both a value and a type — `set(…)` and `set{E}`,
+/// `table(k ==> v)` and `table{K, V}` — so the opening delimiter, never the
+/// word, selects the form.
+fn kw_atom<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    let paren = token(TokenKind::LParen).rewind();
+    let brace = token(TokenKind::LBrace).rewind();
+    let table_value = paren
+        .clone()
+        .ignore_then(table_value_atom(tokens, expr.clone()));
+    let table_type = brace
+        .clone()
+        .ignore_then(table_type_atom(tokens, expr.clone()));
+    let set_value = paren
+        .clone()
+        .ignore_then(set_value_atom(tokens, expr.clone()));
+    let set_type = brace
+        .clone()
+        .ignore_then(set_type_atom(tokens, expr.clone()));
+    token(TokenKind::KwTable)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(choice((table_value, table_type)))
+        .or(token(TokenKind::KwSet)
+            .ignore_then(token(TokenKind::Glue).ignored().or_not())
+            .ignore_then(choice((set_value, set_type))))
+        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .map(|(atom, postfixes)| {
+            postfixes
+                .into_iter()
+                .fold(atom, |acc, p| apply_postfix(acc, p))
+        })
+}
+
+/// A primary, then its glued postfix forms.
+fn postfix_atom<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    primary_parser(tokens, expr.clone())
+        .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
+        .map(|(atom, postfixes)| {
+            postfixes
+                .into_iter()
+                .fold(atom, |acc, p| apply_postfix(acc, p))
+        })
+}
+
+/// The postfix forms, chained left: `[` is an index, a glued `{` is `X{n}`,
+/// and a glued `::name` is `X::a`.
+fn postfix_parser<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Postfix, E<'a>> + Clone {
+    let glue = token(TokenKind::Glue).ignored();
+    choice((
+        token(TokenKind::Dot)
+            .ignore_then(name())
+            .map(|(field_name, _)| Postfix::DotName(field_name)),
+        glue.clone()
+            .ignore_then(token(TokenKind::LBracket))
+            .ignore_then(expr.clone())
+            .then_ignore(token(TokenKind::RBracket))
+            .map(Postfix::Index),
+        glue.clone()
+            .ignore_then(token(TokenKind::LBrace))
+            .ignore_then(expr.clone())
+            .then_ignore(token(TokenKind::RBrace))
+            .map(Postfix::TypeAccess),
+        glue.clone()
+            .ignore_then(token(TokenKind::DoubleColon))
+            .ignore_then(name())
+            .map(|(field_name, _)| Postfix::NamedTypeAccess(field_name)),
+        glue.clone()
+            .ignore_then(token(TokenKind::LParen))
+            .ignore_then(struct_inst_fields(expr))
+            .then_ignore(token(TokenKind::RParen))
+            .map(Postfix::Paren),
+    ))
+}
+
+/// Fold one postfix over the atom it follows.
+fn apply_postfix(acc: Expr, p: Postfix) -> Expr {
+    let span = acc.span();
+    match p {
+        Postfix::DotName(name) => Expr::NamedFieldRead {
+            container: Box::new(acc),
+            name,
+            span,
+        },
+        Postfix::Index(index) => Expr::Index {
+            array: Box::new(acc),
+            index: Box::new(index),
+            span,
+        },
+        Postfix::TypeAccess(index) => Expr::TypeAccess {
+            container: Box::new(acc),
+            index: Box::new(index),
+            span,
+        },
+        Postfix::NamedTypeAccess(name) => Expr::NamedTypeAccess {
+            container: Box::new(acc),
+            name,
+            span,
+        },
+        Postfix::Paren((fields, saw_comma)) => {
+            // A single comma-free expression is the slot read; every empty
+            // or comma-bearing form instantiates.
+            if fields.len() == 1 && !saw_comma && fields[0].name.is_none() {
+                let mut iter = fields.into_iter();
+                let only = iter.next().unwrap();
+                Expr::FieldRead {
+                    container: Box::new(acc),
+                    key: Box::new(only.value),
+                    span,
+                }
+            } else {
+                Expr::StructInst {
+                    callee: Box::new(acc),
+                    fields,
+                    span,
+                }
+            }
+        }
+    }
+}
+
+/// The atoms a *primary* can be: literals, names, grouping, and the
+/// keyword-led forms other than `set`/`table`.
+fn primary_parser<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::Glue)
         .ignored()
         .or_not()
         .ignore_then(choice((
@@ -892,96 +1034,18 @@ fn atom_parser<'a>(
             // wherever an atom can.
             token(TokenKind::Any).map(|t| Expr::Any(t.span)),
             name().map(|(n, span)| Expr::Name(n, span, None)),
+            // One precedence below the atom, so a comma belonging to an
+            // enclosing list is never taken by a nested literal's element.
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
-            table_literal(tokens, expr.clone()),
-            set_literal(tokens, expr.clone()),
             tuple_slots(tokens, expr.clone()),
             block(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
             array_type(tokens, expr.clone()),
             if_expr(tokens, expr.clone()),
         )))
-        .labelled("an expression");
-
-    // The postfix forms, chained left: `[` is an index, a glued `{` is `X{n}`,
-    // and a glued `::name` is `X::a`.
-    let glue = token(TokenKind::Glue).ignored();
-    let postfix = choice((
-        token(TokenKind::Dot)
-            .ignore_then(name())
-            .map(|(field_name, _)| Postfix::DotName(field_name)),
-        glue.clone()
-            .ignore_then(token(TokenKind::LBracket))
-            .ignore_then(expr.clone())
-            .then_ignore(token(TokenKind::RBracket))
-            .map(Postfix::Index),
-        glue.clone()
-            .ignore_then(token(TokenKind::LBrace))
-            .ignore_then(expr.clone())
-            .then_ignore(token(TokenKind::RBrace))
-            .map(Postfix::TypeAccess),
-        glue.clone()
-            .ignore_then(token(TokenKind::DoubleColon))
-            .ignore_then(name())
-            .map(|(field_name, _)| Postfix::NamedTypeAccess(field_name)),
-        glue.clone()
-            .ignore_then(token(TokenKind::LParen))
-            .ignore_then(struct_inst_fields(expr.clone()))
-            .then_ignore(token(TokenKind::RParen))
-            .map(Postfix::Paren),
-    ));
-
-    primary
-        .then(postfix.repeated().collect::<Vec<_>>())
-        .map(|(atom, postfixes)| {
-            postfixes.into_iter().fold(atom, |acc, p| {
-                let span = acc.span();
-                match p {
-                    Postfix::DotName(name) => Expr::NamedFieldRead {
-                        container: Box::new(acc),
-                        name,
-                        span,
-                    },
-                    Postfix::Index(index) => Expr::Index {
-                        array: Box::new(acc),
-                        index: Box::new(index),
-                        span,
-                    },
-                    Postfix::TypeAccess(index) => Expr::TypeAccess {
-                        container: Box::new(acc),
-                        index: Box::new(index),
-                        span,
-                    },
-                    Postfix::NamedTypeAccess(name) => Expr::NamedTypeAccess {
-                        container: Box::new(acc),
-                        name,
-                        span,
-                    },
-                    Postfix::Paren((fields, saw_comma)) => {
-                        // A single comma-free expression is the slot read; every empty
-                        // or comma-bearing form instantiates.
-                        if fields.len() == 1 && !saw_comma && fields[0].name.is_none() {
-                            let mut iter = fields.into_iter();
-                            let only = iter.next().unwrap();
-                            Expr::FieldRead {
-                                container: Box::new(acc),
-                                key: Box::new(only.value),
-                                span,
-                            }
-                        } else {
-                            Expr::StructInst {
-                                callee: Box::new(acc),
-                                fields,
-                                span,
-                            }
-                        }
-                    }
-                }
-            })
-        })
-        .boxed()
+        .labelled("an expression")
 }
 
 /// A postfix form's payload, folded left over the atom.
@@ -1127,9 +1191,9 @@ fn array_literal<'a>(
         })
 }
 
-/// `table { k ==> v, … }` — a constant table literal; `==>` separates the pair
-/// unambiguously.
-fn table_literal<'a>(
+/// `(k ==> v, …)` — the body of a constant table literal, `==>` separating the
+/// pair unambiguously.
+fn table_value_atom<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
@@ -1152,25 +1216,58 @@ fn table_literal<'a>(
                 (key, err_node(tokens, me.span()))
             }
         });
-    token(TokenKind::KwTable)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
+    token(TokenKind::LParen)
         .ignore_then(comma_list(entry))
-        .then_ignore(token(TokenKind::RBrace))
+        .then_ignore(token(TokenKind::RParen))
         .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
 }
 
-/// `set{a, b, …}` — a set of ordinary values, keyword-led like `table{…}`.
-fn set_literal<'a>(
+/// `(a, b, …)` — a set of ordinary values, comma-separated like an array
+/// literal's (`set{E}` spells the set *type*).
+fn set_value_atom<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    token(TokenKind::KwSet)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
+    token(TokenKind::LParen)
         .ignore_then(comma_list(expr))
-        .then_ignore(token(TokenKind::RBrace))
+        .then_ignore(token(TokenKind::RParen))
         .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
+}
+
+/// `{E}` — the body of the set type, holding the element **slot**.
+///
+/// # Invariant
+/// A set's element position is one slot serving every member, so the type form
+/// writes exactly one element and the walk pairs it with each member
+/// (`docs/notes/compound-element-slots.md`).
+fn set_type_atom<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LBrace)
+        .ignore_then(separator_run())
+        .ignore_then(expr.clone())
+        .then_ignore(separator_run())
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|element, me| Expr::TypeSet(Box::new(element), span_at(tokens, me.span().start)))
+}
+
+/// `{K, V}` — the body of the table type, holding the key and value **slots**.
+fn table_type_atom<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LBrace)
+        .ignore_then(separator_run())
+        .ignore_then(expr.clone())
+        .then(separators_between().ignore_then(expr.clone()))
+        .then(separator_run())
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|((key, value), _trailing), me| Expr::TypeTable {
+            key: Box::new(key),
+            value: Box::new(value),
+            span: span_at(tokens, me.span().start),
+        })
 }
 
 /// A keyword-led tuple type, `tuple{slot, …}`.

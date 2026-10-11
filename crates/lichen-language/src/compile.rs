@@ -788,6 +788,15 @@ impl Compiler {
                 let ids = self.compile_all(elements);
                 self.alloc_type_tuple(&ids, span)
             }
+            Expr::TypeSet(element, span) => {
+                let element = self.compile_expr(element);
+                self.alloc_type_set(element, span)
+            }
+            Expr::TypeTable { key, value, span } => {
+                let key = self.compile_expr(key);
+                let value = self.compile_expr(value);
+                self.alloc_type_table(key, value, span)
+            }
             Expr::StructType(fields, span) => {
                 let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
                     .iter()
@@ -834,6 +843,8 @@ impl Compiler {
                         | Expr::Arrow { .. }
                         | Expr::Tuple(..)
                         | Expr::TypeTuple(..)
+                        | Expr::TypeSet(..)
+                        | Expr::TypeTable { .. }
                         | Expr::StructType(..)
                         | Expr::StructInst { .. }
                         | Expr::Array(..)

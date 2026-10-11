@@ -166,7 +166,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a = ; 5");
     assert_eq!(
         err.message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(err.span, Some((1, 5)));
 }
@@ -246,8 +246,20 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         Expr::StructInst { fields, .. } if fields.len() == 2
     ));
     assert!(matches!(
-        parse_ok("table { 1 ==> 2,\n3 ==> 4 }"),
+        parse_ok("table(1 ==> 2,\n3 ==> 4)"),
         Expr::Table(entries, _) if entries.len() == 2
+    ));
+    // The two new *type* forms write their slots in braces, one per line.
+    assert!(matches!(
+        parse_ok("set{\nInt}"),
+        Expr::TypeSet(element, _)
+            if matches!(*element, Expr::TypeConst(TypeConst::Int, _))
+    ));
+    assert!(matches!(
+        parse_ok("table{Int,\nstring}"),
+        Expr::TypeTable { key, value, .. }
+            if matches!(*key, Expr::TypeConst(TypeConst::Int, _))
+                && matches!(*value, Expr::TypeConst(TypeConst::String, _))
     ));
     // A run after the last item still keeps the form a tuple (a bare `(1)` is
     // transparent grouping) or an instantiation.
@@ -264,7 +276,7 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
 #[test]
 fn an_expression_cannot_continue_across_a_separator() {
     // The flip side: an expression still stops at a separator.
-    for source in ["1 +\n2", "x =>\n x + 1", "table { 1 ==>\n2 }"] {
+    for source in ["1 +\n2", "x =>\n x + 1", "table(1 ==>\n2)"] {
         let tokens = lex(source).tokens;
         let Parsed { errors, .. } = parse(&tokens);
         assert!(!errors.is_empty(), "{source:?} must not parse");
@@ -693,7 +705,7 @@ fn index_errors_carry_spans() {
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '@shallow', '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', an expression, ':', '#', '!', '?', or '~', found ']'"
+        "expected '@shallow', '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
@@ -706,11 +718,23 @@ fn the_retired_angle_type_prefix_is_a_parse_error() {
 }
 
 #[test]
+fn the_retired_table_value_braces_are_a_type_not_a_value() {
+    // The braced form is the *type*, so the entry arrow has no pair here.
+    let err = parse_err("table{1 ==> 2}");
+    assert!(err.message.contains("expected"), "{}", err.message);
+    // The parenthesised value form is the one that takes entries.
+    assert!(matches!(
+        parse_ok("table(1 ==> 2)"),
+        Expr::Table(entries, _) if entries.len() == 1
+    ));
+}
+
+#[test]
 fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', an expression, ':', '#', '!', '?', or '~', found the end of the program"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -791,7 +815,7 @@ fn an_at_assert_binds_a_full_application_but_tighter_than_a_binary_operator() {
 #[test]
 fn an_at_in_membership_test_parses_at_the_comparison_level() {
     // `a @in S` — the left operand is the application (it binds tighter).
-    let e = parse_ok("type_of v @in set{Int, Float}");
+    let e = parse_ok("type_of v @in set(Int, Float)");
     let Expr::BinOp {
         operator: BinOp::In,
         left,
@@ -808,7 +832,7 @@ fn an_at_in_membership_test_parses_at_the_comparison_level() {
     assert!(matches!(*right, Expr::Set(..)));
     // Left-associative at the comparison rung: `x @in S == 1` is
     // `(x @in S) == 1`.
-    let e = parse_ok("Int @in set{Int} == 1");
+    let e = parse_ok("Int @in set(Int) == 1");
     assert!(matches!(
         e,
         Expr::BinOp {
@@ -945,7 +969,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));
