@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "(raw 1, raw 2, raw 3): <?a, ?b, ?c>"
+  output = "(1, 2, 3): <Int, Int, Int>"
 ---
 f = x => [x, @shallow f (x + 1)]
 inf = f 0
