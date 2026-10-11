@@ -259,13 +259,26 @@ On top of that plan:
   disagree with a fragment about which parameter it is. A body declaring more
   parameters than its domain flattens to is refused at that point rather than
   emitted with one of them bound to nothing.
-- **An `OpPhi` has one type however its edges were written**, so `resolved` fixes a
-  literal's kind to the module's class. A constant is emitted once per
-  (class, value) — SPIR-V requires every id to be defined exactly once — and since
-  `OpConstant` is module-scope the body's literals are collected in pass 1. The
-  same `Const(0)` is a buffer position in one place and a float's bit pattern in
-  another, so the payload rides in a `Literals` pool until a position reads it and
-  is materialised per class on demand.
+- **An `OpPhi` has one type however its edges were written**, so a block parameter's class comes
+  from the **body** and never from the module. It is what the block's own reads ask of it
+  (`read_class`, through the one `operand_class` rule each emission uses); failing that, what its
+  incoming edges carry; and two reads asking for two classes is
+  `BlockParameterClassDisagrees`, refused by name, because a phi has one type. `resolved` answers
+  `None` for a literal edge — a literal is not a class of its own — and only a value that neither a
+  definition nor a read states a class for falls back to the module's, which is also what a cycle
+  of parameters nothing reads gets: a value no operation observes has no class to be wrong about.
+  **That fallback used to be the answer for every literal edge, and it was wrong for a whole class
+  of programs.** A loop body that carries an `Int` induction variable or address beside a `Float`
+  value — every reduction over a `Float` buffer — had its integer phis typed `Float` in a `Float`
+  module, so the body was refused by name (`MixedClasses`, or `UnsupportedFloatOperator` on a `%`).
+  It stayed latent because every tiled or per-lane fold in the tree folded at `Int`, where the
+  module's class *was* the right answer; the first program that put a `Float` fold on a device found
+  it (`crates/lichen-language/tests/reduction_chain.rs`).
+- **A constant is emitted once per (class, value)** — SPIR-V requires every id to be defined exactly
+  once — and since `OpConstant` is module-scope the body's literals are collected in pass 1. The
+  same `Const(0)` is a buffer position in one place and a float's bit pattern in another, so the
+  payload rides in a `Literals` pool until a position reads it and is materialised per class on
+  demand.
 - **The returned values are the terminator's list**, so the result arity is a fact
   of the body rather than of whatever happened to be left over.
 
