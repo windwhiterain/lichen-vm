@@ -1,5 +1,5 @@
-//! `KernelFragment::check_plan`: a plan is checked against the fragment, never believed.
-//! See `docs/notes/graph-fusion.md` §5.
+//! A plan is checked against the fragment, never believed
+//! (`docs/notes/graph-fusion.md` §5).
 
 use lichen_kernel_ir::{
     IntWidth, KernelBody, KernelFragment, KernelInstr, KernelMark, KernelRoles, KernelShape,

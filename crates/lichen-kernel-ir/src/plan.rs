@@ -1,15 +1,14 @@
-//! The plan: where a fragment's staged values live, and the check that refuses one the fragment
-//! refutes. See `docs/notes/graph-fusion.md` §5.
+//! A plan is checked against the fragment, never believed
+//! (`docs/notes/graph-fusion.md` §5).
 
 use crate::{KernelFragment, Space, ValueId};
 
 /// One staged value's placement, as a plan states it.
 ///
 /// # Invariant
-/// The name is the mark the body published for the value, which is the only durable way to name
-/// one: a run's value numbering is reported and never hashed, so a plan that named a value by
-/// number would name a different one in the next session. A **count** is deliberately absent — a
-/// slice's element count is the body's, and this width is the plan's own group width
+/// The name is the mark the body published for the value — the only durable way to name one,
+/// because a run's value numbering is reported and never hashed. A **count** is deliberately
+/// absent: a slice's element count is the body's, and this width is the plan's own group width
 /// (`docs/notes/shared-memory-and-barriers.md` §5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Staging {
@@ -25,8 +24,7 @@ pub struct Staging {
 ///
 /// # Invariant
 /// A plan is a **proposal**: a fragment is checked against it rather than silently built from it,
-/// so a disagreement is refused by name in either direction rather than resolved by whichever
-/// side ran last. An empty plan proposes nothing and is refused by nothing.
+/// so a disagreement is refused by name in either direction. An empty plan is refused by nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
     /// One entry per value the plan stages.
