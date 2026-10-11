@@ -265,23 +265,35 @@ where
     /// annotation's is, and the same walk the function kind does for a declared
     /// parameter attribute. See docs/notes/compound-element-slots.md.
     fn unify_element_attributes(&mut self, type_expr: ExprId, value: ExprId) {
-        let (Some(types), Some(values)) = (
-            self.compound_children(type_expr),
-            self.compound_children(value),
-        ) else {
-            return;
-        };
-        // An arity conflict is the structural unify's to report.
-        if types.len() != values.len() {
-            return;
-        }
-        for (type_el, value_el) in types.into_iter().zip(values) {
+        for (type_el, value_el) in self.element_pairs(type_expr, value) {
             if !self.schema_tail(type_el).is_empty() || !self.schema_tail(value_el).is_empty() {
                 let loc = self.loc(value_el, shape::PAIR_ATTR_BASE);
                 self.unify_type_attributes(type_el, value_el, loc);
             }
             // A nested compound carries its own elements' requirements.
             self.unify_element_attributes(type_el, value_el);
+        }
+    }
+
+    /// The **pairs** an element walk compares: a compound type's element
+    /// expressions against the value's.
+    ///
+    /// # Invariant
+    /// An array's element position is *one* slot serving every element, so a
+    /// single type element pairs with each value element — which pairs a
+    /// one-element tuple with its own element the same way. A count mismatch of
+    /// any other shape is the structural unify's to report.
+    fn element_pairs(&self, type_expr: ExprId, value: ExprId) -> Vec<(ExprId, ExprId)> {
+        let (Some(types), Some(values)) = (
+            self.compound_children(type_expr),
+            self.compound_children(value),
+        ) else {
+            return Vec::new();
+        };
+        match types.as_slice() {
+            [element] => values.iter().map(|&value| (*element, value)).collect(),
+            _ if types.len() == values.len() => types.into_iter().zip(values).collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -294,17 +306,7 @@ where
     /// its arm vacuous — which is exactly why `@any : T` is no pin.
     /// See docs/notes/compound-element-slots.md.
     fn unify_element_values(&mut self, type_expr: ExprId, value: ExprId) {
-        let (Some(types), Some(values)) = (
-            self.compound_children(type_expr),
-            self.compound_children(value),
-        ) else {
-            return;
-        };
-        // An arity conflict is the structural unify's to report.
-        if types.len() != values.len() {
-            return;
-        }
-        for (type_el, value_el) in types.into_iter().zip(values) {
+        for (type_el, value_el) in self.element_pairs(type_expr, value) {
             match self.ir[type_el].kind {
                 ExprKind::Annotation {
                     value: pin,
@@ -340,6 +342,10 @@ where
         }
         match self.ir[expr].kind {
             ExprKind::Tuple(_) | ExprKind::TypeTuple(_) => Some(self.range_children(expr)),
+            // An array's element position is one slot and the value side is its
+            // element list, so one slot pairs with each.
+            ExprKind::Array(_) | ExprKind::ShallowArray { .. } => Some(self.range_children(expr)),
+            ExprKind::TypeArray { element_type, .. } => Some(vec![element_type]),
             _ => None,
         }
     }

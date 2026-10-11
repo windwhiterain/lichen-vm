@@ -843,7 +843,11 @@ where
     if parts.len() != 2 {
         return None;
     }
-    let element = low_type_of(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node);
+    // An array's element position is a **slot**, so the element type is its type
+    // position.
+    let element = slot_type(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node)
+        .map(|ty| low_type_of(module, ty))
+        .unwrap_or(LowShape::Unknown);
     if !element.is_known() {
         return None;
     }

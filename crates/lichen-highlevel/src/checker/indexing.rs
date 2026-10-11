@@ -29,7 +29,9 @@ where
         self.check_expr(index);
         let elem_cell = self.fresh_cell();
         let len_cell = self.fresh_cell();
-        let shape = self.array_node(self.current_block, &[elem_cell, len_cell]);
+        // The element position is a slot, so the pin's shape is `[slot, length]`.
+        let element = self.element_slot(None, Some(elem_cell), None);
+        let shape = self.array_node(self.current_block, &[element, len_cell]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let array_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
@@ -216,7 +218,9 @@ where
             None,
             Some(P::Value::from(LowValue::USize(vals.len()))),
         );
-        let shape = self.array_node(self.current_block, &[element_ty, length]);
+        // A **slot** element, as a tuple's is: one serves every element.
+        let element = self.element_slot(None, Some(element_ty), None);
+        let shape = self.array_node(self.current_block, &[element, length]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
@@ -427,9 +431,8 @@ where
         self.check_expr(element_type);
         self.check_expr(length);
         let length_value = self.value_of(length);
-        // The element's denotation (operator-polymorphism.md §3): an element
-        // with attributes names the annotated value's term.
-        let element = self.type_denotation(element_type, None);
+        // The element is a **slot**, as a tuple's is.
+        let element = self.element_slot_of(element_type);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
