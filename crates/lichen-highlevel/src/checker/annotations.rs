@@ -207,7 +207,8 @@ where
         // Every attribute in play is reconciled here, the *missing* slot standing
         // in where a side carries none.
         if let Some(value) = value {
-            self.unify_type_attributes(type_expr, value);
+            self.unify_type_attributes(type_expr, value, self.loc(value, shape::PAIR_ATTR_BASE));
+            self.unify_element_attributes(type_expr, value);
         }
         let mut expr = type_expr;
         while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
@@ -226,7 +227,7 @@ where
     /// **missing** slot, so a one-sided spelling is reconciled against the other
     /// side's absence. The two schemas are dense over the attributes each
     /// carries, so the pairing is by marker, never by position.
-    fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId) {
+    fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId, loc: Loc) {
         let type_tail = self.schema_tail(type_expr).to_vec();
         let value_tail = self.schema_tail(value).to_vec();
         let mut markers: Vec<P::Attr> = Vec::new();
@@ -239,7 +240,6 @@ where
             }
             markers.push(*marker);
         }
-        let loc = self.loc(value, 2);
         let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
         for marker in markers {
             let type_slot = self.attr_or_missing(type_expr, &marker);
@@ -251,6 +251,54 @@ where
                 continue;
             };
             ext.unify_slots(self, value_slot, type_slot, loc.clone());
+        }
+    }
+
+    /// Unify a **compound type's element requirements** with the elements of the
+    /// value it types, one element at a time.
+    ///
+    /// # Invariant
+    /// An element slot's attribute positions hold the requirement and a value's
+    /// element slot positions are `@any`, so the lowlevel compare is vacuous by
+    /// construction: the reconciliation is here, by marker, exactly as a whole
+    /// annotation's is, and the same walk the function kind does for a declared
+    /// parameter attribute. See docs/notes/compound-element-slots.md.
+    fn unify_element_attributes(&mut self, type_expr: ExprId, value: ExprId) {
+        let (Some(types), Some(values)) = (
+            self.compound_children(type_expr),
+            self.compound_children(value),
+        ) else {
+            return;
+        };
+        // An arity conflict is the structural unify's to report.
+        if types.len() != values.len() {
+            return;
+        }
+        for (type_el, value_el) in types.into_iter().zip(values) {
+            if !self.schema_tail(type_el).is_empty() || !self.schema_tail(value_el).is_empty() {
+                let loc = self.loc(value_el, shape::PAIR_ATTR_BASE);
+                self.unify_type_attributes(type_el, value_el, loc);
+            }
+            // A nested compound carries its own elements' requirements.
+            self.unify_element_attributes(type_el, value_el);
+        }
+    }
+
+    /// The element expressions of a compound **type or value** expression: its
+    /// children once any annotation is peeled off.
+    ///
+    /// # Invariant
+    /// Only the compound kinds answer. A non-compound expression's children (an
+    /// apply's operands, a block's statements) are not element positions and must
+    /// not be paired with another kind's.
+    fn compound_children(&self, e: ExprId) -> Option<Vec<ExprId>> {
+        let mut expr = e;
+        while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
+            expr = value;
+        }
+        match self.ir[expr].kind {
+            ExprKind::Tuple(_) | ExprKind::TypeTuple(_) => Some(self.range_children(expr)),
+            _ => None,
         }
     }
 

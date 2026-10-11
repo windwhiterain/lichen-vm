@@ -2,10 +2,10 @@
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
 > (`8b2fa7a`); the **tuple** step has landed on `feature/compound-element-pairs`
-> — the element slot is a full term, both construction sites, the readers, and
-> both printers. The step order is tuple, struct, array, then table/set; the
-> element-attribute *comparison* and the surface syntax (`@any`, `tuple{…}`,
-> `struct{…}`) are the tuple step's remaining work.
+> — the element slot is a full term, both construction sites, the readers, the
+> printers, and the element-attribute reconciliation. The step order is tuple,
+> struct, array, then table/set; the surface syntax (`@any`, `tuple{…}`,
+> `struct{…}`) is the tuple step's remaining work.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -81,13 +81,25 @@ Decisions that shape this layout:
   its value. A written **pin** therefore rides in a written type's slot and is
   enforced by a checker walk over the value's own element terms, not by the
   lowlevel structural compare.
-- **An element's attributes are carried, not yet compared.** The dense attribute
+- **An element's attributes are carried *and* reconciled.** The dense attribute
   positions of a written type's slot hold the element expression's own attribute
   slots (`checker::element_attr_slots`), so a written perspective is no longer
   dropped. The value's side holds `@any`, so the lowlevel compare is vacuous by
   construction; the requirement is compared by marker through `unify_slots`, the
-  same way the function kind's declared parameter attribute is — that walk is the
-  tuple step's next piece.
+  way the function kind's declared parameter attribute is — a walk
+  (`checker::unify_element_attributes`) that runs wherever a type expression meets
+  the value it types, one element at a time, descending nested compounds.
+
+  Its rule is the whole annotation's, not a second one: a side that spells no
+  attribute contributes the **missing** slot, so `(1 # 4, 2) : <Int, Int>` is
+  refused exactly as `(1 # 4) : Int` is — a value's claim must be authorized
+  (`declared | value`), and an unspelled requirement authorizes none. Measured:
+
+  ```text
+  (1 # 2, 2) : <Int # 4, Int>          =>  refused: expected 4, found 2
+  (1 # 4, 2) : <Int # 4, Int>          =>  (1, 2): <Int, Int>
+  ((1 # 2, 2), 3) : <<Int # 4, Int>, Int>  =>  refused: expected 4, found 2
+  ```
 
 The readers follow the slot, and the layout is transitional until the struct step
 lands:
@@ -105,15 +117,13 @@ lands:
 
 ## What is open
 
-- **The element-attribute comparison.** See the second decision above: the
-  requirement is carried, the comparison is a checker walk
-  (`AttrExt::unify_slots` per marker) that is not written yet. Until it is, a
-  written `<Int # 2>` accepts `# 4` silently — as it did before the refactor,
-  when the attribute was dropped outright.
 - **The surface syntax.** `@any` is not a token, and `tuple{…}` is not a
   production, so a slot cannot be written out yet; both construction sites build
   the layout internally. `@any` must be a *fresh* node per spelling whose type
   cell is the annotation's, so `@any : Int` binds through the ordinary annotation
-  path.
+  path. A written **pin** (`tuple{5 : Int}`) needs the same syntax, and its
+  enforcement is a checker walk over the value's own element values, the analogue
+  of the attribute walk above; no pin is spellable until then, so nothing is
+  enforced and nothing is lost.
 - **The struct, array, and table/set steps.** Each repeats the tuple's shape: a
   construction site, the readers, the printers, and its own wide tests.

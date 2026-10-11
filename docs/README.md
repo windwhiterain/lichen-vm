@@ -53,7 +53,7 @@ authority, and this table only names the state.
 | [Unify without forcing](notes/unify-without-forcing.md) | `lichen-lowlevel` (`equality`) | historical — the machinery removal it proposed has landed |
 | [Incremental evaluation](notes/incremental-evaluation.md) | `lichen-lowlevel`, `lichen-highlevel` (`checker`), `lichen-language` (`run`) | proposed |
 | [Function types, and a struct type's nominal identity](notes/function-type-merge.md) | `lichen-highlevel` (`checker`/`lambda`/`shape`), `lichen-lowlevel` (`equality`/`static_module`), `lichen-render`, `lichen-language` | current |
-| [Compound element slots](notes/compound-element-slots.md) | `lichen-lowlevel` (`equality`/`evaluation`), `lichen-highlevel` (`checker`/`shape`), `lichen-render` | in progress — `Any` merged; the tuple's slots, readers and printers landed; the attribute comparison and the syntax are next |
+| [Compound element slots](notes/compound-element-slots.md) | `lichen-lowlevel` (`equality`/`evaluation`), `lichen-highlevel` (`checker`/`shape`), `lichen-render` | in progress — `Any` merged; the tuple's slots, readers, printers and element-attribute reconciliation landed; the syntax is next |
 | [Operator polymorphism](notes/operator-polymorphism.md) | `lichen-highlevel`, `lichen-lowlevel` (`assert`), `lichen-language`, `lichen-compute`, `lichen-std` | current — the refinement contract, the set value, the routing |
 | [`core`: the built-in prelude](notes/core-prelude.md) | `lichen-language` (`core.lichen`), `lichen-registry` | current — a failure inside the prelude is unattributed (open) |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`), `lichen-language`, `lichen-doc` | current — includes the `?` doc attribute |
