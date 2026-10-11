@@ -1,11 +1,10 @@
 # Compound element slots
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
-> (`8b2fa7a`); the **tuple** step has landed on `feature/compound-element-pairs`
-> — the element slot is a full term, both construction sites, the readers, the
-> printers, and the element-attribute reconciliation. The step order is tuple,
-> struct, array, then table/set; the surface syntax (`@any`, `tuple{…}`,
-> `struct{…}`) is the tuple step's remaining work.
+> (`8b2fa7a`); the **tuple** step is complete — the element slot is a full term,
+> both construction sites, the readers, the printers, the element-attribute
+> reconciliation, the wildcard literal `@any`, the spelled-out `tuple{…}` form,
+> and value pins. The step order is tuple, struct, array, then table/set.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -115,15 +114,30 @@ lands:
 - Both printers render a tuple's elements through their slots, and an unreadable
   slot falls back to the raw mark rather than printing an element pair whole.
 
+## The two spellings
+
+`<a, b>` and `tuple{a, b}` are the same `TypeTuple`; the second writes each
+element as a **slot**. A slot is `value : type`, so an element with a top-level
+`:` spells the value position — a **pin** — and an element without one is a type
+expression, whose value position is `@any`:
+
+```text
+<Int # 2>                 is  tuple{@any : (Int # 2)}
+tuple{5 : Int, Int}           (5, 2) holds, (6, 2) is refused: expected 5, found 6
+t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in the type
+```
+
+A pin cannot be enforced by the lowlevel compare — a value's element slots hold
+the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)
+exactly as an attribute is, and `@any : T`'s arm is vacuous because a wildcard's
+own class accepts everything.
+
 ## What is open
 
-- **The surface syntax.** `@any` is not a token, and `tuple{…}` is not a
-  production, so a slot cannot be written out yet; both construction sites build
-  the layout internally. `@any` must be a *fresh* node per spelling whose type
-  cell is the annotation's, so `@any : Int` binds through the ordinary annotation
-  path. A written **pin** (`tuple{5 : Int}`) needs the same syntax, and its
-  enforcement is a checker walk over the value's own element values, the analogue
-  of the attribute walk above; no pin is spellable until then, so nothing is
-  enforced and nothing is lost.
+- **A pin is invisible to the type printer.** A pinned type renders its elements'
+  types, so `tuple{5 : Int}` prints `<Int>`; the rendering could state the pin
+  (`<5 : Int>`) now that the syntax can, and nothing else needs to change.
 - **The struct, array, and table/set steps.** Each repeats the tuple's shape: a
-  construction site, the readers, the printers, and its own wide tests.
+  construction site, the readers, the printers, and its own wide tests. The
+  struct's spelled-out form (`struct{.f …}`) and its own pin/attribute walk ride
+  with it.

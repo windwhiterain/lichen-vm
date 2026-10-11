@@ -74,6 +74,7 @@ primary  := int_literal
           | 'set' '{' expr (sep expr)* '}'          -- set value (members are values; the instance is a Set, not an array)
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
+          | 'tuple' '{' expr (sep expr)* sep? '}'   -- tuple type, spelled out: a *slot* per element
           | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
           | 'array' '<' expr sep expr '>'          -- array type  (element type, then length)
           | 'if' expr 'then' expr 'else' expr       -- conditional
@@ -224,9 +225,22 @@ farg     := '.' name expr                         -- named instantiation argumen
 - **One grammar, no type mode.**  Types are expressions, so term and type forms
   share one grammar, and there is no *type-mode* flag: `expr : expr` parses both
   sides the same way.  `(a, b)` is always a `Tuple` *value*; the tuple *type* is
-  always spelled with angle brackets — `<a, b>` is a `TypeTuple` in every
-  position — so a tuple type is written `x : <Int, Int>`, never `x : (Int, Int)`
-  (the latter is a tuple value whose elements are the type-values `Int`).
+  spelled `<a, b>` or, spelled out, `tuple{a, b}` — both are a `TypeTuple` in
+  every position — so a tuple type is written `x : <Int, Int>`, never
+  `x : (Int, Int)` (the latter is a tuple value whose elements are the type-values
+  `Int`).
+- **A tuple type's elements are *slots*.**  The type is a list of `[value, type,
+  attributes…]` terms, and the two spellings write the same list: `<Int # 2>` is
+  `tuple{@any : (Int # 2)}` — an element with no top-level `:` is a *type
+  expression*, and its value position is the wildcard `@any`, which unifies with
+  anything and constrains nothing.  An element with a top-level `:` spells the
+  value position too, which is a **pin**: `tuple{5 : Int}` accepts `(5, 2)` and
+  refuses `(6, 2)`, and because the pin rides in the type value it keeps holding
+  through a binding (`t = tuple{5 : Int, Int}; (6, 2) : t` is refused).  An
+  attribute written on an element (`<Int # 2, Int>`) is a *requirement*: the
+  value's own attribute at that position must be authorized by it, exactly as a
+  whole annotation's must (`(1 # 4) : (Int # 2)` holds, `(1 # 2) : (Int # 4)`
+  does not).  See `docs/notes/compound-element-slots.md`.
 
 - **Conditionals.**  `if cond then e1 else e2` is an expression: `cond` is any
   expression up to `then` (the keyword delimits it — it is neither an atom nor
