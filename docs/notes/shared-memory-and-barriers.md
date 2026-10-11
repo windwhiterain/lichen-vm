@@ -1235,6 +1235,49 @@ a workgroup rather than of an index, so the host path refuses any staged body an
 `gpu_matches_cpu` cannot carry this class. Its verification is the closed form **plus** the
 per-lane reference, and not CPU against device.
 
+**The case it was landed with, and the two things driving it measured.** The tiling is in
+`lichen-fusion-bridge/src/tiled.rs` and its acceptance case in
+`crates/lichen-language/tests/tiled_reduction.rs`; the fold over a staged slice is also driven
+directly on a device by `crates/lichen-compute-gpu/tests/graph_on_device.rs`. Two facts came out
+of that work and belong to the design rather than to the tests:
+
+- **A staged launch's extent is the elements the fold reads, not the lanes it runs.**
+  `GpuContext::run` uploads `extent × width` bytes of each host input, so a two-step tile
+  dispatched over one workgroup uploads one tile and the strided read answers the staging's
+  padding — which is silently `0`, not an error. The tiled body's domain is therefore `(extent,
+  index)` and its fold count is a **compile-time** fact the body carries, so the two are different
+  numbers and a caller must launch the larger. Every workgroup past the first folds the whole tile
+  and writes the same answer, so the surplus is redundant rather than wrong.
+- **A `BufferReadCall`'s placement is free, and a `SliceReadCall`'s is not.** A buffer read in a
+  loop header is emitted and carried correctly — measured directly on a device — because it carries
+  no barrier. A slice read's does: the barrier that separates it from its write is emitted
+  immediately before the read's definition, and `KernelBody::validate` refuses a recorded pair whose
+  read sits in a block a lane can skip. A slice read therefore stays in the loop **header**, where
+  every lane reaches it, and the read and the barrier move together.
+
+One reading of the first wrong answer was **wrong and is recorded so it is not re-derived**: the
+symptom — a two-step fold whose per-lane partial came out as the lane's own address — looks exactly
+like a `BufferReadCall` hoisted out of the loop as invariant in its address. It is not. The
+minimal body that appeared to show it answered its one-step fold, because its slot started where
+the address did, and the real cause was the staging above.
+
+The licence and the two oracles the case is judged by, as landed: `BinaryOp::associative` is the
+declaration the re-association is read off (`+`, `*`, `max`, `min`), a non-associative `combine` is
+refused **by name** beside the positive cases, and the tiled answer is checked at three lengths
+against the hand-derived `count(count + 1) / 2` **and** against the per-lane body the same
+declaration produces, with a second and third combine (`max`, `*`) driven through the same call at
+both a one-step and a three-step tile.
+
+**What the acceptance case cannot yet do, and it is the algebra's fault rather than the schedule's.**
+The pack's `combine` and `identity` cannot be read back out of a lowered body: a loop conversion
+cannot be bounded by an argument of the function that writes it, so the declared loop's bound is a
+literal, the loop is compile-time expanded, and the marked accumulation folds into the constant its
+base case returns — `projection(…, ReadRoles::DATUM_ONLY)` answers `0` where the marks name `+`.
+The case therefore asserts that the `claim` and **both roles** reached the fragment and takes the
+algebra from the pack's declared shape. Reading a declaration's algebra out of a **lowered** body
+needs a reduction whose loop survives lowering; until then step 8's automatic path is driven by a
+declaration the test states rather than one the bridge projected.
+
 **A scan is the second case and the harder one**, because it needs *several* barriers whose
 positions are not the read's own definition — which is where §9's unsettled
 post-dominator question bites. It has no per-lane reference today:
