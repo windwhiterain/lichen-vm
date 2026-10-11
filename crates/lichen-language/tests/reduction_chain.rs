@@ -8,7 +8,7 @@ use lichen_compute::compute::{
 };
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_fusion::{BinaryOp, Expr, Reduction};
-use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
+use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneWidth, Plan,
@@ -18,13 +18,13 @@ use lichen_language::fusion_claim::{claim_of, fragment_of, kernel_id, marked_val
 use lichen_language::program::LangProgram;
 use lichen_lowlevel::Module;
 
-/// The length one launch drives, chosen so every partial sum is an exact `f32`.
+/// The logical count the padded launch folds: one the tile's width does not divide.
 ///
 /// # Invariant
-/// A whole number of workgroups, so a staged launch is legal, and small enough that every partial
-/// any lane or the slice holds is an integer below `2^24`: the closed form `LENGTH(LENGTH + 1) / 2`
-/// is `32896`, and the largest partial is that same number, so no rounding happens anywhere.
-const LENGTH: u64 = 256;
+/// Three tiles hold `192` and four hold `256`, so `tiled_count` must take the ceiling's fourth step
+/// and the tile's last `56` elements are the caller's pad. A `tiled_count` that took the floor
+/// would launch three tiles and answer `192 * 193 / 2` instead of `200 * 201 / 2`.
+const PADDED_COUNT: u64 = 200;
 
 /// The reduction the program's own marks declare, derived rather than stated.
 ///
@@ -115,18 +115,31 @@ k
 "#
 }
 
-/// The data one launch folds: `1 ..= LENGTH`, each an exact `f32`.
-fn triangle() -> Vec<f32> {
-    (1..=LENGTH).map(|value| value as f32).collect()
-}
-
-/// The hand-derived answer for a sum over `1 ..= LENGTH`.
+/// The data one launch folds: `1 ..= count`, then the declared identity `0` up to `extent`.
 ///
 /// # Invariant
-/// `LENGTH` and `LENGTH + 1` are each exact in `f32` and the product is below `2^53`, so the closed
+/// A sum's identity is `0`, which the combine is indifferent to, so the elements past the caller's
+/// count add nothing and a fold over the whole padded tile answers the logical count's closed
+/// form. `extent` is a whole number of tiles at or above `count`.
+fn padded_triangle(count: u64, extent: u64) -> Vec<f32> {
+    (1..=extent)
+        .map(|position| {
+            if position <= count {
+                position as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// The hand-derived answer for a sum over `1 ..= count`.
+///
+/// # Invariant
+/// `count` and `count + 1` are each exact in `f32` and the product is below `2^53`, so the closed
 /// form is one exact `f32` however it is spelled.
-fn closed_form() -> f32 {
-    (LENGTH * (LENGTH + 1) / 2) as f32
+fn closed_form(count: u64) -> f32 {
+    (count * (count + 1) / 2) as f32
 }
 
 /// A context on a device, or `None` when there is none here.
@@ -172,15 +185,15 @@ fn body_fragment(body: KernelBody, slices: Vec<Slice>) -> KernelFragment {
     }
 }
 
-/// A graph whose one kernel node holds `fragment` and reads the graph's own input.
-fn graph_of(fragment: KernelFragment) -> Graph {
+/// A graph whose one kernel node holds `fragment` and reads the graph's own input, at `extent`.
+fn graph_of(fragment: KernelFragment, extent: usize) -> Graph {
     let mut graph = Graph::with_inputs(1);
     let node = graph
         .push(
             Node::Kernel(KernelNode {
                 fragment,
                 inputs: vec![0],
-                count: Count::Constant(LENGTH as usize),
+                count: Count::Constant(extent),
             }),
             1,
         )
@@ -199,12 +212,18 @@ fn pack(elements: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// Run `graph` over `data` and answer the node's first `LENGTH` elements as floats.
+/// Run `graph` over `data` at `extent` and answer the node's first `extent` elements as floats.
 ///
 /// # Invariant
 /// The class is checked: a fetch classed as integers from a float fragment would be the ABI reading
 /// the buffer at the wrong width, which is the failure `ScalarData` exists to name.
-fn run_graph(context: &GpuContext, graph: &Graph, data: &[f32], which: &str) -> Vec<f32> {
+fn run_graph(
+    context: &GpuContext,
+    graph: &Graph,
+    data: &[f32],
+    extent: usize,
+    which: &str,
+) -> Vec<f32> {
     let out = Runner::new(context, Policy::Serial)
         .run(
             graph,
@@ -220,7 +239,7 @@ fn run_graph(context: &GpuContext, graph: &Graph, data: &[f32], which: &str) -> 
         BufferSlot::Host(_) => panic!("a dispatch's output is a buffer, not host data"),
     };
     let answer = match context
-        .fetch(id, LENGTH as usize)
+        .fetch(id, extent)
         .expect("the folded answer comes off the device")
     {
         ScalarData::Float(elements) => elements,
@@ -280,9 +299,10 @@ fn digest_of(graph: &Graph, node: usize) -> u64 {
 /// The whole declared-algebra chain, on a device, with the algebra derived and not stated.
 ///
 /// # Invariant
-/// Nothing here states the algebra: the `Reduction` is asserted as an **output** of the program's
-/// own marks, the tiled body is built from that derived algebra, the body travels as an artifact
-/// and lands in the graph node the runner reads, and the answer after landing is the device's.
+/// Nothing here states the algebra: the `Reduction` is an **output** of the program's own marks,
+/// the tiled body is built from that algebra, travels as one artifact and lands in the graph node
+/// the runner reads, and the landed body answers **three launches** — the last a logical count
+/// padded to a whole tile, so the extent is the bound and the pad is what the tile covers.
 #[test]
 fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
     let (reduction, _fragment) = declared_reduction();
@@ -299,16 +319,12 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
         return;
     };
 
-    // The transform bakes `LENGTH` into the body and the tiled body never reads its extent.
     let folding = Folding::new(
         &reduction,
-        LENGTH,
         Element::Buffer { position: 0 },
         ScalarClass::Float,
     )
-    .unwrap_or_else(|refusal| {
-        panic!("the derived declaration tiles {LENGTH} element(s): {refusal}")
-    });
+    .unwrap_or_else(|refusal| panic!("the derived declaration tiles: {refusal}"));
     let tiled = folding.tiled(LOCAL_SIZE_X, 0).unwrap_or_else(|refusal| {
         panic!("the derived declaration tiles at {LOCAL_SIZE_X}: {refusal}")
     });
@@ -322,25 +338,11 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
         "the tiled body records the write-to-read pair its barrier separates"
     );
 
-    let data = triangle();
     let before = body_fragment(folding.per_lane(), Vec::new());
     before
         .body
         .validate()
         .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
-    let mut graph = graph_of(before);
-
-    // Before landing the node holds the per-lane fold: `out[0]` is one element, not the sum.
-    let per_lane = run_graph(&context, &graph, &data, "per-lane");
-    assert_eq!(
-        per_lane[0], 1.0,
-        "the per-lane body's first lane folds one element before anything lands"
-    );
-    assert_ne!(
-        per_lane[0],
-        closed_form(),
-        "the node's pre-landing answer is not the closed form, so the landing is observable"
-    );
 
     // The artifact: the tiled body, the claim the program wrote, and the plan it was checked
     // against.
@@ -362,24 +364,62 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
         claim: None,
         plan: plan.clone(),
     });
-    land_fused_kernel(&mut graph, 0, &artifact).unwrap_or_else(|refusal| {
-        panic!("the tiled artifact lands in the graph's node: {refusal}")
-    });
 
-    // The landed body is the one that ran, and it answers the closed form at the Float class.
-    let after = run_graph(&context, &graph, &data, "landed");
-    assert_ne!(
-        after[0], per_lane[0],
-        "the answer changed with the node's body, so the landed body is the one that ran"
-    );
+    // **One tiled body, three launches**: the third pads a logical count to the whole tile.
+    let padded = tiled_count(PADDED_COUNT, LOCAL_SIZE_X).unwrap_or_else(|refusal| {
+        panic!("{PADDED_COUNT} element(s) tile at {LOCAL_SIZE_X}: {refusal}")
+    });
     assert_eq!(
-        after[0],
-        closed_form(),
-        "the workgroup's {LOCAL_SIZE_X} lane(s) tile {LENGTH} element(s) of a runtime-extent fold \
-         to the hand-derived closed form"
+        (
+            padded,
+            tail(PADDED_COUNT, LOCAL_SIZE_X)
+                .unwrap_or_else(|refusal| { panic!("{PADDED_COUNT} element(s) pad: {refusal}") }),
+        ),
+        (256, 56),
+        "the tile `tiled_count` answers is the smallest whole number of {LOCAL_SIZE_X}-wide tiles \
+         at or above the caller's count, and `tail` is the padding it adds"
     );
+    let launches = [
+        (u64::from(LOCAL_SIZE_X), u64::from(LOCAL_SIZE_X)),
+        (3 * u64::from(LOCAL_SIZE_X), 3 * u64::from(LOCAL_SIZE_X)),
+        (PADDED_COUNT, padded),
+    ];
+    for (count, extent) in launches {
+        let data = padded_triangle(count, extent);
+        let mut graph = graph_of(before.clone(), extent as usize);
+
+        // Before landing the node holds the per-lane fold: `out[0]` is one element, not the sum.
+        let per_lane = run_graph(&context, &graph, &data, extent as usize, "per-lane");
+        assert_eq!(
+            per_lane[0], 1.0,
+            "the per-lane body's first lane folds one element before anything lands"
+        );
+        assert_ne!(
+            per_lane[0],
+            closed_form(count),
+            "the node's pre-landing answer is not the closed form, so the landing is observable"
+        );
+
+        land_fused_kernel(&mut graph, 0, &artifact).unwrap_or_else(|refusal| {
+            panic!("the tiled artifact lands in the graph's node: {refusal}")
+        });
+
+        // The landed body is the one that ran, and it answers the closed form at the Float class.
+        let after = run_graph(&context, &graph, &data, extent as usize, "landed");
+        assert_ne!(
+            after[0], per_lane[0],
+            "the answer changed with the node's body, so the landed body is the one that ran"
+        );
+        assert_eq!(
+            after[0],
+            closed_form(count),
+            "the workgroup's {LOCAL_SIZE_X} lane(s) fold the {extent} element(s) tile of a \
+             {count} element(s) fold to the hand-derived closed form"
+        );
+    }
 
     // A plan naming a mark the fragment never published, refused before the graph is touched.
+    let graph = graph_of(before, LOCAL_SIZE_X as usize);
     let mut mutated = graph.clone();
     let refusal = land_fused_kernel(&mut mutated, 0, &unpublished(&artifact))
         .expect_err("a plan naming a mark the fragment never published is refused");

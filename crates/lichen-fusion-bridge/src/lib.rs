@@ -16,4 +16,4 @@ mod tiled;
 pub use lower::projection;
 pub use refusal::BridgeRefusal;
 pub use roles::ReadRoles;
-pub use tiled::{Element, Folding, Identity, TileRefusal, Tiled, fold};
+pub use tiled::{Element, Folding, Identity, TileRefusal, Tiled, fold, tail, tiled_count};

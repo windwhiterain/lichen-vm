@@ -138,9 +138,9 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
 /// One dispatch of a folded body, answering the elements it wrote.
 ///
 /// # Invariant
-/// Both bodies carry the count they fold as a **compile-time** fact, so `extent` is what decides
-/// how many indices are covered and — because a staged dispatch uploads `extent × width` bytes —
-/// how much of `data` the device can read.
+/// The launch fixes the extent and the body folds it, so `extent` decides how many indices are
+/// covered and — because a staged dispatch uploads `extent × width` bytes — how much of `data` the
+/// device can read.
 fn run_at(
     context: &GpuContext,
     fragment: &KernelFragment,
@@ -235,50 +235,46 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
         BinaryOp::Add,
         "the program's own marks declare the sum its body folds"
     );
+    // **One body per declaration**: the count is the launch's, so the two bodies are built once
+    // and driven at each length.
+    let folding = Folding::new(
+        &reduction,
+        Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .unwrap_or_else(|refusal| panic!("the declared sum tiles: {refusal}"));
+    let tiled = folding
+        .tiled(LOCAL_SIZE_X, 0)
+        .unwrap_or_else(|refusal| panic!("the declared sum tiles at {LOCAL_SIZE_X}: {refusal}"));
+    let tiled_fragment = body_fragment(tiled.into_body(), true);
+    tiled_fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the tiled body is well formed: {broken}"));
+    assert_eq!(
+        tiled_fragment.body.barriers.len(),
+        1,
+        "the tiled body records the write-to-read pair its barrier separates"
+    );
+    let owed = tiled_fragment
+        .barrier_scan(tiled_fragment.body.parameters()[1])
+        .unwrap_or_else(|refusal| panic!("the tiled body's scan decides: {refusal}"));
+    assert!(
+        owed.len() <= 1,
+        "the tiled body's scan owes at most the one barrier it records"
+    );
+
+    // The floor the tiling replaces, and the body it is differenced against.
+    let per_lane_fragment = body_fragment(folding.per_lane(), false);
+    per_lane_fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
+
     // **Three lengths, only one of them a single tile**, each a whole workgroup multiple.
     let lengths = [LANES as u64, (LANES * 3) as u64, (LANES * 4) as u64];
     for &count in &lengths {
         let data = triangle_data(count);
-        let folding = Folding::new(
-            &reduction,
-            count,
-            Element::Buffer { position: 0 },
-            ScalarClass::Int,
-        )
-        .unwrap_or_else(|refusal| panic!("the declaration tiles {count} element(s): {refusal}"));
-        assert_eq!(
-            folding.count(),
-            count,
-            "the fold is over the count the launch declared, not the tile it falls in"
-        );
-
-        let tiled = folding
-            .tiled(LOCAL_SIZE_X, 0)
-            .unwrap_or_else(|refusal| panic!("{count} element(s) tile: {refusal}"));
-        let tiled_fragment = body_fragment(tiled.into_body(), true);
-        tiled_fragment
-            .body
-            .validate()
-            .unwrap_or_else(|broken| panic!("the tiled body is well formed: {broken}"));
-        assert_eq!(
-            tiled_fragment.body.barriers.len(),
-            1,
-            "the tiled body records the write-to-read pair its barrier separates"
-        );
-        let owed = tiled_fragment
-            .barrier_scan(tiled_fragment.body.parameters()[1])
-            .unwrap_or_else(|refusal| panic!("the tiled body's scan decides: {refusal}"));
-        assert!(
-            owed.len() <= 1,
-            "the tiled body's scan owes at most the one barrier it records"
-        );
-
-        // The floor the tiling replaces, and the body it is differenced against.
-        let per_lane_fragment = body_fragment(folding.per_lane(), false);
-        per_lane_fragment
-            .body
-            .validate()
-            .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
         let per_lane = run_at(
             &context,
             &per_lane_fragment,
@@ -344,7 +340,6 @@ fn a_second_combine_tiles_through_the_same_path() {
         ] {
             let folding = Folding::new(
                 &declared_reduction,
-                count,
                 Element::Buffer { position: 0 },
                 ScalarClass::Int,
             )
@@ -432,7 +427,6 @@ fn a_combine_that_is_not_associative_is_refused_by_name() {
         };
         let refusal = Folding::new(
             &declared_reduction,
-            64,
             Element::Buffer { position: 0 },
             ScalarClass::Int,
         )
@@ -454,7 +448,6 @@ fn a_combine_that_is_not_associative_is_refused_by_name() {
                 combine,
                 identity: 0.0,
             },
-            64,
             Element::Buffer { position: 0 },
             ScalarClass::Int,
         )

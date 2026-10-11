@@ -211,9 +211,9 @@ fn staged_fragment(
 /// One dispatch of a folded body, answering the elements it wrote.
 ///
 /// # Invariant
-/// The body carries the count it folds as a **compile-time** fact, so `extent` is what decides how
-/// many indices are covered and — because a staged dispatch uploads `extent × width` bytes — how
-/// much of `data` the device can read.
+/// The launch fixes the extent and the body folds it, so `extent` decides how many indices are
+/// covered and — because a staged dispatch uploads `extent × width` bytes — how much of `data` the
+/// device can read.
 fn run_at(
     context: &GpuContext,
     fragment: &KernelFragment,
@@ -253,11 +253,10 @@ fn a_declared_plan_stages_the_reduction_and_answers_the_closed_form() {
         let data = triangle_data(count);
         let folding = Folding::new(
             &reduction,
-            count,
             Element::Buffer { position: 0 },
             ScalarClass::Int,
         )
-        .unwrap_or_else(|refusal| panic!("the declaration tiles {count} element(s): {refusal}"));
+        .unwrap_or_else(|refusal| panic!("the declaration tiles: {refusal}"));
         let tiled = folding
             .tiled(LOCAL_SIZE_X, 0)
             .unwrap_or_else(|refusal| panic!("{count} element(s) tile: {refusal}"));
@@ -300,7 +299,6 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
     let (reduction, staged_name) = declared_reduction_and_name();
     let folding = Folding::new(
         &reduction,
-        LANES as u64,
         Element::Buffer { position: 0 },
         ScalarClass::Int,
     )

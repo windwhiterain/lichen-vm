@@ -1254,9 +1254,10 @@ of that work and belong to the design rather than to the tests:
   `GpuContext::run` uploads `extent × width` bytes of each host input, so a two-step tile
   dispatched over one workgroup uploads one tile and the strided read answers the staging's
   padding — which is silently `0`, not an error. The tiled body's domain is therefore `(extent,
-  index)` and its fold count is a **compile-time** fact the body carries, so the two are different
-  numbers and a caller must launch the larger. Every workgroup past the first folds the whole tile
-  and writes the same answer, so the surplus is redundant rather than wrong.
+  index)`, and its fold count is `ceil(extent / lane_width)` read off that extent parameter at run
+  time, so the count a caller means and the whole tile the body covers are different numbers: the
+  caller pads to the tile and launches the larger. Every workgroup past the first folds the whole
+  tile and writes the same answer, so the surplus is redundant rather than wrong.
 - **A `BufferReadCall`'s placement is free, and a `SliceReadCall`'s is not.** A buffer read in a
   loop header is emitted and carried correctly — measured directly on a device — because it carries
   no barrier. A slice read's does: the barrier that separates it from its write is emitted

@@ -52,7 +52,6 @@ fn tiled_fragment(tile: u32) -> KernelFragment {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        u64::from(tile),
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -97,7 +96,6 @@ fn per_lane_fragment(tile: u32) -> KernelFragment {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        u64::from(tile),
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
