@@ -182,6 +182,43 @@ fn fold_constant(operator: UnaryOp, operand: &Expr) -> Option<f64> {
     folded.is_finite().then_some(folded)
 }
 
+/// A relation is an operator with no inverse but an order, so a key adds into its
+/// operands instead of failing to cancel against them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Relation {
+    Max,
+    Min,
+}
+
+impl Relation {
+    fn of(operator: BinaryOp) -> Option<Relation> {
+        match operator {
+            BinaryOp::Max => Some(Relation::Max),
+            BinaryOp::Min => Some(Relation::Min),
+            _ => None,
+        }
+    }
+
+    fn operator(self) -> BinaryOp {
+        match self {
+            Relation::Max => BinaryOp::Max,
+            Relation::Min => BinaryOp::Min,
+        }
+    }
+
+    /// The relation as `-x` maps it: `-max(a,b) = min(-a,-b)`.
+    ///
+    /// # Invariant
+    /// The order reverses, which is the whole difference between the two: a negation that
+    /// kept `max` would answer `-(a ∨ b)` with `(-a) ∨ (-b)`, and the signs would disagree.
+    fn dual(self) -> Relation {
+        match self {
+            Relation::Max => Relation::Min,
+            Relation::Min => Relation::Max,
+        }
+    }
+}
+
 /// The sum of the given terms, as one canonical node.
 fn build_sum(terms: &[Expr], remaining: &mut usize) -> Option<Expr> {
     let mut signed = Vec::with_capacity(terms.len());
@@ -198,16 +235,146 @@ fn build_sum(terms: &[Expr], remaining: &mut usize) -> Option<Expr> {
             other => signed.push(other.clone()),
         }
     }
-    let folded = fold_constants(&flatten(&signed, BinaryOp::Add), |left, right| {
-        Some(left + right)
-    })?;
+    let flat = flatten(&signed, BinaryOp::Add);
+    build_sum_terms(&flat, remaining, &recursive_sum)
+}
+
+/// The sum of already-flattened terms, taking the relation kind the flattened list fixes.
+fn recursive_sum(terms: &[Expr], remaining: &mut usize) -> Option<Expr> {
+    let mut relations: Vec<(Relation, Vec<Expr>)> = Vec::new();
+    let mut keyed = Vec::new();
+    for term in terms {
+        match relation_parts(term) {
+            Some((relation, operands)) => relations.push((relation, operands)),
+            None => keyed.push(term.clone()),
+        }
+    }
+    let Some(relation) = relations.first().map(|(relation, _)| *relation) else {
+        return build_sum_terms(terms, remaining, &additive_sum);
+    };
+    let key = build_sum_terms(&keyed, remaining, &recursive_sum)?;
+    let mut parts = Vec::new();
+    for (_inner, operands) in relations {
+        for operand in operands {
+            parts.push(distribute_key(&operand, &key, remaining)?);
+        }
+    }
+    build_relation(parts, relation, remaining)
+}
+
+/// A sum of terms that hold no relation: folded, sorted, its opposites cancelled.
+fn additive_sum(terms: &[Expr], remaining: &mut usize) -> Option<Expr> {
+    let mut kept = terms.to_vec();
+    kept.sort();
+    cancel_opposites(&mut kept);
+    finish(kept, BinaryOp::Add, 0.0, remaining)
+}
+
+/// The sum of already-flattened canonical terms, built by `builder`.
+fn build_sum_terms(
+    terms: &[Expr],
+    remaining: &mut usize,
+    builder: &dyn Fn(&[Expr], &mut usize) -> Option<Expr>,
+) -> Option<Expr> {
+    let folded = fold_constants(terms, |left, right| Some(left + right))?;
     let mut kept: Vec<Expr> = folded
         .into_iter()
         .filter(|term| term.as_constant() != Some(0.0))
         .collect();
     kept.sort();
     cancel_opposites(&mut kept);
-    finish(kept, BinaryOp::Add, 0.0, remaining)
+    if kept.iter().any(|term| relation_parts(term).is_some()) {
+        return builder(&kept, remaining);
+    }
+    additive_sum(&kept, remaining)
+}
+
+/// The one builder that takes an additive key into the relations a sum holds.
+///
+/// # Invariant
+/// It is the distributivity the fusion engine's obligation is written in: a repair function
+/// that adds a value distributes over a maximum exactly when the addition is pushed into
+/// every operand, so this is the form the two sides are compared on. Every step either
+/// consumes a relation or adds itself to a named subterm, so the recursion terminates.
+fn distribute_key(operand: &Expr, key: &Expr, remaining: &mut usize) -> Option<Expr> {
+    match relation_parts(operand) {
+        Some((inner, _)) => {
+            let summed = build_sum(&[operand.clone(), key.clone()], remaining)?;
+            apply_key_over_relation(inner, &summed, &Expr::Constant(0.0), remaining)
+        }
+        None => build_sum(&[operand.clone(), key.clone()], remaining),
+    }
+}
+
+/// `key` added into a relation term, pushing it into each operand and then into whatever
+/// relation an operand became.
+fn apply_key_over_relation(
+    relation: Relation,
+    term: &Expr,
+    key: &Expr,
+    remaining: &mut usize,
+) -> Option<Expr> {
+    let Some((nested, operands)) = relation_parts(term) else {
+        return build_sum(&[term.clone(), key.clone()], remaining);
+    };
+    let mut parts = Vec::with_capacity(operands.len());
+    for operand in operands {
+        let summed = build_sum(&[operand, key.clone()], remaining)?;
+        parts.push(apply_key_over_relation(
+            nested,
+            &summed,
+            &Expr::Constant(0.0),
+            remaining,
+        )?);
+    }
+    let _ = relation;
+    build_relation(parts, nested, remaining)
+}
+
+/// A list of summed relation operands as one canonical relation node.
+fn build_relation(
+    mut operands: Vec<Expr>,
+    relation: Relation,
+    remaining: &mut usize,
+) -> Option<Expr> {
+    operands.retain(|operand| operand.as_constant() != Some(0.0));
+    finish(operands, relation.operator(), 0.0, remaining)
+}
+
+/// `-relation`, as the dual relation over the negated operands.
+fn negate_relation(relation: Relation, operands: Vec<Expr>, remaining: &mut usize) -> Option<Expr> {
+    let mut negated = Vec::with_capacity(operands.len());
+    for operand in operands {
+        negated.push(negate(&operand, remaining)?);
+    }
+    negated.sort();
+    finish(negated, relation.dual().operator(), 0.0, remaining)
+}
+
+/// One term seen as a relation, or `None` when it is not one.
+fn relation_parts(term: &Expr) -> Option<(Relation, Vec<Expr>)> {
+    let Expr::Binary(operator, left, right) = term else {
+        return None;
+    };
+    let relation = Relation::of(*operator)?;
+    let mut operands = vec![(**left).clone(), (**right).clone()];
+    let mut index = 0;
+    while index < operands.len() {
+        let nested = match &operands[index] {
+            Expr::Binary(operator, left, right) if Relation::of(*operator) == Some(relation) => {
+                Some(((**left).clone(), (**right).clone()))
+            }
+            _ => None,
+        };
+        match nested {
+            Some((left, right)) => {
+                operands[index] = left;
+                operands.insert(index + 1, right);
+            }
+            None => index += 1,
+        }
+    }
+    Some((relation, operands))
 }
 
 /// The product of the given factors, as one canonical node.
@@ -283,6 +450,12 @@ fn negate(expr: &Expr, remaining: &mut usize) -> Option<Expr> {
             let left = Expr::Unary(UnaryOp::Neg, left.clone());
             let right = Expr::Unary(UnaryOp::Neg, right.clone());
             build_binary(*operator, &left, &right, remaining)
+        }
+        Expr::Binary(operator @ (BinaryOp::Max | BinaryOp::Min), left, right) => {
+            let relation = Relation::of(*operator)?;
+            let (_, operands) =
+                relation_parts(&Expr::Binary(*operator, left.clone(), right.clone()))?;
+            negate_relation(relation, operands, remaining)
         }
         other => {
             spend(remaining)?;

@@ -383,7 +383,18 @@ the unroll, and it is the largest single item in this roadmap:
 
 ### 4.3 Axis A: a buffer from a program value
 
+> **Landed.** The operator is `compute.buffer` and it is a **native plugin**: one
+> `ComputeOperator` leaf, one `$buffer` wrapper function in the embedded
+> `compute.lichen`, and one arm of `OperatorExt::run`. The element class is the
+> array's own, so `compute.buffer [1, 2, 3]` is an `Int` buffer and
+> `compute.buffer [0.5, 1.5]` a `Float` one, and both are readable by a kernel and
+> collectable back. A position that is not a scalar, and a mixture of two classes,
+> are **refused by name** (`compute.buffer`) rather than truncated. The hazard the
+> ladder found is closed from the other side too: a program array handed where a
+> buffer belongs is refused, and that refusal now names `compute.buffer`.
+
 **The change**: a `compute.buffer` that turns an array into a `Buffer`, so a
+kernel has something to read.
 kernel has something to read.
 
 - **A native plugin.** One `ComputeOperator` leaf and one wrapper function —

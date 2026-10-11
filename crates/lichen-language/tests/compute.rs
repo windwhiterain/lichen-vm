@@ -1282,8 +1282,9 @@ compute.collect out.z
         "the refusal must name the position and what it holds: {message:?}"
     );
     assert!(
-        message.contains("no way to make one out of a program value"),
-        "and it must say *why*, since the fix is not obvious from the fact: {message:?}"
+        message.contains("compute.buffer"),
+        "and it must name the operation that makes one, since the fix is not obvious from \
+         the fact: {message:?}"
     );
 }
 

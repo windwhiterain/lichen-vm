@@ -213,6 +213,10 @@ impl fmt::Display for FusionRefusal {
 /// because the outermost producer-free subexpression is where an element function's custom
 /// logic is still one expression; and the emitted body is canonicalized, because what the
 /// run report prints and what the distributivity check compares must be the same tree.
+/// The repair is `g'(r_{N+1})(g'(r_N)⁻¹(x))`, and the two instantiations are why the template
+/// is substituted **after** the inverse is taken: the inverse is the parameter solved at the
+/// step's own producer value, which is what the template is written at, and substituting the
+/// producer first would solve at the next value instead.
 pub fn derive(
     producer: Reduction,
     element_function: Expr,
