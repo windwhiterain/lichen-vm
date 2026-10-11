@@ -934,12 +934,49 @@ Still open, cheapest to settle before the interface syntax is written:
   property harness is believed — more coverage, and the harness is one more
   artifact to define). This note is written symbolic-only; §3's
   `UnverifiableInstance` is where a second tier would slot in.
-- **The mark payload's richness** — the spike's payload is one string literal, because
-  text is exactly what keeps a mark out of the pair layout. A record payload (a claim
-  naming its interface and roles as fields rather than as `claim:Name(role,…)` text)
-  is the natural next step, and the mark channel is already positioned for it: the
-  fragment's payload is a *list* of fields per mark, so a reader that wants "the mark's
-  own text" reads the unnamed field rather than a second variant.
+- **The mark payload's richness, and with it mark *paths* — measured, and deferred.** The
+  spike's payload is one string literal, because text is exactly what keeps a mark out of the
+  pair layout, and the channel is positioned for a record: a mark's payload is a *list* of
+  fields, so a reader that wants "the mark's own text" reads the unnamed field rather than a
+  second variant. Keying a mark by the **path** of the marks enclosing it, rooted at the
+  fragment's interface, is what would let a plan name a value durably — and it is blocked by a
+  surface rather than by a design:
+  - **No surface produces a named field.** `mark_payload`
+    (`crates/lichen-language-parser/src/parse.rs`) takes a string literal and nothing else, the
+    AST, the IR and the module carry one `Vec<String>` per mark, `MarkField`'s only producer
+    writes `name: None` (`crates/lichen-compute/src/compute/body.rs`), and
+    `KernelMark::field(name)` has no caller. So a claim's interface and its roles either gain a
+    grammar or are parsed back out of `claim:Name(role,…)` — the mini-language a record payload
+    exists to end.
+  - **The names a plan may use have to be declared somewhere, and §4 is why.** The canonical
+    form commits to the interface and to each required role's canonical projection, and to
+    nothing else: not a mark's anchor, not a mark that is not a role. A plan naming one of
+    *those* would be matched by a hash that does not fix what the name points at, so two kernels
+    with one algebra and that mark on two different expressions would take one plan. A claim's
+    declaration is therefore load-bearing rather than a restatement of the interface.
+  - The three spellings are a **named mark** (`~ interface "Reduction" ~ role "combine"`), a
+    **registry** keyed by interface in the IR, and **nothing declared** at all. Only the first
+    keeps the declaration in the program — and so inside the hash — while ending the
+    mini-language; only the first two keep `RoleNotMarked` and the undeclared-name refusal
+    reachable.
+  - **Two families of existing marks are what any of the three has to answer for.** The
+    `accumulator` marks (`crates/lichen-language/examples/reduction_interface.rs`,
+    `crates/lichen-language/examples/fusion_numbers.rs`) are not roles of `Reduction` and are
+    read today as roles no claim requires; and `element` in all four chains of
+    `crates/lichen-language/examples/fusion_schema.rs` sits *inside* the `combine` mark, because
+    a consumer's per-element function is used inside its own combine, so a path reads
+    `Reduction/combine/element` where the interface declares `element`. Resolving a role by the
+    mark's own segment rather than by its whole path is the reading that keeps that example as
+    written.
+  - **A path cannot be completed by ancestry alone.** Every example's claim mark rides the *use
+    site* (`compute.parallel (producer_raw ~ "claim:…")`), whose anchor is the function
+    template's parameter node rather than an `ExprId` ancestor of the body, so a checker can
+    compute only the relative chain among body marks and the root has to be applied where the
+    interface is known — the kernel compile, or the lowering that publishes them.
+
+  **Deferred deliberately**, because its only consumer is the plan: §5's functional half — a plan
+  that is data, checked against the three facts, and refused by name — is the thing to build
+  first.
 - **Pack trust beyond correctness** — signing/provenance of installed packs
   is the package manager's roadmap item, deliberately not this design's.
 
