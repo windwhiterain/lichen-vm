@@ -1,12 +1,12 @@
 # Compound element slots
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
-> (`8b2fa7a`); every compound's element is now a full `[value, type, attrs…]` slot
-> — tuple, struct, array, table, and set — with both construction sites, the
+> (`8b2fa7a`); every compound's element is a full `[value, type, attrs…]` slot —
+> tuple, struct, array, table, and set — with both construction sites, the
 > readers, the printers, the element-attribute and value-pin reconciliation, the
-> wildcard literal `@any`, a value-less annotation `: T # a`, the spelled-out
-> `tuple{…}` form, and `ShapeElements` gone. What remains is releasing `<>` for
-> the keyword-led forms.
+> wildcard literal `@any`, a value-less annotation `: T # a`, `ShapeElements`
+> gone, and the angle spellings retired for `tuple{…}` / `struct{…}` /
+> `array{T, n}`. What remains is in the open list below.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -116,24 +116,28 @@ lands:
 - Both printers render a tuple's elements through their slots, and an unreadable
   slot falls back to the raw mark rather than printing an element pair whole.
 
-## The two spellings
+## The spelling
 
-`<a, b>` and `tuple{a, b}` are the same `TypeTuple`; the second writes each
-element as a **slot**. A slot is `value : type`, so an element with a top-level
-`:` spells the value position — a **pin** — and an element without one is a type
-expression, whose value position is `@any`:
+A compound type writes each element as a **slot**: `tuple{a, b}` for a tuple,
+`struct{.f a}` for a struct, `array{T, n}` for an array. A slot is `value : type`,
+so an element with a top-level `:` spells the value position — a **pin** — and an
+element without one is a type expression, whose value position is `@any`:
 
 ```text
-<Int # 2>                 is  tuple{@any : (Int # 2)}
+tuple{Int # 2}            is  tuple{@any : (Int # 2)}
 tuple{5 : Int, Int}           (5, 2) holds, (6, 2) is refused: expected 5, found 6
 t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in the type
 ```
+
+The angle spellings this note was written against (`<a, b>`, `struct<.f a>`,
+`array<T, n>`) were retired afterwards; measurements recorded before that
+retirement keep its spelling.
 
 A pin cannot be enforced by the lowlevel compare — a value's element slots hold
 the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)
 exactly as an attribute is, and `@any : T`'s arm is vacuous because a wildcard's
 own class accepts everything. Both printers read a slot back as source, so a pin
-is visible: `(5, 2) : tuple{5 : Int, Int}` renders `(5, 2): <5 : Int, Int>`,
+is visible: `(5, 2) : tuple{5 : Int, Int}` renders `(5, 2): tuple{5 : Int, Int}`,
 while `@any`'s own position renders as no pin at all.
 
 ## A value-less annotation
@@ -176,8 +180,8 @@ consequences of taking that seriously:
 - **The read goes through the container's own type cell**, not through the
   pattern an open container was pinned to. A cell's class carries the actual type
   once it resolves, so the elements resolve with it: `lazy_infinite` reads
-  `(1, 2, 3): <Int, Int, Int>` where a read through the pattern gave
-  `(raw 1, raw 2, raw 3): <?a, ?b, ?c>`.
+  `(1, 2, 3): tuple{Int, Int, Int}` where a read through the pattern gave
+  `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
   (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
   container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an
@@ -199,13 +203,13 @@ read of a decided tuple type allocates nothing.
 An array's element position is **one slot serving every element**, so the two
 rules that need a count are stated once each:
 
-- `check_array_type` (`array<T, n>`), `check_array_term`, and `check_index`'s pin
+- `check_array_type` (`array{T, n}`), `check_array_term`, and `check_index`'s pin
   build `[element slot, length]`; `low_type_of_array` and both printers read the
   slot's type position.
 - The element walk pairs a **single** type element with *each* value element
   (`checker::element_pairs`), which is what a pin on an array's element means:
-  `[1, 2] : array<5 : Int, 2>` is refused twice, once per element, and
-  `[1 # 4, 2] : array<Int # 2, 2>` holds while `[1 # 2, 2] : array<Int # 4, 2>` is
+  `[1, 2] : array{5 : Int, 2}` is refused twice, once per element, and
+  `[1 # 4, 2] : array{Int # 2, 2}` holds while `[1 # 2, 2] : array{Int # 4, 2}` is
   refused. A one-element tuple pairs the same way, so the rule needs no kind test.
 
 ## The table and set steps
@@ -225,14 +229,19 @@ arm) rather than a new one.
 
 - **An element's attribute is not rendered.** A pinned element now reads
   `5 : Int`, but a *requirement* — `tuple{Int # 2, Int}`, whose attribute sits in
-  the slot's dense position — still renders as `<Int, Int>`. The printer would
-  need each attribute extension's source sigil (`#`, `?`, `!`), which
+  the slot's dense position — still renders as `tuple{Int, Int}`. The printer
+  would need each attribute extension's source sigil (`#`, `?`, `!`), which
   `AttrSpec` does not state today, so the spelling is a wider change than the
   pin's was.
 - **A table *value* still renders raw.** Its *type* reads `table<K, V>` now, but
   the value itself is the table handle the checker built, which no arm decodes:
   `t = table{1 ==> "a"}; t` reads `raw Table: table<Int, string>` where a
   `table{1 ==> "a"}` would need the handle's entries.
-- **Releasing `<>`.** `tuple{…}` is the spelled-out form; `<…>`, `struct<…>`, and
-  `array<…, …>` are the angle spellings that would go with it, and the raw index
-  `X<e>` is the token's other user.
+- **`set<…>` and `table<…>` are renderer notation, not source.** Neither kind has
+  a *type* syntax, and their braced form would collide with the set/table
+  *literal*: the language spec says the printer spells them this way.
+- **`tree-sitter-lichen/grammar.js` still models the retired forms.** Regenerating
+  and validating it needs the tree-sitter CLI, which this checkout cannot run;
+  `docs/notes/operators.md` §10 records the gap.
+- **The raw index `X<e>` keeps its angle token**, which is why `<`/`>` remain in
+  the lexer and the glued-index rule stays.
