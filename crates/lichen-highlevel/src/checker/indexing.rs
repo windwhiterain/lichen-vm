@@ -6,9 +6,18 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 use crate::diagnostic::DiagKind;
 use crate::ir::{BinOp, ExprId};
 use crate::program::{HighProgram, TypeOperator, ValueType};
+use crate::shape;
 
 use super::Checker;
 use crate::diagnostic::AssertSpelling;
+
+/// A **dynamic** node of a term read, `None` for a frozen static ref.
+fn dynamic_node(id: AnyNodeId) -> Option<NodeId> {
+    match id {
+        AnyNodeId::Dynamic(node) => Some(node),
+        AnyNodeId::Static(_) => None,
+    }
+}
 
 impl<P: HighProgram> Checker<P>
 where
@@ -27,19 +36,59 @@ where
     pub(super) fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
-        let elem_cell = self.fresh_cell();
-        let len_cell = self.fresh_cell();
-        // The element position is a slot, so the pin's shape is `[slot, length]`.
-        let element = self.element_slot(None, Some(elem_cell), None);
-        let shape = self.array_node(self.current_block, &[element, len_cell]);
-        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let array_ty = self.array_node(self.current_block, &[shape, kind]);
-        self.check_unify(
-            self.state[array].ty.unwrap(),
-            array_ty,
-            self.loc(array, 1),
-            DiagKind::Guard,
-        );
+        let array_ty = self.state[array].ty.unwrap();
+        // The requirement names the container's **kind**, never its type, so the
+        // container's type cell stays free.
+        if self.type_is_concrete(array_ty) {
+            let kind = self.array_kind_requirement();
+            let container_kind = self.lazy_index_path(array_ty, &[shape::TYPE_KIND_SLOT]);
+            // The kind read runs first: an unevaluated `Index` holds no value, so
+            // a unify writes into its class and asks nothing.
+            self.module
+                .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
+            self.check_unify(container_kind, kind, self.loc(array, 1), DiagKind::Guard);
+        } else {
+            // An undecided container is registered as an assert condition,
+            // re-checked per apply clone.
+            let operands = self.array_node(self.current_block, &[array_ty, self.type_expr]);
+            let condition = self.op_node(
+                self.current_block,
+                P::Operator::from(TypeOperator::IsArrayType),
+                Some(operands),
+            );
+            self.register_assert(
+                condition,
+                self.loc(array, 1),
+                true,
+                AssertSpelling::ArrayKind {
+                    container: array_ty,
+                },
+            );
+        }
+        // The element type and the length come out of the container's **own**
+        // shape; an undecided one keeps the lazy read.
+        let type_ref = shape::TypeRef::Term(AnyNodeId::Dynamic(array_ty));
+        let element = shape::field_type(&self.module, type_ref, shape::ARRAY_TYPE_ELEMENT_SLOT)
+            .and_then(dynamic_node);
+        let elem_cell = match element {
+            Some(element) => element,
+            None => self.lazy_index_path(
+                array_ty,
+                &[
+                    shape::TYPE_SHAPE_SLOT,
+                    shape::ARRAY_TYPE_ELEMENT_SLOT,
+                    shape::PAIR_TYPE_SLOT,
+                ],
+            ),
+        };
+        let length = shape::array_length(&self.module, type_ref).and_then(dynamic_node);
+        let len_cell = match length {
+            Some(length) => length,
+            None => self.lazy_index_path(
+                array_ty,
+                &[shape::TYPE_SHAPE_SLOT, shape::ARRAY_TYPE_LENGTH_SLOT],
+            ),
+        };
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));

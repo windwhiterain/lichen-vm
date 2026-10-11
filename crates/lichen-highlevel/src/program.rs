@@ -656,6 +656,12 @@ pub enum TypeOperator {
     /// `shape::is_tuple_type_any`, so a struct type answers `0` here just as a
     /// tuple type answers `0` there.
     IsTupleType,
+    /// Whether a type value is an **array type**, answering `USize(0/1)`.
+    ///
+    /// # Invariant
+    /// The operand layout is [`TypeOperator::IsStructType`]'s; the decode is
+    /// `shape::is_array_type_any`.
+    IsArrayType,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -787,6 +793,7 @@ define_type_operator_codec! {
     Sqrt = 22;
     Floor = 23;
     IsTupleType = 24;
+    IsArrayType = 25;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -937,7 +944,8 @@ where
             | TypeOperator::BitXor
             | TypeOperator::InDomain
             | TypeOperator::IsStructType
-            | TypeOperator::IsTupleType => {
+            | TypeOperator::IsTupleType
+            | TypeOperator::IsArrayType => {
                 // An undecided operand never reaches this operator.
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
@@ -1095,6 +1103,15 @@ where
                             crate::shape::is_tuple_type_any(module, universe, operands[0].node);
                         Some(P::Value::from(LowValue::USize(is_tuple as usize)))
                     }
+                    // The array read's container requirement, the same way.
+                    TypeOperator::IsArrayType => {
+                        let AnyNodeId::Dynamic(universe) = operands[1].node else {
+                            return None;
+                        };
+                        let is_array =
+                            crate::shape::is_array_type_any(module, universe, operands[0].node);
+                        Some(P::Value::from(LowValue::USize(is_array as usize)))
+                    }
                 }
             }
         })()
@@ -1146,6 +1163,7 @@ where
             // type values and answered by the assert channel.
             TypeOperator::IsStructType => Some(LowShape::USize),
             TypeOperator::IsTupleType => Some(LowShape::USize),
+            TypeOperator::IsArrayType => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }

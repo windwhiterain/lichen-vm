@@ -896,7 +896,17 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
     assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(l));
-    assert_eq!(diags[0].a, b.state[l].ty.unwrap());
+    // The requirement names the container's **kind**: the expected side is the
+    // array kind, not the container's own type.
+    let requirement = array_ids(&b, diags[0].b);
+    assert_eq!(requirement.len(), 2, "a kind is a [marker, K] pair");
+    assert!(
+        matches!(
+            b.module.node_value(AnyNodeId::Dynamic(requirement[0])),
+            Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
+        ),
+        "the expected side is the array kind"
+    );
 }
 
 #[test]

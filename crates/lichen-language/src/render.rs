@@ -307,6 +307,11 @@ where
                 "expected a tuple type, found {}",
                 printer.node(container)
             ),
+            // The index read's half.
+            Some(AssertSpelling::ArrayKind { container }) => format!(
+                "expected an array type, found {}",
+                printer.node(container)
+            ),
             // An explicit `@assert e`: the condition's own failed value.
             _ => {
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {

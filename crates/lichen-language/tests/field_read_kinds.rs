@@ -71,12 +71,12 @@ fn a_bracket_read_of_a_tuple_is_refused() {
     let (message, kind) = refused("f = x => x[0]\nf (10, 20)");
     assert_eq!(
         kind,
-        DiagKind::Runtime,
+        DiagKind::Assert,
         "the same apply tier the tuple read uses"
     );
     assert!(
-        message.contains("expected array") && message.contains("found <Int, Int>"),
-        "the array pin refuses a tuple: {message}"
+        message.contains("expected an array type") && message.contains("found <Int, Int>"),
+        "the array requirement refuses a tuple: {message}"
     );
 }
 
