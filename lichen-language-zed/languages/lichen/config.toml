@@ -10,7 +10,7 @@ path_suffixes = ["lichen"]
 tab_size = 4
 hard_tabs = false
 
-# Lichen has no real comments; prose lives in the `@{ ... @}` preprocessor block.
-# Indent after constructs that open a block / parenthesised group.
+# Prose lives in the `--- ... ---` preprocessor block.  Indent after constructs
+# that open a block / parenthesised group.
 increase_indent_pattern = "\\{\\s*$"
 decrease_indent_pattern = "^\\s*\\}\\s*$"

@@ -257,9 +257,10 @@ not pull the tokio/tower async stack.
 - **Grammar:** Lichen's lexer/parser is hand-rolled, so syntax highlighting needs
   a Tree-sitter grammar. `tree-sitter-lichen/` at the repo root provides it.
   It is a **deliberately simple, permissive** grammar (not a re-implementation of
-  the strict frontend): its job is highlighting, outline and bracket-matching,
-  so it glosses over the frontend's whitespace-sensitive "Glue" postfix
-  distinction and accepts more than the strict parser. It lives in this repo as
+  the strict frontend): its job is highlighting, outline and bracket-matching.
+  It models the postfix Glue rule for the forms that need it (`a[0]` is an index,
+  `a [0]` applies `a` to an array) and still accepts more than the strict parser.
+  It lives in this repo as
   a sub-directory so the extension can reference it via the grammar `path` field
   (`[grammars.lichen]` with `path = "tree-sitter-lichen"`), which Zed supports
   for (mono)repos holding multiple grammars. The generated parser is **not**
@@ -270,12 +271,14 @@ not pull the tokio/tower async stack.
   Queries live both in `tree-sitter-lichen/queries/` and (mirrored) in the
   extension's `languages/lichen/`, because Zed reads queries from the extension
   directory.
-- **Grammar `rev`:** pinned to `d799ade` (a commit containing `tree-sitter-lichen/`
+- **Grammar `rev`:** pinned to `2ef68c10` (a commit containing `tree-sitter-lichen/`
   and pushed to `origin/dev`), with `[grammars.lichen]` `repository` pointing at the
   public HTTPS remote (`https://github.com/windwhiterain/lichen-vm`). The pinned
   `rev` must stay reachable from that remote and in sync with the grammar/query
   paths (the `grammar_consistency` test guards this) so a registry install can clone
-  and check it out. A `file://` `repository` is only for local development.
+  and check it out. A `file://` `repository` is only for local development. Any
+  commit that changes the grammar or the queries must re-bump it in the same
+  commit, so `rev` follows the grammar through `dev`.
 - **Semantic tokens** (the grammar-optional highlight path) are served by the
   LSP, so the extension neither needs the grammar for color nor needs any extra
   client-side config — Zed requests `textDocument/semanticTokens/full` because

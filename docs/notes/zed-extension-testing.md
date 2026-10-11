@@ -78,25 +78,30 @@ Then confirm the grammar pin: `[grammars.lichen]` has `rev` (a real Git SHA in `
 whose grammar actually contains every node that the `highlights.scm`/`outline.scm` queries
 reference — pinning an older rev (e.g. `9b23892`, before `return` was added to the grammar)
 makes the grammar `Query::new` fail on load with `Invalid node type "return"`. The `rev` must
-be reachable from the public `repository`; `d799ade` is the current pin, pushed to `origin/dev`
-and containing `tree-sitter-lichen/`.
+be reachable from the public `repository`; `2ef68c10` is the current pin, containing
+`tree-sitter-lichen/`. It is re-bumped by the commit that lands a grammar, query or highlight
+change on `dev`, because `grammar_rev_is_not_stale` compares it with the last commit touching
+those paths.
 
 ### 4. Grammar (run by the developer who changes `grammar.js`)
 
 `tree-sitter-lichen` is **not a workspace member** (Zed builds the grammar itself from the
 committed `grammar.js`), so it is tested against its own manifest, and the samples parse runs
 by default there. The generated `src/parser.c` is not committed; `build.rs` regenerates it when
-it is missing or stale, so this needs a `tree-sitter` CLI on PATH (`cargo install tree-sitter-cli`
-once):
+it is missing or stale, so this needs a `tree-sitter` CLI (`cargo install tree-sitter-cli`
+once, or an npm `tree-sitter-cli` under the crate's `node_modules/`, which `build.rs` finds as
+a fallback):
 
 ```bash
 cargo test --manifest-path tree-sitter-lichen/Cargo.toml
 ```
 
 `tests/samples.rs` parses every `.lichen` sample under `examples/` and
-`tests/fixtures/readme`, plus a set of edge cases, and asserts the root node has no ERROR
-nodes. It is deliberately opt-in, so a plain `cargo test --workspace` never builds the
-grammar and never needs the tree-sitter CLI — whoever changes `grammar.js` runs it locally.
+`crates/lichen-tools/tests/fixtures/readme`, plus a set of edge cases (one per current
+surface form), and asserts the root node has no ERROR nodes; a second test asserts the
+retired angle spellings *do* produce error nodes. It is deliberately opt-in, so a plain
+`cargo test --workspace` never builds the grammar and never needs the tree-sitter CLI —
+whoever changes `grammar.js` runs it locally.
 
 Zed reads queries from the extension's `languages/lichen/`, not the grammar repo, so the
 two copies of `highlights.scm`/`outline.scm` stay in sync by hand. A quick semantic check

@@ -41,11 +41,12 @@ Anyone adding a new token to the lexer should note that `_`'s
 `TokenKind` is also what the language server's semantic-token classifier keys on;
 a new placeholder-like spelling must be classified there too.
 
-## Editor highlighting (open)
+## Editor highlighting
 
-The tree-sitter grammar and thus the Zed extension highlight `_` as an
-identifier; a placeholder node could be added for accurate editor coloring. This
-is a highlighting-only concern and does not affect the compiler. See
+The tree-sitter grammar gives `_` its own `placeholder` node (`@variable` in
+`queries/highlights.scm`, mirrored in the Zed extension), and `@any` its own
+`wildcard` node (`@constant.builtin`).  Both are highlighting-only concerns and
+do not affect the compiler. See
 [tree-sitter-generated-files](tree-sitter-generated-files.md) and
 [zed-extension-testing](zed-extension-testing.md) for how the generated grammar
 is built and verified.
