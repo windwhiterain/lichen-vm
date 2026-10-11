@@ -93,8 +93,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
     for sv in vals {
-        // The two field values are type constants, so their own types name them;
-        // only the native kernel value has no name to read.
+        // The two field values are type constants, so their own types name them.
         assert_eq!(
             sv.value.as_deref(),
             Some("(raw Kernel, Int, Int)"),

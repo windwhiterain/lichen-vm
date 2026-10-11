@@ -221,14 +221,14 @@ impl Folding {
         let entry = builder.body.entry;
         builder.body.add_param(entry);
         let lane = builder.body.add_param(entry);
-        let one = builder.constant(entry, ScalarClass::Int, 1);
+        let one = builder.constant(ScalarClass::Int, 1);
         let stop = builder.push(
             entry,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![lane, one],
         );
-        let identity = builder.constant(entry, self.class, self.identity.bits());
-        let zero = builder.constant(entry, ScalarClass::Int, 0);
+        let identity = builder.constant(self.class, self.identity.bits());
+        let zero = builder.constant(ScalarClass::Int, 0);
         let folded = Fold {
             stop,
             start: zero,
@@ -239,13 +239,13 @@ impl Folding {
             operator: self.combine,
         }
         .run(&mut builder);
-        let position = builder.constant(builder.body.entry, ScalarClass::Int, 0);
+        let position = builder.constant(ScalarClass::Int, 0);
         builder.push(
             builder.current(),
             KernelInstr::BufferWriteCall(self.class),
             vec![position, lane, folded],
         );
-        let dummy = builder.constant(builder.body.entry, self.class, self.identity.bits());
+        let dummy = builder.constant(self.class, self.identity.bits());
         builder.finish(vec![dummy]);
         builder.body
     }
@@ -266,17 +266,17 @@ impl Folding {
         let entry = builder.body.entry;
         builder.body.add_param(entry);
         let lane = builder.body.add_param(entry);
-        let width = builder.constant(entry, ScalarClass::Int, i64::from(lane_width));
+        let width = builder.constant(ScalarClass::Int, i64::from(lane_width));
         let slot = builder.push(
             entry,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
             vec![lane, width],
         );
-        let identity = builder.constant(entry, self.class, self.identity.bits());
+        let identity = builder.constant(self.class, self.identity.bits());
         // **The steps a lane takes are per lane**, so the bound is the tile over the stride.
         let steps = count / u64::from(lane_width);
-        let stop = builder.constant(entry, ScalarClass::Int, steps as i64);
-        let lane_slot = builder.constant(entry, ScalarClass::Int, 0);
+        let stop = builder.constant(ScalarClass::Int, steps as i64);
+        let lane_slot = builder.constant(ScalarClass::Int, 0);
         let folded = Fold {
             stop,
             start: lane,
@@ -287,13 +287,13 @@ impl Folding {
             operator: self.combine,
         }
         .run(&mut builder);
-        let ordinal = builder.constant(builder.body.entry, ScalarClass::Int, slice as i64);
+        let ordinal = builder.constant(ScalarClass::Int, slice as i64);
         let write = builder.push(
             builder.current(),
             KernelInstr::SliceWriteCall(self.class),
             vec![ordinal, slot, folded],
         );
-        let identity = builder.constant(builder.body.entry, self.class, self.identity.bits());
+        let identity = builder.constant(self.class, self.identity.bits());
         let reading = Fold {
             stop: width,
             start: lane_slot,
@@ -313,13 +313,13 @@ impl Folding {
             .copied()
             .expect("a slice fold reads the slice it observed");
         builder.body.barriers.push(Barrier { write, read: first });
-        let position = builder.constant(builder.body.entry, ScalarClass::Int, 0);
+        let position = builder.constant(ScalarClass::Int, 0);
         builder.push(
             builder.current(),
             KernelInstr::BufferWriteCall(self.class),
             vec![position, lane, reading],
         );
-        let dummy = builder.constant(builder.body.entry, self.class, self.identity.bits());
+        let dummy = builder.constant(self.class, self.identity.bits());
         builder.finish(vec![dummy]);
         return Ok(Tiled {
             body: builder.body,
@@ -397,13 +397,13 @@ impl Fold {
         let merged = builder.body.add_block();
         let result = builder.body.add_param(merged);
         // **The count starts at zero and the slot at `start`**.
-        let zero = builder.constant(builder.body.entry, ScalarClass::Int, 0);
+        let zero = builder.constant(ScalarClass::Int, 0);
         // **The loop's own instructions land in its header**, which `enter` below selects.
         builder.enter(header);
         // **The element is read in the header**, where a slice read's barrier is uniform.
         let address = match self.modulo {
             Some(modulo) => {
-                let modulo = builder.constant(builder.body.entry, ScalarClass::Int, modulo as i64);
+                let modulo = builder.constant(ScalarClass::Int, modulo as i64);
                 builder.push(
                     header,
                     KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
@@ -445,13 +445,13 @@ impl Fold {
             KernelInstr::Bin(builder.class, self.operator),
             vec![current, read],
         );
-        let one = builder.constant(step, ScalarClass::Int, 1);
+        let one = builder.constant(ScalarClass::Int, 1);
         let advanced = builder.push(
             step,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![next, one],
         );
-        let stride = builder.constant(step, ScalarClass::Int, self.stride as i64);
+        let stride = builder.constant(ScalarClass::Int, self.stride as i64);
         let moved = builder.push(
             step,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
@@ -459,7 +459,7 @@ impl Fold {
         );
         let moved = match self.modulo {
             Some(modulo) => {
-                let modulo = builder.constant(step, ScalarClass::Int, modulo as i64);
+                let modulo = builder.constant(ScalarClass::Int, modulo as i64);
                 builder.push(
                     step,
                     KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
@@ -497,7 +497,8 @@ struct Builder {
     block: usize,
     /// The class a fold's operator is applied in.
     class: ScalarClass,
-    /// Every constant emitted so far, by class and bits, so a body states one per value.
+    /// Every constant this body states, by class and bits: the map is body-global, so its key states
+    /// what its entries are.
     constants: HashMap<(ScalarClass, i64), ValueId>,
     /// The slice reads this body emitted, in the order it emitted them.
     slice_reads: Vec<ValueId>,
@@ -543,11 +544,17 @@ impl Builder {
         self.body.add_op(block, op, args, classes)
     }
 
-    fn constant(&mut self, block: usize, class: ScalarClass, bits: i64) -> ValueId {
+    /// The constant `class` and `bits` name, stated once per body.
+    ///
+    /// # Invariant
+    /// It is defined in **`body.entry`**, which dominates every reachable block, because the map
+    /// below is keyed by value alone: a constant defined where it was first wanted is one a later
+    /// block reads outside its scope, which `KernelBody::validate` refuses.
+    fn constant(&mut self, class: ScalarClass, bits: i64) -> ValueId {
         if let Some(&value) = self.constants.get(&(class, bits)) {
             return value;
         }
-        let value = self.body.add_const(block, class, bits);
+        let value = self.body.add_const(self.body.entry, class, bits);
         self.constants.insert((class, bits), value);
         value
     }
@@ -561,7 +568,7 @@ impl Builder {
         let block = self.current();
         match element {
             Element::Buffer { position } => {
-                let position = self.constant(block, ScalarClass::Int, position as i64);
+                let position = self.constant(ScalarClass::Int, position as i64);
                 self.push(
                     block,
                     KernelInstr::BufferReadCall(self.class),
@@ -569,7 +576,7 @@ impl Builder {
                 )
             }
             Element::Slice { ordinal, observed } => {
-                let ordinal = self.constant(block, ScalarClass::Int, ordinal as i64);
+                let ordinal = self.constant(ScalarClass::Int, ordinal as i64);
                 let read = self.push(
                     block,
                     KernelInstr::SliceReadCall(self.class),
