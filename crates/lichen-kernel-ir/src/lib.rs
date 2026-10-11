@@ -14,7 +14,7 @@ mod body;
 mod marks;
 
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
-pub use marks::{KernelMark, MarkField};
+pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 
 /// What a value is: an `Int`, a `Float`, or the zero-width [`Self::State`] a write leaves.
 ///
@@ -719,8 +719,8 @@ impl KernelFragment {
 /// # Invariant
 /// Every field is hashed, and a field left out is a way for two fragments that differ in it
 /// to share one identity — a cache then serves one kernel's compiled form for another's,
-/// silently. `marks` is hashed for the same reason: two fragments differing only in what
-/// their values mean are two artifacts.
+/// silently. `marks` is hashed for the same reason: what a value means is part of the
+/// artifact. The **claim** is not a fragment field: the registry interns the two together.
 pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

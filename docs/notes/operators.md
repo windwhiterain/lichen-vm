@@ -287,9 +287,11 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   the frontend's token model rather than one more operator. Named rather than
   half-done.
 - **Unary minus and unary bitwise-not.** `-x` would collide with the existing
-  `-` (binary only) and `~x` with the array literal's shallow marker `~e`/`~2 e`.
-  Both are spellable (`0 - x`, `x ^ (0 - 1)`) and neither is worth a grammar
-  ambiguity.
+  `-` (binary only), and `~x` with the array literal's shallow marker.  Both are
+  spellable (`0 - x`, `x ^ (0 - 1)`) and neither is worth a grammar ambiguity.
+  The shallow marker took `@shallow` when `~` became the mark sigil
+  (`e ~ "payload"`, [graph-fusion](graph-fusion.md) §3), so `~` is free for a
+  unary spelling and is not used by one.
 - **`and` / `or` / `not` keywords.** `&`/`|` over `0`/`1` results *are* them; a
   second spelling of one operation would need its own precedence and its own
   short-circuit rule, and there is no `Bool` type for it to be a rule about.

@@ -2094,7 +2094,7 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 
 #[test]
 fn shallow_array_is_masked_and_typed_like_a_tuple() {
-    // [1, ~2] — the bare `~` marks position 1; the type is a tuple, not an
+    // [1, @shallow(2)] — the marker marks position 1; the type is a tuple, not an
     // array type.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
@@ -2143,7 +2143,7 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
 
 #[test]
 fn shallow_marked_position_stays_lazy_until_a_read() {
-    // [1, ~(x => x + 1) 5] — the apply sits at the bare-`~` position, so the
+    // [1, @shallow(x => x + 1) 5] — the apply sits at the bare-`@shallow` position, so the
     // deep pass skips it.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
@@ -2170,7 +2170,7 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
 
 #[test]
 fn a_read_of_a_shallow_position_forces_the_element() {
-    // [1, ~(x => x + 1) 5][1] — the read runs the apply that the deep pass
+    // [1, @shallow(x => x + 1) 5][1] — the read runs the apply that the deep pass
     // deliberately skipped.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);

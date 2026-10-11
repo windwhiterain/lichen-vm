@@ -61,6 +61,9 @@ pub enum TokenKind {
     /// `@in` — set membership, `value @in set`; the one keyword that is an infix
     /// operator.
     KwIn,
+    /// `@shallow` — the shallow marker of an array-literal position,
+    /// `@shallow e` or `@shallow(n) e`.
+    KwShallow,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The `cache` keyword — a binding whose value is a retained cell
@@ -138,8 +141,8 @@ pub enum TokenKind {
     LAngle,
     /// '>' — closes an angle bracket, or is the greater-than comparison.
     RAngle,
-    /// A '~' shallow marker.
-    Tilde(usize),
+    /// '~' — the mark sigil: `e ~ "payload"`.
+    Tilde,
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
     /// A zero-width marker: the next '(' '{' '<' '[' or '::' is glued to the
@@ -172,6 +175,7 @@ impl TokenKind {
             TokenKind::KwLoop => "'@loop'".to_string(),
             TokenKind::KwAssert => "'@assert'".to_string(),
             TokenKind::KwIn => "'@in'".to_string(),
+            TokenKind::KwShallow => "'@shallow'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
@@ -208,7 +212,7 @@ impl TokenKind {
             TokenKind::RBrace => "'}'".to_string(),
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
-            TokenKind::Tilde(_) => "'~'".to_string(),
+            TokenKind::Tilde => "'~'".to_string(),
             TokenKind::Separator => "a separator".to_string(),
             TokenKind::Glue => "a glued delimiter".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
@@ -356,8 +360,8 @@ enum RawToken {
     LAngle,
     #[token(">")]
     RAngle,
-    #[regex(r"~[0-9]*")]
-    TildeLit,
+    #[token("~")]
+    Tilde,
 }
 
 impl RawToken {
@@ -676,12 +680,13 @@ fn raw_to_kind(
             "loop" => Some(TokenKind::KwLoop),
             "assert" => Some(TokenKind::KwAssert),
             "in" => Some(TokenKind::KwIn),
+            "shallow" => Some(TokenKind::KwShallow),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert` and `@in` are the ones that exist"
+                         `@assert`, `@in` and `@shallow` are the ones that exist"
                     ),
                 });
                 None
@@ -708,31 +713,6 @@ fn raw_to_kind(
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
-        RawToken::TildeLit => {
-            let digits = &slice[1..];
-            // A bare `~` is the unbounded depth, encoded as `usize::MAX` in
-            // the token's payload (`TokenKind::Tilde`).
-            if digits.is_empty() {
-                return Some(TokenKind::Tilde(usize::MAX));
-            }
-            let mut n: usize = 0;
-            for byte in digits.bytes() {
-                let digit = (byte - b'0') as usize;
-                // Saturating would make an out-of-range depth the bare `~`, a
-                // different marker.
-                match n.checked_mul(10).and_then(|v| v.checked_add(digit)) {
-                    Some(v) => n = v,
-                    None => {
-                        errors.push(LexDiag {
-                            span: Some(lc),
-                            message: "shallow marker depth out of range".to_string(),
-                        });
-                        return None;
-                    }
-                }
-            }
-            Some(TokenKind::Tilde(n))
-        }
         RawToken::KwInt => Some(TokenKind::KwInt),
         RawToken::KwFloat => Some(TokenKind::KwFloat),
         RawToken::KwString => Some(TokenKind::KwString),
@@ -781,6 +761,7 @@ fn raw_to_kind(
         RawToken::RBrace => Some(TokenKind::RBrace),
         RawToken::LAngle => Some(TokenKind::LAngle),
         RawToken::RAngle => Some(TokenKind::RAngle),
+        RawToken::Tilde => Some(TokenKind::Tilde),
         RawToken::Separator => Some(TokenKind::Separator),
     }
 }

@@ -37,7 +37,7 @@ impl<P: Program> Module<P> {
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
             global_ext: P::GlobalExt::default(),
-            labels: HashMap::new(),
+            marks: HashMap::new(),
             apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,
@@ -128,36 +128,48 @@ impl<P: Program> Module<P> {
         self.nodes[node].depth
     }
 
-    /// Record that the value `value` carries the label whose slot pair is `slot`.
+    /// Record that the value `value` carries the marks `payloads`.
     ///
     /// # Invariant
-    /// One slot per value: a later label over the same value **replaces** the earlier one,
-    /// which is what the attribute layer does to a label (`? b` over `? a` keeps `b`), and
-    /// a checker compiles an annotation's value before the annotation wrapping it.
-    pub fn stamp_label(&mut self, value: NodeId, slot: NodeId) {
-        self.labels.insert(value, slot);
+    /// Several marks may pin one expression (`e ~ "a" ~ "b"`), and they accumulate in the
+    /// order the checker stamped them. The stamp happens **once**, where the marked expression
+    /// lowered, and no clone walk carries it: a clone reaches its template's marks through
+    /// [`Self::marks_of`], which is what makes the anchor survive a per-call clone.
+    pub fn stamp_marks(&mut self, value: NodeId, payloads: Vec<String>) {
+        self.marks.entry(value).or_default().extend(payloads);
     }
 
-    /// The label slot the value `value` carries, or `None` when it carries none.
+    /// The marks the value `node` carries, resolved through the apply clone walk's origins.
     ///
     /// # Invariant
-    /// The value's **class** is asked as well as the node: a value is committed to its
-    /// class's representative, and a reader holding one member of a class must see the
-    /// label another member was stamped with — a per-call clone carries its template's.
-    pub fn label_of(&self, value: NodeId) -> Option<NodeId> {
-        self.labels
-            .get(&value)
-            .or_else(|| self.labels.get(&self.class_root(value)))
-            .copied()
+    /// The walk is the **anchor handoff**: a body the dispatcher compiles is a clone, so the
+    /// clone itself carries nothing and its origin — the template node the checker stamped —
+    /// carries the mark. An origin always names an older node, so the walk terminates, and a
+    /// node released by [`Self::garbage_collect`] reads as no mark rather than panicking.
+    pub fn marks_of(&self, node: NodeId) -> &[String] {
+        self.marks_at(node)
+            .map(|(_, payloads)| payloads)
+            .unwrap_or_default()
     }
 
-    /// Every published label slot.
+    /// The marks `node` carries, and the node they were stamped on.
     ///
     /// # Invariant
-    /// A list rather than an iterator, because the caller that wants them computed needs
-    /// `&mut self` for each: it takes the list, then deep-evaluates each slot.
-    pub fn label_slots(&self) -> Vec<NodeId> {
-        self.labels.values().copied().collect()
+    /// The stamped node is **not** `node` when the walk crossed an origin, and it is what a
+    /// reader de-duplicates on: an expanded recurrence lowers the same anchor once per copy,
+    /// and those are one mark on one expression rather than one mark per copy.
+    pub fn marks_at(&self, node: NodeId) -> Option<(NodeId, &[String])> {
+        let mut current = node;
+        while self.nodes.contains_key(current) {
+            if let Some(payloads) = self.marks.get(&current) {
+                return Some((current, payloads));
+            }
+            match self.nodes[current].origin {
+                Some(origin) => current = origin,
+                None => return None,
+            }
+        }
+        None
     }
 
     /// The block `node` is homed in, and the arena its payloads live in.

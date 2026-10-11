@@ -152,14 +152,19 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `e : T`, `e # p`, `e ! r`, and/or `e ? d` — a type, perspective,
-    /// refinement, and/or doc annotation.
+    /// `e : T`, `e # p`, `e ! r`, `e ? d`, `e ~ "m"` — an annotation, and the
+    /// marks `e` carries.
+    ///
+    /// # Invariant
+    /// A **mark** is the one annotation that is not an attribute: its payloads are text,
+    /// never expressions, so no reader evaluates one and none reaches the pair layout.
     Annotation {
         value: Box<Expr>,
         r#type: Option<Box<Expr>>,
         perspective: Option<Box<Expr>>,
         refinement: Option<Box<Expr>>,
         doc: Option<Box<Expr>>,
+        marks: Vec<String>,
         span: Span,
     },
     /// `T1 -> T2` — a function type.
@@ -190,7 +195,7 @@ pub enum Expr {
     /// `set{a, b}` — a set of ordinary values
     /// (`docs/notes/operator-polymorphism.md` §3).
     Set(Vec<Expr>, Span),
-    /// `~n e` — a shallow-marked array position; `usize::MAX` is the bare `~`.
+    /// `@shallow e` — a shallow-marked position; `usize::MAX` is the bare form.
     Shallow(Box<Expr>, usize, Span),
     /// `array<T, n>` — an array type: the element type `T` and the length `n`.
     TypeArray {

@@ -537,11 +537,6 @@ where
                     checker.module.evaluate_node_deep(condition, None);
                 }
             }
-            // A label's payload is read by its readers, so it is computed before the
-            // statements that compile kernels run.
-            for slot in checker.module.label_slots() {
-                checker.module.evaluate_node_deep(slot, None);
-            }
         }
         // A marked site's "not emitted" verdict is the reader's to report.
         // See docs/notes/loop-conversion.md.
@@ -1187,6 +1182,9 @@ where
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
         };
+        // **The anchor handoff**: the one place a mark's position crosses
+        // into the lowlevel as data.
+        self.anchor_marks(e);
         // Bind the skeleton's cells to the real value and type, so a
         // reference resolved to it equals the finished expression.
         if let Some((vc, tc)) = skeleton {
@@ -1196,6 +1194,41 @@ where
             self.module.unify(tc, ty);
         }
         pair
+    }
+
+    /// Pin the marks `e` carries to the node its reader reaches them by.
+    ///
+    /// # Invariant
+    /// The one place a mark's *position* crosses into the lowlevel: the stored fact is text
+    /// and nothing else — no slot, no tail, no value. Every mark the frontend recorded is
+    /// pinned, because a mark is a primitive and not a claim's property: the claim decides
+    /// which marks are *projections*, not which are marks.
+    fn anchor_marks(&mut self, e: ExprId) {
+        // Copied out: the table read and the anchor node are two borrows.
+        let Some(payloads) = self.ir.marks.get(&e).cloned() else {
+            return;
+        };
+        let Some(anchor) = self.anchor_node(e) else {
+            return;
+        };
+        self.module.stamp_marks(anchor, payloads);
+    }
+
+    /// The node a reader reaches `e`'s marks by.
+    ///
+    /// # Invariant
+    /// **The node the reader walks, never a synthesized one.** A value expression anchors to
+    /// its own value node, or — for the kinds decided only at the apply — to the node that
+    /// computes it. A **function** is the one other shape: its value node is re-minted per
+    /// closure, so a claim on it anchors to the template's parameter, which every clone's
+    /// origin chain reaches.
+    fn anchor_node(&mut self, e: ExprId) -> Option<NodeId> {
+        if let ExprKind::Function { .. } = self.ir[e].kind
+            && let Some(function) = self.function_of.get(&e).copied()
+        {
+            return Some(self.module.functions[function].parameter);
+        }
+        self.state[e].val.or(self.state[e].term)
     }
 
     fn lookup(&self, target: ExprId) -> Binding {

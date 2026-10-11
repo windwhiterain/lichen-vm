@@ -322,9 +322,8 @@ where
                     .term
                     .expect("an annotation value expr is compiled");
                 if ext.is_label() {
-                    // A label is stamped here: its pair is reached from nothing else,
-                    // and it carries no apply-time slot.
-                    self.module.stamp_label(value_node, slot);
+                    // A label is metadata: it carries no apply-time slot, and its
+                    // slot is the annotation value's pair like any other's.
                     slots.push(slot);
                 } else {
                     // A *constraint* replaces the slot and validates it against the
@@ -384,11 +383,6 @@ where
         pair.push(type_pair);
         pair.extend(slots);
         let pair = self.array_node(self.current_block, &pair);
-        // A label is published against the pair and the value: a reader holds either,
-        // and they do not reach each other.
-        if let Some(slot) = self.module.label_of(value_node) {
-            self.module.stamp_label(pair, slot);
-        }
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(type_pair);

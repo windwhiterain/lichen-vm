@@ -126,6 +126,7 @@ pub(crate) fn shift_expr(
             doc,
             refinement,
             span,
+            ..
         } => {
             shift(span, old_starts, new_starts, delta);
             shift_expr(value, old_starts, new_starts, delta);

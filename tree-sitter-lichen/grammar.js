@@ -109,6 +109,7 @@ module.exports = grammar({
     expression: $ => choice(
       $.lambda,
       $.annotation,
+      $.mark,
       $.arrow,
       $.binary_comparison,
       $.binary_or,
@@ -135,6 +136,7 @@ module.exports = grammar({
     _angle_element: $ => prec(1, choice(
       $.lambda,
       $.annotation,
+      $.mark,
       $.arrow,
       $.binary_or,
       $.binary_xor,
@@ -157,6 +159,17 @@ module.exports = grammar({
       field('value', $.expression),
       field('operator', choice(':', '#', '?')),
       field('annotation', $.expression),
+    )),
+
+    // `e ~ "payload"` — the mark sigil, at the annotation level and like `#`
+    // over the whole expression to its left.  It introduces no closing token,
+    // so it is safe in an angle form for the reason `annotation` is (that rule
+    // is in `_angle_element` to keep a comparison's `>` out of a type's
+    // brackets, and a mark has no `>` to confuse).
+    mark: $ => prec.right(PREC.annotation, seq(
+      field('value', $.expression),
+      field('operator', '~'),
+      field('payload', $.string_literal),
     )),
 
     arrow: $ => prec.right(PREC.arrow, seq(
@@ -248,19 +261,27 @@ module.exports = grammar({
       field('value', $.expression),
     ),
 
-    // `[e1, e2, ...]` array literal.  Elements may be `~`-marked; a bare
-    // `expression` is the no-`~` case of `tilde_element`.
+    // `[e1, e2, ...]` array literal.  Elements may be `@shallow`-marked; a bare
+    // `expression` is the unmarked case of `shallow_element`.
     array: $ => seq(
       '[',
       optional(seq(
-        $.tilde_element,
-        repeat(seq($.separator, $.tilde_element)),
+        $.shallow_element,
+        repeat(seq($.separator, $.shallow_element)),
         optional($.separator),
       )),
       ']'
     ),
 
-    tilde_element: $ => seq(optional(/\~[0-9]*/), field('element', $.expression)),
+    // `@shallow e` marks the whole element shallow, `@shallow(2) e` the first
+    // two levels.  The depth's parens are a **glued** postfix, like every other
+    // postfix form in the language (`f(x)` against `f (x)`), so a spaced `(` is
+    // the element itself and never a depth — the one distinction the two
+    // spellings differ by.
+    shallow_element: $ => seq(
+      optional(seq('@shallow', optional(seq(token.immediate('('), $.integer, ')')))),
+      field('element', $.expression),
+    ),
 
     // `<e1, e2, ...>` — the tuple type, the same lenient one-or-more shape the
     // grammar has always had, so `X<e>`, `array<Int, 3>` and `x : <Int, Int>`

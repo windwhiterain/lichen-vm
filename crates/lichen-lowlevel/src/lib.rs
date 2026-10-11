@@ -889,14 +889,15 @@ pub struct Module<P: Program> {
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
-    /// The **label slot** each labelled value carries, keyed by the value node.
+    /// The **mark anchors** each lowered marked expression reached, keyed by the
+    /// node its value became.
     ///
     /// # Invariant
-    /// A value's `[value, type, attrs…]` pair is not reachable from the value: the checker
-    /// stores the pair's element 0 as the value's node, so no graph edge points at the pair.
-    /// The attribute a value carries is published here instead, where the checker resolved
-    /// it, and a reader asks through [`Self::label_of`].
-    labels: HashMap<NodeId, NodeId>,
+    /// A mark is **text and nothing else**: no slot node rides along, so there is no node here
+    /// for a reader to reach a value through, and nothing to unify, propagate or evaluate.
+    /// The key is the one place a mark's *position* crosses into this layer as data
+    /// (graph-fusion.md §3); a reader asks through [`Module::marks_of`].
+    marks: HashMap<NodeId, Vec<String>>,
     apply_total: usize,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,

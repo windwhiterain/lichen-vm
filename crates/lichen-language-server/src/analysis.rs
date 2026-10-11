@@ -1474,6 +1474,8 @@ fn classify_token_kind(
         | TokenKind::KwAssert
         // `@in` is the one keyword that is an *infix* operator.
         | TokenKind::KwIn
+        // `@shallow` is a prefix marker over one array position.
+        | TokenKind::KwShallow
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
@@ -1502,7 +1504,7 @@ fn classify_token_kind(
         | TokenKind::Pipe
         | TokenKind::Caret
         | TokenKind::Dot
-        | TokenKind::Tilde(_) => Some((SemanticTokenType::OPERATOR, Vec::new())),
+        | TokenKind::Tilde => Some((SemanticTokenType::OPERATOR, Vec::new())),
         // Delimiters, separators, Glue and Eof carry no semantic color.
         TokenKind::LParen
         | TokenKind::RParen

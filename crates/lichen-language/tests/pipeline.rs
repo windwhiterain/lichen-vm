@@ -2395,13 +2395,13 @@ fn an_underscore_cannot_be_a_lambda_parameter() {
 
 #[test]
 fn a_shallow_marked_recursive_tail_stays_lazy() {
-    // `f = x => [x, ~ f (x + 1)]` — the bare `~` cuts the deep pass at the tail,
-    // so the definition pass terminates.
+    // `f = x => [x, @shallow f (x + 1)]` — the bare marker cuts the
+    // deep pass, so the definition pass terminates.
 
     // Each index read forces the next apply, so the *values* resolve
     // level by level; the *types* stay underdetermined.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
+        "f = x => [x, @shallow f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     );
     let elements = common::array_values(&module, &value);
     assert_eq!(common::usize_of(&elements[0]), 1);
@@ -2410,13 +2410,13 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
 }
 
 #[test]
-fn a_tilde_n_wrap_marks_value_slots_shallow() {
-    // `~2` on a plain array: the deep pass terminates, and the read gives the
-    // element's value with an underdetermined type.
+fn an_at_shallow_depth_marks_value_slots_shallow() {
+    // `@shallow(2)` on a plain array: the deep pass terminates, and the
+    // read gives the value with an underdetermined type.
 
     // The wrapped term is a lazy region, so its reads never claim a concrete
     // type that would silently mismatch it.
-    let (module, value, root_ty) = common::evaluate("([1, ~2 [2, 3]])(1)(0)");
+    let (module, value, root_ty) = common::evaluate("([1, @shallow(2) [2, 3]])(1)(0)");
     assert_eq!(
         common::usize_array(&module, &value),
         vec![2, 3],
@@ -2429,16 +2429,16 @@ fn a_tilde_n_wrap_marks_value_slots_shallow() {
 }
 
 #[test]
-fn a_tilde_one_on_a_recursive_tail_terminates() {
-    // `~1` on the recursive tail: the old depth-budget descent used to loop on
-    // this.
+fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
+    // `@shallow(1)` on the recursive tail: the old depth-budget descent
+    // used to loop on this.
 
     // The compile-time wrap cannot descend the undecided spine, so the
     // definition pass terminates.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, ~1 f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
+        "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     );
-    // The reads stay lazy under the `~1` mark, so the tuple's elements are
+    // The reads stay lazy under the mark, so the tuple's elements are
     // underdetermined cells rather than pinned scalars.
     assert_eq!(
         common::array_values(&module, &value).len(),
