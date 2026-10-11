@@ -282,6 +282,28 @@ a real nest. The benefit is narrow too: a literal count is where tiling has leas
 because the whole fold already fits one lane. That is why the reorder above is preferred to the
 predicate, and why the practical road to a declared algebra is a **runtime** extent.
 
+**And the wall an integer reduction meets is the class, not an operator.** The bridge refuses a
+projection that computes in the machine-integer class at all — `Const(Int, _)`, `Bin(Int, _)` and
+`BufferReadCall(Int)` each earn `MachineInteger`
+(`crates/lichen-fusion-bridge/src/lower.rs`) — on the reason that "`Int` wraps and `f64` does not
+hold every value" (`crates/lichen-fusion-bridge/src/refusal.rs`). Measured, that wall is the
+**only** thing between an integer reduction and a readable algebra when its count is a runtime
+value: both marks publish there, and the class refuses both halves. Neither repair is cheap:
+
+- **Narrowing the refusal by operator** is sound only where the class's arithmetic agrees with the
+  reals: `Max`/`Min` bridge cleanly, because the `f64` conversion is monotone and
+  `max(f64 a, f64 b)` is `f64(max a b)`, and an exactly-representable `Const` does too. It buys
+  almost nothing, though: the integer operation worth reading is a **sum**, and a sum is precisely
+  the wrapping case, so `Add`/`Sub`/`Mul` stay unreadable and the refusal stands where it matters.
+- **Giving the symbolic language an integer class** is the honest repair: wrapping `i64` addition
+  is associative with identity `0` — it is Z/2⁶⁴ — so an integer sum's algebra is real, and
+  `BinaryOp::associative` would be a truthful licence rather than one borrowed from the reals. Its
+  price is the whole symbolic path, because `Expr`, `normalize` and the repair-function derivation
+  would each have to say which class they are in.
+
+So an integer reduction does not fuse today, and that is a limit of the symbolic language rather
+than a hole in the mark channel.
+
 **And the discriminator is enough to get out of it from the program side, which is what
 `reduction_interface` now does.** A fold whose count is a **runtime** value — the buffer's
 own length, `fold (k.n, 0.0 ~ "identity")` — is exactly the "the definition pass leaves
@@ -925,6 +947,7 @@ about shrinks exactly where fusion fires.
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | the **memory plan** interface | **the carrier, the check and the landing landed; matching and the fact checks remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed on this branch: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. What remains: the plan **matched by schema**, checked against the three facts (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), and its `sync`. The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
+| **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
 | the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
