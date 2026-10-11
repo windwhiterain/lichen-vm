@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
-    Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
+    Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator, ValueDef, ValueId,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -1206,5 +1206,108 @@ fn a_loop_header_leaves_on_its_own_exit_arm() {
             on_true, leaves,
             "{what}: the condition's true arm is where the loop leaves"
         );
+    }
+}
+
+/// `slot[index] = 7`; barrier; `out = slot[index]` — one slot staged between lanes.
+///
+/// # Invariant
+/// The read's slot and index are pushed **before** the write's three operands: a step takes its
+/// operands in push order and the write's version is appended, so the read pops
+/// `[slot, index, version]` only when its own two sit below them
+/// (`docs/notes/shared-memory-and-barriers.md` §4).
+fn stages_a_shared_slot() -> KernelFragment {
+    let mut body = KernelBody::from_flat(
+        2,
+        &[
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the read's slot
+            FlatOp::Read(1),                                        // the read's index
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the write's slot
+            FlatOp::Read(1),                                        // the write's index
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
+            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+        ],
+    );
+    body.barriers.push(Barrier {
+        write: shared_value(&body, true),
+        read: shared_value(&body, false),
+    });
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        shared_slots: vec![ScalarClass::Int],
+        marks: Vec::new(),
+    }
+}
+
+/// The value `body` defines with a shared write, or with the read that observes it.
+///
+/// # Invariant
+/// `from_flat` numbers one value per step, and a barrier's pair must be the body's own values:
+/// this reads them back rather than counting the steps that produced them.
+fn shared_value(body: &KernelBody, write: bool) -> ValueId {
+    let at = body
+        .values
+        .iter()
+        .position(|value| match value {
+            ValueDef::Instr {
+                op: KernelInstr::SharedWriteCall(_),
+                ..
+            } => write,
+            ValueDef::Instr {
+                op: KernelInstr::SharedReadCall(_),
+                ..
+            } => !write,
+            _ => false,
+        })
+        .expect("the body holds the shared access it is asked for");
+    ValueId(at as u32)
+}
+
+/// `OpControlBarrier` (224), the specification's own number.
+const CONTROL_BARRIER: u16 = 224;
+
+/// A module for a body that stages validates: `Workgroup` storage, a barrier and an access chain.
+///
+/// # Invariant
+/// `spirv-val` reads the module's shape and cannot see a **missing** barrier, so the opcode is
+/// asserted here: a module that staged without synchronising would otherwise validate and race.
+#[test]
+fn a_body_that_stages_validates() {
+    let fragment = stages_a_shared_slot();
+    fragment
+        .body
+        .validate()
+        .unwrap_or_else(|broken| panic!("the staged body is well formed: {broken}"));
+    let words = spirv::compile(
+        &LaunchSet::single(&fragment),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .unwrap_or_else(|refusal| panic!("a shared access is emitted: {refusal}"));
+
+    let seen = opcodes(&words);
+    assert!(
+        seen.contains(&CONTROL_BARRIER),
+        "the recorded pair emits a barrier: {seen:?}"
+    );
+    if !validate("the staged module", &words) {
+        eprintln!("the staged module was not validated");
     }
 }

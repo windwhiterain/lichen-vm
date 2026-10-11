@@ -7,7 +7,7 @@
 //! disagrees with the wasm backend, and the per-buffer element class:
 //! `docs/notes/lichen-compute-gpu.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use lichen_kernel_ir::{
@@ -29,6 +29,7 @@ mod op {
     pub const TYPE_INT: u16 = 21;
     pub const TYPE_FLOAT: u16 = 22;
     pub const TYPE_VECTOR: u16 = 23;
+    pub const TYPE_ARRAY: u16 = 28;
     pub const TYPE_RUNTIME_ARRAY: u16 = 29;
     pub const TYPE_POINTER: u16 = 32;
     pub const TYPE_STRUCT: u16 = 30;
@@ -89,6 +90,8 @@ mod op {
     pub const BITWISE_OR: u16 = 197;
     pub const BITWISE_XOR: u16 = 198;
     pub const BITWISE_AND: u16 = 199;
+    /// The workgroup barrier: no invocation of the workgroup passes before every one arrives.
+    pub const CONTROL_BARRIER: u16 = 224;
 }
 
 /// `SpvCapabilityShader`, `SpvCapabilityInt64`.
@@ -100,6 +103,8 @@ mod capability {
 /// `SpvStorageClass` values used below.
 mod storage_class {
     pub const INPUT: u32 = 1;
+    /// The workgroup's own memory: what one lane writes, its siblings read.
+    pub const WORKGROUP: u32 = 4;
     pub const PUSH_CONSTANT: u32 = 9;
     pub const STORAGE_BUFFER: u32 = 12;
 }
@@ -116,6 +121,15 @@ mod decoration {
 
 /// `SpvBuiltInGlobalInvocationId`.
 const BUILT_IN_GLOBAL_INVOCATION_ID: u32 = 28;
+/// `SpvScopeWorkgroup` and `SpvMemorySemanticsWorkgroupMemory`.
+///
+/// # Invariant
+/// Both are **values the barrier's operands name as ids**, not literals: at SPIR-V 1.3 the scope and
+/// semantics operands are `OpConstant` ids, so each needs its own instruction. Workgroup scope and
+/// workgroup-memory semantics are one fact about shared memory — the lanes of a workgroup, and the
+/// storage they exchange through (`docs/notes/shared-memory-and-barriers.md` §4).
+const SCOPE_WORKGROUP: u32 = 2;
+const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
 /// The `None` a merge instruction's optional control mask carries.
 const CONTROL_NONE: u32 = 0;
 /// `SpvExecutionModelGLCompute`, `SpvExecutionModeLocalSize`.
@@ -171,9 +185,10 @@ pub enum SpirvRefusal {
         results: usize,
         at: usize,
     },
-    /// A buffer position that is not a compile-time constant.
+    /// A buffer position that is not a compile-time constant, or a shared slot that is not
+    /// one.
     NonConstantBufferPosition { at: usize },
-    /// A buffer position outside the space it addresses.
+    /// A position outside the space it addresses, whether a buffer's or a shared slot's.
     BufferPositionOutOfRange {
         position: i64,
         space: &'static str,
@@ -212,13 +227,6 @@ pub enum SpirvRefusal {
     /// different program than it was lowered from, and the transfer is already in the
     /// IR, so this is about the emitter rather than about what the language can say.
     ControlFlow { detail: String },
-    /// The body accesses a shared slot, and this emitter does not stage yet.
-    ///
-    /// # Invariant
-    /// Emitting the access without the synchronisation would be a race rather than a
-    /// wrong number, so it is refused by name until the target emits a `Workgroup`
-    /// variable and its barrier (`docs/notes/shared-memory-and-barriers.md` §9).
-    StagingNotEmitted { at: usize },
 }
 
 impl fmt::Display for SpirvRefusal {
@@ -254,8 +262,9 @@ impl fmt::Display for SpirvRefusal {
             ),
             SpirvRefusal::NonConstantBufferPosition { at } => write!(
                 f,
-                "instruction {at} uses a buffer position that is not a compile-time constant. A \
-                 position is an emission ordinal by construction, so this fragment is malformed."
+                "instruction {at} uses a position that is not a compile-time constant. A buffer \
+                 position and a shared slot are both emission ordinals by construction, so this \
+                 fragment is malformed."
             ),
             SpirvRefusal::BufferPositionOutOfRange {
                 position,
@@ -264,7 +273,7 @@ impl fmt::Display for SpirvRefusal {
                 at,
             } => write!(
                 f,
-                "instruction {at} names {space} buffer {position}, but this module binds \
+                "instruction {at} names {space} position {position}, but this module has \
                  {bound} of them."
             ),
             SpirvRefusal::UnsupportedIntWidth { bits } => write!(
@@ -315,13 +324,6 @@ impl fmt::Display for SpirvRefusal {
                 "this emitter cannot structure this body: {detail}. The transfer is in the kernel \
                  IR, so this is the emitter's limit rather than something the program could not say \
                  — see `docs/notes/loop-conversion.md` §8."
-            ),
-            SpirvRefusal::StagingNotEmitted { at } => write!(
-                f,
-                "instruction {at} accesses a shared slot, and this target emits no staging yet: a \
-                 module from it declares no `Workgroup` variable and no `OpControlBarrier`, so the \
-                 access would be a race between lanes rather than a staged value \
-                 (`docs/notes/shared-memory-and-barriers.md` §9)."
             ),
         }
     }
@@ -493,6 +495,20 @@ struct BufferTypes {
     ptr_elem: u32,
 }
 
+/// The shared-memory type chain for one class: the slot's `Workgroup` array and its two pointers.
+///
+/// # Invariant
+/// A slot is a **fixed-size array**, not a scalar: a shared access names an element of it, and the
+/// length is the fragment's declared lane width, the same fact `OpExecutionMode LocalSize`
+/// states — a slot has room for exactly one element per lane. One chain per element class serves
+/// every slot of that class (`docs/notes/shared-memory-and-barriers.md` §4).
+#[derive(Clone, Copy)]
+struct SharedTypes {
+    array: u32,
+    ptr_array: u32,
+    ptr_elem: u32,
+}
+
 /// Every module-scope id, allocated before anything is emitted.
 ///
 /// # Invariant
@@ -549,6 +565,24 @@ struct Ids {
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
+    /// The per-class shared-memory type chain, keyed by [`ScalarClass::index`].
+    ///
+    /// # Invariant
+    /// One chain per class a shared slot holds, and an id nothing defines is legal: a class no slot
+    /// holds leaves its chain undefined and no `OpTypeArray` is emitted for it.
+    shared_types: [SharedTypes; ScalarClass::ALL.len()],
+    /// The first of each function's own consecutive `Workgroup` variables, in the order the launch
+    /// set is emitted.
+    ///
+    /// # Invariant
+    /// **The slot space is the fragment's**: a shared access's ordinal indexes the variables of the
+    /// function that reads it, so a callee's staging is not its caller's.
+    shared: Vec<u32>,
+    /// The id of the `OpConstant` a slot's `OpTypeArray` takes its length from.
+    shared_len: u32,
+    /// The barrier's three operands name these two ids: the scope constant, and the semantics.
+    barrier_scope: u32,
+    barrier_semantics: u32,
     /// The push-constant block's struct, its variable, and a pointer to each class's
     /// member within it.
     ///
@@ -619,6 +653,11 @@ impl Ids {
     /// The storage-buffer type chain for `class`.
     fn chain_of(&self, class: ScalarClass) -> BufferTypes {
         self.buffer_types[class.index()]
+    }
+
+    /// The shared-memory type chain for `class`.
+    fn shared_of(&self, class: ScalarClass) -> SharedTypes {
+        self.shared_types[class.index()]
     }
 }
 
@@ -714,6 +753,24 @@ fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<Scala
         .into_iter()
         .filter(|class| {
             used(class) || (*class == fallback && fragment.inputs + fragment.outputs == 0)
+        })
+        .collect()
+}
+
+/// Every class a launch set's shared slots hold, in [`ScalarClass::ALL`] order.
+///
+/// # Invariant
+/// The set the module declares a shared type chain for, and the condition a barrier belongs to: a
+/// launch set with no shared slot declares no `Workgroup` storage, no barrier and no shared
+/// constant.
+fn shared_classes(launch: &LaunchSet<'_>) -> Vec<ScalarClass> {
+    ScalarClass::ALL
+        .into_iter()
+        .filter(|class| {
+            launch
+                .ordered()
+                .iter()
+                .any(|fragment| fragment.shared_slots.contains(class))
         })
         .collect()
 }
@@ -823,6 +880,28 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let function_types = take(ordered.len() as u32);
     let functions = take(ordered.len() as u32);
     let buffers = take(binding.total() as u32);
+    // Three ids per shared class, then each function's own `Workgroup` variables.
+    let shared = shared_classes(launch);
+    let mut shared_types = [SharedTypes {
+        array: 0,
+        ptr_array: 0,
+        ptr_elem: 0,
+    }; ScalarClass::ALL.len()];
+    for used in &shared {
+        let base = take(3);
+        shared_types[used.index()] = SharedTypes {
+            array: base,
+            ptr_array: base + 1,
+            ptr_elem: base + 2,
+        };
+    }
+    let shared_variables: Vec<u32> = ordered
+        .iter()
+        .map(|fragment| take(fragment.shared_slots.len() as u32))
+        .collect();
+    let shared_len = take(1);
+    let barrier_scope = take(1);
+    let barrier_semantics = take(1);
     // The push-constant block's ids: struct, pointer, variable, per-class
     // pointers, and one member index per leaf.
     let push_members = root.scalar_leaves();
@@ -854,6 +933,11 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         zero_float,
         gid,
         buffers,
+        shared_types,
+        shared: shared_variables,
+        shared_len,
+        barrier_scope,
+        barrier_semantics,
         push_block,
         push_block_ptr,
         push_var,
@@ -875,6 +959,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
                 entry: position == 0,
                 index,
                 binding,
+                shared: ids.shared[position],
             },
             &ids,
             launch,
@@ -888,6 +973,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         &ids,
         binding,
         &classes,
+        &shared,
         needs_int64(launch)?,
         &literals.declarations,
         &bodies,
@@ -905,6 +991,8 @@ struct Function<'a> {
     /// The root's index parameter, from `index_local`.
     index: u32,
     binding: Binding,
+    /// The first of this function's own consecutive `Workgroup` variables.
+    shared: u32,
 }
 
 /// One function's instructions: its parameters, then its blocks in an order
@@ -931,6 +1019,7 @@ fn emit_function(
         entry,
         index,
         binding,
+        shared,
     } = function;
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
@@ -945,6 +1034,13 @@ fn emit_function(
             lanes: fragment.target.lane_width.lanes(),
         });
     }
+    // The reads a barrier is owed for, one per recorded pair.
+    let barrier_reads: HashSet<ValueId> = fragment
+        .body
+        .barriers
+        .iter()
+        .map(|pair| pair.read)
+        .collect();
     // The entry block's label is the first id this function owns.
     let entry_label = next;
     next += 1;
@@ -1465,8 +1561,64 @@ fn emit_function(
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
                         }
-                        KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => {
-                            return Err(SpirvRefusal::StagingNotEmitted { at });
+                        KernelInstr::SharedWriteCall(_) => {
+                            let index = operand(1)?;
+                            let (pointer, element_class) = shared_pointer(
+                                fragment,
+                                shared,
+                                ids,
+                                operand(0)?,
+                                index,
+                                at,
+                                &mut code,
+                                &mut literals,
+                                &mut next,
+                            )?;
+                            // **The version this leaves is not materialised**: its only
+                            // consumer is a read's third operand, which emission ignores.
+                            let value = as_class(
+                                operand(2)?,
+                                element_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                        }
+                        KernelInstr::SharedReadCall(_) => {
+                            // Immediately before the read's definition
+                            // (`docs/notes/shared-memory-and-barriers.md` §9).
+                            if barrier_reads.contains(&definition) {
+                                code.push(Inst::new(
+                                    op::CONTROL_BARRIER,
+                                    vec![
+                                        ids.barrier_scope,
+                                        ids.barrier_scope,
+                                        ids.barrier_semantics,
+                                    ],
+                                ));
+                            }
+                            let index = operand(1)?;
+                            let (pointer, element_class) = shared_pointer(
+                                fragment,
+                                shared,
+                                ids,
+                                operand(0)?,
+                                index,
+                                at,
+                                &mut code,
+                                &mut literals,
+                                &mut next,
+                            )?;
+                            let loaded = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::LOAD,
+                                vec![ids.type_of(element_class), loaded, pointer],
+                            ));
+                            slots.insert(definition, scalar(loaded, element_class));
                         }
                         // **The callee's own facts**: the set carries its arity,
                         // which is its domain's flattening.
@@ -2391,6 +2543,7 @@ fn assemble(
     ids: &Ids,
     binding: Binding,
     classes: &[ScalarClass],
+    shared: &[ScalarClass],
     needs_int64: bool,
     literals: &[Inst],
     bodies: &[Vec<Inst>],
@@ -2537,6 +2690,28 @@ fn assemble(
         op::TYPE_POINTER,
         vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
     )]);
+    // A slot's `Workgroup` array: the lane width, defined before the type that names it.
+    if !shared.is_empty() {
+        types.push(Inst::new(
+            op::CONSTANT,
+            vec![ids.uint, ids.shared_len, lane_width],
+        ));
+    }
+    for used in shared {
+        let chain = ids.shared_of(*used);
+        let scalar = ids.type_of(*used);
+        types.extend([
+            Inst::new(op::TYPE_ARRAY, vec![chain.array, scalar, ids.shared_len]),
+            Inst::new(
+                op::TYPE_POINTER,
+                vec![chain.ptr_array, storage_class::WORKGROUP, chain.array],
+            ),
+            Inst::new(
+                op::TYPE_POINTER,
+                vec![chain.ptr_elem, storage_class::WORKGROUP, scalar],
+            ),
+        ]);
+    }
     // One block member per leaf, in the parameter's own order.
     if ids.push_members > 0 {
         let mut block = vec![ids.push_block];
@@ -2639,6 +2814,23 @@ fn assemble(
         opcode: literal.opcode,
         operands: literal.operands.clone(),
     }));
+    if !shared.is_empty() {
+        // The barrier's scope and semantics: two ids its operands name.
+        constants.extend([
+            Inst::new(
+                op::CONSTANT,
+                vec![ids.uint, ids.barrier_scope, SCOPE_WORKGROUP],
+            ),
+            Inst::new(
+                op::CONSTANT,
+                vec![
+                    ids.uint,
+                    ids.barrier_semantics,
+                    MEMORY_SEMANTICS_WORKGROUP_MEMORY,
+                ],
+            ),
+        ]);
+    }
     emit_all(&mut out, &constants);
 
     let mut globals = vec![Inst::new(
@@ -2667,6 +2859,19 @@ fn assemble(
                 storage_class::PUSH_CONSTANT,
             ],
         ));
+    }
+    // **Shared memory is not bound**: a `Workgroup` variable gets no descriptor set or binding.
+    for (position, fragment) in launch.ordered().iter().copied().enumerate() {
+        for (slot, class) in fragment.shared_slots.iter().enumerate() {
+            globals.push(Inst::new(
+                op::VARIABLE,
+                vec![
+                    ids.shared_of(*class).ptr_array,
+                    ids.shared[position] + slot as u32,
+                    storage_class::WORKGROUP,
+                ],
+            ));
+        }
     }
     emit_all(&mut out, &globals);
 
@@ -2829,4 +3034,42 @@ fn buffer_slot(
         });
     }
     Ok(base + value as usize)
+}
+
+/// The pointer a shared access names, and the class of the element it holds, with the access chain
+/// emitted.
+///
+/// # Invariant
+/// The slot is a compile-time ordinal into `fragment`'s **own** `shared_slots` — the rule a buffer
+/// position follows — and the index operand indexes the slot's `Workgroup` array, whose length is
+/// the fragment's declared lane width. A slot that is not a constant, or is past the fragment's
+/// own count, is refused by name rather than addressing another function's variable.
+fn shared_pointer(
+    fragment: &KernelFragment,
+    base: u32,
+    ids: &Ids,
+    slot: Slot,
+    index: Slot,
+    at: usize,
+    code: &mut Vec<Inst>,
+    literals: &mut Literals,
+    next: &mut u32,
+) -> Result<(u32, ScalarClass), SpirvRefusal> {
+    let variable = buffer_slot(
+        slot,
+        at,
+        base as usize,
+        fragment.shared_slots.len(),
+        "shared",
+    )?;
+    let class = fragment.shared_slots[variable - base as usize];
+    let index = as_class(index, ScalarClass::Int, ids, literals, code, next, at)?;
+    let chain = ids.shared_of(class);
+    let pointer = *next;
+    *next += 1;
+    code.push(Inst::new(
+        op::ACCESS_CHAIN,
+        vec![chain.ptr_elem, pointer, variable as u32, index.id],
+    ));
+    Ok((pointer, class))
 }

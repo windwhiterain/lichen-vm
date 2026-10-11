@@ -11,8 +11,8 @@ mod common;
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, ResidentId, ScalarClass, TargetFacts,
+    Barrier, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
+    KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, TargetFacts, Terminator,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -329,4 +329,153 @@ fn a_graph_node_carrying_a_runtime_scalar_is_refused_by_name() {
         refusal.to_string().contains("runtime scalar"),
         "the message names what the launch did not supply: {refusal}"
     );
+}
+
+/// `slot[i % 64] = i + 1`; barrier; `out[i] = slot[(i + 1) % 64]`.
+///
+/// # Invariant
+/// The reader names **another lane's** element: a lane that read its own slot would answer
+/// `i + 1`, so the answer exists only if the workgroup's storage and the barrier both work.
+/// `add_op` rather than `from_flat` because the read's version operand is appended while the
+/// write that produces it comes first (`docs/notes/shared-memory-and-barriers.md` §4).
+fn stages_between_lanes() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let index = body.add_param(entry);
+
+    let sixty_four = body.add_const(entry, ScalarClass::Int, 64);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    // The write: slot 0 holds `i + 1` at `i % 64`.
+    let write_slot = body.add_const(entry, ScalarClass::Int, 0);
+    let offset = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![index, sixty_four],
+        vec![ScalarClass::Int],
+    );
+    let written = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![index, one],
+        vec![ScalarClass::Int],
+    );
+    let write = body.add_op(
+        entry,
+        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        vec![write_slot, offset, written],
+        vec![ScalarClass::Int],
+    );
+    // The read: the element one lane over, which this lane did not write.
+    let read_slot = body.add_const(entry, ScalarClass::Int, 0);
+    let next = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![index, one],
+        vec![ScalarClass::Int],
+    );
+    let next_offset = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![next, sixty_four],
+        vec![ScalarClass::Int],
+    );
+    let read = body.add_op(
+        entry,
+        KernelInstr::SharedReadCall(ScalarClass::Int),
+        vec![read_slot, next_offset, write],
+        vec![ScalarClass::Int],
+    );
+    body.barriers.push(Barrier { write, read });
+    let position = body.add_const(entry, ScalarClass::Int, 0);
+    body.add_op(
+        entry,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, read],
+        Vec::new(),
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![position],
+        },
+    );
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        // Nothing is bound in: the exchange is between the workgroup's own lanes.
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        shared_slots: vec![ScalarClass::Int],
+        marks: Vec::new(),
+    }
+}
+
+/// A staged exchange answers the number derived by hand, on a real device.
+///
+/// # Invariant
+/// This class has no CPU reference: `gpu_matches_cpu`'s interpreter refuses a staged body rather
+/// than read a barrier as a no-op (§7 of the shared-memory note), so the closed form is the
+/// oracle. Lane `g` reads what lane `(g + 1) % 64` wrote — `local + 1` — answering `g + 2`,
+/// except at a workgroup's last lane, where the read wraps to `g - 62`.
+#[test]
+fn a_staged_exchange_answers_the_value_derived_by_hand() {
+    let Some(context) = common::context("a_staged_exchange_answers_the_value_derived_by_hand")
+    else {
+        return;
+    };
+    // A workgroup multiple, so no surplus lane writes a slot a real lane reads.
+    let count = 128usize;
+    let mut graph = Graph::with_inputs(0);
+    let node = graph
+        .push(
+            Node::Kernel(KernelNode {
+                fragment: stages_between_lanes(),
+                inputs: Vec::new(),
+                count: Count::Constant(count),
+            }),
+            1,
+        )
+        .expect("one output, one declared");
+    graph
+        .returning(vec![node])
+        .expect("a value the graph defines");
+    let returned = graph.returns().expect("the return was recorded")[0];
+
+    let expected: Vec<i64> = (0..count as i64)
+        .map(|lane| if lane % 64 == 63 { lane - 62 } else { lane + 2 })
+        .collect();
+    // A same-lane read would answer `lane + 1`: the cross-lane index is what this pins.
+    assert_ne!(
+        expected,
+        (0..count as i64).map(|lane| lane + 1).collect::<Vec<i64>>()
+    );
+
+    for policy in [Policy::Serial, Policy::Async] {
+        let out = Runner::new(&context, policy)
+            .run(&graph, Vec::new())
+            .unwrap_or_else(|refusal| panic!("{policy:?} runs a staged dispatch: {refusal}"));
+        let id = resident(&out[returned]);
+        assert_eq!(
+            words(
+                context
+                    .fetch(id, count)
+                    .expect("the staged answer comes off the device")
+            ),
+            expected,
+            "{policy:?}: a barrier and a workgroup slot answer the closed form"
+        );
+        release_all(&context, &out);
+    }
 }
