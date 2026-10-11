@@ -764,6 +764,7 @@ dependencies = [
  "lichen-doc",
  "lichen-fusion",
  "lichen-fusion-bridge",
+ "lichen-graph-ir",
  "lichen-highlevel",
  "lichen-kernel-ir",
  "lichen-language-lex",

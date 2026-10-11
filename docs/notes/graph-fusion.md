@@ -283,23 +283,72 @@ reduction_interface` prints each step and each refusal).
 ## 4. The schema: derived from the interface graph, stable under everything else
 
 A schema is computed per **fusible region** of the recorded graph: a maximal
-connected run that contains at least one interface instance. It is plain
-data, content-hashed, storable in the artifact store:
+connected run of kernel nodes whose registry entries carry claims. A node with no
+claim is a boundary. It is plain data, content-hashed, storable in the artifact
+store. The types are `crates/lichen-language/src/fusion_claim/schema.rs`, and
+`derive_regions` is the entry point:
 
 ```rust
+derive_regions(graph: &Graph, instances: &[Instance]) -> Vec<Result<RegionSchema, SchemaRefusal>>
+
+Instance { kernel: KernelId, claim: KernelClaim, fragment: KernelFragment }
+
 RegionSchema {
-    nodes: Vec<SchemaNode>,         // interface instances, in evaluation order
-    between: Vec<KernelFragment>,   // the analyzable code connecting them (the g's)
-    ports: Vec<Port>,               // region inputs/outputs: extent, class, axis roles
-    hash: SchemaHash,               // over the canonical form of all of the above
+    nodes: Vec<SchemaNode>,   // the interface instances, in evaluation order
+    between: Vec<Between>,    // the code connecting adjacent instances (the g's)
+    ports: Vec<Port>,         // region inputs/outputs: role, class
+    hash: SchemaHash,         // sha256 over the canonical form of all of the above
 }
 
 SchemaNode {
-    interface: InterfaceId,         // which contract (e.g. Reduction)
-    projections: Vec<KernelFragment>, // combine, identity — the declared values
-    laws: LawSet,                   // associative, commutative, … — declared, checked per §3
+    position: usize,                    // the instance's place in the region
+    kernel: KernelId,                   // the registry id, so a report can name it
+    interface: String,                  // which contract (e.g. Reduction)
+    projections: Vec<RoleProjection>,   // one per role the claim requires, in name order
+}
+
+RoleProjection {
+    role: String,       // combine, identity, element
+    expression: Expr,   // the marked subexpression as the logic reads it
+    canonical: Expr,    // the same tree, canonicalized
+}
+
+Between {
+    producer: usize, consumer: usize, input: usize,   // the edge, in region-local positions
+    element: Expr, canonical: Expr,                   // the consumer's `element` role
+}
+
+Port {
+    kind: PortKind,             // Input, Output, Extent
+    node: usize, position: usize,
+    class: Option<ScalarClass>,
+    value: Option<ValueId>,     // one run's numbering: reported, never hashed
+    count: Option<usize>,       // a constant extent
 }
 ```
+
+Three things the sketch did not survive contact with the real graph, and each is
+a decision:
+
+- **The input is the graph *plus* the registry.** A recorded node holds a cloned
+  `KernelFragment` and no `KernelId`, and the claim lives in the registry keyed
+  by id (`compute.graph` reads `ComputeValue::ParKernel(id, _)` while recording
+  and stores only `entry.fragment`). So a derivation takes the `Graph` and the
+  `Instance`s a program dispatched and joins them on the fragment itself — a
+  digest bucket and an exact comparison. Two of a program's kernels that share a
+  body and claim different interfaces leave a node's instance ambiguous, and
+  that is `AmbiguousClaim`, not a guess.
+- **A projection is stored in two forms.** §6's abstraction must read the element
+  function *as the logic wrote it*: taken canonical, `exp(d - r)` is
+  `exp(d) * exp(-r)` and the outermost producer-free subexpression is `d`, not
+  the datum a `g` of `r` is written over — the two instances in
+  `examples/fusion_schema.rs` derive only from `expression`. §4's stability is a
+  property of the canonical form, so `canonical` is `expression` normalized once
+  at derivation and the engine reads `expression`.
+- **`LawSet` is not a field, because nothing proves one yet.** The schema records
+  the interface and its projections; the laws §3 requires (`associative`, with
+  the identity as its unit) are what §9's missing *interface verification* would
+  establish, and until it lands a claim is read as declared.
 
 The schema is deliberately a function of **the interface graph plus the
 fragments between instances**, and of nothing else:
@@ -310,11 +359,26 @@ fragments between instances**, and of nothing else:
   Change the algebra — a different combine, a different `g` — and the hash
   changes. This stability is a *requirement*, not a nicety: §5's packs match
   by hash, so a schema that wobbled under refactoring would make every
-  installed pack silently useless. Canonicalisation (commutative operand
-  order, alpha-equivalence, common-subexpression normalisation) is therefore
-  part of derivation, and the hash must be reproducible across machines —
-  the determinism discipline of [artifact-cache](artifact-cache.md) applied
-  to one more artifact.
+  installed pack silently useless.
+- **What the hash covers, and what it excludes.**
+  `RegionSchema::canonical_form` is the text `sha256` is taken over, and it is
+  also what a report prints, so a pack author recomputes the hash from what they
+  can see. In it: the instance count; each instance's position, interface and,
+  per role in name order, the **canonical** projection in a fully parenthesized
+  prefix form (`(max t (+ d (- r)))`, which no precedence or rendering rule can
+  make ambiguous); each `between`'s producer, consumer and input ordinal with its
+  canonical element; and each port's kind, region-local node and ordinal, and
+  element class. Out of it: kernel ids, graph value numbers, a constant extent's
+  number, the backend, the raw fragments and their digests, and the marks' body
+  positions. The exclusions are what make two spellings one schema — the
+  re-spelled chain in `examples/fusion_schema.rs` changes both kernels' fragment
+  digests and derives the same hash.
+- **Canonicalisation is `lichen_fusion::normalize`**, applied to every projection
+  exactly once at derivation: commutative operand order, constant folding
+  (`0.0 - 1000000.0` is one literal), flattening and cancellation, a product
+  distributed over a sum, and `exp(a + b)` into `exp(a) * exp(b)`.
+  **Alpha-equivalence is free**: the bridge reads a body into the three named
+  slots (`d`, `r`, `t`), so renaming a source binder cannot reach a projection.
 - **It is the pattern language for both implementation sources.** The engine
   matches structural shape (a `Reduction` feeding analyzable code whose `g`
   mentions the reduction's running value, feeding another `Reduction`); a
@@ -324,6 +388,28 @@ fragments between instances**, and of nothing else:
   ALiBi slope inside softmax is not an obstacle the schema must be taught —
   it is fragment content the engine's inversion step (§6) either handles or
   refuses by name. A tensor-operator pattern would not have matched at all.
+
+**Where the schema meets the algebra.** A region assembles into one
+producer→code→consumer chain or is refused by name: a node fed by two instances
+of its region, or feeding two, is `NotAReductionChain`; a consumer that declares
+no `element` role is `NoElementRole`; and the element must read
+`Variable::PRODUCER` or the edge that made the producer its input is not the
+algebra the engine fuses (`ElementWithoutProducer`). A claimed role with no mark
+(`RoleNotMarked`) and a projection that does not bridge (`ProjectionNotBridged`)
+are refusals too. A region is never silently skipped, and
+`examples/fusion_schema.rs` prints each schema, its canonical form and its hash.
+
+**One anchoring fact the example measures.** A projection prints the computation
+its mark rides — a `combine` prints as the add or max it marks, an `identity` as
+the literal, an `element` as the subexpression, never a buffer read and never a
+neighbour's value. The one reader this needed was the transcendental:
+`compile_fragment` expands `exp` into the IR's one primitive sequence *before*
+the fragment is registered, so the marked value's instruction is the expanded
+polynomial and the walk meets its `Select`.
+`lichen_kernel_ir::inlined_exp_operand` reads that definition back, and is the
+same definition's other half. What is *not* claimed: the expansion rewrites the
+marked value in place, so a mark on a transcendental is the one body mark whose
+instruction lowering does not preserve.
 
 ## 5. Optimization packs: implementations the runner installs
 
@@ -468,8 +554,15 @@ table lists — `NotInvertible { at, cause }` and `NotDistributive { repair,
 combine }`, plus the budget that canonicalization is held to — and
 `examples/softmax.rs` deriving §7's online softmax through a per-element bias,
 through a rectified square, and from a hand-written `h`, checking each against
-the two-pass form over random inputs. It does not read `KernelFragment` yet: the
-bridge from the fragment IR is a later step, and split-K (step 5) is untouched.
+the two-pass form over random inputs. The bridge is in
+(`crates/lichen-fusion-bridge`), and §4's schema now feeds this function its
+three arguments directly: `examples/fusion_schema.rs` reads a producer's
+`combine`/`identity` and a consumer's `element` out of a derived schema and
+prints the rolling update — §7's `g = exp(d - r)` between a max and a sum comes
+out as `r' = max(d, r)`, `t' = t * exp(r - r') + exp(d - r')`, the online softmax,
+with no `exp` written anywhere in the engine. What the schema cannot yet supply
+is the *check*: `UnverifiableInstance` is still §9's missing row, so a claimed
+combine is believed. Split-K (step 5) is untouched.
 
 **A pack may hand the engine its `h`.** Derivation is the floor, not the only
 door: an optimization file can supply the repair function directly
@@ -581,6 +674,8 @@ about shrinks exactly where fusion fires.
 | dynamic loop in a kernel body | **in** ([loop-conversion](loop-conversion.md)) | the fused reduction's inner loop |
 | fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of, and where an in-body mark is published (`KernelFragment::marks`) |
 | symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; `crates/lichen-fusion-bridge` carries a *marked subexpression* of a `KernelFragment` to it, for the arithmetic subset and the three slots a projection reads |
+| **region schema derivation** | **in** (`crates/lichen-language/src/fusion_claim/schema.rs`) | §4's per-region `RegionSchema`: the instances and their bridged projections, the between code, the boundary ports and the `sha256` content hash, with a refusal naming every way a region fails to assemble. The input is the recorded graph **plus** the registry instances, joined on the fragment, because a graph node holds no kernel id. `crates/lichen-language/examples/fusion_schema.rs` derives the reference sum/max chain and §7's max → `exp(d − r)` → sum chain, prints both canonical forms and hashes, shows a re-spelling keeping the hash and a changed `g` moving it, and hands the schema's own projections to `derive` |
+| reading a marked transcendental back | **in** (`lichen_kernel_ir::inlined_exp_operand`, `crates/lichen-fusion-bridge`) | `compile_fragment` expands `exp` into the IR's primitive sequence **before** the fragment is registered, so a mark on one anchors the expanded polynomial and the walk meets its `Select`: the definition's other half reads that sequence back, so §7's `g = exp(d − r)` bridges. The expansion still rewrites the marked value in place, which is the one body mark lowering does not preserve |
 | a **numeric** validation of the engine over real data | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance (producer `sum`, `g = d - r`, consumer `max`) derives, and the emitted rolling update agrees with the two-pass form over fixed seeds and lengths; the per-element identity is checked numerically beside it |
 | buffer ingress for the fused chain (roadmap axis A) | **in** (`compute.buffer`) | a program array as a kernel input, so a chain has data the device did not itself compute |
 | a **kernel** column for the numeric comparison | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance's consumer is a maximum, and the language can write one now: `max a b` lowers to `KernelBin::Max` in both backends and the fusion bridge maps it to `BinaryOp::Max`. The example writes the producer (a sum) and the consumer (a `max` over `d - r`) as `compute.parallel` kernels over `compute.buffer` inputs, runs them unfused on the cpu backend, and prints all three columns — the two host forms and the kernels — with a class-appropriate tolerance. Two emission defects had to fall first: a value's class was filed under the wrong node, and a buffer's element class came from the body rather than from the parameter ([operators](operators.md) §11, [compute-buffer-wrapper](compute-buffer-wrapper.md)) |

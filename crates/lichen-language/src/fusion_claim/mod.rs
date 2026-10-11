@@ -1,5 +1,5 @@
 //! The interface claim a kernel declares and the fragment its marks live in.
-//! See docs/notes/graph-fusion.md §3 and §9.
+//! See docs/notes/graph-fusion.md §3 and §4.
 //!
 //! # Invariant
 //! **Both facts come from the registry, neither from the value.** The claim was read when
@@ -13,6 +13,13 @@ use lichen_lowlevel::{AnyNodeId, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 use crate::program::LangProgram;
+
+mod schema;
+
+pub use schema::{
+    Between, Instance, Port, PortKind, RegionSchema, RoleProjection, SchemaHash, SchemaNode,
+    SchemaRefusal, derive_regions,
+};
 
 /// The kernel id a value names, or the refusal that names what the value is.
 ///

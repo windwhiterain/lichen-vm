@@ -16,7 +16,7 @@ mod unary;
 
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
-pub use unary::{exp_body, exp_value};
+pub use unary::{exp_body, exp_value, inlined_exp_operand};
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`
 /// (`f32`).
