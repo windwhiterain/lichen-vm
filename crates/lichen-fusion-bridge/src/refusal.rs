@@ -50,6 +50,11 @@ pub enum BridgeRefusal {
         /// The write's element position.
         position: usize,
     },
+    /// The marked value reaches a shared slot, which a symbolic expression cannot stage.
+    SharedAccess {
+        /// The shared slot's ordinal in the fragment's slot set.
+        slot: usize,
+    },
     /// The marked value calls another kernel.
     Call {
         /// The callee's registry id.
@@ -132,6 +137,12 @@ impl fmt::Display for BridgeRefusal {
                 formatter,
                 "the projection writes output buffer {position}, and a symbolic expression has \
                  no side effects"
+            ),
+            BridgeRefusal::SharedAccess { slot } => write!(
+                formatter,
+                "the projection accesses shared slot {slot}, and a symbolic expression has no \
+                 staging: a value one lane leaves for another is not a term it can carry \
+                 (`docs/notes/shared-memory-and-barriers.md` §5)"
             ),
             BridgeRefusal::Call { kernel } => write!(
                 formatter,

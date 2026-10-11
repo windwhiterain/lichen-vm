@@ -317,6 +317,10 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         KernelInstr::BufferReadCall(class) => Some(super::assemble::value_type(class)),
         // A write leaves nothing, so it has no type to decide.
         KernelInstr::BufferWriteCall(_) => None,
+        // Refused at the instruction walk; the version's class is the element class the IR states.
+        KernelInstr::SharedReadCall(class) | KernelInstr::SharedWriteCall(class) => {
+            Some(super::assemble::value_type(class))
+        }
     }
 }
 
@@ -505,8 +509,25 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 &[],
             );
         }
+        KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => {
+            return Err(staging_refusal(instr));
+        }
     }
     Ok(())
+}
+
+/// The reason this backend refuses a body that stages a value between lanes.
+///
+/// # Invariant
+/// `run_parallel_range` calls a kernel body once per **index**, never per workgroup, so no
+/// barrier has a group to synchronise and a shared slot has no lifetime between indices
+/// (`docs/notes/shared-memory-and-barriers.md` §7).
+fn staging_refusal(access: ValueId) -> String {
+    format!(
+        "compute.wasm: {access:?} accesses a shared slot, and this backend calls a kernel body \
+         once per index rather than once per workgroup, so a barrier has no lanes to synchronise \
+         and the slot no lifetime to hold (`docs/notes/shared-memory-and-barriers.md` §7)"
+    )
 }
 
 /// Lower one block's terminator.

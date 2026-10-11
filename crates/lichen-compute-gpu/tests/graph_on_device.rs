@@ -50,6 +50,7 @@ fn adds() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -94,6 +95,7 @@ fn sums() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -130,6 +132,7 @@ fn with_a_runtime_scalar() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }

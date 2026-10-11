@@ -178,6 +178,11 @@ impl Walk<'_> {
             KernelInstr::BufferWriteCall(_) => Err(BridgeRefusal::BufferWrite {
                 position: self.read_position(args)?,
             }),
+            KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => {
+                Err(BridgeRefusal::SharedAccess {
+                    slot: self.read_position(args)?,
+                })
+            }
         }
     }
 
@@ -191,12 +196,12 @@ impl Walk<'_> {
         }
     }
 
-    /// A buffer instruction's element position: its first operand is the compile-time
-    /// ordinal the lowering emitted.
+    /// The compile-time ordinal a memory instruction's first operand names: a buffer position or
+    /// a shared slot.
     ///
     /// # Invariant
-    /// The position is the read's own slot, so a body whose position is not a constant
-    /// cannot be read as one slot — it is refused rather than defaulted.
+    /// The ordinal is the instruction's own slot, so a body whose first operand is not a
+    /// constant cannot be read as one slot — it is refused rather than defaulted.
     fn read_position(&self, args: &[ValueId]) -> Result<usize, BridgeRefusal> {
         match args
             .first()

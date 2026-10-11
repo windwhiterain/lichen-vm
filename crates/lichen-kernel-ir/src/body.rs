@@ -78,6 +78,21 @@ pub struct Br {
     pub args: Vec<ValueId>,
 }
 
+/// A separated `(write, read)` pair: the data a barrier is, before it is a position.
+///
+/// # Invariant
+/// `write` names a [`KernelInstr::SharedWriteCall`] and `read` the [`KernelInstr::SharedReadCall`]
+/// that observes it. Both are [`ValueId`]s and never positions, because the one restructuring in
+/// the tree moves an instruction between blocks and a value edge survives it
+/// (`docs/notes/shared-memory-and-barriers.md` §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Barrier {
+    /// The shared write that must have happened.
+    pub write: ValueId,
+    /// The read that must observe it.
+    pub read: ValueId,
+}
+
 /// A fragment's body: SSA values, blocks, and where control starts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KernelBody {
@@ -85,6 +100,12 @@ pub struct KernelBody {
     pub blocks: Vec<BasicBlock>,
     /// Which block control starts in.
     pub entry: usize,
+    /// The pairs a barrier is owed for, in no order that matters.
+    ///
+    /// # Invariant
+    /// A pair's read must be reached by every lane: a barrier in divergent control flow is
+    /// invalid rather than imprecise, and [`KernelBody::validate`] refuses one.
+    pub barriers: Vec<Barrier>,
 }
 
 impl KernelBody {
@@ -411,7 +432,8 @@ impl KernelBody {
     /// (1) The entry block exists, and so does every block a transfer names; (2) every
     /// value a block reads is available there, checked by walk order; (3) a branch's
     /// `args` are exactly its target's `params`; (4) an instruction's `classes` matches
-    /// what it produces — zero for a write, one for everything else.
+    /// what it produces — none for a buffer write; (5) a barrier pairs a shared write with the
+    /// read observing it, in a block every lane reaches.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
             return Err("a body must have at least its entry block".into());
@@ -487,7 +509,138 @@ impl KernelBody {
                 }
             }
         }
+        // A recorded barrier is a pair this body really holds, and one no lane can skip.
+        let unavoidable = self.unavoidable_blocks();
+        for pair in &self.barriers {
+            if !matches!(
+                self.values.get(pair.write.0 as usize),
+                Some(ValueDef::Instr {
+                    op: KernelInstr::SharedWriteCall(_),
+                    ..
+                })
+            ) {
+                return Err(format!(
+                    "the barrier ({:?}, {:?}) does not name a shared write",
+                    pair.write, pair.read
+                ));
+            }
+            let Some(ValueDef::Instr {
+                op: KernelInstr::SharedReadCall(_),
+                args,
+                ..
+            }) = self.values.get(pair.read.0 as usize)
+            else {
+                return Err(format!(
+                    "the barrier ({:?}, {:?}) does not name a shared read",
+                    pair.write, pair.read
+                ));
+            };
+            if args.get(2) != Some(&pair.write) {
+                return Err(format!(
+                    "the barrier's read {:?} does not observe the write {:?} it is paired with",
+                    pair.read, pair.write
+                ));
+            }
+            let Some(block) = self.block_of(pair.read) else {
+                return Err(format!(
+                    "the barrier's read {:?} is not an instruction of this body",
+                    pair.read
+                ));
+            };
+            if !unavoidable[block] {
+                return Err(format!(
+                    "the barrier's read {:?} sits in block {block}, which a lane can skip, so the \
+                     barrier would be in divergent control flow — invalid rather than imprecise \
+                     (`docs/notes/shared-memory-and-barriers.md` §9)",
+                    pair.read
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// The block whose instruction list defines `value`, or `None` for one it does not.
+    fn block_of(&self, value: ValueId) -> Option<usize> {
+        self.blocks
+            .iter()
+            .position(|block| block.instrs.contains(&value))
+    }
+
+    /// Which blocks every lane reaches, as a flag per block.
+    ///
+    /// # Invariant
+    /// Dominance over the reachable CFG: a block qualifies when it dominates every reachable
+    /// `Return`, so every path that ends passes through it. A read in dead code is not here and is
+    /// refused; a path that never returns is not an exit, so a non-terminating branch past the
+    /// read is not caught.
+    fn unavoidable_blocks(&self) -> Vec<bool> {
+        let count = self.blocks.len();
+        let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for (index, block) in self.blocks.iter().enumerate() {
+            for br in block.branches() {
+                if br.target < count {
+                    successors[index].push(br.target);
+                }
+            }
+        }
+        let mut reachable = vec![false; count];
+        let mut stack = vec![self.entry];
+        while let Some(block) = stack.pop() {
+            if std::mem::replace(&mut reachable[block], true) {
+                continue;
+            }
+            stack.extend(successors[block].iter().copied());
+        }
+        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for (index, targets) in successors.iter().enumerate() {
+            if !reachable[index] {
+                continue;
+            }
+            for &target in targets {
+                predecessors[target].push(index);
+            }
+        }
+        // Every block starts as all reachable blocks and shrinks to its predecessors'
+        // intersection, except the entry.
+        let mut dominators: Vec<Vec<bool>> = vec![vec![false; count]; count];
+        for block in 0..count {
+            if block != self.entry && reachable[block] {
+                dominators[block] = reachable.clone();
+                dominators[block][block] = true;
+            }
+        }
+        dominators[self.entry][self.entry] = true;
+        loop {
+            let mut changed = false;
+            for block in 0..count {
+                if block == self.entry || !reachable[block] {
+                    continue;
+                }
+                let mut next = vec![true; count];
+                for &predecessor in &predecessors[block] {
+                    for candidate in 0..count {
+                        next[candidate] &= dominators[predecessor][candidate];
+                    }
+                }
+                next[block] = true;
+                if next != dominators[block] {
+                    dominators[block] = next;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        (0..count)
+            .map(|block| {
+                reachable[block]
+                    && self.blocks.iter().enumerate().all(|(exit, basic)| {
+                        !(reachable[exit] && matches!(&basic.terminator, Terminator::Return { .. }))
+                            || dominators[exit][block]
+                    })
+            })
+            .collect()
     }
 }
 

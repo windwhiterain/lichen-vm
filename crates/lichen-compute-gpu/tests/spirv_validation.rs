@@ -59,6 +59,7 @@ fn adds_one() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -149,6 +150,7 @@ fn scales_a_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -171,6 +173,7 @@ fn one_integer_output(body: KernelBody) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -565,6 +568,7 @@ fn index_to_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -611,6 +615,7 @@ fn crosses_both_ways() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -694,6 +699,7 @@ fn two_buffer_classes() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -713,6 +719,7 @@ fn nullary_callee() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -744,6 +751,7 @@ fn calls_a_nullary_kernel() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -854,6 +862,7 @@ fn unary_callee() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1027,6 +1036,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1068,6 +1078,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }

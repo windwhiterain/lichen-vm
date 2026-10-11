@@ -34,6 +34,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -100,6 +101,7 @@ fn calls_kernel_7() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -222,6 +224,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     };
     let binding = Binding {
@@ -291,6 +294,7 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     };
     let refusal =
@@ -394,6 +398,7 @@ fn a_write_inside_a_loop_is_refused_by_name() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     };
     fragment
@@ -430,5 +435,59 @@ fn a_lane_width_this_target_cannot_schedule_is_refused_by_name() {
     assert!(
         message.contains("does not schedule"),
         "says the target cannot honour it: {message}"
+    );
+}
+
+/// A body that writes one shared slot, leaving behind the version a read would name.
+///
+/// # Invariant
+/// The write's operands are `[slot, index, value]` and its result is the version, so the body
+/// stages a value between lanes; the trailing constant is the one value the ABI's result wants.
+fn stages_a_shared_slot() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the slot ordinal
+                FlatOp::Read(1),                                        // the index into it
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
+                FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        shared_slots: vec![ScalarClass::Int],
+        marks: Vec::new(),
+    }
+}
+
+/// A body that stages is refused by name: this target emits no `Workgroup` storage and no barrier.
+#[test]
+fn a_shared_access_is_refused_by_name() {
+    let fragment = stages_a_shared_slot();
+    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT)
+        .expect_err("this target does not emit staging yet");
+    assert_eq!(refusal, SpirvRefusal::StagingNotEmitted { at: 2 });
+    let message = refusal.to_string();
+    assert!(
+        message.contains("shared slot"),
+        "names the cause: {message}"
+    );
+    assert!(
+        message.contains("emits no staging yet"),
+        "says what the target does not do: {message}"
     );
 }

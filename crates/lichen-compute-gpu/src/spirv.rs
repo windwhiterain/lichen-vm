@@ -212,6 +212,13 @@ pub enum SpirvRefusal {
     /// different program than it was lowered from, and the transfer is already in the
     /// IR, so this is about the emitter rather than about what the language can say.
     ControlFlow { detail: String },
+    /// The body accesses a shared slot, and this emitter does not stage yet.
+    ///
+    /// # Invariant
+    /// Emitting the access without the synchronisation would be a race rather than a
+    /// wrong number, so it is refused by name until the target emits a `Workgroup`
+    /// variable and its barrier (`docs/notes/shared-memory-and-barriers.md` §9).
+    StagingNotEmitted { at: usize },
 }
 
 impl fmt::Display for SpirvRefusal {
@@ -308,6 +315,13 @@ impl fmt::Display for SpirvRefusal {
                 "this emitter cannot structure this body: {detail}. The transfer is in the kernel \
                  IR, so this is the emitter's limit rather than something the program could not say \
                  — see `docs/notes/loop-conversion.md` §8."
+            ),
+            SpirvRefusal::StagingNotEmitted { at } => write!(
+                f,
+                "instruction {at} accesses a shared slot, and this target emits no staging yet: a \
+                 module from it declares no `Workgroup` variable and no `OpControlBarrier`, so the \
+                 access would be a race between lanes rather than a staged value \
+                 (`docs/notes/shared-memory-and-barriers.md` §9)."
             ),
         }
     }
@@ -1450,6 +1464,9 @@ fn emit_function(
                                 ],
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                        }
+                        KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => {
+                            return Err(SpirvRefusal::StagingNotEmitted { at });
                         }
                         // **The callee's own facts**: the set carries its arity,
                         // which is its domain's flattening.

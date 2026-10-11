@@ -75,6 +75,7 @@ fn fragment() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }

@@ -183,6 +183,7 @@ mod kernel_intern_tests {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
             },
+            shared_slots: Vec::new(),
             marks: Vec::new(),
         }
     }
@@ -2164,6 +2165,7 @@ where
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: std::mem::take(&mut tally.marks),
     })
 }
@@ -2418,6 +2420,7 @@ where
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: std::mem::take(&mut tally.marks),
     })
 }
@@ -6140,8 +6143,60 @@ mod parallel_launch_tests {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
             },
+            shared_slots: Vec::new(),
             marks: Vec::new(),
         }
+    }
+
+    /// A body that writes one shared slot, leaving behind the version a read would name.
+    ///
+    /// # Invariant
+    /// The write's operands are `[slot, index, value]` and its result is the version, so the body
+    /// stages a value between lanes; the trailing constant is the one value the ABI's result wants.
+    fn stages_a_shared_slot() -> KernelFragment {
+        KernelFragment {
+            roles: KernelRoles::default(),
+            param_shape: KernelShape::Tuple(vec![
+                KernelShape::Scalar(ScalarClass::Int),
+                KernelShape::Scalar(ScalarClass::Int),
+            ]),
+            body: KernelBody::from_flat(
+                2,
+                &[
+                    FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the slot ordinal
+                    FlatOp::Read(1),                                        // the index into it
+                    FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
+                    FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+                    FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+                ],
+            ),
+            inputs: 1,
+            outputs: 1,
+            input_classes: vec![ScalarClass::Int],
+            output_classes: vec![ScalarClass::Int],
+            result_classes: vec![ScalarClass::Int; 1],
+            target: TargetFacts {
+                int_width: IntWidth::I64,
+                lane_width: LaneWidth::new(64),
+            },
+            shared_slots: vec![ScalarClass::Int],
+            marks: Vec::new(),
+        }
+    }
+
+    /// A body that stages is refused by name: the host calls the body once per index.
+    #[test]
+    fn a_shared_access_is_refused_by_name() {
+        let refusal = assemble_module(&[stages_a_shared_slot()], &std::collections::HashMap::new())
+            .expect_err("a per-index host cannot stage a value between lanes");
+        assert!(
+            refusal.contains("shared slot"),
+            "names the cause: {refusal}"
+        );
+        assert!(
+            refusal.contains("once per index"),
+            "says why this backend cannot serve it: {refusal}"
+        );
     }
 
     /// The backend slot is process-global, so tests that install one must be

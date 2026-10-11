@@ -14,7 +14,9 @@ mod body;
 mod marks;
 mod unary;
 
-pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
+pub use body::{
+    Barrier, BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat,
+};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use unary::{
     TRANSCENDENTALS, exp_body, exp_value, floor_body, floor_value, inlined_exp_operand, sqrt_body,
@@ -615,6 +617,22 @@ pub enum KernelInstr {
     /// The class is the element class, as in [`Self::BufferReadCall`]; the position and the
     /// index are `Int`.
     BufferWriteCall(ScalarClass),
+    /// Write one element of one shared slot: `[slot, index, value]`.
+    ///
+    /// # Invariant
+    /// The class is the element class, as in [`Self::BufferWriteCall`]; `slot` is a compile-time
+    /// ordinal into [`KernelFragment::shared_slots`] and `index` is `Int`. What it **leaves** is
+    /// the version a later [`Self::SharedReadCall`] names — the edge a barrier is derived from —
+    /// so it produces one value (`docs/notes/shared-memory-and-barriers.md` §3).
+    SharedWriteCall(ScalarClass),
+    /// Read one element of one shared slot: `[slot, index, version]`.
+    ///
+    /// # Invariant
+    /// `slot` and `index` are as in [`Self::SharedWriteCall`]. The third operand is the
+    /// [`Self::SharedWriteCall`] whose result this read observes, so a pair says *which* write to
+    /// *which* slot it is ordered after rather than "after something"
+    /// (`docs/notes/shared-memory-and-barriers.md` §3).
+    SharedReadCall(ScalarClass),
 }
 
 /// The role of every field of a parallel kernel's parameter struct.
@@ -671,9 +689,10 @@ impl KernelInstr {
     /// How many values this instruction leaves behind.
     ///
     /// # Invariant
-    /// **One for everything except a write**, a side effect that leaves nothing — the
-    /// whole of the arity question, so [`KernelBody::validate`](crate::KernelBody::validate)
-    /// can check a definition against its declaration.
+    /// **One for everything except [`KernelInstr::BufferWriteCall`]**, the side effect that leaves
+    /// nothing: a shared write leaves the version its reader consumes. The whole of the arity
+    /// question, so [`KernelBody::validate`](crate::KernelBody::validate) can check a definition
+    /// against its declaration.
     pub fn produces(&self) -> usize {
         match self {
             KernelInstr::BufferWriteCall(_) => 0,
@@ -700,6 +719,7 @@ impl KernelInstr {
             | KernelInstr::Floor => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
+            KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
         })
     }
@@ -717,6 +737,9 @@ impl KernelInstr {
             KernelInstr::Conv { to, .. } => Some(*to),
             KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
+                Some(*class)
+            }
+            KernelInstr::SharedReadCall(class) | KernelInstr::SharedWriteCall(class) => {
                 Some(*class)
             }
             KernelInstr::I32WrapI64 | KernelInstr::Select | KernelInstr::CallKernel(_) => None,
@@ -783,6 +806,14 @@ pub struct KernelFragment {
     /// crate carries as data rather than assumes — and [`fragment_digest`] hashes the whole
     /// struct, so a fact added here is in the digest by construction.
     pub target: TargetFacts,
+    /// The element class of each shared slot this body addresses, one entry per ordinal.
+    ///
+    /// # Invariant
+    /// The length is the slot set: a [`KernelInstr::SharedWriteCall`]'s `slot` is an ordinal into
+    /// it, as a buffer write's position is into `outputs`. It is not a target fact — the slots are
+    /// the program's own memory — and [`fragment_digest`] hashes it: two fragments differing only
+    /// in their staging are two modules.
+    pub shared_slots: Vec<ScalarClass>,
     /// The marks expressions in the body carried, in the order the walk published them.
     ///
     /// # Invariant
@@ -835,6 +866,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
     fragment.result_classes.hash(&mut hasher);
     format!("{:?}", fragment.target).hash(&mut hasher);
+    format!("{:?}", fragment.shared_slots).hash(&mut hasher);
     format!("{:?}", fragment.marks).hash(&mut hasher);
     hasher.finish()
 }

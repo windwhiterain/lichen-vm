@@ -1,8 +1,9 @@
-//! The digest's stated invariant, exercised through the crate's public surface.
+//! The crate's stated invariants — the digest, and the body's well-formedness gate — through its
+//! public surface.
 
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaneWidth, ScalarClass, TargetFacts,
+    Barrier, Br, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
+    KernelShape, LaneWidth, ScalarClass, TargetFacts, Terminator,
 };
 
 /// A one-parameter body: `p0 + first`, in SSA.
@@ -53,6 +54,7 @@ fn fragment() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
+        shared_slots: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -130,6 +132,14 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             },
         ),
         (
+            "shared_slots",
+            KernelFragment {
+                roles: KernelRoles::default(),
+                shared_slots: vec![ScalarClass::Int],
+                ..base.clone()
+            },
+        ),
+        (
             "lane width",
             KernelFragment {
                 target: TargetFacts {
@@ -192,4 +202,90 @@ fn a_domain_flattens_to_exactly_its_leaf_count() {
         .flat_arity(),
         3
     );
+}
+
+/// A body whose shared read sits either in a branch's arm or in the block it joins.
+///
+/// # Invariant
+/// The arm is reached only when the condition holds, so a barrier before a read there is
+/// divergent by construction; the join is on every path to the return, so a barrier there is
+/// uniform.
+fn branched_shared_read(in_the_arm: bool) -> (KernelBody, Barrier) {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _config = body.add_param(entry);
+    let index = body.add_param(entry);
+    let slot = body.add_const(entry, ScalarClass::Int, 0);
+    let value = body.add_const(entry, ScalarClass::Int, 7);
+    let version = body.add_op(
+        entry,
+        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        vec![slot, index, value],
+        vec![ScalarClass::Int],
+    );
+    let arm = body.add_block();
+    let join = body.add_block();
+    let taken = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::CondBr {
+            cond: taken,
+            if_true: Br {
+                target: arm,
+                args: Vec::new(),
+            },
+            if_false: Br {
+                target: join,
+                args: Vec::new(),
+            },
+        },
+    );
+    let read = body.add_op(
+        if in_the_arm { arm } else { join },
+        KernelInstr::SharedReadCall(ScalarClass::Int),
+        vec![slot, index, version],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        arm,
+        Terminator::Br(Br {
+            target: join,
+            args: Vec::new(),
+        }),
+    );
+    let returned = body.add_const(join, ScalarClass::Int, 0);
+    body.set_terminator(
+        join,
+        Terminator::Return {
+            values: vec![returned],
+        },
+    );
+    (
+        body,
+        Barrier {
+            write: version,
+            read,
+        },
+    )
+}
+
+/// A barrier whose read a lane can skip is invalid rather than imprecise, so the gate refuses it.
+#[test]
+fn a_barrier_whose_read_sits_under_a_branch_is_refused() {
+    let (mut body, pair) = branched_shared_read(true);
+    body.barriers.push(pair);
+    let refusal = body
+        .validate()
+        .expect_err("a barrier before a read a lane can skip is refused");
+    assert!(refusal.contains("divergent"), "names the cause: {refusal}");
+    assert!(refusal.contains("block 1"), "names the block: {refusal}");
+}
+
+/// What the check does catch, from the other side: a read every path reaches needs no refusal.
+#[test]
+fn a_barrier_whose_read_every_lane_reaches_is_accepted() {
+    let (mut body, pair) = branched_shared_read(false);
+    body.barriers.push(pair);
+    body.validate()
+        .expect("a read on every path to the return carries a uniform barrier");
 }
