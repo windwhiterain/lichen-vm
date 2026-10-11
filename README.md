@@ -166,7 +166,7 @@ a = x => (1, Int)(x)
 ```text
 ---
   order = "2"
-  output = "(raw 1, raw 2, raw 3): <?a, ?b, ?c>"
+  output = "(1, 2, 3): <Int, Int, Int>"
 ---
 f = x => [x, @shallow f (x + 1)]
 inf = f 0
@@ -443,16 +443,17 @@ gcd (48, 18)
 ```text
 ---
   order = "14"
-  doc = "The arithmetic, comparison and bitwise operators, the three prefix scalar
+  doc = "The arithmetic, comparison and bitwise operators, the five prefix scalar
 keywords, and the two precedence facts worth knowing: `* / %` bind tighter than
 `+ -`, and a comparison is the loosest binary level — so `1 & 3 == 1` is
 `(1 & 3) == 1`.  `& | ^` over two comparison results are the language's
 `and`/`or`/`xor`, and `!=` is the generalized equality's other face, so it
-compares type values too.  `max`, `min` and `exp` take their operands by
-juxtaposition and leave a value of the operands' class, unlike a comparison."
-  output = "(7, 3, 1, 3, 0, 1, 2, 1, Int, 5, 3, 2.5, 1.0): <Int, Int, Int, Int, Int, Int, Int, Int, Type, Int, Int, Float, Float>"
+compares type values too.  `max`, `min` and the three `Float`-only scalar
+operators `exp`, `sqrt` and `floor` take their operands by juxtaposition and
+leave a value of the operands' class, unlike a comparison."
+  output = "(7, 3, 1, 3, 0, 1, 2, 1, Int, 5, 3, 2.5, 1.0, 2.0, 1.0): <Int, Int, Int, Int, Int, Int, Int, Int, Type, Int, Int, Float, Float, Float, Float>"
 ---
-(1 + 2 * 3, 7 / 2, 7 % 2, 1 | 2 ^ 3 & 1, (2 > 1) & (2 < 1), (1 < 2) == 1, 6 & 3, Int != string, Int, max 3 5, min 3 5, max 1.5 2.5, exp 0.0)
+(1 + 2 * 3, 7 / 2, 7 % 2, 1 | 2 ^ 3 & 1, (2 > 1) & (2 < 1), (1 < 2) == 1, 6 & 3, Int != string, Int, max 3 5, min 3 5, max 1.5 2.5, exp 0.0, sqrt 4.0, floor 1.75)
 ```
 
 ### `convert.lichen`
