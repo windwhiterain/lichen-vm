@@ -561,6 +561,47 @@ that sentence and the tree, and both are `missing` rather than merely unimplemen
   lichen does not have it, which is the same absence
   [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 records.
 
+**Measured, and the first gap is wider than it reads** (at `ebae69bc`): *nothing* in `crates/` fuses
+two kernels today. `fusion_claim::derive_regions` has no caller outside
+`examples/fusion_schema.rs`; `lichen_fusion::derive`/`derive_with_repair` derive `Expr`-level
+assignments and **no emitter turns them into a `KernelBody`**; and the only transform reachable from
+production is the intra-kernel tiling of one reduction (`automatic_tiling.rs`). So the first gap is not
+"it cannot fuse on request yet" — there is no fusion *to* request.
+
+The graph side, by contrast, is already there, and that is the measurement's most useful correction: a
+**graph pass can return a two-nodes-into-one graph today** (`GraphPass::apply` answers a whole `Graph`,
+and `with_inputs` + `push` + `returning` build a legal one that the runner accepts — measured on the
+host stub), so [compute-graph-jit](compute-graph-jit.md)'s "general builder" is not what blocks a
+merge. What blocks it is:
+
+1. **no fused body** — nothing composes two fragments, and the engine's own derivation stops at `Expr`
+   (§6's repair-function fusion included);
+2. **the landing path** — `land_fused_kernel` replaces a node through `Graph::replace_kernel`, whose
+   gate is `FragmentShape` equality, so a merged fragment is refused (`ShapeDisagrees`) even when the
+   merge is legal: a merge *is* a shape change, which is what "not a linear chain" means; and
+3. **renumbering, forced rather than optional** — `push` allocates ids consecutively from
+   `input_count()`, so a merge that is not at the tail shifts every later value, every edge and count
+   naming it, and `returns()`.
+
+**The first slice, ranked, and the measurement owed before any code.** Smallest honest step: the
+**graph-level merge machinery alone** — a rebuild/renumber plus a landing path that is not
+`replace_kernel`, with the replacement fragment supplied as an ordinary `fused/` artifact (which a human
+can write), because that needs no arithmetic. Then the pass that inlines a consumer into a producer,
+which additionally needs a **body composition** function and the legality conditions: the absorbed
+output is read exactly once and is not also returned; the two extents correspond; the read's address is
+a function of the index the survivor can compute; the classes are equal; and the merged ports are the
+union minus the absorbed buffer. The `fuse` directive comes **after** both, because it would drive a
+region engine that does not run, add a field to `Pack`, and force the node-schema/region-schema question
+into the matcher.
+
+One measurement can still invalidate that plan, and it is owed before any code: **compose the two
+recorded fragments of `examples/fusion_schema.rs`'s chain by hand into one `KernelFragment`** — splice
+the bodies, bind the producer's reduction result to the consumer's read of its input position — pass it
+through `KernelBody::validate` and `KernelFragment::validate`, and compare it numerically with the
+two-pass reference. If that composition is refused, "shape-changing fusion is an inlining the engine can
+perform" fails at the kernel IR, and the first thing to build is a body-composition pass rather than
+graph machinery.
+
 ### The memory plan: the second thing a pack hands over
 
 A fused body is a DAG, not a chain. Once a kernel's read and write are a value —
@@ -988,7 +1029,7 @@ about shrinks exactly where fusion fires.
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
-| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing, and there is no fusion to request yet** | §5 measured at `ebae69bc`: **no code path in `crates/` fuses two kernels at all** — `derive_regions` has no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production is the intra-kernel tiling of one reduction. What a merge needs, in order: a body composition (nothing composes two fragments), a landing path that is not `replace_kernel` (its `FragmentShape` gate refuses a merged fragment), and a renumbering for a merge away from the tail. The graph side is already there: a pass can return a merged graph and the runner accepts it |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:

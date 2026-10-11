@@ -588,7 +588,14 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   is refused by name until it does. `run_chain` is that fusion at depth one.
 - **The general builder.** The `compute.graph` operator, the `Graph` value and the
   lowering exist; what remains is the shape the design records for a graph that is
-  not a linear chain of one fragment — a graph's fan-out is not that.
+  not a linear chain of one fragment — a graph's fan-out is not that. **Measured
+  since**: the *graph* side is not the gap. A graph pass can already return a legal
+  two-nodes-into-one graph (`with_inputs` + `push` + `returning` build it and the
+  runner accepts it), so what blocks a merge is that nothing composes two fragments
+  into one body, that `replace_kernel`'s `FragmentShape` gate refuses a merged
+  fragment, and that a merge away from the tail forces a renumbering (`push`
+  allocates ids consecutively from `input_count()`).
+  [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
 - **`traced`'s first real user.** The graph is not it; see the builder.
