@@ -123,6 +123,8 @@ where
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::None | LowValue::Error => "none".to_string(),
+                // The wildcard's own spelling, as the source writes it.
+                LowValue::Any => "@any".to_string(),
             };
         }
         self.type_constant(&value)
@@ -440,6 +442,7 @@ where
             Some(LowValue::Str(s)) => format!("\"{s}\""),
             // An empty value is a concrete value, never a class letter.
             Some(LowValue::None | LowValue::Error) => "none".to_string(),
+            Some(LowValue::Any) => "@any".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
             // SAFETY: `array` is a static payload read through `sref`, whose

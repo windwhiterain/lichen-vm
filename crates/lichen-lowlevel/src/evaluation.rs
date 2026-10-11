@@ -97,6 +97,11 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
+            // The wildcard is undecided to every reader but the unifier, so it is
+            // never a computed answer to hand on.
+            if matches!(value.as_enum(), Some(LowValue::Any)) {
+                return None;
+            }
             // A value a unification wrote is not the operator's answer: the run gate's `runned` term
             // tests this operator.
             if self.has_no_result_yet(node) && !self.nodes[node].visiting {
