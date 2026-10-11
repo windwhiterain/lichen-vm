@@ -233,6 +233,12 @@ impl<P: Program> Module<P> {
                 .iter()
                 .fold(0u64, |hash, &byte| mix(hash ^ byte as u64)))),
             Some(LowValue::None) => KeyState::Hashed(NONE_TOKEN),
+            // The wildcard is undecided to every reader, key hashing included: it
+            // is not key content.
+            Some(LowValue::Any) => match mode {
+                UnfoldMode::Key => KeyState::Undecided,
+                UnfoldMode::Template => KeyState::Hashed(UNDECIDED_TOKEN),
+            },
             // An empty value is never key content. A template is not key content at
             // all — there it is only a shape.
             Some(LowValue::Error) => match mode {

@@ -410,6 +410,7 @@ where
             Some(LowValue::Function(_)) => Some("Function".to_string()),
             Some(LowValue::Table(_)) => Some("Table".to_string()),
             Some(LowValue::None) | Some(LowValue::Error) => Some("none".to_string()),
+            Some(LowValue::Any) => Some("@any".to_string()),
             Some(LowValue::Array(_)) => None,
             None => Some(
                 self.printer

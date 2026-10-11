@@ -592,6 +592,10 @@ impl<P: Program> Module<P> {
         let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
+        // The wildcard writes nothing back, so a class holding `Any` is never bound.
+        if is_wildcard(va) || is_wildcard(vb) {
+            return true;
+        }
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
             // A node-less side carries the fact the other class is missing: a value against it is a write.
             match (a.node, b.node) {
@@ -820,6 +824,11 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
         AnyNodeId::Dynamic(node) => node,
         AnyNodeId::Static(_) => NodeId::default(),
     }
+}
+
+/// Whether a side's class holds the wildcard `Any`.
+fn is_wildcard<V: AsEnum<LowValue>>(value: Option<V>) -> bool {
+    matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any))
 }
 
 /// The low type a concrete value's tag states, never reading the payload; payload starts `Unknown`.

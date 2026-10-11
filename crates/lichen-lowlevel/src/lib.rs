@@ -77,6 +77,15 @@ pub enum LowValue {
     /// re-runs. It is not the [`Self::None`] unit value. Consumers **propagate** it
     /// rather than re-reporting the failure.
     Error,
+    /// **The wildcard**: it unifies with any value and constrains nothing.
+    ///
+    /// # Invariant
+    /// Unification against a class holding `Any` neither merges the classes nor writes
+    /// a value, so the wildcard never propagates and its node stays reusable across
+    /// every use. Every other reader treats it as **undecided** — evaluation answers
+    /// no value, and it states no low type — so a wildcard can never leak into a
+    /// computed result. See docs/notes/compound-element-slots.md.
+    Any,
 }
 
 /// Value identity as the lowlevel decides it: field-wise like the derive, except a float.
@@ -96,6 +105,7 @@ impl PartialEq for LowValue {
             (LowValue::Function(a), LowValue::Function(b)) => a == b,
             (LowValue::None, LowValue::None) => true,
             (LowValue::Error, LowValue::Error) => true,
+            (LowValue::Any, LowValue::Any) => true,
             _ => false,
         }
     }
