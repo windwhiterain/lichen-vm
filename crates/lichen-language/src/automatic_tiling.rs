@@ -4,7 +4,8 @@
 //! # Invariant
 //! A declared reduction is what licenses a tiled fold, so the program that wrote the algebra
 //! decides the schedule: no count and no operator is an input here. A node the pass cannot read
-//! stays per-lane rather than being tiled on a guess.
+//! stays per-lane rather than being tiled on a guess. The fragment it lands publishes no mark of
+//! its own: the marks the program wrote anchor values of the body the tiling replaced.
 
 use std::collections::HashMap;
 
@@ -24,13 +25,6 @@ use crate::fusion_claim::{
     RoleProjection, SchemaNode, SchemaRefusal, claim_of, fragment_of, kernel_id, marked_value,
 };
 use crate::program::LangProgram;
-
-/// The staged value's name for the tiling pass's own marks.
-///
-/// # Invariant
-/// The plan that would name it is a pack's artifact, so this is a mark the fragment publishes
-/// and nothing reads: the pass's plan is empty and an empty plan names no staged value.
-const TILE: &str = "tile";
 
 /// The row a fragment digest joins to: the program's own instance, or why it has no algebra.
 ///
@@ -176,7 +170,8 @@ fn tile(
         count: tiled.staged_count(),
         space: Space::Shared,
     }];
-    fragment.marks = tiled.marks(TILE);
+    // The tiled fragment publishes no mark: a name is the logic's and a plan is a pack's.
+    fragment.marks = Vec::new();
     let artifact = write_fused_kernel(&FusedKernel {
         fragment,
         claim: Some(instance.claim.clone()),
