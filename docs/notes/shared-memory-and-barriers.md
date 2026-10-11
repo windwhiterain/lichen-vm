@@ -624,14 +624,18 @@ for a declared plan the walk is a *check* (§9 step 7), for a logic package it i
 *decision* (step 8), and §9 step 4's scan is neither: it consumes a body that already
 states its space. The three steps are the same three in all three places.
 
-1. **Is the reader the writing lane?** Fact 2's test: the two index operands are the same
-   `ValueId`, or neither's def cone contains the lane parameter. Then the value is a
-   register and nothing is owed.
+1. **Is the reader the writing lane?** Fact 2's test, which is the two index operands being the
+   same `ValueId`, **and nothing else** (§4). Then the value is a register and nothing is owed.
+   The lane-invariance clause this step first carried — "or neither's def cone contains the lane
+   parameter" — is dead and, in this direction, unsound: an index that excludes the lane names
+   the **same** element in every lane, which is the most contended case there is rather than a
+   private one. That case is §4's refusal, not this step's conclusion.
 2. **Is the value certified uniform over the group?** A value at `# n` covering every
    reader's lane is one every lane computes, so nothing is exchanged and the space is a
-   register again. **This is what `# p` buys**: it settles a pair fact 2 could not, in the
-   direction of *needing nothing* — which is why the certificate is a precision upgrade on
-   a rule that already works, and not a requirement for the rule to exist.
+   register again. **This is what `# p` buys**: it is the **sound** form of what the dead
+   clause reached for — a value every lane computes — and it settles a pair fact 2 could not,
+   in the direction of *needing nothing*. That is why the certificate is a precision upgrade
+   on a rule that already works, and not a requirement for the rule to exist.
 3. **Otherwise the value is exchanged**, and the readers pick the space: all of them
    inside the writing workgroup is `shared`, with a barrier placed by facts 1 and 3; a
    reader outside it is `global`, which is the fusion gate's refusal rather than a
