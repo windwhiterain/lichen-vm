@@ -180,11 +180,17 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(array, deps);
             walk(index, deps);
         }
+        Expr::TypeAccess {
+            container, index, ..
+        } => {
+            walk(container, deps);
+            walk(index, deps);
+        }
         Expr::FieldRead { container, key, .. } => {
             walk(container, deps);
             walk(key, deps);
         }
-        Expr::NamedFieldRead { container, .. } | Expr::RawNamedField { container, .. } => {
+        Expr::NamedFieldRead { container, .. } | Expr::NamedTypeAccess { container, .. } => {
             walk(container, deps);
         }
         Expr::TableFind { container, key, .. } => {

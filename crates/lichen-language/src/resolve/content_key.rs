@@ -10,7 +10,7 @@ use super::*;
 /// no compatibility path, so the bump invalidates every cached key. `6` seeded
 /// the prelude, which renumbers every program's binders.
 /// See docs/notes/incremental-update.md §6.1.
-const KEY_FORMAT_VERSION: u64 = 6;
+const KEY_FORMAT_VERSION: u64 = 7;
 
 /// The **resolved content key** of a resolved program.
 ///
@@ -113,8 +113,8 @@ impl KeyWriter {
     ///
     /// Tags are unique across [`Expr`] variants and every list writes its
     /// length, so the encoding is injective; adding a variant or changing a tag
-    /// bumps [`KEY_FORMAT_VERSION`]. Tag `27` retired with the raw index and is
-    /// never reused. `#[stacksafe]`: one stack frame per nested expression.
+    /// bumps [`KEY_FORMAT_VERSION`]. `#[stacksafe]`: one stack frame per nested
+    /// expression.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
@@ -246,6 +246,13 @@ impl KeyWriter {
                 self.expr(array);
                 self.expr(index);
             }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                self.u(27);
+                self.expr(container);
+                self.expr(index);
+            }
             Expr::FieldRead { container, key, .. } => {
                 self.u(14);
                 self.expr(container);
@@ -258,7 +265,7 @@ impl KeyWriter {
                 self.expr(container);
                 self.str(name);
             }
-            Expr::RawNamedField {
+            Expr::NamedTypeAccess {
                 container, name, ..
             } => {
                 self.u(28);

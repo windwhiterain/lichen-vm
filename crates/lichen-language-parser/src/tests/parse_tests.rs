@@ -485,22 +485,22 @@ fn named_field_read_is_dot_postfix() {
 }
 
 #[test]
-fn raw_named_read_is_glued_double_colon_postfix() {
-    // `S::a` — a raw named read; the `::` must be glued to the container.
-    let Expr::RawNamedField {
+fn named_type_access_is_glued_double_colon_postfix() {
+    // `S::a` — a named type access; the `::` must be glued to the container.
+    let Expr::NamedTypeAccess {
         container, name, ..
     } = parse_ok("S::a")
     else {
-        panic!("expected a raw named field read")
+        panic!("expected a named type access")
     };
     assert!(matches!(*container, Expr::Name(n, _, _) if n == "S"));
     assert_eq!(name, "a");
     // The glued `::` reads through a struct type value too.
-    let Expr::RawNamedField {
+    let Expr::NamedTypeAccess {
         container, name, ..
     } = parse_ok("struct{.a Int, .b string}::a")
     else {
-        panic!("expected a raw named field read")
+        panic!("expected a named type access")
     };
     assert_eq!(name, "a");
     assert!(matches!(*container, Expr::StructType(..)));
@@ -613,7 +613,8 @@ fn struct_type_errors_carry_spans() {
 
 #[test]
 fn the_array_type_keyword() {
-    // `array{T, n}` — the keyword-led array type.
+    // `array{T, n}` — the keyword-led array type, distinct from the glued
+    // `X{n}` type access.
     let Expr::TypeArray {
         element_type,
         length,
@@ -635,6 +636,34 @@ fn the_array_type_keyword() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Array(..)));
+}
+
+#[test]
+fn the_type_access_postfix() {
+    // `X{n}` — the glued `{` reads component `n` of `X`'s value, unvalidated.
+    let Expr::TypeAccess {
+        container, index, ..
+    } = parse_ok("tuple{Int, string}{0}")
+    else {
+        panic!("expected a type access")
+    };
+    assert!(matches!(*container, Expr::TypeTuple(..)));
+    assert!(matches!(*index, Expr::Int(0, _)));
+    let Expr::TypeAccess { container, .. } = parse_ok("struct{Int, string}{1}") else {
+        panic!("expected a type access")
+    };
+    assert!(matches!(*container, Expr::StructType(..)));
+    // chained postfix: Int{2}{3} = (Int{2}){3} — the outer type access's
+    // container is the inner type access.
+    let Expr::TypeAccess { container, .. } = parse_ok("Int{2}{3}") else {
+        panic!("expected a type access")
+    };
+    assert!(matches!(*container, Expr::TypeAccess { .. }));
+    // A glued `{` after an expression is the type access (never a block).
+    let Expr::TypeAccess { container, .. } = parse_ok("f{3}") else {
+        panic!("expected a type access")
+    };
+    assert!(matches!(*container, Expr::Name(..)));
 }
 
 #[test]

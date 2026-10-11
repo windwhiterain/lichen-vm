@@ -586,7 +586,8 @@ workstream's, for cost 1).
    The three options weighed: `domain<Int, Float>` (rejected: `<…>` was the
    type-position spelling, and a set is a *value*); `$domain(Int, Float)` (no new
    syntax, but `$` is the *plugin-private* sigil, so it works only for a source
-   the host embeds); and reusing `{…}` (a bare glued `{` is a table lookup). Two
+   the host embeds); and reusing `{…}` (a bare glued `{` was the table lookup then,
+   and is the positional type access now). Two
    consequences of "a set is a value" are in §3.2.
 8. *(Closed — the two targets are green, and what remains is a recorded
    dependency.)* **The kernel boundary is not this feature's to fix.** Making `+`
@@ -689,11 +690,11 @@ and has no `@in`.
     instantiation, mirroring the tuple grammar's `()` unit vs `(,)` empty tuple; a
     spaced paren is function application.  (The two zero-field spellings are the
     one part no note recorded.)
-  - `a.name` is the named field read, `a[i]` the array read, `t{k}` the table lookup
-    (the *adjacent* brace is the distinction), and `X::a` the raw named read of a
-    type value's field.
-  - A struct *instance* reads a field **value** with `.a`; a struct *type* value
-    reads a field **type** with `X::a`.
+  - `a.name` is the named field read, `a[i]` the array read, `t <== k` the table read
+    (the infix arrow is the distinction), `X{n}` the positional type access
+    and `X::a` the named one.
+  - A struct *instance* reads a field **value** with `.a`; a positional component of
+    a type-as-value reads with `X{n}`; a named one with `X::a`.
   - The refusals follow from the same principle: a struct type reaching `a(k)` is
     refused like any other non-tuple, and a set reaching `s[i]` is refused because
     the read pins its container to an array type.

@@ -146,11 +146,19 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 0, array);
             push_index(&mut out, 1, i);
         }
+        Expr::TypeAccess {
+            container,
+            index: i,
+            ..
+        } => {
+            push_index(&mut out, 0, container);
+            push_index(&mut out, 1, i);
+        }
         Expr::FieldRead { container, key, .. } => {
             push_index(&mut out, 0, container);
             push_index(&mut out, 1, key);
         }
-        Expr::NamedFieldRead { container, .. } | Expr::RawNamedField { container, .. } => {
+        Expr::NamedFieldRead { container, .. } | Expr::NamedTypeAccess { container, .. } => {
             push_index(&mut out, 0, container);
         }
         Expr::TableFind { container, key, .. } => {

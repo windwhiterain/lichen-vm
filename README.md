@@ -289,7 +289,7 @@ Box = t => struct{.f t}
   output = "(10, 20): tuple{Int, Int}"
 ---
 t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
-(t{[1, 2]}, t{[3, 4]})
+(t <== [1, 2], t <== [3, 4])
 ```
 
 ### `import`
@@ -398,16 +398,16 @@ five = 5 # 8 ? Doc(.tag 7)
 five # 4
 ```
 
-### `raw_field.lichen`
+### `type_access.lichen`
 
 ```text
 ---
-  order = "12"
-  output = "(Int, string, 1): tuple{Type, Type, Int}"
+  order = "11"
+  output = "(Int, string, Int, string, 1): tuple{Type, Type, Type, Type, Int}"
 ---
 S = struct{.a Int, .b string}
 s = S(.a 1, .b "h")
-(S::a, S::b, s.a)
+(tuple{Int, string}{0}, tuple{Int, string}{1}, S::a, S::b, s.a)
 ```
 
 ### `gcd.lichen`

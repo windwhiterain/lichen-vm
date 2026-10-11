@@ -136,16 +136,24 @@ prefix keyword takes its operands as atoms instead, so `max a + 1 b` is not a
 spelling and `max (a + 1) b` is — the operator's own arity decides the level, and
 `PrefixOp::arity` is the one list both the parser and the checker read.
 
-## 4. `<` and `>` are comparisons
+## 4. `<` and `>` compare alone, and `<==` reads a table
 
-`<` and `>` are the less-than and greater-than comparisons, at §3's comparison
-rung and left-associative like the rest of it: `1 < 2 == 1` is `(1 < 2) == 1`.
-Neither token has another job — the `Glue` rule exists for the `(`, `{`, `[`
-and `::` postfixes alone ([no-type-mode](no-type-mode.md)).
+`<` and `>` are comparisons and nothing else: no postfix form opens with `<`, so
+adjacency no longer changes a token's job — `a<b`, `a < b` and `2 > 1` all compare,
+and the zero-width `>` lookahead the retired angle-bracket index needed is gone
+with it.
+No form is displaced: what used to be an atom at a spaced `<` is still a
+comparison, and a glued `<` is now the same comparison.
 
-Pinned by `operator_precedence_and_associativity` (`1 < 2 == 1` is
-`(1 < 2) == 1`) and `an_int_is_unsigned_where_the_two_readings_differ`
-(`0 - 1 > 1` is `1`).
+`<==` is the **table read** (`t <== k`), at the loosest **binary** level: above it
+sit only `->`, the annotation pieces and `=>`. It is left-associative, and its
+right operand is a whole comparison expression, so `t <== k + 1` reads the key
+`k + 1`, `t <== a <== b` reads `(t <== a) <== b`, and — the one asymmetry the
+choice creates — `t <== a == b` reads `t <== (a == b)`: the comparison to the right
+of the arrow is part of the key, exactly as `k + 1` is. Its left operand must be a
+comparison expression, so an annotated container needs parens
+(`(t : Table) <== k`). The lexer's longest match keeps `<==` from ever lexing as
+`<=` `=`, and `a <= = b` was never a spelling.
 
 ## 5. An `Int` is unsigned
 
@@ -276,11 +284,11 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   workstream's specialize pass, an open class's honest `raw[?a, ?b]` rendering, and
   a routed statement's missing value snapshot — are measured in
   [operator-polymorphism](operator-polymorphism.md) §7.1.
-- **Shifts (`<<`, `>>`).** The blocker was the retired raw index: a `>>` token
-  would have swallowed the adjacent closers of nested angle forms
-  (`X<Y<0>>`), which a `logos` lexer cannot split back. Those forms no longer
-  exist, so the blocker is gone; neither operator is implemented. Named rather
-  than half-done.
+- **Shifts (`<<`, `>>`).** No token exists, so `a << b` lexes as two `<` comparisons
+  and does not parse. The former blocker — a `>>` token swallowing the adjacent
+  closers of nested angle forms — retired with the angle forms themselves
+  ([no-type-mode](no-type-mode.md)), so what is left is a missing operator rather
+  than a blocked one.
 - **Unary minus and unary bitwise-not.** `-x` would collide with the existing
   `-` (binary only), and `~x` with the array literal's shallow marker.  Both are
   spellable (`0 - x`, `x ^ (0 - 1)`) and neither is worth a grammar ambiguity.
@@ -336,7 +344,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - Editor grammar: `tree-sitter-lichen`'s own two tests, which parse every
   example — `operators.lichen` and `gcd.lichen` included — and assert no ERROR
   node, plus the `grammar-consistency` guard that every `.scm` query still
-  compiles. See §10.
+  compiles. See §10, which the type-access spellings have not reached.
 
 ## 10. The editor grammar
 
@@ -351,10 +359,10 @@ two changes, and the second is the interesting one.
   `1 + 2 * 3` nests as `binary_addition(1, binary_product(2, 3))` in an editor
   too, and `queries/highlights.scm` (mirrored in the Zed extension) colours
   every operator in §1's table.
-- **`<` and `>` are two tokens, not one.** The grammar kept this for the removed
-  raw index `X<e>`: the real parser used to re-read the expression it just parsed
-  to decide whether a `<` opens a raw index or compares. A tree-sitter table is
-  LR: it must decide at the token, and
+- **`<` and `>` are two tokens, not one.** This is grammar.js's own model: the
+  compiler's parser no longer has a `<` form at all (§4), but the grammar still
+  opens its retired `angle_tuple` with a glued `<`. A tree-sitter table is LR: it
+  must decide at the token, and
   the decision needs more lookahead than one token — `a < b` and `f<A, B>`
   are both decided *at* the `<`. Whitelisting the conflict in `conflicts` and
   letting the GLR fork pick was tried and is unsound here: the two stacks
@@ -381,7 +389,8 @@ two changes, and the second is the interesting one.
     an index, so nothing real is lost; without it, every angle form with three
     or more elements stops parsing.
 
-**This grammar has not been migrated to the braced type forms.** The language
+**This grammar has not been migrated to the braced type forms, nor to the
+type-access spellings.** The language
 retired `<…>` for `tuple{…}`, and `struct<…>` and `array<…>` for `struct{…}` and
 `array{…}` ([no-type-mode](no-type-mode.md)), but `grammar.js` still models the
 retired `angle_tuple` and `struct<…>`, and only the CLI regenerates it
@@ -390,14 +399,14 @@ in this section is the *grammar's*, not the language's, and an editor reads a
 braced tuple type as a block until the grammar follows. The compiler's parser,
 the language server and the printer know only the braced forms.
 
-**The grammar still models the removed raw index `X<e>`.** The language has since
-retired the form — `<` and `>` are the comparisons alone (§4) — but `grammar.js`
-is unchanged, because regenerating and validating it needs the tree-sitter CLI
-([tree-sitter-generated-files](tree-sitter-generated-files.md)). Its glued `<`
-still opens a lenient one-or-more `angle_tuple`, so `X<0>` reads there as an
-application of an atom to an angle form — a removed spelling. The compiler's own
-lexer, parser, checker, language server and printer know only the comparison, so
-nothing in the language waits on it; an editor grammar's job is colouring.
+The same gap now covers the two reads: `grammar.js` has no `{n}` postfix and no
+`<==` token, so the positional type access and the table read are not modelled
+there at all — an editor gets the grammar's older reading of those programs, and
+`examples/type_access.lichen` and `examples/table.lichen` are the two files that
+spell them. Its `raw_field_read` (`::name`) is the one postfix the rename does
+not touch: `X::a` is the same token sequence, so only its name in this note
+changed. Regenerating the grammar is a `tree-sitter` CLI task and is not done
+here; see [tree-sitter-generated-files](tree-sitter-generated-files.md).
 
 **And the one thing it does not yet know is §7's and §11's five keywords.**
 `int2float`, `float2int`, `max`, `min` and `exp` colour as identifiers there,

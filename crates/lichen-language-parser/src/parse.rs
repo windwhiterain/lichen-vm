@@ -586,8 +586,8 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             )
             .boxed();
 
-        // The comparisons, left-associative, and the loosest binary level; `@in`
-        // sits here too (it yields the same `0`/`1`).
+        // The comparisons, left-associative; `@in` sits here too (it yields the
+        // same `0`/`1`).
         let comparison = bitor
             .clone()
             .foldl(
@@ -606,12 +606,31 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             )
             .boxed();
 
+        // `e <== key` — the table read, the loosest binary level, so the key is
+        // a whole comparison expression.
+        let table_find = comparison
+            .clone()
+            .foldl(
+                token(TokenKind::TableFindArrow)
+                    .ignore_then(operand(tokens, comparison.clone()))
+                    .repeated(),
+                |container, key| {
+                    let span = container.span();
+                    Expr::TableFind {
+                        container: Box::new(container),
+                        key: Box::new(key),
+                        span,
+                    }
+                },
+            )
+            .boxed();
+
         // `->`, right-associative.
-        let term3 = comparison
+        let term3 = table_find
             .clone()
             .then(
                 token(TokenKind::Arrow)
-                    .ignore_then(operand(tokens, comparison.clone()))
+                    .ignore_then(operand(tokens, table_find.clone()))
                     .repeated()
                     .collect::<Vec<_>>(),
             )
@@ -834,8 +853,8 @@ enum Pre {
     FatArrow(Box<Expr>, Box<Expr>),
 }
 
-/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `t{k}`, `X::a`,
-/// and `C(...)`.
+/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `X{n}`, `X::a`, and
+/// `C(...)`.
 fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
@@ -886,8 +905,8 @@ fn atom_parser<'a>(
         )))
         .labelled("an expression");
 
-    // The postfix forms, chained left: `[` is an index and a glued `::name`
-    // is `X::a`.
+    // The postfix forms, chained left: `[` is an index, a glued `{` is `X{n}`,
+    // and a glued `::name` is `X::a`.
     let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
         token(TokenKind::Dot)
@@ -899,14 +918,14 @@ fn atom_parser<'a>(
             .then_ignore(token(TokenKind::RBracket))
             .map(Postfix::Index),
         glue.clone()
-            .ignore_then(token(TokenKind::DoubleColon))
-            .ignore_then(name())
-            .map(|(field_name, _)| Postfix::RawFieldName(field_name)),
-        glue.clone()
             .ignore_then(token(TokenKind::LBrace))
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RBrace))
-            .map(Postfix::TableFind),
+            .map(Postfix::TypeAccess),
+        glue.clone()
+            .ignore_then(token(TokenKind::DoubleColon))
+            .ignore_then(name())
+            .map(|(field_name, _)| Postfix::NamedTypeAccess(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LParen))
             .ignore_then(struct_inst_fields(expr.clone()))
@@ -930,12 +949,12 @@ fn atom_parser<'a>(
                         index: Box::new(index),
                         span,
                     },
-                    Postfix::TableFind(key) => Expr::TableFind {
+                    Postfix::TypeAccess(index) => Expr::TypeAccess {
                         container: Box::new(acc),
-                        key: Box::new(key),
+                        index: Box::new(index),
                         span,
                     },
-                    Postfix::RawFieldName(name) => Expr::RawNamedField {
+                    Postfix::NamedTypeAccess(name) => Expr::NamedTypeAccess {
                         container: Box::new(acc),
                         name,
                         span,
@@ -970,8 +989,8 @@ fn atom_parser<'a>(
 enum Postfix {
     DotName(String),
     Index(Expr),
-    TableFind(Expr),
-    RawFieldName(String),
+    TypeAccess(Expr),
+    NamedTypeAccess(String),
     Paren((Vec<StructInstArg>, bool)),
 }
 

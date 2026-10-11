@@ -1,7 +1,0 @@
----
-  order = "12"
-  output = "(Int, string, 1): tuple{Type, Type, Int}"
----
-S = struct{.a Int, .b string}
-s = S(.a 1, .b "h")
-(S::a, S::b, s.a)

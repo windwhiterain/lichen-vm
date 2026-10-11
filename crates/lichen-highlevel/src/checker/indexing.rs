@@ -1,5 +1,5 @@
 //! Arrays, tables, and indexing: the array instance and type, the element
-//! read with its bounds, and the raw reads.
+//! read with its bounds, and the type accesses.
 
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
@@ -24,7 +24,7 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// An array-element read `a[i]`.
+    /// An array-element read `a[i]`. See `docs/notes/type-access.md`.
     ///
     /// # Invariant
     /// The container's type is pinned to a fresh array type, so a non-array
@@ -118,8 +118,47 @@ where
         pair
     }
 
-    /// The element read behind the raw named read `X::a`; see
-    /// `docs/notes/raw-field.md`. Returns `(pair, element, type)`.
+    /// A positional type access `X{n}` — element `index` of the container's
+    /// value. See `docs/notes/type-access.md`.
+    ///
+    /// # Invariant
+    /// The container must be a tuple type value, stated once as a unify against
+    /// the tuple kind: pinned when undecided, refused where it is decided and
+    /// different. Beyond that the read validates nothing. Its term is the
+    /// element's own `[value, type]` pair, never the bare element.
+    pub(super) fn check_type_access(
+        &mut self,
+        e: ExprId,
+        container: ExprId,
+        index: ExprId,
+    ) -> NodeId {
+        self.check_expr(container);
+        self.check_expr(index);
+        // The tuple-kind requirement, a unify on the container's kind: decided
+        // here, deferred to the apply otherwise.
+        let container_ty = self.state[container].ty.unwrap();
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
+        // A decided container of another kind is refused and not read:
+        // its element's type slot would be the container's type.
+        if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
+            return self.refused_pair(e);
+        }
+        let container_value = self.value_of(container);
+        let index_value = self.value_of(index);
+        self.node_edges.insert(index_value, self.loc(index, 0));
+        let (pair, element, ty_node) = self.element_read(container_value, index_value);
+        // Both slot reads target the element, so this edge gives a failed one
+        // a span and names it the element.
+        self.node_edges.insert(element, self.loc(e, 1));
+        self.state[e].term = Some(pair);
+        // Left to `value_of`: it reads the same node `element_read` built.
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty_node);
+        pair
+    }
+
+    /// The element read shared by `X{n}` and `X::a`; see
+    /// `docs/notes/type-access.md`. Returns `(pair, element, type)`.
     ///
     /// # Invariant
     /// A **type value** container's component is `[type value, kind]`, so the
@@ -162,7 +201,7 @@ where
         (self.pair_of(value_node, ty_node), element, ty_node)
     }
 
-    /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose
+    /// A table read `t <== k`: the lowlevel `TableGet` reads the entry whose
     /// stored key is deep-content-equal to `k`.
     ///
     /// # Invariant

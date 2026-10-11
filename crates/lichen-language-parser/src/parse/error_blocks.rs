@@ -72,6 +72,12 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(array, out);
                 walk_expr(index, out);
             }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                walk_expr(container, out);
+                walk_expr(index, out);
+            }
             Expr::FieldRead { container, key, .. } => {
                 walk_expr(container, out);
                 walk_expr(key, out);
@@ -79,7 +85,7 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
             Expr::NamedFieldRead { container, .. } => {
                 walk_expr(container, out);
             }
-            Expr::RawNamedField { container, .. } => {
+            Expr::NamedTypeAccess { container, .. } => {
                 walk_expr(container, out);
             }
             Expr::TableFind { container, key, .. } => {

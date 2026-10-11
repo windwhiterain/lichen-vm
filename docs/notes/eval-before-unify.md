@@ -131,7 +131,7 @@ all**, which is why a deferred check needs a net at the later tier.
 ### 2.4 The pin route is sound; the guard route was not
 
 The container reads defer an undecided container by different mechanisms: `e[i]`
-and `t{k}` **pin** the container's type to a fresh array/table type
+and `t <== k` **pin** the container's type to a fresh array/table type
 (`check_index`/`check_table_find`), and the pin is enforced by the apply's
 argument unify per call; `a(k)` **guarded** on concreteness and skipped when
 undecided. Measured with no annotation anywhere, so no statement order is
@@ -156,7 +156,7 @@ kind: a disjunction (tuple *or* struct) cannot be pinned, which is what §6.2's
 ranking turns on. A tuple read of a tuple is unaffected, and `x[0]` over a tuple
 still refuses as before.
 
-The **named** reads (`check_named_field`, `check_raw_named_field`) are the guard
+The **named** reads (`check_named_field`, `check_named_type_access`) are the guard
 route — a struct type is refused by `a(k)` now, so `.name` and `::a` are a struct
 instance's only reads — and their deferred half is measured the same way, again
 with no annotation and no statement order:
@@ -213,7 +213,7 @@ answers permanently:
 | site | question | acts on "cannot tell yet" by |
 |---|---|---|
 | `check_binop` | "has either operand stated a class" / "is one a float" | taking the polymorphic path — correct for the value, and the result type is fixed by the merge carry |
-| `check_field` / `check_named_field` / `check_raw_named_field` | "is the container concrete" | skipping the guard; the named halves re-ask through a registered condition (§5.2) |
+| `check_field` / `check_named_field` / `check_named_type_access` | "is the container concrete" | skipping the guard; the named halves re-ask through a registered condition (§5.2) |
 | `slot_read` | "is the position constant", "what is the field type" | keeping the lazy `Index` — sound, but any *reader* of that type cell before it resolves snapshots "unknown" |
 | `check_convert` (`unify_stated_class`) | "is the operand's low type known" | skipping the source-class unify entirely |
 | `check_instantiate` | a one-time force of the callee | deferring the nominality check to the apply's argument unify |
@@ -447,8 +447,7 @@ encoding**, not measured — only §2.4's two rows are measurements):
 
 **The parked experiment that tried the direct pin.** Pinning the undecided tier's
 container to the skeleton, and stating each read form's accepted kind as a unify
-on the container's own cell, was tried in three parts: the positional raw read
-`X<e>` (since removed) requiring the tuple
+on the container's own cell, was tried in three parts: `X{n}` requiring the tuple
 kind, `X::a` requiring a struct kind, and `.a` stating its requirement on the
 container's kind slot; then keeping `X::a`'s requirement for both tiers while
 `.a` keeps the lazy name-table read when undecided; then stating the accepted kind
@@ -536,11 +535,11 @@ order stays as it is.
 - The single-node run is the right strength for both one-shot reads
   (`Checker::compute_operands`, and `element_read`'s inline force): the operand is
   *one* node whose own operator reads what it needs, and the chain it needs is
-  followed through the operand edges `evaluate_node` walks anyway — for a raw
-  element read, the element, the name table's `TableGet` and the container's own
+  followed through the operand edges `evaluate_node` walks anyway — for a type
+  access, the element, the name table's `TableGet` and the container's own
   value. A deep pass would also descend the operand's whole reachable subtree and
   publish a concreteness verdict over it — for a type operand, the *entire type
-  value*, every field pair and every field's type expression, for every raw read —
+  value*, every field pair and every field's type expression, for every type access —
   which is both stronger than the claim needs and wrong in kind, since it decides
   concreteness for nodes the check never asked about.
 - `check_field`'s decided tier is refused outright: its kind is readable, so the
@@ -597,7 +596,7 @@ order stays as it is.
   it against the requirement takes the "one side knows a value" arm, which writes
   the requirement into the read's class and asks nothing — the guard passes over an
   array or a tuple instead of refusing it. Measured: `l.a` on `[10, 20]` reported
-  the generic "not a container" plus a name-table miss, where the raw sibling
+  the generic "not a container" plus a name-table miss, where the named sibling
   `l::a` on the same container states `expected TypeStruct, found array{Int, 2}`.
   The shared "tuple, array, or struct" wording is likewise what this read does not
   accept, and is why the *kind* is the requirement rather than the shape. A
@@ -664,9 +663,10 @@ order stays as it is.
   conflicting expectation later fails against the pinned value. The read's
   subscript is only known by evaluating the read, so the alias is established by
   the evaluation (`alias_read`), not at unify time.
-- The raw named read states its container kind: `X::a` reads a
+- The type accesses state their container kind: `X{n}` reads a component of a **tuple
+  type value** (the container's kind is unified against `TypeTuple`), `X::a` a
   struct type value's named field, and `.a` / `::a` over an array are the two named
   sides of one refusal — `.a` states the container's *kind*, `::a` its whole type.
-  A tuple *value* is not a struct *type* value: `(1, 2)`'s type is the shape
-  `tuple{Int, Int}`, not `TypeStruct`. A deferred container is refused at the argument,
+  A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the shape
+  `tuple{Int, Int}`, not `TypeTuple`. A deferred container is refused at the argument,
   where this used to be an internal panic at the apply.

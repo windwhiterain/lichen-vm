@@ -69,9 +69,11 @@ The samples test runs by default when testing the grammar crate directly; it can
 ## The grammar's state
 
 - `tree-sitter-lichen/grammar.js` is the source of truth (the `==>` table
-  separator, the `X::a` raw named read, and the full operator set — see
-  [operators §10](operators.md#10-the-editor-grammar), which is where the `<`/`>`
-  two-token decision and its two consequences are written down).
+  separator, the `X::a` named type access, and the full operator set — see
+  [operators §9](operators.md#9-the-editor-grammar), which is where the `<`/`>`
+  two-token decision and its two consequences are written down).  It has **not**
+  been regenerated for the type-access spellings: it models neither the `{n}`
+  postfix nor the `<==` table read yet.
 - `tree-sitter-lichen/queries/highlights.scm` colours every operator in that set,
   and is mirrored in `lichen-language-zed/languages/lichen/highlights.scm`.
 - The generated `src/parser.c` etc. are **not** committed; they are regenerated

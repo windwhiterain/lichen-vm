@@ -50,10 +50,20 @@ fn a_table_arrow_separates_a_table_entry() {
             TokenKind::Eof,
         ]
     );
+    // The read's arrow keeps `<=` and `=` from winning their own tokens.
+    assert_eq!(
+        kinds("t <== 2"),
+        vec![
+            TokenKind::Name("t".to_string()),
+            TokenKind::TableFindArrow,
+            TokenKind::Int(2),
+            TokenKind::Eof,
+        ]
+    );
 }
 
 #[test]
-fn a_glued_double_colon_is_a_raw_field_postfix() {
+fn a_glued_double_colon_is_a_named_type_access_postfix() {
     // `S::a` is glued, so a Glue marker precedes `::`; `kinds_all` keeps it.
     assert_eq!(
         kinds_all("S::a"),
