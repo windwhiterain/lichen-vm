@@ -594,10 +594,8 @@ session's to settle; these seams are the interface:
 implements = schema "sha256:9f2c…"
 requires   = { class = f32 }
 reference  = <the region's derivation>
-kernel     = cfg => { …dataflow, and the staged values it exchanges. It names no
-                        space: a slice is a thing, a space is where it lives. … } "gpu"
 plan       = {
-  -- `value` is a mark the body published: the plan's only stable way to name one.
+  -- `mark` is a mark the body published: the plan's only stable way to name one.
   -- `space` is a plan value — `Register | Shared` — and names no length.
   -- `group_width` is a **constraint on this placement** — the group width the facts
   -- are checked against — and not the origin of a length: a slice's element count is
@@ -613,8 +611,10 @@ plan       = {
 ```
 
 **This block is the only place above the IR that names a space** — the buffer's **type** names
-the `DP`, and a space is what the plan puts inside it — and that is the rule the
-mechanism is built on rather than a convention of this note:
+the `DP`, and a space is what the plan puts inside it — and the pack names no body either: the
+body is the engine's, from the region's own dataflow, so *a slice is a thing and a space is
+where it lives*. That is the rule the mechanism is built on rather than a convention of this
+note:
 [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 states it with the layer table,
 and with the three quantities — a slice's element count, a staging group's width, a device's
 lane width — that keep being read as one.
@@ -635,7 +635,7 @@ records which of its steps carries which.
 that is not a producer→code→consumer chain, so a fan-out body — the shape whose
 staging this subsection is about — is not fusable today at all
 ([compute-graph-jit](compute-graph-jit.md)'s missing general builder). The
-interface is written now, ahead of that, because a pack that hands over a body
+interface is written now, ahead of that, because a pack that steers a region
 must hand over a *plan* with it, and the engine owes a stated contract to check
 the plan against rather than a silent acceptance.
 
