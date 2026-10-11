@@ -511,19 +511,42 @@ plan, and what the engine does with it.
   all.** For a region no pack covers, the emitter places a value in the cheapest
   space its own analysis proves: registers where the definition cone shows every
   reader is the writing lane, shared plus the scan's barriers where a reader is
-  another lane of the group, global otherwise — which is a graph edge rather than
-  a kernel's staging. A pack **replaces** the placement and the barrier
+  another lane of the group, and otherwise **the region does not fuse at all** — a
+  reader in another workgroup is a graph edge, which is the engine declining rather
+  than a third placement. That walk, in three steps with the width entering two of
+  them, is [shared-memory-and-barriers](shared-memory-and-barriers.md) §5's and is
+  not restated here. A pack **replaces** the placement and the barrier
   positions; it never replaces the obligation to have them.
 - **The uniformity certificate decides which placements are legal, and it is the
   perspective slot.** A value certified uniform over the group's width needs no
-  cross-lane staging at all — every lane computes the same value; a value
-  certified uniform over `n < group` and read across the group needs shared
-  memory with a barrier, because the lanes that read it are not the lanes that
-  wrote it; an uncertified value that crosses lanes is either staged with the
-  scan's barrier or refused. Where the lattice admits a width no device has (`6`
-  against a 64-lane group), a placement must refuse or state its rounding and
-  never round silently — that open question stays
+  cross-lane staging at all — every lane computes the same value, so there is
+  nothing to exchange; a value certified uniform over `n < group` needs staging
+  **only where a reader sits outside the writer's own `n`-subgroup**, because inside
+  it those lanes already agree; and an uncertified value that crosses lanes is
+  either staged with the scan's barrier or refused. Where the lattice admits a width
+  no device has (`6` against a 64-lane group), a placement must refuse or state its
+  rounding and never round silently — that open question stays
   [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2's.
+- **A plan names values by mark, and that is forced rather than chosen.** §4's
+  canonical form excludes "a run's value numbering: reported, never hashed", so a
+  plan cannot name a value by number and stay valid across sessions. It names the
+  **mark** the body published — §3's channel, and alpha-equivalence free — while a
+  plan naming a value no mark published is refused by name. The mark channel was
+  built for declaring what code cannot carry; this is the second thing it carries.
+- **The plan is checked where the width is, so it has to be carried there.**
+  Matching is schema-level — hash plus constraints — and says nothing about
+  placement; the check needs the fragment's lane-group width and the three facts, so
+  a plan travels from a match to the emit as data on the matched region. Which width
+  that is, is the fragment's to declare, on `int_width`'s template: a target fact as
+  data, in `fragment_digest`, refused by name when a plan asks for a width the target
+  does not have.
+- **Two hashes, and the plan is named in neither.** §4 excludes the plan from the
+  *schema* hash, so two packs that compute one region differently are two
+  implementations of one schema and neither is inert; the plan's **effect** — the
+  slots it stages and the barriers it places — is in the *fragment digest*, because
+  two fragments differing in staging are two modules, and a module cache that
+  conflated them would serve one kernel's shader for another's. The first rule keeps
+  a cost decision from becoming a semantic one; the second keeps a cache from lying.
 
 **What a pack author writes, schematically.** The spelling is the implementing
 session's to settle; these seams are the interface:
@@ -534,8 +557,11 @@ requires   = { class = f32 }
 reference  = <the region's derivation>
 kernel     = cfg => { …the hand-written fused body, with Shared slots… } "gpu"
 plan       = {
-  staging = [ { value = "tile", space = Shared(.n 64) } ]  -- Register | Shared | Global
-  sync    = auto        -- or explicit barrier positions between named writes and reads
+  -- `value` is a mark the body published: the plan's only stable way to name one.
+  staging = [ { value = "tile", space = Shared(.n 64) } ]   -- Register | Shared
+  -- `auto` is the scan. An explicit sync names the two marks it separates, never a
+  -- position: a position drifts under re-spelling.
+  sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
 }
 ```
 
@@ -545,7 +571,9 @@ value with neither a barrier nor a uniformity certificate),
 `StagingNotOnThisBackend` (the host path refuses `Shared` and barriers — the
 memory note's §7 decision — so a plan that needs them is GPU-only and says so),
 and `StagingWidthNotAWidth` (the divisibility lattice against a device's
-lane-group width).
+lane-group width). Naming them is this note's; **implementing each is the
+mechanism's**, and [shared-memory-and-barriers](shared-memory-and-barriers.md) §9
+records which of its steps carries which.
 
 **And this is where the non-chain region finally bites.** §4 refuses a region
 that is not a producer→code→consumer chain, so a fan-out body — the shape whose
@@ -796,7 +824,7 @@ about shrinks exactly where fusion fires.
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
-| the **memory plan** interface | **interface stated, implementation delegated** (§5) | the four seams a pack hands a plan over through — pack-side data, checked against the three facts, an automatic fallback, and `# p` as the certificate — with the mechanism owned by [shared-memory-and-barriers](shared-memory-and-barriers.md)'s staging and the implementation assigned to the local-storage session |
+| the **memory plan** interface | **interface and selection rule stated, implementation staged** | the four seams a pack hands a plan over through — pack-side data, checked against the three facts, an automatic fallback, and `# p` as the certificate — plus the width the check needs and the three-step walk that chooses a space, both [shared-memory-and-barriers](shared-memory-and-barriers.md) §4/§5. The mechanism is that note's §9, staged: the width as a fragment fact, the vocabulary, the walk, the surface, the plan's carriage, and a tiled reduction as the first automatic consumer |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 
 Staging, each stage independently useful:

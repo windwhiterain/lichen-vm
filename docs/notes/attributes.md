@@ -148,6 +148,19 @@ which also records a mismatch this lattice has and that axis would expose:
 **divisibility admits a width no device has** — `6` is a legal perspective, and
 no lane group is six wide.
 
+**A third consumer has since been named, and it needs the lattice's precision rather
+than its coarse half: the legality of a placement.** A value's uniformity is what
+decides whether it needs *staging* at all — a value uniform over the group is one every
+lane computes, so nothing is exchanged — and a value uniform over `n < group` needs
+staging only where a reader sits outside the writer's own `n`-subgroup. That makes the
+certificate the **permission** for a placement and not an optimisation of one, and it is
+stated as a seam of the memory plan in
+[graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5,
+feeding the walk in
+[shared-memory-and-barriers](shared-memory-and-barriers.md) §5. The lattice is
+load-bearing there for exactly the reason the mismatch above gives: a placement for a
+width no device has must refuse rather than round.
+
 ## Subtyping: checking is a generalised unify
 
 `check_unify_relaxed(a, b, loc, kind, is_subtype)` attempts an equality unify; on

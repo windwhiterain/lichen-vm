@@ -401,7 +401,7 @@ and the crate is forbidden from learning it.
 |---|---|---|---|
 | fact 2, same lane | the two index operands are the same `ValueId`, or neither's def cone contains the lane parameter | one memoised cone walk over the body | the IR, from the body |
 | fact 1, **conservative** | the two index intervals intersect at all | O(1) integers | the IR, from the body |
-| fact 1, **exact** | the same modulo the lane count, which is what decides whether `i % 64` is one slot per lane or one slot for all of them | O(1) integers | **a backend**: it needs `LOCAL_SIZE_X` |
+| fact 1, **exact** | the same modulo the lane count, which is what decides whether `i % 64` is one slot per lane or one slot for all of them | O(1) integers | the IR, **given a width the fragment declares** (below) |
 | fact 3, already separated | a latch over the scan | free | the IR |
 | the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slot is `Shared` | the same cone walk | the IR, and it must stay there |
 
@@ -415,9 +415,19 @@ variant plus its `Display` and match arms, the wasm emitter's `instruction_type`
 `lower_instr` (which its own invariant requires to agree), the wasm mixed-class check,
 the differential test's second CPU interpreter, and `spirv.rs` — of which exactly one,
 `spirv.rs`, is a place a barrier means anything. The other six each had to invent an
-answer for an instruction undefined in their target. Insertion therefore belongs where
-`LOCAL_SIZE_X` and `OpControlBarrier` already are; §9's staging predates this
-measurement and is **not yet restaged for it**, shared memory being deferred.
+answer for an instruction undefined in their target.
+
+**That is a cost argument about the instruction, not a location argument about the
+width, and this note first drew the wrong conclusion from it.** The crate's invariant
+forbids *depending on* a backend's constant; it does not forbid *receiving* a width as
+data, and `KernelFragment` already does exactly that for a target fact: `int_width:
+IntWidth` is "declared rather than assumed", is hashed in `fragment_digest`, and a backend
+whose target cannot represent it "refuses the fragment **by name** rather than narrowing
+silently" (`lichen-kernel-ir/src/lib.rs`; `SpirvRefusal::UnsupportedIntWidth`). The
+lane-group width is the same kind of fact and wants the same treatment — declared by the
+fragment, chosen by the host compiler, in the digest, refused by name when a plan or a
+certificate asks for a width the target does not have. With the width as data the whole
+scan is the IR's, which is §9's staging and not the backend's.
 
 The refusal is the interesting row, because it is the one this note originally
 assigned to `DP`. "Excludes the lane parameter" is a **sound** test for
@@ -468,6 +478,58 @@ on top of a working analysis, which is why it moved from "the missing half" to
 judgement, and the barrier is a scan over the first three.** That is the sentence
 the whole note is for; the original version of it named `DP` where the def cone
 now sits.
+
+### The three spaces, and how one is chosen
+
+The facts decide *whether* a pair needs a barrier. They also decide **where the value
+between the pair lives**, which is the same question one level up: a value that crosses
+lanes needs somewhere to be between its write and its read. There are three spaces, and
+only two of them are a kernel's to choose.
+
+| space | who reads it | mechanism | today |
+|---|---|---|---|
+| **registers** | the lane that wrote it | nothing: an SSA value | **the only one that exists** |
+| **shared** | another lane of the same workgroup | a `Workgroup` variable, and a barrier | absent |
+| **global** | another workgroup | **a graph edge**, so the region is not one kernel | the fusion gate's answer |
+
+**`global` is not a placement.** A fused body has no global staging: a value two
+workgroups must exchange cannot be one kernel, so the answer is that the region does not
+fuse and the graph keeps two nodes. That is the graph's decision and not a kernel's, which
+is why the plan's staging has two values and not three — a plan asking for `global` is
+asking the engine to place a value in the one space that costs a kernel boundary.
+**`registers` is not a placement either**: it is the assertion that no staging is owed,
+which the facts confirm rather than believe.
+
+So the plan's real content is *which* values are staged, *where* (shared), and *which*
+barriers — and the automatic plan is the walk that decides it:
+
+1. **Is the reader the writing lane?** Fact 2's test: the two index operands are the same
+   `ValueId`, or neither's def cone contains the lane parameter. Then the value is a
+   register and nothing is owed.
+2. **Is the value certified uniform over the group?** A value at `# n` covering every
+   reader's lane is one every lane computes, so nothing is exchanged and the space is a
+   register again. **This is what `# p` buys**: it settles a pair fact 2 could not, in the
+   direction of *needing nothing* — which is why the certificate is a precision upgrade on
+   a rule that already works, and not a requirement for the rule to exist.
+3. **Otherwise the value is exchanged**, and the readers pick the space: all of them
+   inside the writing workgroup is `shared`, with a barrier placed by facts 1 and 3; a
+   reader outside it is `global`, which is the fusion gate's refusal rather than a
+   placement.
+
+The width enters in steps 2 and 3 and nowhere else: "uniform over the group" needs to know
+what the group is, and fact 1's *exact* judgement needs the lane count to know whether
+`i % 64` is one slot per lane or one slot for every lane. Both are §4's table's third row,
+and both read the width the fragment declares.
+
+**What makes the choice legal is declared algebra, not a proof.** The paper has the author
+state the sharing structure (`partition`, `claim`) and places the synchronisation at the
+scope's end; lichen does not give the logic that surface, so the licence comes from the
+mark channel instead. A `Reduction` declares its `combine` **associative with an
+identity**, and that declaration is precisely the permission to re-associate the fold — it
+is what makes a workgroup-tiled implementation of a reduction the *same answer* as the
+per-lane loop, and therefore what lets the automatic plan be a floor rather than the only
+choice. [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over)
+§5 carries the interface this rule feeds and §7 the acceptance case that needs it.
 
 ## 6. The shape of the two halves
 
@@ -765,11 +827,26 @@ mergeable and leaves the tree green.
 | | step | crate(s) | note |
 |---|---|---|---|
 | **1** | **revert the token**: `ScalarClass::State`, `ComputeValue::State`, `Lower.state` and the loop-nest carry, `StateWhereAValueBelongs`, `BridgeRefusal::StateClass`, the ~20 `Const(State, 0)` seeds, `State = struct<>`; `BufferWriteCall` back to `produces() == 0`, `arity() == 3`, and `Write`'s `run` arm back to lazy | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-graph-ir`, `lichen-fusion-bridge`, `lichen-language` (tests) | §6.2 is the inventory. Coordinates with `356fc4a`, which adapted the fusion bridge to the variant — and fixes a latent defect there while it does (`read_position` reads `args.first()`, which the token made the state). **Nothing replaces it on global buffers**: §3's ABI wall |
-| **2** | IR vocabulary: `SharedReadCall`, `SharedWriteCall`, `Barrier` as *additive* variants; the shared-slot set as a fragment field, hashed in `fragment_digest`; `validate` refuses a barrier under divergent control flow | `lichen-kernel-ir` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move |
-| **3** | the scan: `insert_barriers(&mut KernelFragment)`, plus the contended-write refusal | `lichen-kernel-ir` | in the IR crate so `from_flat` bodies get it and it is testable without the language. Conservative first, then §4's interval refinement |
-| **4** | **one landing**: the surface (`Shared`, `swrite` returning a new version, `sread` consuming it through `.from`), its lowering, and the GPU backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slot layout) | `lichen-compute`, `lichen-compute-gpu` | §3's conclusion: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0`. The tally gate must also learn that writes to one buffer are one output. The descriptor set and binding layout do not change — shared memory is not bound |
-| **5** | the host backend: the named refusal | `lichen-compute` | §7. Segmentation is a later, separate step |
-| **6** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
+| **2** | **the lane-group width as a fragment fact**, on `int_width`'s template: a field the fragment *declares*, chosen by the host compiler, hashed in `fragment_digest`, and refused **by name** by a target that cannot honour it | `lichen-kernel-ir`, `lichen-compute-gpu` | Independent of 3–5 and **landable on its own today**. It is what moves fact 1's *exact* judgement and the uniformity check out of a backend and into the IR without the crate depending on any backend's constant (§4). This step is what §5's `StagingWidthNotAWidth` and `StagingNotOnThisBackend` are |
+| **3** | IR vocabulary for staging: `SharedReadCall` and `SharedWriteCall` as *additive* variants, the shared-slot set as a fragment field hashed in `fragment_digest`, and the barrier instruction | `lichen-kernel-ir` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move. Whether a distinct `Barrier` variant earns its cost is measured in §4: 11 edits across 7 files, one of them in a place a barrier means anything |
+| **4** | **the scan and the selection**: `insert_barriers`, *and* §5's three-step walk that decides each cross-lane value's space, plus the contended-write refusal | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language — which step 2 is what makes possible. Conservative first, then §4's interval refinement. The selection is not a second pass: it is the same walk with a second output |
+| **5** | **one landing**: the surface (`Shared`, `swrite` returning a new version, `sread` consuming it through `.from`), its lowering, and the GPU backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slot layout) | `lichen-compute`, `lichen-compute-gpu` | **This surface is a pack's, not the logic's.** The logic DSL never names a space, so `Shared` here is what a hand-written fused body and a plan are written in; what a logic package gets instead is step 8. §3's conclusion holds: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0`. The descriptor set and binding layout do not change — shared memory is not bound |
+| **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses `Shared` and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
+| **7** | **the plan interface**: a pack's plan matched by schema, **checked against the three facts rather than believed**, carried from match to emit, with the refusals the interface owes | `lichen-language` (match), `lichen-kernel-ir` (check) | [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5 is the interface; this step is where it becomes checkable. The plan never enters the *schema* hash and its **effect** enters `fragment_digest` through the fragment — which is why step 3's slot field and step 2's width are the same kind of fact and land in the same place |
+| **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | §5's walk's step 3, and what makes the selection's domain non-empty. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so the selection has nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better |
+| **9** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
+
+**Where the mechanism lives, and who owes what.**
+[graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5
+states the *interface* — what a pack may say about a plan — and delegates the
+*mechanism* here: "the wrapper, the spine, the scan, the barrier instruction and the
+staging table". This note is the receiving end of that delegation, and the pieces it
+owes are steps 3–5. The four refusals §5 names split across them: `PlanContradicted`
+and `UncertifiedCrossLaneRead` are step 4's (the facts refuting a declared plan; a
+cross-lane value with neither a barrier nor a certificate), `StagingNotOnThisBackend`
+is step 6's, and `StagingWidthNotAWidth` is step 2's — the step that did not exist
+when §5 was written, and the reason §5's seam "a declared plan is checked against the
+same facts the automatic one is" was owing a width with no named source.
 
 Two facts about the starting point that the staging assumes, both verified:
 
@@ -777,11 +854,14 @@ Two facts about the starting point that the staging assumes, both verified:
   storage class and no `OpControlBarrier` anywhere in `crates/lichen-compute-gpu`;
   the only barriers in the tree are Vulkan **pipeline** barriers between
   dispatches (`dispatch.rs:1068` and neighbours), which order *dispatches* and have
-  nothing to do with a workgroup's lanes.
-- **Steps 2–4 are a strict prerequisite chain, and step 1 is not a prerequisite at
-  all** — it is a reversion. The spine was originally step 1 precisely so that it
-  could be validated before anything consumed it; §3 records why that turned out to
-  be backwards, and why the version that does land lands with its first consumer.
+  nothing to do with a workgroup's lanes. `op::VARIABLE` is used at module scope
+  only, for the storage buffers and the push-constant block, so there is not even a
+  `Function`-storage local to extend.
+- **Steps 3–5 are a strict prerequisite chain, step 2 is not a prerequisite of
+  anything but the walk, and step 1 is not a prerequisite at all** — it is a
+  reversion. The spine was originally step 1 precisely so that it could be validated
+  before anything consumed it; §3 records why that turned out to be backwards, and
+  why the version that does land lands with its first consumer.
 
 ## 10. What is open
 

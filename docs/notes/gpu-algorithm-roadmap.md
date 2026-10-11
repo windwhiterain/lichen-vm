@@ -359,7 +359,16 @@ the unroll, and it is the largest single item in this roadmap:
 > this item; its [§9](shared-memory-and-barriers.md#9-the-staging) is the
 > staging that follows. First, the overlap judgement is **not** `DP`: it is the
 > nominal wrapper (which says whether a slot is block-shared at all) plus a
-> def-cone query over the body, both local to `lichen-kernel-ir`. `UP`/`DP` is a
+> def-cone query over the body, and the **conservative** form of that query is the
+> body's alone. Its **exact** form needs the group's lane count — a target fact, but
+> a fragment may *declare* one on `int_width`'s template, which is what keeps the
+> whole scan in `lichen-kernel-ir` and what makes the width a
+> [staging step](shared-memory-and-barriers.md#9-the-staging) in its own right
+> rather than a backend's business. The audit first drew the other conclusion from
+> it and was wrong; §4 of that note records the correction. That width has a second
+> consumer, the one this axis is *not* about: it decides whether `i % 64` is one
+> slot per lane or one slot for every lane, which is what chooses **where a
+> cross-lane value lives**. `UP`/`DP` is a
 > precision upgrade on a refusal that already works, so growing the `UP` lattice
 > with a **level** component — which is what this callout used to say the item
 > needs *first* — is deferred to a trigger that has not arrived. Second, the
@@ -371,7 +380,10 @@ the unroll, and it is the largest single item in this roadmap:
 - **The surface is a native plugin** (a new operator, a new buffer kind bound at
   a group scope, a barrier op) — but the *IR* must grow, because a fragment has
   no notion of local memory or of a synchronisation point. So it is the first
-  item here that is not confined to `lichen-compute`.
+  item here that is not confined to `lichen-compute`. **And it is a *pack's*
+  surface, not the logic's**: a logic package never names a space, so what a logic
+  author gets instead is the automatic plan and the tiled reduction it chooses
+  ([shared-memory-and-barriers](shared-memory-and-barriers.md) §5).
 - **What it buys**: it is the axis that makes scan, sort, tiled matmul and
   sub-group reduction expressible at all. Every one of those is out of reach
   without it, and reachable with it.
