@@ -111,7 +111,7 @@ The map itself, as landed:
 | `Conv { from, to }` | `F32ConvertI64U` / `I64TruncF32U`; `from == to` is a **reclassification** and emits nothing |
 | `CallKernel(kid)` | `Call { function_index: base + index[kid] }` |
 | `BufferReadCall(class)` | `Call { function_index: read_index[class] }` over `[position, index]` |
-| `BufferWriteCall(class)` | `Call { function_index: write_index[class] }` over `[position, index, value]` — the state operand is dropped at the call and the token the instruction leaves is a fresh `i32.const 0`, so the import's signature is unchanged |
+| `BufferWriteCall(class)` | `Call { function_index: write_index[class] }` over `[position, index, value]` |
 
 **The trap, and it is the important one.** The kernel's comparison operators yield
 an **`i64` `0`/`1` scalar**, while wasm's comparisons yield an **`i32`**. So a

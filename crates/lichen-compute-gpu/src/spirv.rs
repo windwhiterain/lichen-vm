@@ -189,12 +189,6 @@ pub enum SpirvRefusal {
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
     MixedClasses { at: usize },
-    /// A state token where a value belongs.
-    ///
-    /// # Invariant
-    /// A state carries nothing, so no operand, conversion or stored element can be made of
-    /// it: the instruction is malformed rather than something a target cannot represent.
-    StateWhereAValueBelongs { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
     /// A buffer write inside a loop body: the trip count is per lane and may be zero.
@@ -271,13 +265,6 @@ impl fmt::Display for SpirvRefusal {
                 "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
                  do not convert in either direction, so nothing here can make the two operands \
                  meet: this is a malformed fragment rather than an unsupported shape."
-            ),
-            SpirvRefusal::StateWhereAValueBelongs { at } => write!(
-                f,
-                "instruction {at} reads a state token as a value. A state carries nothing — it \
-                 only orders the effects around it — so no conversion, operand or stored element \
-                 can be made of it: this is a malformed fragment rather than a shape a target \
-                 could not represent."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -364,12 +351,6 @@ enum Kind {
     Literal(i64),
     /// The `OpTypeBool` a comparison yields.
     Condition,
-    /// The zero-width state token a write leaves.
-    ///
-    /// # Invariant
-    /// Materialised, not held: it has no representation, so every one of these ids is the
-    /// module's own `uint` zero, and no position may read one as a value.
-    State,
 }
 
 /// A slot holding a value of `class`.
@@ -393,14 +374,6 @@ const fn condition(id: u32) -> Slot {
     Slot {
         id,
         kind: Kind::Condition,
-    }
-}
-
-/// A slot holding a state token, over the module-scope constant that materialises it.
-const fn state(id: u32) -> Slot {
-    Slot {
-        id,
-        kind: Kind::State,
     }
 }
 
@@ -571,9 +544,6 @@ impl Ids {
         match self.class {
             ScalarClass::Int => self.ulong,
             ScalarClass::Float => self.float,
-            ScalarClass::State => {
-                unreachable!("a module's arithmetic class is a data class, never a state")
-            }
         }
     }
 
@@ -582,9 +552,6 @@ impl Ids {
         match self.class {
             ScalarClass::Int => self.ulong,
             ScalarClass::Float => self.uint,
-            ScalarClass::State => {
-                unreachable!("a module's arithmetic class is a data class, never a state")
-            }
         }
     }
 
@@ -593,9 +560,6 @@ impl Ids {
         match class {
             ScalarClass::Int => self.integer(),
             ScalarClass::Float => self.float,
-            ScalarClass::State => {
-                unreachable!("a state token is no data value; Kind::State names its form")
-            }
         }
     }
 
@@ -604,9 +568,6 @@ impl Ids {
         match class {
             ScalarClass::Int => self.one_integer,
             ScalarClass::Float => self.one_float,
-            ScalarClass::State => {
-                unreachable!("a state token carries no number, so it has no one")
-            }
         }
     }
 
@@ -614,9 +575,6 @@ impl Ids {
         match class {
             ScalarClass::Int => self.zero_integer,
             ScalarClass::Float => self.zero_float,
-            ScalarClass::State => {
-                unreachable!("a state token carries no number, so it has no zero")
-            }
         }
     }
 
@@ -995,9 +953,6 @@ fn emit_function(
                     widened
                 }
                 ScalarClass::Float => component,
-                ScalarClass::State => {
-                    unreachable!("the module's own class is a data class, never a state")
-                }
             };
             (id, ScalarClass::Int)
         } else {
@@ -1060,12 +1015,6 @@ fn emit_function(
                     let instruction = op;
                     match instruction {
                         KernelInstr::Const(class, value) => {
-                            // **A state constant is the token itself**: no representation,
-                            // so it is the module's `uint` zero, already declared.
-                            if class == ScalarClass::State {
-                                slots.insert(definition, state(ids.zero));
-                                continue;
-                            }
                             // One id per (class, value): SPIR-V requires every id defined
                             // exactly once.
                             let id = literals.get(class, value, &ids, &mut next);
@@ -1210,9 +1159,6 @@ fn emit_function(
                                             operator: "^ (bitwise exclusive or)",
                                             at,
                                         });
-                                    }
-                                    (ScalarClass::State, _) => {
-                                        return Err(SpirvRefusal::StateWhereAValueBelongs { at });
                                     }
                                 };
                             if as_bits {
@@ -1370,11 +1316,9 @@ fn emit_function(
                             if plan.inside[node] {
                                 return Err(SpirvRefusal::WriteInsideLoop { at });
                             }
-                            // The state token orders the write and is not stored: it is an
-                            // SSA value here only because the body's graph names it.
-                            let value = operand(3)?;
-                            let element = operand(2)?;
-                            let position = operand(1)?;
+                            let value = operand(2)?;
+                            let element = operand(1)?;
+                            let position = operand(0)?;
                             let slot = buffer_slot(
                                 position,
                                 at,
@@ -1418,7 +1362,6 @@ fn emit_function(
                                 ],
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
-                            slots.insert(definition, state(ids.zero));
                         }
                         // **The callee's own facts**: the set carries its arity,
                         // which is its domain's flattening.
@@ -1543,8 +1486,6 @@ fn type_of(ids: &Ids, kind: Kind) -> u32 {
         // A parameter's kind is resolved when its first edge arrives, so a literal
         // never carries a phi.
         Kind::Literal(_) => ids.scalar(),
-        // The token's own type is the narrow integer it is materialised as.
-        Kind::State => ids.uint,
     }
 }
 
@@ -2175,9 +2116,7 @@ impl Emitter<'_> {
                     Kind::Scalar(class) => {
                         as_class(*arg, class, self.ids, self.literals, code, self.next, at)?
                     }
-                    // **A state is handed over as it is**: it carries nothing, so there is
-                    // no representation to coerce an edge into.
-                    Kind::State | Kind::Literal(_) => *arg,
+                    Kind::Literal(_) => *arg,
                 };
             }
         }
@@ -2589,9 +2528,6 @@ fn assemble(
             ));
             constants.push(Inst::new(op::CONSTANT, vec![ids.uint, ids.one_integer, 1]));
         }
-        ScalarClass::State => {
-            unreachable!("a module's arithmetic class is a data class, never a state")
-        }
     }
     constants.extend(literals.iter().map(|literal| Inst {
         opcode: literal.opcode,
@@ -2672,13 +2608,14 @@ fn bin_class(lhs: Kind, rhs: Kind, module: ScalarClass) -> ScalarClass {
         _ => module,
     }
 }
+
 /// `slot` as a value of `class`, emitting what the change needs.
 ///
 /// # Invariant
-/// Four cases, each a fact about the module: a literal becomes a constant of `class`, the one IR
+/// Three cases, each a fact about the module: a literal becomes a constant of `class`, the one IR
 /// instruction whose class the position decides; a condition becomes that class's `1`/`0` through
-/// `OpSelect`, since there is no `OpConvertBoolToInt`; a scalar of the other class is refused by
-/// name rather than converted; and a state token is refused too, because it carries nothing.
+/// `OpSelect`, since there is no `OpConvertBoolToInt`; and a scalar of the other class is refused by
+/// name rather than converted.
 fn as_class(
     slot: Slot,
     class: ScalarClass,
@@ -2692,7 +2629,6 @@ fn as_class(
         Kind::Scalar(seen) if seen == class => Ok(slot),
         Kind::Scalar(_) => Err(SpirvRefusal::MixedClasses { at }),
         Kind::Literal(value) => Ok(scalar(literals.get(class, value, ids, next), class)),
-        Kind::State => Err(SpirvRefusal::StateWhereAValueBelongs { at }),
         Kind::Condition => {
             let result = *next;
             *next += 1;
@@ -2726,9 +2662,6 @@ fn as_condition(
 ) -> Slot {
     match slot.kind {
         Kind::Condition => slot,
-        Kind::Scalar(ScalarClass::State) | Kind::State => {
-            unreachable!("a state token carries no number, so it is no condition")
-        }
         Kind::Scalar(ScalarClass::Int) => {
             let result = *next;
             *next += 1;

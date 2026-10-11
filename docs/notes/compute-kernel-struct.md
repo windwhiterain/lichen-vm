@@ -56,9 +56,8 @@ plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => $range(x): Int
 Read = T => struct<.from (Buf T), .at Int>
 Write = T => struct<.to (Buf T), .at Int, .value T>
-State = struct<>
 read = (x : (Read _)) => $read(x.from, x.at): x.from.element
-write = (x : (Write _)) => $write(x.to, x.at, x.value): State
+write = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)

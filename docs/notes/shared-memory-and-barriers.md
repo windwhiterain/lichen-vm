@@ -1,17 +1,36 @@
 # Shared memory, and where a barrier comes from
 
-> Status: **in progress — part one has landed, the rest is settled and staged.**
+> Status: **in flux — part one landed as a token, is being reverted, and the
+> replacement is restaged.**
 > A design for the one capability the [roadmap](gpu-algorithm-roadmap.md) calls
 > the largest single item in axis C — lanes that can see each other — and for the
 > analysis that makes it sound. The three parts were written as inseparable; a
 > code audit before implementation showed two of the three are **cheaper than
 > this note first claimed**, and §9 records the staging that follows from it.
 >
-> What has landed is part one alone: **the write's effect as a value**
-> ([§6.2](#62-the-spine-what-landed)) — `write` returns a zero-width `State` and
-> the lowered body threads it, on both backends, with no ABI change and nothing
-> new expressible. The `Shared` wrapper, the barrier, the scan and §7's host
-> refusal are staged behind it and none of them is built.
+> Part one landed as a zero-width `State` token ([§6.2](#62-the-spine-what-landed)).
+> **That choice is retracted and being reverted.** §3's argument for a witness over a
+> buffer version rested on a runtime-value model that does not hold inside a kernel
+> body, where a `Buf` is an undecided wrapper node and the JIT walks structure rather
+> than tracing values — so all three of its objections fall, and the spine becomes a
+> **buffer version**: `write` returns a new version of the buffer it wrote, and
+> `read` consumes it through the `.from` field it already has. That is what
+> *purifying* the write means, which a token never was, because a token is consumed
+> and never read.
+>
+> A spike then measured the replacement and corrected this note twice more (§3). The
+> read **does** grow an operand — a version needs it just as a token did — and reading
+> back what a body wrote has **no data path in today's ABI**, so landing the
+> annotation alone would turn a named refusal into a silent `0`. The spine therefore
+> moves out of step 1 and lands **with** `Shared` (§9 step 4), where the slot space is
+> readable by construction; step 1 is now the reversion itself.
+>
+> The spike also measured a case that looked like a silently wrong answer on `dev` —
+> a write the codomain does not reach is never emitted and never diagnosed — and it
+> is **not one**. Checking it against the type settled the design instead:
+> [code-audit D17](code-audit.md), **a `compute.write` is not an effect, it is the
+> value of an output position.** That is the sentence this retraction rests on, and it
+> makes the token a category error rather than merely an expensive choice.
 >
 > The paper this project's attribute extension is inspired by supplies the `DP`
 > half ([Typed Perspectives](../reference/Modular%20GPU%20Programming%20with%20Typed%20Perspectives.pdf),
@@ -154,40 +173,130 @@ What the spine must **not** be is the reason the analysis is deferred: §4's thr
 facts need no perspective attribute, so the spine lands alone and the scan lands
 when shared memory does.
 
-### Why the spine is a zero-width witness and not a new buffer
+### Why the witness was the wrong answer, and what replaces it
 
-The proposal this note records first arrived as "each write returns a new
-buffer, and the return point collects them". The spine is right; making it a
-*buffer* buys nothing the spine does not already have, and costs three things
-that a witness does not:
+**Retracted, with the evidence.** The subsection this replaces argued that a
+buffer-valued write costs three things a zero-width token does not. All three were
+written against a **runtime-value** model of what a buffer inside a kernel body is,
+and that model is wrong. Inside a parallel index function a `Buf` is an **undecided
+wrapper node** — "two items, the second an element *type*", with a placeholder in
+`.native` ([compute-buffer-wrapper](compute-buffer-wrapper.md#a-placeholder-under-a-buf-wrapper))
+— and a parallel kernel "is compiled by `$parallel`'s own run, and at that moment
+the parameter's annotated type may still be an unresolved cell", which "leaves the
+operator **undecided**" (same note, §"The kernel may compile before its
+parameter's annotation resolves"). The JIT is a **structural** walk over nodes and
+index paths — `Lower::value`, `write_value_node` over `operand_items`,
+`parallel_buffer_pos` over `param_path`/`named_path` — and not a trace over values.
+Each objection, against that:
 
-- **It writes a false dependency into the graph.** Two adjacent values of a
-  scatter/gather are not ordered, and a buffer-valued write says they are. The
-  false edge is not a correctness bug — it is a claim the optimizer would later
-  have to be taught to disbelieve.
-- **It removes the buffer from first-class position.** A closure that captures a
-  buffer would have to name *which version* it captured; today it captures a
-  handle whose writes are not versions.
-- **It collides with the buffer's lifetime model.** A buffer's payload is arena
-  data owned by its block and there is **no per-value destructor**
-  (`ValueExt`/`ComputeValue::Buffer`, `compute.rs:775`) — one new buffer value
-  per write is a new allocation per write.
+- **"One new buffer value per write is a new allocation per write."** There is no
+  buffer *value* in a kernel body to allocate; a version costs a **node**. And even
+  where a payload-bearing `ComputeValue::Buffer` does exist, the freeze collects
+  handles by `(ptr, len)` and dedups them (`static_module/freeze.rs:200`), so N
+  nodes sharing one payload cost one arena entry, not N.
+- **Two versions would be collapsed into one.** They would be, if they had decided
+  values: `ValueExt::value_eq` compares handle payloads by pointer **and by content**
+  (`lichen-lowlevel/src/lib.rs:346`), and the equality walk merges two nodes into one
+  class when their values are `value_eq` (`equality.rs:744`). But that path is gated —
+  "Undecided is not a fact to propagate, so **only a decided value reaches here**"
+  (`equality.rs:292`), and `value_pair_equal` asks "whether two **decided** leaf
+  values are one" (`:757`). An undecided wrapper is never merged by it.
+- **"It removes the buffer from first-class position."** The one that survives, and
+  it survives as a *question* rather than a refutation: a closure capturing a buffer
+  would have to name which version it captured. Whether that is a cost or the honest
+  semantics is [§10](#10-what-is-open) item 2's, not this section's.
 
-A zero-width state value has none of the three, and gives the same spine. It is
-a value in exactly the sense lichen already uses the word — it has a type, it can
-be a struct field, it participates in the DAG — and it carries nothing: not an
-element, not an address. What it *means* is "the effects up to here have
-happened", which is a fact a later read can require.
+What remains of the first objection — "two adjacent values of a scatter/gather are
+not ordered, and a buffer-valued write says they are" — is not an objection to
+versions at all. **Versions are the cure for it**: `w1 = write(b, …)` and
+`w2 = write(b, …)`, both taken from `b`, are *not* ordered, which is the true
+partial order, where a token threaded in emission position imposes a total one
+([§10](#10-what-is-open) item 5).
 
-The same argument decides a narrower question the spine's first landing hits:
-**the token threads through the *lowered* body, not through the codomain.** A
-parallel index function's return value *is* its output positions —
-`parallel_output_nodes` takes one node per position and the lowering refuses
-unless `tally.writes == outputs.len()` (`compute.rs:2128`, `:2189`). Collecting a
-final state into the codomain, as this note originally proposed, would grow the
-output arity by one and break that identity. It is also unnecessary: the codomain
-already reaches every write, so the token only has to be threaded where the
-effects are emitted, which is `Lower`.
+**So the spine is a buffer version, not a token — but a spike measured the price,
+and it is not the one this section assumed.** `write` returns a new version of the
+buffer it wrote and `read` consumes it through the `.from` field it already has;
+that much holds, and the annotation is simply `: x.to` —
+`write = (x : (Write _)) => $write(x.to, x.at, x.value): x.to` — which type-checks
+and needs no `ComputeValue` at all. `ComputeOperator::Write` can go back to
+**lazy**, because a `: T` annotation writes the type cell and neither the checker nor
+the lowering reads the operator's answer (`check_ann`,
+`lichen-highlevel/src/checker/annotations.rs:274`; `NativeOp::build` for `Write`
+already answers `decided: false`). This is also what *purifying* the write means —
+the body becomes a function of buffer values — and a token was never that, because a
+token is consumed and never read.
+
+**What the spike refutes is "no extra operand on the read".** The edge exists at the
+**lichen node** level — a read's `.from` operand *is* the write's result node, and a
+small structural walk resolves it to that write's `.to` position, in exactly
+`write_value_node`'s shape. It does **not** exist in the lowered IR:
+`BufferReadCall`'s operands are `vec![position, index]`, where `position` is a fresh
+`emit_const` ordinal (`body.rs:1548`), so the write's `ValueId` has nowhere to
+travel. A version therefore needs the same IR change a token needed — the read grows
+an operand — and step 3's scan, which reads the *lowered* body, cannot see the edge
+without it. What a version buys over a token is not the absence of that operand but
+its **content**: an operand naming a buffer version lets the scan tell a read of `A`
+after a write to `B` from a read of `A` after a write to `A`, which an opaque token
+cannot.
+
+**And behind that is a wall, which is the real reason to restage.** Reading back
+what a body wrote has **no data path in today's ABI**: the host `read` import reads
+`state.inputs` only (`compute.rs:5779`, `.unwrap_or(0)`), outputs are write-only, and
+the fragment's `inputs`/`outputs` split has no room for "this input is really an
+output of the same body". So landing the annotation and the position walk *alone*
+would turn today's named refusal —
+
+```text
+compute.parallel: read's buffer argument is not an input buffer of the parallel
+parameter (the parameter's inputs are [])
+```
+
+— into a program that compiles and **silently reads `0`**. Strictly worse. A global
+`Buf` version is therefore not a type-level change but an **ABI** change, and nothing
+needs it until shared memory exists — where the slot space is readable *by
+construction*, because that is what `Workgroup` storage is for.
+
+**Which moves the spine out of step 1 and into step 4.** [§9](#9-the-staging) now
+lands it with `Shared`, `sread`/`swrite` and the `Workgroup` declaration as one
+landing, so the edge, its operand and its data path arrive together and the scan has
+something real to walk. The token is still reverted ([§6.2](#62-the-spine-what-landed)),
+but nothing replaces it on global buffers, because on global buffers the read-back
+the spine would order does not exist.
+
+Two measurements outlive that decision and are recorded here rather than lost:
+
+- **A write the codomain does not reach is not written, and that is correct.** The
+  lowering is demand-driven from the codomain leaves, so a `write` bound to a
+  statement the return value never reads is never emitted, never counted by
+  `tally.writes` and never diagnosed: two writes to one output with only the second
+  reachable answer with the second's value and no complaint. That looks exactly like
+  the ladder's histogram until it is checked against the **type**: an index function
+  is `A T.I -> T.O` over a parameter whose `.out` group *is* the outputs, so walking
+  the return necessarily covers every declared output, the per-output
+  `write_value_node` gate and the tally gate already say the two sets are the same,
+  and an unreturned `write` is a dead expression — dropping it is what a
+  pure-function semantics does. [code-audit D17](code-audit.md) records the decision
+  and its scope: **it holds for global buffers only**, because §9 step 4 makes a
+  `Shared` slot readable by another lane, and then an unreturned `swrite` has a
+  reader and reachability from the codomain stops being the test. The token would not
+  have caught it either, and could not — both writes hang off the same
+  `Const(State, 0)` root, so the first is a value nothing consumes. **D17's sentence
+  is what this whole section rests on**: a `compute.write` is not an effect, it is the
+  value of an output position. So threading a state token through it was a category
+  error and not merely an expensive choice, and returning a new version of the buffer
+  is not a clever encoding but the honest type for it.
+- **A data-flow chain of two writes is refused today.** Making the second write's
+  `.at` close over the first's result trips the tally gate ("emitted 2 write(s) but
+  its codomain names 1 output(s)"), because the gate counts *emissions* and a chain
+  emits twice for one output. Under versioning that program is ordinary, so the gate
+  must learn that writes to one buffer are one output — new work the replacement
+  unlocks, not a reversion.
+
+**The enforcement question is unanswered and is now the sharpest open one.** Nothing
+in the tree forbids reading the original `b` after writing it, which is a silently
+unordered read; `KernelBody::validate` has no read/write ordering check and cannot
+have one, because it cannot tell an input buffer from an output. The token never
+provided this either — `read` does not consume it. [§10](#10-what-is-open) item 3.
 
 ## 4. What decides a barrier, and it is three facts
 
@@ -344,6 +453,14 @@ is still the option to prefer, for the one-slot reason above.
 
 ### 6.2 The spine: what landed
 
+> **Reverted — read this as the record of what the token cost, not as the design.**
+> [§3](#why-the-witness-was-the-wrong-answer-and-what-replaces-it) retracts the
+> argument that chose it. Everything below stayed true of the landing while it was
+> on `dev`, and the costs it records — a `ScalarClass` variant with `unreachable!`
+> arms in four crates, a state carried through every loop nest, ~20 hand-written
+> bodies reseeded, a refusal variant and a bridge arm that both exist only to reject
+> the token — are exactly what the replacement does not pay.
+
 Part one, and the only part built. **`compute.write` returns a zero-width
 state**, and the lowered write threads it.
 
@@ -388,7 +505,8 @@ The residual hazard is stated rather than fixed: **`KernelFragment` has no
 `validate`**, so a fragment that *declares* `result_classes: [State]` reaches
 `type_of`'s `unreachable!` and panics instead of being refused. The lowering cannot
 produce one — a parallel fragment's result is the dummy constant in the first
-write's value class — but a hand-written fixture can. §10 item 3 keeps this open.
+write's value class — but a hand-written fixture can. §10 item 4 keeps the general
+question open.
 
 **The state is a carried value of every loop nest, and no source program can put a
 write there yet.** `Lower` seeds the token with a `Const(State, 0)` in the entry
@@ -566,13 +684,12 @@ mergeable and leaves the tree green.
 
 | | step | crate(s) | note |
 |---|---|---|---|
-| **1** | the spine: `write` returns a zero-width state, threaded through the lowered body | `lichen-compute`, `lichen-kernel-ir`, `lichen-lowlevel`, both backends | **landed.** §6.2 records what it cost and the one hazard it left open. Expresses nothing new on purpose: it is the edge, not the analysis |
-| **2** | IR vocabulary: `SharedReadCall`, `SharedWriteCall`, `Barrier` as *additive* variants; the shared-slot set as a fragment field, hashed in `fragment_digest`; `validate` refuses a barrier under divergent control flow | `lichen-kernel-ir` | additive variants, so the ~50 existing `BufferWriteCall` sites do not move twice |
+| **1** | **revert the token**: `ScalarClass::State`, `ComputeValue::State`, `Lower.state` and the loop-nest carry, `StateWhereAValueBelongs`, `BridgeRefusal::StateClass`, the ~20 `Const(State, 0)` seeds, `State = struct<>`; `BufferWriteCall` back to `produces() == 0`, `arity() == 3`, and `Write`'s `run` arm back to lazy | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-graph-ir`, `lichen-fusion-bridge`, `lichen-language` (tests) | §6.2 is the inventory. Coordinates with `356fc4a`, which adapted the fusion bridge to the variant — and fixes a latent defect there while it does (`read_position` reads `args.first()`, which the token made the state). **Nothing replaces it on global buffers**: §3's ABI wall |
+| **2** | IR vocabulary: `SharedReadCall`, `SharedWriteCall`, `Barrier` as *additive* variants; the shared-slot set as a fragment field, hashed in `fragment_digest`; `validate` refuses a barrier under divergent control flow | `lichen-kernel-ir` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move |
 | **3** | the scan: `insert_barriers(&mut KernelFragment)`, plus the contended-write refusal | `lichen-kernel-ir` | in the IR crate so `from_flat` bodies get it and it is testable without the language. Conservative first, then §4's interval refinement |
-| **4** | the surface: `Shared`, `sread`, `swrite`, and their lowering | `lichen-compute` | a second struct wrapper, per §6.1 |
-| **5** | the GPU backend: `OpVariable` in `Workgroup`, `OpControlBarrier`, the shared-slot layout | `lichen-compute-gpu` | greenfield: see below. The descriptor set and binding layout do not change, because shared memory is not bound |
-| **6** | the host backend: the named refusal | `lichen-compute` | §7. Segmentation is a later, separate step |
-| **7** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
+| **4** | **one landing**: the surface (`Shared`, `swrite` returning a new version, `sread` consuming it through `.from`), its lowering, and the GPU backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slot layout) | `lichen-compute`, `lichen-compute-gpu` | §3's conclusion: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0`. The tally gate must also learn that writes to one buffer are one output. The descriptor set and binding layout do not change — shared memory is not bound |
+| **5** | the host backend: the named refusal | `lichen-compute` | §7. Segmentation is a later, separate step |
+| **6** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
 
 Two facts about the starting point that the staging assumes, both verified:
 
@@ -581,8 +698,10 @@ Two facts about the starting point that the staging assumes, both verified:
   the only barriers in the tree are Vulkan **pipeline** barriers between
   dispatches (`dispatch.rs:1068` and neighbours), which order *dispatches* and have
   nothing to do with a workgroup's lanes.
-- **Steps 2–5 are a strict prerequisite chain, and step 1 is not.** Step 1 could
-  have been deferred until step 3 needed it; §3 records why it was not.
+- **Steps 2–4 are a strict prerequisite chain, and step 1 is not a prerequisite at
+  all** — it is a reversion. The spine was originally step 1 precisely so that it
+  could be validated before anything consumed it; §3 records why that turned out to
+  be backwards, and why the version that does land lands with its first consumer.
 
 ## 10. What is open
 
@@ -598,14 +717,20 @@ re-litigated:
   a `validate` refusal, and automatic insertion is *less* surface than an explicit
   operator plus a placement checker plus a sufficiency check on the author's
   placement.
-- **What the spine is spelled as** — a zero-width state, at the language level,
-  with the token threaded through the lowered body. §6.2.
-- **The state's class in the IR** — a third `ScalarClass` variant, **outside
-  `ALL`**, and not an `Int` alias. The cheaper alternative — materialise the token
-  as a narrow integer and let the type system not know — was rejected for the reason
-  §3 rejects a buffer-valued write: it is a claim a later optimizer would have to be
-  taught to disbelieve. §6.2 records the diff it actually cost, which stayed inside
-  the two backends. Its residual hazard is item 3 below.
+- **What the spine is spelled as** — **a buffer version, not a token.** §3. The
+  token landed first (`4a41a71`) and is reverted; §6.2 stays as the record of what
+  it cost. The annotation that expresses a version is `: x.to`, and it type-checks.
+- **Whether `write` must be eager** — **no.** A `: T` annotation writes the type
+  cell, and neither the checker nor the lowering reads the operator's answer, so
+  `ComputeOperator::Write` goes back to lazy and no `ComputeValue` variant is needed
+  for a version. A token needed a *value*; a version needs only a *node*.
+- **Where the spine lands** — **with `Shared`, not before it** (§9 step 4). §3's ABI
+  wall: a read-back with no data path compiles and silently answers `0`, so the edge,
+  its operand and its data path arrive together or not at all.
+- **Whether the read grows an operand** — **yes, either way.** §3 measured that a
+  version needs it just as a token did, because `BufferReadCall`'s operands are
+  `[position, index]` and the write's `ValueId` has nowhere to travel. What a version
+  buys is the operand's *content*, not its absence.
 - **`DP` on `Buf`** — additive and deferred: `Buf` stays what it means today, and
   only `Shared` narrows it. Whether the top is the *honest* `DP` for a global
   buffer is still an open question, and it is now a question about a later landing
@@ -620,25 +745,36 @@ Still open:
    Whether lichen needs both, or only the degenerate one, is not settled. **This is
    also §6.1's trigger**: it is the first thing that needs a level the nominal type
    cannot supply.
-2. **Whether the surface ever needs explicit threading.** §6.2 defers a `.after`
-   field on `Write` and an initial state to thread from. If shared-memory algorithms
-   turn out to need orderings the emission order does not give — two independent
-   chains in one body, say — the field comes back, and with it a source-level
-   change to every `Write` spelling in `examples/` and the tests.
-3. **Whether the panic surface of `ScalarClass::State` is acceptable.** §6.2
-   records what step 1 chose — `State` outside `ALL`, `unreachable!` in
-   `byte_width`/`index`/`type_of`, `SpirvRefusal::StateWhereAValueBelongs` wherever
-   the emitter can see a state in a data position — and the cost question is
-   answered: the diff stayed inside the two backends and no fixed-size per-class
-   table grew. What is still open is the one route by which a state reaches those
-   `unreachable!`s from *outside* the compiler's own construction:
-   **`KernelFragment` has no `validate`**, so a fragment declaring
-   `result_classes: [State]` panics instead of being refused. The fix is a
-   fragment-level check that every declared result, input and output class is a
-   data class; whether it belongs beside `KernelBody::validate`, which cannot see
-   the fragment, or beside `fragment_digest`, which can, is the question, and it
-   should be settled before step 2 adds a fragment field of its own.
-4. **The refusal's diagnostic.** A contended write is today silently wrong on both
+2. **Whether a closure must name the version it captures.** §3's one surviving
+   objection to a buffer-valued write, and versioning makes it concrete rather than
+   hypothetical: threading *is* the surface now (`read (.from w1, …)`), so a closure
+   that captures a buffer captures some version, and the question is whether
+   capturing a stale one is refused or silently unordered. Today a closure captures a
+   handle whose writes are not versions, which is why this never arose.
+3. **The enforcement question, and it is the sharpest one.** Nothing in the tree
+   forbids reading the original `b` after writing it, which is a silently unordered
+   read. `KernelBody::validate` cannot host the check — it cannot tell an input
+   buffer from an output — so it belongs where the roles are known: the lowering, or
+   a fragment-level validate. Until it exists, a version chain is an *opportunity* to
+   be ordered rather than a *guarantee* that it is, and the token never provided one
+   either, because `read` did not consume it.
+4. **Whether `KernelFragment` needs a `validate` at all.** The token made this
+   concrete and then went away: `KernelFragment` has no validate, so a fragment
+   declaring `result_classes: [State]` reached `type_of`'s `unreachable!` and panicked
+   instead of being refused. The revert removes that instance, but item 3's check
+   needs the same thing — fragment-level facts (`roles`, `inputs`, `outputs`) that
+   `KernelBody::validate` cannot see. Step 2 adds a fragment field of its own, so the
+   question should be settled there rather than after.
+5. **The residual false edge.** Versioning makes the order partial and matches the
+   program text, which cures the token's total order across unrelated buffers. It does
+   not cure everything: a scatter writing *one* buffer at distinct indices still gets
+   an edge between adjacent versions of that buffer. Breaking it needs the scan to
+   prove two writes touch disjoint slots — fact 1's interval question on a
+   write/write pair — and then to split the version chain, which means a body carries
+   two versions at once and something must say which a later effect consumes. That is
+   item 2 arriving by another route, so the two should be settled together, and
+   neither is worth settling before a reordering pass exists.
+6. **The refusal's diagnostic.** A contended write is today silently wrong on both
    backends (below). Making it a refusal is the fix, but the message has to name the
    index expression, the slot and the reason, and the reason differs between "the
    def cone excludes the lane" and "`UP` proves it uniform" — two causes that should
@@ -660,5 +796,5 @@ that excludes the lane parameter, so the write is the same slot in all 64 lanes,
 so it is contended, so it is refused. **The original note credited `DP` with this,
 and that was too strong** — `DP` would notice *more* of them (`i % 1`, and any
 expression `UP` can prove uniform whose cone still contains the lane), which is
-why §4 calls the perspective attribute a precision upgrade and §10 item 4 asks for
+why §4 calls the perspective attribute a precision upgrade and §10 item 6 asks for
 the two causes to be told apart in the diagnostic.

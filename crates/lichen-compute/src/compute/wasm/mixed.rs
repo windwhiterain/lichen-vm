@@ -89,7 +89,9 @@ pub(super) fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), Stri
             // Each definition records what it leaves behind, so an operand's class is
             // the defining instruction's.
             let produced = check(op, &args, &defined, at)?;
-            defined.insert(instr, produced);
+            if op.produces() > 0 {
+                defined.insert(instr, produced);
+            }
         }
     }
     // A terminator adds nothing to check: every value it hands over was checked where it
@@ -142,10 +144,10 @@ fn check(
         }
         KernelInstr::BufferWriteCall(class) => {
             // This is where a mix is caught: the other class stored into a buffer.
-            as_operand_class(class_of(&args[3]), class, at)?;
-            as_operand_class(class_of(&args[2]), ScalarClass::Int, at)?;
-            // The result is the state token, which the next write's state operand is.
-            Ok(OperandClass::Scalar(ScalarClass::State))
+            as_operand_class(class_of(&args[2]), class, at)?;
+            as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
+            // A write leaves nothing behind, and the class it answers is the absent one.
+            Ok(OperandClass::Opaque)
         }
         // The two class crossings as one instruction: the pair makes the direction
         // explicit rather than guessed.

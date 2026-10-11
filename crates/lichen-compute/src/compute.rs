@@ -420,9 +420,6 @@ fn element_value(class: ScalarClass, bytes: &[u8]) -> Option<LowValue> {
             let bits = u32::from_le_bytes(bytes.try_into().ok()?);
             Some(LowValue::Float(f32::from_bits(bits)))
         }
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so it is never a buffer element")
-        }
     }
 }
 
@@ -437,9 +434,6 @@ fn pack_elements(class: ScalarClass, words: &[i64]) -> Vec<u8> {
         match class {
             ScalarClass::Int => payload.extend_from_slice(&word.to_le_bytes()),
             ScalarClass::Float => payload.extend_from_slice(&(*word as u32).to_le_bytes()),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it is never a buffer element")
-            }
         }
     }
     payload
@@ -464,9 +458,6 @@ fn unpack_elements(class: ScalarClass, payload: &[u8]) -> Vec<i64> {
                     .try_into()
                     .unwrap_or_default(),
             )),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it is never a buffer element")
-            }
         })
         .collect()
 }
@@ -741,13 +732,6 @@ pub enum ComputeValue {
     /// the next dispatch reads, so the edge follows the operand with no side
     /// table to disagree with.
     GraphValue(GraphValueId),
-    /// The state a `compute.write` leaves: what a later effect is ordered after.
-    ///
-    /// # Invariant
-    /// It carries nothing — not an element, not an address, not a handle — so there is
-    /// nothing to release and nothing to freeze, and it means only "the effects up to
-    /// here have happened".
-    State,
 }
 
 /// A run's results as the language holds them while they are still on a device.
@@ -984,16 +968,6 @@ impl ValueCodec for ComputeValue {
                     "this package is not cached: it holds a graph's own placeholder at its top \
                      level, and a placeholder means nothing outside the recording that made it — \
                      the number is a position in that recording's value table and nothing else"
-                        .into(),
-                );
-            }
-            // A state token is refused for the same reason: an effect's value names no
-            // data an artifact could describe.
-            ComputeValue::State => {
-                return Err(
-                    "this package is not cached: it holds the state a `compute.write` left at its \
-                     top level, and a state is a runtime value with no on-disk form — it orders \
-                     effects that have already happened"
                         .into(),
                 );
             }
@@ -1564,14 +1538,10 @@ where
                     };
                     Some(element)
                 }
-                ComputeOperator::Range => {
-                    // Kernel-only: `range` never reaches the VM as a standalone apply
-                    // — stay lazy.
+                ComputeOperator::Range | ComputeOperator::Write => {
+                    // Kernel-only operators: `range`/`write` never reach the VM as a
+                    // standalone apply — stay lazy.
                     None
-                }
-                // **The write's effect is a value**; its operands are already evaluated.
-                ComputeOperator::Write => {
-                    Some(<P::Value as From<ComputeValue>>::from(ComputeValue::State))
                 }
                 ComputeOperator::BufferCollect => {
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
@@ -1605,11 +1575,6 @@ where
                                         .map(|word| f32::from_bits(word as u32))
                                         .collect(),
                                 ),
-                                ScalarClass::State => {
-                                    unreachable!(
-                                        "a state token carries nothing, so it is no buffer's element"
-                                    )
-                                }
                             }
                         }
                         Some(ComputeValue::DeviceBuffer(resident)) => {
@@ -2522,9 +2487,6 @@ pub(crate) fn buffer_import_name(class: ScalarClass, kind: &str) -> String {
     let class = match class {
         ScalarClass::Int => "i64",
         ScalarClass::Float => "f32",
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so it is no buffer's element")
-        }
     };
     format!("{kind}_{class}")
 }
@@ -2664,9 +2626,6 @@ fn low_shape_of(class: ScalarClass) -> LowShape {
     match class {
         ScalarClass::Int => LowShape::USize,
         ScalarClass::Float => LowShape::Float,
-        ScalarClass::State => {
-            unreachable!("a state token is not a data class, so it is never a parameter leaf")
-        }
     }
 }
 
@@ -2847,9 +2806,6 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
         // Exact for the integers a fragment carries: ordinals, and an index bounded
         // by `MAX_PARALLEL_ELEMENTS`.
         ScalarClass::Float => float_bits(value as f32),
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so its bits are never read")
-        }
     }
 }
 
@@ -2970,9 +2926,6 @@ fn element_type(class: ScalarClass) -> TypeValue {
     match class {
         ScalarClass::Int => TypeValue::TypeInt,
         ScalarClass::Float => TypeValue::TypeFloat,
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so it is no buffer's element")
-        }
     }
 }
 
@@ -3993,9 +3946,6 @@ impl ScalarValue {
         match self.class {
             ScalarClass::Int => LowValue::USize(self.bits as usize),
             ScalarClass::Float => LowValue::Float(f32::from_bits(self.bits as u32)),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it never crosses the ABI")
-            }
         }
     }
 
@@ -4004,9 +3954,6 @@ impl ScalarValue {
         match self.class {
             ScalarClass::Int => wasmi::Val::I64(self.bits),
             ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32)),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it never crosses the ABI")
-            }
         }
     }
 
@@ -4021,9 +3968,6 @@ impl ScalarValue {
         let bits = match class {
             ScalarClass::Int => v.i64()?,
             ScalarClass::Float => i64::from(v.f32()?.to_bits()),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it never crosses the ABI")
-            }
         };
         Some(ScalarValue { class, bits })
     }
@@ -5860,9 +5804,6 @@ fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
     match class {
         ScalarClass::Int => value.i64().unwrap_or(0),
         ScalarClass::Float => float_bits(value.f32().map_or(0.0, |bits| bits.to_float())),
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so the host import never writes one")
-        }
     }
 }
 
@@ -5871,9 +5812,6 @@ fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
     match class {
         ScalarClass::Int => wasmi::Val::I64(word),
         ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(word as u32)),
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so the host import never writes one")
-        }
     }
 }
 
@@ -5903,7 +5841,6 @@ mod parallel_launch_tests {
             body: KernelBody::from_flat(
                 2,
                 &[
-                    FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the writes thread
                     FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
                     FlatOp::Read(1),
                     FlatOp::Read(1),

@@ -315,7 +315,6 @@ pub fn describe(value: &ComputeValue) -> &'static str {
         ComputeValue::Graph(..) => "a graph",
         ComputeValue::GraphInput(_) => "a placeholder for a graph's own input",
         ComputeValue::GraphValue(_) => "a placeholder for a value the graph has produced",
-        ComputeValue::State => "the state a write left",
     }
 }
 

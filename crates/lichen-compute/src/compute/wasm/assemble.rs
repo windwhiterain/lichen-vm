@@ -19,15 +19,10 @@ use super::mixed::refuse_mixed_classes;
 use crate::compute::{buffer_import_name, param_classes};
 
 /// The wasm value type a class is lowered to.
-///
-/// # Invariant
-/// A data class is its own type. A `State` is `i32`: wasm has no void value, and the
-/// narrow integer is what keeps the token a real type that is not a data value.
 pub(super) fn value_type(class: ScalarClass) -> Type {
     match class {
         ScalarClass::Int => Type::I64,
         ScalarClass::Float => Type::F32,
-        ScalarClass::State => Type::I32,
     }
 }
 
@@ -200,8 +195,6 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
     classes.sort_by_key(|class| match class {
         ScalarClass::Int => 0,
         ScalarClass::Float => 1,
-        // A state is no buffer's element, so it never reaches this list.
-        ScalarClass::State => 2,
     });
     classes
 }

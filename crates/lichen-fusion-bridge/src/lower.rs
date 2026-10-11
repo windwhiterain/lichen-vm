@@ -128,7 +128,6 @@ impl Walk<'_> {
             KernelInstr::Const(ScalarClass::Int, _) => {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
-            KernelInstr::Const(ScalarClass::State, _) => Err(BridgeRefusal::StateClass),
             KernelInstr::Bin(ScalarClass::Float, operator) => {
                 let Some(symbolic) = binary(operator) else {
                     return Err(BridgeRefusal::UnsupportedOperator { operator });
@@ -140,7 +139,6 @@ impl Walk<'_> {
             KernelInstr::Bin(ScalarClass::Int, _) => {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
-            KernelInstr::Bin(ScalarClass::State, _) => Err(BridgeRefusal::StateClass),
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
             KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
             KernelInstr::Select => Err(BridgeRefusal::Select),
@@ -158,7 +156,6 @@ impl Walk<'_> {
             KernelInstr::BufferReadCall(ScalarClass::Int) => {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
-            KernelInstr::BufferReadCall(ScalarClass::State) => Err(BridgeRefusal::StateClass),
             KernelInstr::BufferWriteCall(_) => Err(BridgeRefusal::BufferWrite {
                 position: self.read_position(args)?,
             }),

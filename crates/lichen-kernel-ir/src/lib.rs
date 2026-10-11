@@ -16,70 +16,50 @@ mod marks;
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 
-/// What a value is: an `Int`, a `Float`, or the zero-width [`Self::State`] a write leaves.
+/// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`
+/// (`f32`).
 ///
 /// # Invariant
 /// Fieldless: the class is a tag, and the one representation fact that follows — its
 /// width — is [`Self::byte_width`], because a field would be a second place the same
-/// number could be written wrong. `State` is no data class: it has no width, no buffer
-/// holds it, and no ABI leaf names it.
+/// number could be written wrong. A single variant space over both classes would give
+/// `bits()` two ways to answer `32` with no way to tell which it described.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarClass {
     /// An unsigned machine-sized integer — the language's `Int`.
     Int,
     /// A 32-bit float — the language's `Float`.
     Float,
-    /// The zero-width token a [`KernelInstr::BufferWriteCall`] leaves: a value in the
-    /// body's DAG and no data at all.
-    ///
-    /// # Invariant
-    /// It is not an alias for [`Self::Int`]: it carries nothing, so it has no width, no
-    /// buffer element class, no fragment result class and no parameter class, and every
-    /// position that wants a number refuses it rather than reading it.
-    State,
 }
 
 impl ScalarClass {
     /// The bytes one buffer element of this class occupies.
     ///
     /// # Invariant
-    /// The one answer, on the class, the only thing that knows it: every width — host byte
-    /// arithmetic, a module's `ArrayStride`, a dispatch's padding — is derived from here.
-    /// Two copies of the rule is how the wasm backend came to lay a float element out at
-    /// eight bytes while SPIR-V read four. `State` is no buffer element, so a width for it
-    /// is unreachable: zero would compile.
+    /// The one answer, on the class because the class is the only thing that knows it:
+    /// every width — host byte arithmetic, a module's `ArrayStride`, a dispatch's padding —
+    /// is derived from here. Two copies of the rule is how the wasm backend came to lay a
+    /// float element out at eight bytes while SPIR-V read four.
     pub fn byte_width(self) -> usize {
         match self {
             ScalarClass::Int => 8,
             ScalarClass::Float => 4,
-            ScalarClass::State => {
-                unreachable!("a state token is zero-width: it is never a buffer element")
-            }
         }
     }
 
-    /// The data classes, in the order the per-class tables are indexed.
+    /// A dense index for this class, so a backend can key a per-class table on it.
     ///
     /// # Invariant
-    /// The two are in step with the two *data* variants: a module holding one element type
-    /// per class — an SPIR-V storage buffer, whose `ArrayStride` is the class's
+    /// The two are in step with the two variants: a module holding one element type per
+    /// class — an SPIR-V storage buffer, whose `ArrayStride` is the class's
     /// `byte_width()` — sizes its table by the number of classes, not by a number
-    /// restated beside it. `State` is no buffer's element, so a table entry for it would
-    /// be a chain nothing can bind.
+    /// restated beside it.
     pub const ALL: [ScalarClass; 2] = [ScalarClass::Int, ScalarClass::Float];
 
-    /// A dense index into the per-class tables [`Self::ALL`] sizes.
-    ///
-    /// # Invariant
-    /// Only the data classes have one, and a state reaching here is the bug
-    /// [`Self::byte_width`] refuses in the same breath.
     pub fn index(self) -> usize {
         match self {
             ScalarClass::Int => 0,
             ScalarClass::Float => 1,
-            ScalarClass::State => {
-                unreachable!("a state token is not a data class, so it has no table index")
-            }
         }
     }
 }
@@ -535,14 +515,11 @@ pub enum KernelInstr {
     /// position and the index are `Int` regardless: one is a compile-time ordinal, the other
     /// a lane number. So this instruction names two classes at once.
     BufferReadCall(ScalarClass),
-    /// Write one element of one output buffer: `[state, position, index, value]`.
+    /// Write one element of one output buffer: `[position, index, value]`.
     ///
     /// # Invariant
-    /// The class named here is the element class of the value written, as in
-    /// [`Self::BufferReadCall`]; the position and the index are `Int`, and the state is
-    /// the token of the write that precedes this one — [`ScalarClass::State`], which is
-    /// what this instruction itself leaves. The state is first so that threading it keeps
-    /// the other three operands' relative order.
+    /// The class is the element class, as in [`Self::BufferReadCall`]; the position and the
+    /// index are `Int`.
     BufferWriteCall(ScalarClass),
 }
 
@@ -580,12 +557,14 @@ impl KernelInstr {
     /// How many values this instruction leaves behind.
     ///
     /// # Invariant
-    /// **One for every instruction, a write included**: a write leaves the
-    /// [`ScalarClass::State`] token that orders it, which is the whole of the arity
-    /// question, so [`KernelBody::validate`](crate::KernelBody::validate) can check a
-    /// definition against its declaration.
+    /// **One for everything except a write**, a side effect that leaves nothing — the
+    /// whole of the arity question, so [`KernelBody::validate`](crate::KernelBody::validate)
+    /// can check a definition against its declaration.
     pub fn produces(&self) -> usize {
-        1
+        match self {
+            KernelInstr::BufferWriteCall(_) => 0,
+            _ => 1,
+        }
     }
 
     /// How many values this instruction reads, when the instruction fixes it.
@@ -602,26 +581,25 @@ impl KernelInstr {
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
             KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } => 1,
             KernelInstr::Select => 3,
-            KernelInstr::BufferWriteCall(_) => 4,
+            KernelInstr::BufferWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
         })
     }
 
-    /// The class this instruction's result is declared in, where it can be stated.
+    /// The class this instruction states in its own form, if it states one.
     ///
     /// # Invariant
-    /// **Stated, not derived**: a constant's bits and an operator's operands are only
-    /// readable against the class they were lowered in, so an instruction names its class
-    /// because the fact cannot be recovered from the value later. A write's result is the
-    /// zero-width `State` and not the element class in its own form: that class is what was
-    /// written, while what it *leaves* is the token.
+    /// **Stated, not derived**: a constant's bits and an arithmetic operator's operands are
+    /// only readable against the class they were lowered in, so an instruction names its
+    /// class because the fact cannot be recovered from the value later.
     pub fn own_class(&self) -> Option<ScalarClass> {
         match self {
             KernelInstr::Const(class, _) => Some(*class),
             KernelInstr::Bin(class, _) => Some(*class),
             KernelInstr::Conv { to, .. } => Some(*to),
-            KernelInstr::BufferReadCall(class) => Some(*class),
-            KernelInstr::BufferWriteCall(_) => Some(ScalarClass::State),
+            KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
+                Some(*class)
+            }
             KernelInstr::I32WrapI64 | KernelInstr::Select | KernelInstr::CallKernel(_) => None,
         }
     }

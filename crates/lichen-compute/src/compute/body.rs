@@ -86,14 +86,6 @@ pub struct Lower<'a, P: Program> {
     /// It moves to a loop's merge block when a nest is built, so the caller's
     /// remaining instructions land in the block the nest leaves.
     block: usize,
-    /// The current **state token**: the last effect this body emitted, and the first
-    /// operand of the next `BufferWriteCall`.
-    ///
-    /// # Invariant
-    /// One value threaded through the whole body, so the chain reaches every effect:
-    /// seeded in the entry block, carried through a nest as its last parameter, and
-    /// replaced by each write's own result.
-    state: ValueId,
     /// The active `@loop` nests, innermost last.
     loops: Vec<ActiveLoop>,
 }
@@ -163,8 +155,6 @@ where
         for _ in 0..domain_arity(params) {
             body.add_param(entry);
         }
-        // **The state root**: every effect in this body is ordered after it.
-        let state = body.add_const(entry, ScalarClass::State, 0);
         let mut lower = Lower {
             module,
             params,
@@ -179,7 +169,6 @@ where
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
             block: entry,
-            state,
             loops: Vec::new(),
         };
         let mut values = Vec::new();
@@ -197,9 +186,8 @@ where
     ///
     /// # Invariant
     /// The outputs are emitted in position order, so write `k` takes the ordinal
-    /// `k`. The writes leave only the state tokens that order them, so the
-    /// terminator returns a dummy of the fragment's class to match the result the
-    /// signature declares.
+    /// `k`. The writes produce nothing, so the terminator returns a dummy of the
+    /// fragment's class to match the result the signature declares.
     pub fn lower_index_function(
         module: &'a Module<P>,
         params: &'a [ParamSlot],
@@ -217,8 +205,6 @@ where
         // **The fragment's domain is the config's leaves plus the invocation index**,
         // which no shape contains.
         body.add_param(entry);
-        // **The state root**: the first write threads from it.
-        let state = body.add_const(entry, ScalarClass::State, 0);
         let mut lower = Lower {
             module,
             params,
@@ -233,7 +219,6 @@ where
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
             block: entry,
-            state,
             loops: Vec::new(),
         };
         for output in outputs {
@@ -567,9 +552,16 @@ where
 
     /// Emit `instr` over `args` in the current block, declaring what it leaves.
     fn emit(&mut self, instr: KernelInstr, args: Vec<ValueId>, class: ScalarClass) -> ValueId {
-        let value = self.body.add_op(self.block, instr, args, vec![class]);
-        // **Recorded against the node being defined**, which an operator consults.
-        self.classes.insert(self.defining, class);
+        let declared = if instr.produces() == 0 {
+            Vec::new()
+        } else {
+            vec![class]
+        };
+        let value = self.body.add_op(self.block, instr, args, declared);
+        if instr.produces() > 0 {
+            // **Recorded against the node being defined**, which an operator consults.
+            self.classes.insert(self.defining, class);
+        }
         value
     }
 
@@ -910,11 +902,11 @@ where
     /// The entering call lowered to a `@loop` nest over the conversion's roles.
     ///
     /// # Invariant
-    /// Every block of the nest receives the whole carried state as its `params` — a read
-    /// of the marked function's parameter means one thing in all of them — followed by
-    /// the state token, so an effect inside the nest stays ordered after the effects
-    /// before it. The header is the outermost test: a merge block is joined from it,
-    /// and structured control flow requires the header to choose.
+    /// Every block of the nest receives the whole carried state as its `params`,
+    /// so a read of the marked function's parameter means one thing in all of
+    /// them; the header is the outermost test, because a merge block is joined
+    /// from the header and a backend's structured control flow requires the
+    /// header to be the block that chooses.
     fn lower_loop(
         &mut self,
         node: NodeId,
@@ -922,11 +914,9 @@ where
         conversion: &LoopConversion,
     ) -> Result<ValueId, String> {
         let slots = self.loop_state(node, conversion)?;
-        let state = self.state;
-        let carried = slots.len() + 1;
         let entry = self.block;
         let header = self.body.add_block();
-        for _ in 0..carried {
+        for _ in 0..slots.len() {
             self.body.add_param(header);
         }
         let tests: Vec<usize> = (0..conversion.tests.len())
@@ -934,24 +924,22 @@ where
                 if position == 0 {
                     header
                 } else {
-                    self.loop_block(carried)
+                    self.loop_block(slots.len())
                 }
             })
             .collect();
         let steps: Vec<usize> = (0..conversion.steps.len())
-            .map(|_| self.loop_block(carried))
+            .map(|_| self.loop_block(slots.len()))
             .collect();
         let exits: Vec<usize> = (0..conversion.exits.len())
-            .map(|_| self.loop_block(carried))
+            .map(|_| self.loop_block(slots.len()))
             .collect();
-        let merge = self.loop_block(2);
-        let mut entering = slots;
-        entering.push(state);
+        let merge = self.loop_block(1);
         self.body.set_terminator(
             entry,
             Terminator::Br(Br {
                 target: header,
-                args: entering,
+                args: slots.clone(),
             }),
         );
         // A nested outermost decision gets its own block; the header's own
@@ -993,8 +981,6 @@ where
         // The caller's remaining instructions go in the merge block, which is
         // where the nest leaves its result.
         self.block = merge;
-        // **The nest's state is the merge block's second parameter**.
-        self.state = self.body.blocks[merge].params[1];
         self.values.insert(node, result);
         Ok(result)
     }
@@ -1088,12 +1074,10 @@ where
             let block = self.loops[index].steps[position];
             self.enter_loop_block(index, block);
             let next = self.loops[index].conversion.steps[position].next.clone();
-            let mut next: Vec<ValueId> = next
+            let next: Vec<ValueId> = next
                 .into_iter()
                 .map(|value| self.value(value))
                 .collect::<Result<_, _>>()?;
-            // **The state a write in the step left** travels with the carried tuple.
-            next.push(self.state);
             let header = self.loops[index].header;
             self.body.set_terminator(
                 block,
@@ -1107,10 +1091,6 @@ where
     }
 
     /// One exit: the base's value, then the branch into the merge block.
-    ///
-    /// # Invariant
-    /// The merge block takes the result and then the state, so a write after the nest is
-    /// ordered after every write inside it.
     fn lower_loop_exit(&mut self, index: usize) -> Result<ValueId, String> {
         let mut result = None;
         for position in 0..self.loops[index].exits.len() {
@@ -1118,13 +1098,12 @@ where
             self.enter_loop_block(index, block);
             let value = self.loops[index].conversion.exits[position].value;
             let value = self.value(value)?;
-            let state = self.state;
             let merge = self.loops[index].merge;
             self.body.set_terminator(
                 block,
                 Terminator::Br(Br {
                     target: merge,
-                    args: vec![value, state],
+                    args: vec![value],
                 }),
             );
             result = Some(value);
@@ -1141,9 +1120,6 @@ where
         self.block = block;
         self.loops[index].block = block;
         self.loops[index].block_slots = self.body.blocks[block].params.clone();
-        // **The state is the last parameter of every nest block**, after the slots.
-        let slots = self.loops[index].conversion.state.len();
-        self.state = self.body.blocks[block].params[slots];
     }
 
     /// The two branches one test's arms take.
@@ -1159,7 +1135,7 @@ where
         ))
     }
 
-    /// Where one arm goes, handing the block's carried values on unchanged.
+    /// Where one arm goes, handing the current state on unchanged.
     fn loop_arm(&mut self, index: usize, arm: LoopArm) -> Result<Br, String> {
         let active = &self.loops[index];
         let target = match arm {
@@ -1601,9 +1577,7 @@ where
     /// # Invariant
     /// The ordinal is taken before the operands are emitted, so a write nested inside
     /// another write's value still consumes an ordinal of its own — which the
-    /// codomain count check refuses. The operands are the current state, then the
-    /// position, the index and the value, and the write's result becomes the state, so
-    /// the tokens are one chain.
+    /// codomain count check refuses.
     fn buffer_write(&mut self, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
@@ -1619,17 +1593,14 @@ where
         // The element a write fills is the class of the value written.
         let element = node_class_in(self.module, self.params, value_node);
         self.tally.write_classes.push(element);
-        let state = self.state;
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
         let value = self.value(value_node)?;
-        let written = self.emit(
+        Ok(self.emit(
             KernelInstr::BufferWriteCall(element),
-            vec![state, position, index, value],
-            ScalarClass::State,
-        );
-        self.state = written;
-        Ok(written)
+            vec![position, index, value],
+            element,
+        ))
     }
 }
 

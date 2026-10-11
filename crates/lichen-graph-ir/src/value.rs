@@ -27,9 +27,6 @@ fn pack(class: ScalarClass, words: &[i64]) -> Vec<u8> {
         match class {
             ScalarClass::Int => bytes.extend_from_slice(&word.to_le_bytes()),
             ScalarClass::Float => bytes.extend_from_slice(&(*word as u32).to_le_bytes()),
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it is never a buffer element")
-            }
         }
     }
     bytes
@@ -47,9 +44,6 @@ fn elements(class: ScalarClass, bytes: &[u8]) -> Vec<i64> {
             ScalarClass::Int => i64::from_le_bytes(element.try_into().unwrap_or_default()),
             ScalarClass::Float => {
                 i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
-            }
-            ScalarClass::State => {
-                unreachable!("a state token carries nothing, so it is never a buffer element")
             }
         })
         .collect()

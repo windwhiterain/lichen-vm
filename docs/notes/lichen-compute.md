@@ -95,9 +95,8 @@ plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => $range(x): Int
 Read = T => struct<.from (Buf T), .at Int>
 Write = T => struct<.to (Buf T), .at Int, .value T>
-State = struct<>
 read = (x : (Read _)) => $read(x.from, x.at): x.from.element
-write = (x : (Write _)) => $write(x.to, x.at, x.value): State
+write = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)
@@ -298,7 +297,7 @@ enum KernelInstr {
   Select,                       // if c then a else b
   CallKernel(KernelId),         // cross-kernel call, resolved at assembly
   BufferReadCall(ScalarClass),  // the host `read(cfg_pos, idx)` import
-  BufferWriteCall(ScalarClass)  // the host `write(state, out_pos, idx, val)` import
+  BufferWriteCall(ScalarClass)  // the host `write(out_pos, idx, val)` import
 }
 
 // And the body they live in: blocks with parameters, not a flat list.
@@ -320,17 +319,15 @@ to be inferred — which is the same reason the two crossing directions are a pa
 on `Conv` ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md)). A module
 that needs one element type per class is holding a fixed-size table of them, and
 that table's length is `ScalarClass::ALL`, so `ScalarClass::index` is a dense index
-into it: the array's length is the number of **data** classes, not a number restated
-beside it. `ScalarClass::State` is a third variant and deliberately not in `ALL` —
-a state token is no buffer's element, so a table entry for it would be a chain
-nothing can bind, and `byte_width`/`index` refuse it instead of answering.
+into it: the array's length is the number of classes, not a number restated beside
+it.
 
 `KernelInstr::produces`, `arity` and `own_class` are stated on the instruction
-rather than left to a lowering: a **write** produces the state token that orders
-the next effect, a **call**'s arity is the callee's own domain and is `None` here
-because this crate does not know it, and an instruction's class is not recoverable
-from the value later. `KernelBody::validate` uses the first two to check a
-definition against its declaration.
+rather than left to a lowering: a **write** produces nothing (a side effect), a
+**call**'s arity is the callee's own domain and is `None` here because this crate
+does not know it, and an instruction's class is not recoverable from the value
+later. `KernelBody::validate` uses the first two to check a definition against its
+declaration.
 
 `Lower` walks the simple kernel-safe subset — integer constants, every
 `KernelBin` operator (the arithmetic, comparison and bitwise sets the language
@@ -430,10 +427,9 @@ an equality class, and that rule belongs beside the cells
 
 Two per-kind facts the declarations carry:
 
-- **`classes` is per result and may be empty.** A `BufferWriteCall` leaves the
-  zero-width `ScalarClass::State` token that orders the next effect, a call to
-  another kernel leaves its callee's result class, and a comparison leaves one
-  scalar. The list is what the definition produces and a consumer reads; it is
+- **`classes` is per result and may be empty.** A `BufferWriteCall` leaves nothing,
+  a call to another kernel leaves its callee's result class, and a comparison leaves
+  one scalar. The list is what the definition produces and a consumer reads; it is
   never inferred backwards.
 - **`Terminator::Return` carries a list, because a codomain is.** A kernel returns
   one leaf or a tuple of them, and a tuple codomain's values are one `Return` —
@@ -460,12 +456,9 @@ it, and the return would hand them back as results. The return hands out the top
 the stack and nothing else — a body that computes several values in sequence
 returns the last, which is what the stack's own convention was, and handing back
 every intermediate would make the arity depend on how the body was written. **A
-body's result is a data value, and a write's is not**: a write leaves the
-zero-width `State` token, and no fragment may declare one as a result class, so a
-write-only fragment's results are its output buffers rather than its wasm results
-— `compile_parallel_fragment` appends the constant that gives it one, and a
-hand-written `from_flat` body ends the same way, with a data constant above the
-write rather than with the write itself. An operation's declared class comes from
+body that produces nothing returns nothing**: a write-only fragment's results are
+its output buffers rather than its wasm results, and `compile_parallel_fragment`
+appends the constant that gives it one. An operation's declared class comes from
 the instruction itself where it states one (`KernelInstr::own_class`) and is the
 ABI's integer default otherwise, because a hand-written body says what it computes
 rather than deriving it from a node.
@@ -482,8 +475,8 @@ each rule is a fact about the structure rather than about a target:
    the cheap and sufficient condition for a body built by `add_op` in order;
 3. **a branch's `args` are exactly its target's `params`**, which is what makes a
    target's phi complete without it inventing a default;
-4. an instruction's `classes` matches what it produces — one for every
-   instruction, a write's being the `State` token.
+4. an instruction's `classes` matches what it produces — zero for a write, one for
+   everything else.
 
 A body that fails any of these is **refused by name**, never partially emitted: a
 silently dropped branch or a mismatched phi is a fragment that computes a different

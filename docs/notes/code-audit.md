@@ -39,6 +39,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
 | P1-40 | medium | lowlevel | The apply budget refuses a long **terminating** loop as non-terminating | todo |
+| P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -484,6 +485,71 @@ keeps that argument and changes the operator**, and its Stage 1 is also the fix
 shape for the second ceiling: the structured body is what turns the emitter's
 400-to-1000 **crash** into a named refusal, independently of whether any loop is
 ever written.
+
+### P1-42 — A `compute.write` the codomain does not reach is silently not written `verified`
+
+`verified` at `dev@a63086f`, measured by a spike into
+[shared-memory-and-barriers](shared-memory-and-barriers.md#why-the-witness-was-the-wrong-answer-and-what-replaces-it)
+§3. Found while asking what a buffer *version* would order.
+
+```text
+w1 = compute.write ((compute.Write _)(.to b, .at i, .value i + 7))
+compute.write ((compute.Write _)(.to b, .at i, .value i + 100))   -- the codomain
+-- answered raw[raw 100, raw 101, raw 102, raw 103]
+-- no diagnostic, no refusal: the first write never happened
+```
+
+**The lowering is demand-driven from the codomain leaves.** `lower_index_function`
+(`crates/lichen-compute/src/compute/body.rs:230`) walks the codomain and nothing
+else, so a `write` bound to a statement the return value never reads is never
+emitted. `tally.writes` counts **emissions**, so the tally gate
+(`crates/lichen-compute/src/compute.rs:2335`) sees one write against one output and
+passes. Both the mechanism and the silence follow from that.
+
+The same mechanism was measured independently on a `@loop`: `seed = fill (…)` as a
+statement beside a top-level write compiled, ran, and answered with the top write's
+value — the nest was never in the IR at all.
+
+**Why it is a diagnostic gap rather than obviously a semantic bug.** The language's
+model is that a parallel index function's codomain *is* its output positions, so a
+write outside it is not an output and arguably should not happen. But `compute.write`
+reads as an effect at the call site, and nothing says otherwise — so the author's
+two-output program compiles, runs, both backends agree, and one of the two writes is
+missing. That is the failure class
+[gpu-algorithms-ladder §5](gpu-algorithms-ladder.md#5-a-scatter-accumulate-is-silently-wrong)
+made this project careful about.
+
+**The effect token that landed at `4a41a71` does not catch it, and could not.** Both
+writes take their state operand from the same `Const(State, 0)` root (measured: both
+were the same `ValueId`), so the first write's result is a value nothing consumes and
+the chain says nothing about reachability. Catching this needs a check that a
+`ComputeOperator::Write` node exists in the body **and** is reached from the
+codomain, which is a fact about the lichen graph rather than about the lowered body —
+so it belongs in `compile_parallel_fragment`, beside the existing per-output
+`write_value_node` gate, and not in `KernelBody::validate`.
+
+Two shapes a fix could have taken were written down here — refuse the unreachable
+write by name, or lower it anyway so the existing tally gate fires on it. **Both are
+rejected; closed `wontfix:D17`.** The short form of `D17` is that this is not a
+diagnostic gap at all: an index function's type is `A T.I -> T.O`, so it takes the
+inputs *and the outputs* and returns the outputs, and walking the returned value
+necessarily covers every declared output — the per-output `write_value_node` gate and
+the `tally.writes == outputs.len()` gate together already say so. A `write` the
+author did not connect to the return is a dead expression, and dropping a dead
+expression is what a pure-function semantics does. What made it look like a bug is
+that `compute.write` *reads* as an effect at the call site; under the buffer map's
+model it is not one, it is the value of an output position. That is also why the
+`State` token of `4a41a71` was a category error: you do not thread a state through
+values. See [shared-memory-and-barriers](shared-memory-and-barriers.md#why-the-witness-was-the-wrong-answer-and-what-replaces-it)
+§3, which reaches the same conclusion from the other direction.
+
+The item stays in the file rather than being deleted because the *measurement* is
+worth keeping: two writes to one output with only the second reachable do answer
+with the second's value and no complaint, and anyone who later makes outputs
+readable inside a body — which
+[§9 step 4](shared-memory-and-barriers.md#9-the-staging) does, for `Shared` — has to
+decide again whether an unreturned write is dead, because at that point it has a
+reader. `D17` answers it for global buffers only.
 
 ## P4 — optimization
 
@@ -958,4 +1024,43 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   written on was a **reported** runtime error where it used to print `none`
   silently (`P1-35`). So the choice really was between the
   two sides above; there is no third spelling available today.
+
+- **D17 — Is a `compute.write` the codomain does not reach a silently dropped
+  effect, or a dead expression? — DECIDED: a dead expression; `P1-42` is
+  `wontfix`.** The index function's type settles it. `S = T: KT _ => A T.I -> T.O`
+  and `P = T: KT _ => struct<.n Int, .in T.I, .out T.O>`, so an index function takes
+  the extent, the inputs **and the outputs**, and returns the outputs. Walking the
+  returned value therefore necessarily covers every declared output, and two gates
+  already enforce that they are the same set: each codomain position must reduce to a
+  `compute.write` (`write_value_node`), and `tally.writes` must equal
+  `outputs.len()`. A `write` outside that walk is not an unwritten output — the
+  output *is* written, by the write that is in the codomain — it is an expression
+  whose value nobody reads, and dropping it is what a pure-function semantics does.
+  What that commits to: **a `compute.write` is not an effect, it is the value of an
+  output position.** That is the buffer map's model stated as a rule, and it is why
+  the `State` token of `4a41a71` was a category error rather than merely an expensive
+  choice — you do not thread a state through values, and a token that nothing reads
+  cannot order anything. The replacement in
+  [shared-memory-and-barriers](shared-memory-and-barriers.md#why-the-witness-was-the-wrong-answer-and-what-replaces-it)
+  §3 follows from the same sentence: `write` returns a new **version of the buffer**,
+  which is a value, so an unreturned one is dead by the same rule and a returned one
+  is ordinary data flow.
+
+  *Rejected — refuse the unreachable write by name:* it would be a new diagnostic for
+  a program that is already wrong by its own type, and it would have to decide what
+  "unreachable from the codomain" means for a write inside a `@loop` nest, which is a
+  harder question than the one being answered.
+
+  *Rejected — lower it anyway so the tally gate fires:* cheaper, and it reuses a
+  diagnostic that already names both numbers, but it makes the emitter's work depend
+  on nodes the type says are not outputs, and it would turn a dead expression into a
+  refusal for a program whose declared outputs are all correctly written.
+
+  **The scope of this decision is global buffers.** [§9 step
+  4](shared-memory-and-barriers.md#9-the-staging) makes a `Shared` slot readable
+  inside the body that writes it, and at that point an unreturned `swrite` *does* have
+  a reader — another lane's `sread` — so "dead" stops being the right answer for it.
+  Whoever lands step 4 has to decide it again for `Shared`, and the honest default
+  there is the opposite one: a shared write is reachable from any lane of the
+  workgroup, so reachability from the codomain is not the test.
 

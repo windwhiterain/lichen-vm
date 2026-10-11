@@ -68,12 +68,11 @@ fn calls_kernel_7() -> KernelFragment {
         vec![element],
         vec![ScalarClass::Int],
     );
-    let state = body.add_const(entry, ScalarClass::State, 0);
     body.add_op(
         entry,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![state, out_position, index, called],
-        vec![ScalarClass::State],
+        vec![out_position, index, called],
+        Vec::new(),
     );
     let returned = body.add_const(entry, ScalarClass::Int, 0);
     body.set_terminator(
@@ -199,7 +198,6 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
                 FlatOp::Read(1),                                        // idx
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // cfg_pos, in the *input* space
@@ -232,7 +230,6 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             // name a parameter that does not exist.
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
                 FlatOp::Read(1),
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 5)),
@@ -250,7 +247,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             space: "output",
             bound: 1,
             // The position's own `ValueId`: the emitter reads the constant by name.
-            at: 3,
+            at: 2,
         }
     );
     assert!(refusal.to_string().contains("output"));
@@ -347,12 +344,11 @@ fn a_write_inside_a_loop_is_refused_by_name() {
 
     let position = body.add_const(latch, ScalarClass::Int, 0);
     let written = body.add_const(latch, ScalarClass::Int, 3);
-    let state = body.add_const(latch, ScalarClass::State, 0);
     body.add_op(
         latch,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![state, position, index, written],
-        vec![ScalarClass::State],
+        vec![position, index, written],
+        Vec::new(),
     );
     body.set_terminator(
         latch,
@@ -392,9 +388,9 @@ fn a_write_inside_a_loop_is_refused_by_name() {
     let refusal =
         spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     // `at` is the write's position in the loop body block.
-    assert_eq!(refusal, SpirvRefusal::WriteInsideLoop { at: 3 });
+    assert_eq!(refusal, SpirvRefusal::WriteInsideLoop { at: 2 });
     let message = refusal.to_string();
-    assert!(message.contains('3'), "names the write: {message}");
+    assert!(message.contains('2'), "names the write: {message}");
     assert!(
         message.contains("without initialising"),
         "says why the buffer matters: {message}"
