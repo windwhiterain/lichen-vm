@@ -592,7 +592,7 @@ only two of them are a kernel's to choose.
 | space | who reads it | mechanism | today |
 |---|---|---|---|
 | **registers** | the lane that wrote it | a **scalar** is an SSA value and needs nothing; a **slice** is a per-lane array of its declared count, which needs a `Private`-storage variable and an array type — the array type and the module-scope variable exist for `Shared`, the storage class does not | a scalar: the only one that exists; a slice: refused by name (`SpirvRefusal::StagingNotOnThisBackend`) |
-| **shared** | another lane of the same workgroup | a `Workgroup` variable, and a barrier | emitted for a `from_flat` body — `Workgroup` storage and `OpControlBarrier` (§9 step 5's GPU half); the surface that names one is unbuilt |
+| **shared** | another lane of the same workgroup | a `Workgroup` variable, and a **block-level** barrier | emitted for a `from_flat` body — `Workgroup` storage and `OpControlBarrier` (§9 step 5's GPU half); the surface that names one is unbuilt |
 | **global** | another workgroup | **a graph edge**, so the region is not one kernel | the fusion gate's answer |
 
 **The space a slice states is a field, not a name.** The two values a slice may carry are the
@@ -776,7 +776,7 @@ all threads, the `∞` fold", with `gcd(n, 0) = n` and `divides(0, sup) ⟺ sup 
 cases a kernel needs are already distinct, and neither needs a tag:
 
 - **a finite `p` is inside a block.** It is a group of `p` threads the block contains, and the
-  unit of the finite part is a **warp, 32 threads**.
+  only barrier this landing places is the block's (§9), so the warp is not a level here.
 - **`0` is `∞` and it is the top**: it crosses blocks, and no finite `p` names it.
 
 Three scopes collapsing into one number is the mismatch the roadmap records as "divisibility
@@ -791,7 +791,8 @@ convention.** A slice is what a *block* can stage, so its `DP` is finite; the `�
 value that crosses blocks, and with no cross-block synchronisation primitive there is nothing
 to stage it with — the region does not fuse and the graph keeps two nodes (§5).
 
-**If a third scope ever arrives** — a cluster, or a subgroup below the warp — folding a level
+**If a third scope ever arrives** — a cluster, or a barrier narrower than the block, which is
+where a warp's width would become a question — folding a level
 into `Perspective` is the option to prefer, and the price is then the one this subsection
 measured while it was still an option: `AttrExt::combine`, which hard-codes `ctx.pair(gcd,
 ctx.int_type())` (`perspective.rs:156`), the `GcdOp` codec *and* its `run`, `is_subtype`,
@@ -1151,7 +1152,11 @@ run with a surplus lane in it.
 data; the barrier is a position in the emitted code, and that position is *immediately
 before the read's definition* — the earliest point at which the reader could observe the
 writer, and so the only point one barrier can serve. That is well defined and needs no
-search. **What is not well defined is a read under divergent control flow**: SPIR-V
+search. **And the barrier is the block's**: `OpControlBarrier` with `Workgroup` execution scope
+and `WorkgroupMemory` semantics (`spirv.rs`'s `SCOPE_WORKGROUP` and
+`MEMORY_SEMANTICS_WORKGROUP_MEMORY`), one per recorded pair. A narrower barrier — a warp or a
+subgroup — is not in this landing, and inserting one is what would make the warp's width a
+question at all. **What is not well defined is a read under divergent control flow**: SPIR-V
 requires `OpControlBarrier` in uniform control flow, so a barrier placed with the read
 inside a branch that not every lane takes is not imprecise, it is invalid. The honest
 answers are to place it in the divergent region's immediate post-dominator, where every
