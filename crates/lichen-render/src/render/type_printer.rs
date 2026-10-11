@@ -236,7 +236,7 @@ where
                             .and_then(|value| value.as_enum()),
                         Some(LowValue::Array(_))
                     );
-                    let fields = self.fields_any(elements[0].node);
+                    let fields = self.slot_fields_any(elements[0].node);
                     return if open {
                         format!("<{}, …>", fields.join(", "))
                     } else {
@@ -416,6 +416,36 @@ where
             AnyNodeId::Dynamic(node) => self.node(node),
             AnyNodeId::Static(sref) => self.static_node(sref),
         }
+    }
+
+    /// [`Self::fields_any`] over an element-**slot** list: each element's type
+    /// position.
+    fn slot_fields_any(&mut self, shape: AnyNodeId) -> Vec<String> {
+        if let Some(LowValue::Array(array)) =
+            self.module.node_value(shape).and_then(|v| v.as_enum())
+        {
+            // SAFETY: `array` is the payload of the value read from the live
+            // node `shape`.
+            unsafe { array.items() }
+                .iter()
+                .map(|item| match self.slot_type_any(item.node) {
+                    Some(ty) => self.any_node(ty),
+                    None => self.any_node(item.node),
+                })
+                .collect()
+        } else {
+            vec![self.any_node(shape)]
+        }
+    }
+
+    /// An element slot's type position, when it has one.
+    pub(crate) fn slot_type_any(&self, slot: AnyNodeId) -> Option<AnyNodeId> {
+        let LowValue::Array(array) = self.module.node_value(slot)?.as_enum()? else {
+            return None;
+        };
+        // SAFETY: `array` is the payload of the value read from the live node
+        // `slot`.
+        unsafe { array.items() }.get(1).map(|item| item.node)
     }
 
     fn static_node(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {

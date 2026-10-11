@@ -95,7 +95,7 @@ where
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let (pair, element, ty_node) = self.element_read(container_value, index_value);
+        let (pair, element, ty_node) = self.element_read(container_value, index_value, true);
         // Both slot reads target the element, so this edge gives a failed one
         // a span and names it the element.
         self.node_edges.insert(element, self.loc(e, 1));
@@ -110,15 +110,15 @@ where
     /// `docs/notes/raw-index.md`. Returns `(pair, element, type)`.
     ///
     /// # Invariant
-    /// Both callers require a **type value** container, whose components hold
-    /// `[type value, kind]` pairs — so the read's type is the component's
-    /// *kind*, the only handle on it. The slot read is computed here, so the
-    /// type is decided before any check asks; an undecided container's read
-    /// stays lazy, which is what the per-apply re-check relies on.
+    /// A **type value** container's component is `[type value, kind]`, so the
+    /// read's type is the component's kind; a **slot** container's component is
+    /// its slot's type position instead. The read is computed here, so an
+    /// undecided container stays lazy, which the per-apply re-check relies on.
     pub(super) fn element_read(
         &mut self,
         container_value: NodeId,
         subscript: NodeId,
+        slots: bool,
     ) -> (NodeId, NodeId, NodeId) {
         let element_ops = self.array_node(self.current_block, &[container_value, subscript]);
         let element = self.op_node(
@@ -126,13 +126,24 @@ where
             P::Operator::from(LowOperator::Index),
             Some(element_ops),
         );
-        let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
+        // A slot container's component is the slot's own type position.
+        let component = if slots {
+            let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
+            self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(slot_ops),
+            )
+        } else {
+            element
+        };
+        let value_ops = self.array_node(self.current_block, &[component, self.zero()]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let ty_ops = self.array_node(self.current_block, &[element, self.one()]);
+        let ty_ops = self.array_node(self.current_block, &[component, self.one()]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -339,10 +350,14 @@ where
             }
             mask.push(depths[i] == usize::MAX);
         }
-        // `[values, [[element types], [TupleType, Type]]]` — a tuple's shape, so
-        // a read selects the per-element type slot.
+        // `[values, [[slot…], [TupleType, Type]]]` — a tuple's shape, so a read
+        // selects the per-element slot.
         let value = self.array_node_masked(self.current_block, &vals, &mask);
-        let shape = self.array_node(self.current_block, &tys);
+        let mut slots = Vec::new();
+        for &ty in &tys {
+            slots.push(self.element_slot(Some(ty), None));
+        }
+        let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);

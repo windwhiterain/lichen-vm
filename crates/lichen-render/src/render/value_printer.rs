@@ -170,9 +170,14 @@ where
                 ));
             }
         } else if marker == P::Value::tuple_type_marker() {
+            // A tuple type's shape is its element-**slot** list, so each element
+            // reads its slot's type position.
             let fields: Vec<String> = shape
                 .iter()
-                .map(|item| self.printer.any_node(item.node))
+                .map(|item| match self.printer.slot_type_any(item.node) {
+                    Some(ty) => self.printer.any_node(ty),
+                    None => self.printer.any_node(item.node),
+                })
                 .collect();
             return Some(format!("<{}>", fields.join(", ")));
         } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
@@ -221,7 +226,13 @@ where
             }
             let mut out = Vec::with_capacity(values.len());
             for (i, v) in values.iter().enumerate() {
-                out.push(self.element_any(v.node, shape[i].node));
+                // A tuple's shape element is a slot: the element's type is its
+                // type position.
+                let ty = self
+                    .printer
+                    .slot_type_any(shape[i].node)
+                    .unwrap_or(shape[i].node);
+                out.push(self.element_any(v.node, ty));
             }
             return Some(self.parens(&out));
         }

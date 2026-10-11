@@ -70,7 +70,13 @@ where
         // The field's position, when the key is a literal: `slot_read` reads
         // the field's type out of the field list.
         let position = self.constant_position(key);
-        let (value_node, ty_node) = self.slot_read(read_ty, container_value, key_value, position);
+        let (value_node, ty_node) = self.slot_read(
+            read_ty,
+            container_value,
+            key_value,
+            position,
+            shape::ShapeElements::Slots,
+        );
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -92,6 +98,7 @@ where
         container_value: NodeId,
         key: NodeId,
         position: Option<usize>,
+        elements: shape::ShapeElements,
     ) -> (NodeId, NodeId) {
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let value_node = self.op_node(
@@ -107,6 +114,7 @@ where
                     &self.module,
                     shape::TypeRef::Term(AnyNodeId::Dynamic(container_ty)),
                     at,
+                    elements,
                 )
             })
             .and_then(|ty| match ty {
@@ -168,7 +176,7 @@ where
         self.node_edges.insert(key, self.loc(e, 0));
         // The element's own pair, as the positional raw read builds it.
         let container_value = self.value_of(container);
-        let (pair, element, ty_node) = self.element_read(container_value, key);
+        let (pair, element, ty_node) = self.element_read(container_value, key, false);
         // As there: the element is the target of both slot reads.
         self.node_edges.insert(element, self.loc(e, 1));
         self.state[e].term = Some(pair);
@@ -287,7 +295,13 @@ where
         };
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key, position);
+        let (value_node, ty_node) = self.slot_read(
+            container_ty,
+            container_value,
+            key,
+            position,
+            shape::ShapeElements::Types,
+        );
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -501,7 +515,9 @@ where
                         kind,
                         P::Value::tuple_type_marker(),
                     ) {
-                        shape
+                        // A tuple's shape element is a slot, so the positional
+                        // field list is each slot's type position.
+                        self.tuple_element_types(shape)
                     } else {
                         value_ty
                     }

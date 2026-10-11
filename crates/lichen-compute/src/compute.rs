@@ -13,8 +13,8 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
 use lichen_highlevel::shape::{
-    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, TypeRef, array_items as array_items_any,
-    field_list, field_names, field_type, low_type_of_slot,
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, ShapeElements, TypeRef,
+    array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
@@ -1794,7 +1794,7 @@ where
     // field the class is read from.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
         path.first()
-            .and_then(|&at| field_type(module, ty?, at))
+            .and_then(|&at| field_type(module, ty?, at, ShapeElements::Types))
             .map(|field| scalar_class_of(&low_type_of_slot(module, field)))
             .unwrap_or(ScalarClass::Int)
     };
@@ -1912,7 +1912,7 @@ where
             // **The parameter's `Buf T` states the element class**, not a body node; an
             // open cell states nothing.
             let element = parameter_type_ref(module, field)
-                .and_then(|ty| field_type(module, ty, 1))
+                .and_then(|ty| field_type(module, ty, 1, ShapeElements::Types))
                 .map(|element| low_type_of_slot(module, element))
                 .filter(|shape| shape.is_known())
                 .map(|shape| scalar_class_of(&shape));
