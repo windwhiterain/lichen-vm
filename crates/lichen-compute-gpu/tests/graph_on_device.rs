@@ -12,7 +12,7 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, ResidentId, ScalarClass,
+    KernelShape, LaneWidth, ResidentId, ScalarClass, TargetFacts,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -46,7 +46,10 @@ fn adds() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -87,7 +90,10 @@ fn sums() -> KernelFragment {
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -120,7 +126,10 @@ fn with_a_runtime_scalar() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }

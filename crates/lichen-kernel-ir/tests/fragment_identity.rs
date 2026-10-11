@@ -2,7 +2,7 @@
 
 use lichen_kernel_ir::{
     IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ScalarClass,
+    LaneWidth, ScalarClass, TargetFacts,
 };
 
 /// A one-parameter body: `p0 + first`, in SSA.
@@ -49,7 +49,10 @@ fn fragment() -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -123,6 +126,16 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             KernelFragment {
                 roles: KernelRoles::default(),
                 result_classes: vec![ScalarClass::Int, ScalarClass::Int],
+                ..base.clone()
+            },
+        ),
+        (
+            "lane width",
+            KernelFragment {
+                target: TargetFacts {
+                    lane_width: LaneWidth::new(32),
+                    ..base.target
+                },
                 ..base.clone()
             },
         ),

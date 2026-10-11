@@ -142,11 +142,13 @@ fn element_stride(class: ScalarClass) -> u32 {
     class.byte_width() as u32
 }
 
-/// The local workgroup size.
+/// The local workgroup size this target schedules.
 ///
 /// # Invariant
 /// A run of `count` indices is `ceil(count / LOCAL_SIZE_X)` workgroups, and the surplus lanes of the
-/// last one are a caller obligation, not the shader's.
+/// last one are a caller obligation, not the shader's. It is also the only width this target
+/// schedules, so a fragment declaring another is refused by name rather than having its `LocalSize`
+/// rounded to this.
 pub const LOCAL_SIZE_X: u32 = 64;
 
 /// Why a fragment cannot be emitted for this target: every variant names its own
@@ -180,6 +182,8 @@ pub enum SpirvRefusal {
     },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
+    /// The fragment declares a workgroup width this target cannot schedule.
+    UnsupportedLaneWidth { lanes: u32 },
     /// An operation over `Float` the language has no form for.
     ///
     /// # Invariant
@@ -260,6 +264,11 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "the fragment was lowered for {bits}-bit integers, which this target does not \
                  represent."
+            ),
+            SpirvRefusal::UnsupportedLaneWidth { lanes } => write!(
+                f,
+                "the fragment was lowered for workgroups of {lanes} lanes, which this target \
+                 does not schedule."
             ),
             SpirvRefusal::UnsupportedFloatOperator { operator, at } => write!(
                 f,
@@ -912,9 +921,14 @@ fn emit_function(
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
     }
-    if fragment.int_width.bits() != 64 {
+    if fragment.target.int_width.bits() != 64 {
         return Err(SpirvRefusal::UnsupportedIntWidth {
-            bits: fragment.int_width.bits(),
+            bits: fragment.target.int_width.bits(),
+        });
+    }
+    if fragment.target.lane_width.lanes() != LOCAL_SIZE_X {
+        return Err(SpirvRefusal::UnsupportedLaneWidth {
+            lanes: fragment.target.lane_width.lanes(),
         });
     }
     // The entry block's label is the first id this function owns.
@@ -2366,6 +2380,7 @@ fn assemble(
     bound: u32,
 ) -> Vec<u32> {
     let root = launch.root();
+    let lane_width = root.target.lane_width.lanes();
     let mut out = vec![SPIRV_MAGIC, SPIRV_VERSION, GENERATOR, bound, 0];
 
     let emit_all = |out: &mut Vec<u32>, instructions: &[Inst]| {
@@ -2403,7 +2418,7 @@ fn assemble(
         &mut out,
         &[Inst::new(
             op::EXECUTION_MODE,
-            vec![ids.entry(), EXECUTION_MODE_LOCAL_SIZE, LOCAL_SIZE_X, 1, 1],
+            vec![ids.entry(), EXECUTION_MODE_LOCAL_SIZE, lane_width, 1, 1],
         )],
     );
 

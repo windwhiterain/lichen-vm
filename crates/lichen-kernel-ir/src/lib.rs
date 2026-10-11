@@ -385,6 +385,43 @@ impl IntWidth {
     }
 }
 
+/// The lane count one workgroup runs, declared rather than assumed.
+///
+/// # Invariant
+/// A fragment states how many lanes a workgroup runs, and a backend whose target cannot schedule
+/// that many refuses the fragment by name rather than rounding silently: the language names no
+/// lane count, so the width is the host compiler's choice, carried as a fact rather than assumed
+/// from any backend's constant (`docs/notes/shared-memory-and-barriers.md` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneWidth(u32);
+
+impl LaneWidth {
+    /// The lane count a host compiler declares for one workgroup.
+    pub const fn new(lanes: u32) -> Self {
+        Self(lanes)
+    }
+
+    /// The lane count, as the number a workgroup runs.
+    pub const fn lanes(self) -> u32 {
+        self.0
+    }
+}
+
+/// The facts a fragment declares about the target it was lowered for.
+///
+/// # Invariant
+/// Declared together because they are the same kind of fact: a choice the host compiler made,
+/// carried as data rather than assumed, and refused by name by a backend whose target cannot
+/// honour it. [`fragment_digest`] hashes the whole struct, so a field added here is in the digest
+/// by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetFacts {
+    /// The width the body's integers were lowered to mean.
+    pub int_width: IntWidth,
+    /// The lane count one workgroup runs.
+    pub lane_width: LaneWidth,
+}
+
 /// A fragment's parameter domain, in the IR's own terms rather than the host's.
 ///
 /// # Invariant
@@ -739,8 +776,13 @@ pub struct KernelFragment {
     /// returning `(Int, Float)` and one returning `(Float, Int)` have one arity and different
     /// signatures, and typing both from one class would emit a module that cannot validate.
     pub result_classes: Vec<ScalarClass>,
-    /// The integer width the body was lowered to mean.
-    pub int_width: IntWidth,
+    /// The target facts the fragment declares: what a backend is asked to honour.
+    ///
+    /// # Invariant
+    /// They travel together because they are one kind of fact — a host compiler's choice this
+    /// crate carries as data rather than assumes — and [`fragment_digest`] hashes the whole
+    /// struct, so a fact added here is in the digest by construction.
+    pub target: TargetFacts,
     /// The marks expressions in the body carried, in the order the walk published them.
     ///
     /// # Invariant
@@ -792,7 +834,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     format!("{:?}", fragment.input_classes).hash(&mut hasher);
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
     fragment.result_classes.hash(&mut hasher);
-    format!("{:?}", fragment.int_width).hash(&mut hasher);
+    format!("{:?}", fragment.target).hash(&mut hasher);
     format!("{:?}", fragment.marks).hash(&mut hasher);
     hasher.finish()
 }

@@ -18,8 +18,8 @@ use lichen_highlevel::shape::{
 };
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
-    KernelMark, KernelRoles, KernelShape, ResidentId, ScalarClass, ScalarData, ScalarLeaf,
-    fragment_digest,
+    KernelMark, KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, ScalarData,
+    ScalarLeaf, TargetFacts, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -179,7 +179,10 @@ mod kernel_intern_tests {
             input_classes: Vec::new(),
             output_classes: Vec::new(),
             result_classes: vec![ScalarClass::Int],
-            int_width: IntWidth::I64,
+            target: TargetFacts {
+                int_width: IntWidth::I64,
+                lane_width: LaneWidth::new(64),
+            },
             marks: Vec::new(),
         }
     }
@@ -2157,7 +2160,10 @@ where
         // are the wasm results below.
         output_classes: Vec::new(),
         result_classes,
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: std::mem::take(&mut tally.marks),
     })
 }
@@ -2408,7 +2414,10 @@ where
         output_classes: tally.output_classes(),
         // The dummy scalar the write-only body leaves, in the first write's class.
         result_classes: vec![class],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: std::mem::take(&mut tally.marks),
     })
 }
@@ -6127,7 +6136,10 @@ mod parallel_launch_tests {
             input_classes: Vec::new(),
             output_classes: vec![ScalarClass::Int, ScalarClass::Int],
             result_classes: vec![ScalarClass::Int],
-            int_width: IntWidth::I64,
+            target: TargetFacts {
+                int_width: IntWidth::I64,
+                lane_width: LaneWidth::new(64),
+            },
             marks: Vec::new(),
         }
     }

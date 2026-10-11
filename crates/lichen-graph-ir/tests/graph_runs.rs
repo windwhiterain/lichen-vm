@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarClass, ScalarData,
+    KernelShape, LaneWidth, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarClass,
+    ScalarData, TargetFacts,
 };
 
 /// `out[i] = in[i] + in[i] + 1`, which is `adds` everywhere else in this tree.
@@ -44,7 +45,10 @@ fn fragment() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }

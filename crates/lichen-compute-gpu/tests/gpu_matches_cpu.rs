@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf,
+    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, TargetFacts,
 };
 
 /// A one-fragment launch set: every kernel here stands alone, and a set's
@@ -55,7 +55,10 @@ fn fragment(body: Vec<FlatOp>) -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -863,7 +866,10 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -901,7 +907,10 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Float; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }

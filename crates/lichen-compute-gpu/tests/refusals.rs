@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
     Br, FlatOp, IntWidth, KernelBody, KernelFragment, KernelId, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, ScalarClass, Terminator,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
 };
 
 const ONE_IN_ONE_OUT: Binding = Binding {
@@ -30,7 +30,10 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -93,7 +96,10 @@ fn calls_kernel_7() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -212,7 +218,10 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     };
     let binding = Binding {
@@ -278,7 +287,10 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     };
     let refusal =
@@ -378,7 +390,10 @@ fn a_write_inside_a_loop_is_refused_by_name() {
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     };
     fragment
@@ -394,5 +409,26 @@ fn a_write_inside_a_loop_is_refused_by_name() {
     assert!(
         message.contains("without initialising"),
         "says why the buffer matters: {message}"
+    );
+}
+
+/// A workgroup width this target cannot schedule is refused by name, not rounded to one it can.
+#[test]
+fn a_lane_width_this_target_cannot_schedule_is_refused_by_name() {
+    let fragment = KernelFragment {
+        target: TargetFacts {
+            lane_width: LaneWidth::new(32),
+            ..unary_callee(Vec::new()).target
+        },
+        ..unary_callee(Vec::new())
+    };
+    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT)
+        .expect_err("a workgroup width this target does not schedule is refused");
+    assert_eq!(refusal, SpirvRefusal::UnsupportedLaneWidth { lanes: 32 });
+    let message = refusal.to_string();
+    assert!(message.contains("32"), "names the width: {message}");
+    assert!(
+        message.contains("does not schedule"),
+        "says the target cannot honour it: {message}"
     );
 }

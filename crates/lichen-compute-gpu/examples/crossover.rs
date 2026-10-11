@@ -12,7 +12,7 @@ use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaunchSet, Pending, ScalarClass, ScalarData,
+    LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, TargetFacts,
 };
 
 /// A one-fragment launch set: this example measures one kernel at a time.
@@ -71,7 +71,10 @@ fn fragment() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }

@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
     Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, ScalarClass, Terminator,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -55,7 +55,10 @@ fn adds_one() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -142,7 +145,10 @@ fn scales_a_float() -> KernelFragment {
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -161,7 +167,10 @@ fn one_integer_output(body: KernelBody) -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -552,7 +561,10 @@ fn index_to_float() -> KernelFragment {
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -595,7 +607,10 @@ fn crosses_both_ways() -> KernelFragment {
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -675,7 +690,10 @@ fn two_buffer_classes() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -691,7 +709,10 @@ fn nullary_callee() -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -719,7 +740,10 @@ fn calls_a_nullary_kernel() -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -826,7 +850,10 @@ fn unary_callee() -> KernelFragment {
         input_classes: Vec::new(),
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -996,7 +1023,10 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }
@@ -1034,7 +1064,10 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Float; 1],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     }
 }

@@ -6,7 +6,7 @@
 
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaunchSet, ScalarClass,
+    LaneWidth, LaunchSet, ScalarClass, TargetFacts,
 };
 
 fn main() {
@@ -39,7 +39,10 @@ fn main() {
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
-        int_width: IntWidth::I64,
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
         marks: Vec::new(),
     };
 
