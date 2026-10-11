@@ -414,10 +414,10 @@ and the crate is forbidden from learning it.
 
 | the question | the query | cost | where it can live |
 |---|---|---|---|
-| fact 2, same lane | the two index operands are the same `ValueId`, or neither's def cone contains the lane parameter | one memoised cone walk over the body | the IR, from the body |
-| fact 1, **conservative** | the two index intervals intersect at all | O(1) integers | the IR, from the body |
-| fact 1, **exact** | the same modulo the lane count, which is what decides whether `i % 64` is one slot per lane or one slot for all of them | O(1) integers | the IR, **given a width the fragment declares** (below) |
-| fact 3, already separated | a latch over the scan | free | the IR |
+| fact 2, same lane | the two index operands are the same `ValueId`, **and nothing else** — the clause this row first carried, "or neither's def cone contains the lane parameter", is dead and would be unsound | one comparison | the IR, from the body |
+| fact 1, **conservative** | the two index intervals intersect at all, a lane's own interval being the whole unsigned range — so an operation that may overflow answers *unbounded*, because a wrapped index is not inside the sum of the bounds | O(1) integers per expression | the IR, from the body |
+| fact 1, **exact** | the same question **decided** rather than bounded: does a lane other than the writer reach this slot | not bounds — arithmetic over the per-lane function, a modulo/periodicity question | the IR, and the width is its **domain and not its answer**: `lane_width` alone does not close it |
+| fact 3, already separated | a **position** latch and not a boolean: a recorded barrier separates a pair when its read sits strictly after the write and no later than the read, and that walk order stands for a path order only because `validate` makes such a barrier's read dominate every reachable `Return` | a comparison | the IR |
 | the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slot is `Shared` | the same cone walk | the IR, and it must stay there |
 
 The refusal stays above the backends because it is a **program** property, not a target

@@ -429,11 +429,11 @@ impl KernelBody {
     /// name, never partially emitted.
     ///
     /// # Invariant
-    /// (1) The entry block exists, and so does every block a transfer names; (2) every
-    /// value a block reads is available there, checked by walk order; (3) a branch's
-    /// `args` are exactly its target's `params`; (4) an instruction's `classes` matches
-    /// what it produces — none for a buffer write; (5) a barrier pairs a shared write with the
-    /// read observing it, in a block every lane reaches.
+    /// (1) The entry block exists, and every block a transfer names does; (2) every value
+    /// a block reads exists in this body — **existence, not order**; (3) a branch's `args`
+    /// are exactly its target's `params`; (4) each instruction's `classes` matches what it
+    /// produces — none for a write; (5) a barrier pairs a shared write with the read
+    /// observing it, in a block every lane reaches.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
             return Err("a body must have at least its entry block".into());
