@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use lichen_kernel_ir::KernelFragment;
+
 /// Why a graph could not be built or run.
 ///
 /// # Invariant
@@ -31,6 +33,31 @@ pub enum GraphRefusal {
         node: usize,
         declared: usize,
         claimed: usize,
+    },
+    /// A node index named no node in the graph.
+    ///
+    /// # Invariant
+    /// `node` is the index that was named and `nodes` the number the graph has, because
+    /// an index past the end is fixed at the call and not in any node: a refusal that
+    /// named only the graph would leave the caller to find which number was wrong.
+    NoSuchNode { node: usize, nodes: usize },
+    /// The named node is not a kernel node, so it holds no fragment to replace.
+    ///
+    /// # Invariant
+    /// `found` names the kind of node that was met, because a node that dispatches
+    /// nothing is a different mistake from an index that names no node at all — the
+    /// node enum is where that other kind would go.
+    NotAKernelNode { node: usize, found: &'static str },
+    /// A replacement fragment's shape disagreed with the node it would replace.
+    ///
+    /// # Invariant
+    /// `had` and `got` name both sides, because the three facts they carry are what the
+    /// graph's edges, its value numbering and a launch's scalar leaves were built
+    /// against, and a silent difference mis-wires them instead of failing.
+    ShapeDisagrees {
+        node: usize,
+        had: FragmentShape,
+        got: FragmentShape,
     },
     /// A node read a value number the graph does not have.
     ///
@@ -121,6 +148,44 @@ pub enum GraphRefusal {
     Backend { what: &'static str, reason: String },
 }
 
+/// The three facts of a fragment's shape a recorded graph is built against.
+///
+/// # Invariant
+/// These are the whole of what [`Graph::replace_kernel`] compares: `inputs` is the
+/// count the node's edges bind, `outputs` is the count the graph's value numbering
+/// advanced by, and `flat_arity` is the count a launch's scalar leaves are placed by.
+/// A fragment differing in none of them is a drop-in replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FragmentShape {
+    /// How many input buffers the fragment reads.
+    pub inputs: usize,
+    /// How many output buffers it writes.
+    pub outputs: usize,
+    /// How many scalar leaves `param_shape` flattens to.
+    pub flat_arity: usize,
+}
+
+impl FragmentShape {
+    /// The shape `fragment` states.
+    pub fn of(fragment: &KernelFragment) -> Self {
+        FragmentShape {
+            inputs: fragment.inputs,
+            outputs: fragment.outputs,
+            flat_arity: fragment.param_shape.flat_arity(),
+        }
+    }
+}
+
+impl fmt::Display for FragmentShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} input(s), {} output(s) and {} parameter leaf/leaves",
+            self.inputs, self.outputs, self.flat_arity
+        )
+    }
+}
+
 impl fmt::Display for GraphRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -144,6 +209,23 @@ impl fmt::Display for GraphRefusal {
                 "node {node} was pushed claiming {claimed} output(s) while its own body \
                  declares {declared}, so the value numbers after it would be misaligned by {}.",
                 claimed.abs_diff(*declared)
+            ),
+            GraphRefusal::NoSuchNode { node, nodes } => write!(
+                f,
+                "node {node} was named, and this graph has {nodes} node(s), so the index \
+                 names nothing to replace."
+            ),
+            GraphRefusal::NotAKernelNode { node, found } => write!(
+                f,
+                "node {node} is {found}, and only a kernel node holds a fragment a caller \
+                 can replace."
+            ),
+            GraphRefusal::ShapeDisagrees { node, had, got } => write!(
+                f,
+                "node {node}'s fragment has {had}, and the replacement has {got}. Those \
+                 three facts are what the graph's edges, its value numbering and a \
+                 launch's scalar leaves were built against, so a different shape would \
+                 mis-wire them."
             ),
             GraphRefusal::UnknownValue { node, value } => write!(
                 f,

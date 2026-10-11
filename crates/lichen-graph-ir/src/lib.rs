@@ -20,6 +20,6 @@ pub mod run;
 pub mod value;
 
 pub use graph::{Count, Graph, KernelNode, Node, ValueId};
-pub use refusal::GraphRefusal;
+pub use refusal::{FragmentShape, GraphRefusal};
 pub use run::{Policy, Runner};
 pub use value::Value;

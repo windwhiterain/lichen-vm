@@ -10,9 +10,10 @@ pub use lichen_highlevel::native::{NativeOp, NativeOps};
 pub use compute::{
     BufferCollectOp, BufferOp, BufferPayload, CallOp, ComputeOperator, ComputePlugin, ComputeValue,
     FusedKernel, FusedRefusal, GraphId, GraphOp, GraphRunOp, GraphValueId, JitOp, KernelEntry,
-    KernelId, LaunchOp, ParLaunchOp, ParallelOp, RangeOp, ReadOp, WRAPPER_SOURCE, WriteOp,
-    compile_fragment, compile_parallel_fragment, kernel_claim, kernel_fragment,
-    module_cache_misses, read_fused_kernel, set_graph_policy, write_fused_kernel,
+    KernelId, LandingRefusal, LaunchOp, ParLaunchOp, ParallelOp, RangeOp, ReadOp, WRAPPER_SOURCE,
+    WriteOp, compile_fragment, compile_parallel_fragment, kernel_claim, kernel_fragment,
+    land_fused_kernel, module_cache_misses, read_fused_kernel, set_graph_policy,
+    write_fused_kernel,
 };
 
 /// Contribute this plugin's vocabulary leaves into a host's composition.
