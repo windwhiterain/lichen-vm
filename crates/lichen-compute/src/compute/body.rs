@@ -1596,8 +1596,8 @@ where
                 "read's buffer argument is not an input buffer of the parallel parameter ({seen})"
             )
         })?;
-        // **A read's element class is declared, not inferred**: the host binds the
-        // buffer, and the parameter's own `Buf T` states the class this position reads.
+        // **A read's element class is declared, not inferred**: the parameter's `Buf T`
+        // states what this position reads.
         let element = self.declared_input_class(pos);
         self.tally.reads = self.tally.reads.max(pos + 1);
         self.tally.read_classes.push(element);

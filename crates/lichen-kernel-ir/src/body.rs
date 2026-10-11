@@ -236,11 +236,9 @@ impl KernelBody {
     ///
     /// # Invariant
     /// **The gate between the language's instructions and a target's.** A transcendental
-    /// whose two targets agree on a native instruction is not in
-    /// [`crate::TRANSCENDENTALS`] and is emitted as itself; one that is there is defined by
-    /// the IR and this rewrite inlines that definition, so a backend that runs afterwards
-    /// meets only instructions it emits. A transcendental of anything but one operand is
-    /// refused by name rather than inlined as a different function.
+    /// the two targets agree on natively is emitted as itself; one that is in
+    /// [`crate::TRANSCENDENTALS`] is defined by the IR, and this rewrite inlines that
+    /// definition. Another operand count is refused by name.
     pub fn expand_transcendentals(&mut self) -> Result<(), String> {
         for (instruction, definition_of) in crate::TRANSCENDENTALS {
             let definition = definition_of();
@@ -255,8 +253,8 @@ impl KernelBody {
                     }
                 }
             }
-            // **Latest first**: an inlining adds values to the block it rewrites, so an earlier
-            // position stays the position it was read at.
+            // **Latest first**: an inlining adds values to the block it rewrites, so an
+            // earlier position stays where it was read.
             for (block, position, value) in work.into_iter().rev() {
                 let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
                     continue;
@@ -275,7 +273,7 @@ impl KernelBody {
     }
 
     /// [`Self::expand_transcendentals`]'s inlining: a one-parameter, one-result
-    /// straight-line `definition` at `target`'s site.
+    /// straight-line `definition` at `target`.
     ///
     /// # Invariant
     /// `target` **becomes** the definition's result, so every reader of the original value

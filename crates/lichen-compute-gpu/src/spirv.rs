@@ -194,10 +194,8 @@ pub enum SpirvRefusal {
     /// # Invariant
     /// A transcendental the IR defines is expanded into the primitive instructions, which
     /// `Lower` applies before a fragment is registered, so a body that still holds one was
-    /// not built by it (`docs/notes/floating-point.md` §6, §7). For the exponential the
-    /// reason is this target's GLSL `Exp`, which is implementation-defined per vendor and
-    /// could not answer the CPU path's numbers; the square root is defined for the same
-    /// reason and not because `OpSqrt` would disagree.
+    /// not built by it. The exponential's reason is this target's GLSL `Exp`, which is
+    /// implementation-defined per vendor. `docs/notes/floating-point.md` §6, §7.
     UnexpandedTranscendental { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },

@@ -176,8 +176,8 @@ where
     /// One entry point for the whole prefix family, so the operand array's shape and the
     /// result class are stated once. A **conversion** unifies only a class the operand
     /// already states, since a unify binds every cell that class shares; `max`/`min` tie
-    /// their operands by [`Self::arithmetic_class`]; `exp`, `sqrt` and `floor` are `Float`'s
-    /// alone and pin their operand, having no other class to be.
+    /// their operands by [`Self::arithmetic_class`]; `exp`, `sqrt` and `floor` are
+    /// `Float`'s alone and pin their operand.
     pub(super) fn check_prefix(
         &mut self,
         e: ExprId,

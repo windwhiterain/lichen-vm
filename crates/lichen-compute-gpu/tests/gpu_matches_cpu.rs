@@ -465,8 +465,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     };
                     produced = Scalar::Float(lichen_kernel_ir::exp_value(x));
                 }
-                // The definition the IR expands: a body that still holds one was not built by
-                // the lowering, and the reference reads the same sequence the CPU does.
+                // The IR's own definition: the reference reads the same sequence the CPU does.
                 KernelInstr::Sqrt => {
                     let Scalar::Float(x) = operand(0) else {
                         panic!("the square root is a float's own instruction")

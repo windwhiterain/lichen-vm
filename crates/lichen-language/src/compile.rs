@@ -629,8 +629,8 @@ impl Compiler {
                 operands,
                 span,
             } => {
-                // A prefix keyword operator: the operator rides along for the checker, and
-                // its operands go into the children arena in the order they are written.
+                // A prefix keyword operator: the operator rides along for the checker
+                // and the operands keep the written order.
                 let operator = match operator {
                     crate::ast::PrefixOp::Int2Float => PrefixOp::Int2Float,
                     crate::ast::PrefixOp::Float2Int => PrefixOp::Float2Int,

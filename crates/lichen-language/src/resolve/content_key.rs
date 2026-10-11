@@ -213,8 +213,8 @@ impl KeyWriter {
                 self.u(11);
                 self.expr(value);
             }
-            // The operator is content: `int2float x` and `float2int x` are different
-            // computations of the same operand, and so are `max a b` and `min a b`.
+            // The operator is content: `int2float x` and `float2int x` differ, and so
+            // do `max a b` and `min a b`.
             Expr::Prefix {
                 operator, operands, ..
             } => {

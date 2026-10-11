@@ -10,7 +10,7 @@ use crate::expr::{Expr, Variable};
 /// `Add`, `Sub`, `Mul`, `Div`, `Max` and `Min` are the operators a reduction's `combine`
 /// and an element function are written in; the comparisons are here because masking and
 /// clipping are ordinary attention logic, and a language that cannot name them would
-/// refuse every masked kernel. `Div` on a zero divisor folds nowhere: the canonicalizer
+/// refuse a masked kernel. `Div` on a zero divisor folds nowhere: the canonicalizer
 /// keeps the tree rather than invent an infinity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BinaryOp {

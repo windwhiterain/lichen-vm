@@ -481,8 +481,8 @@ fn run(
     bindings[&Variable::CONSUMER_STATE]
 }
 
-/// The two-pass reference a program runs unfused: the maximum of the datum, then the sum of
-/// the exponentials of the element's contribution above it.
+/// The two-pass reference an unfused program runs: the datum's maximum, then the sum of the
+/// exponentials above it.
 ///
 /// # Invariant
 /// The maximum is taken over the datum alone and the bias is not in it, because that is what

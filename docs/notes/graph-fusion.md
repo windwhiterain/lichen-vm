@@ -509,6 +509,10 @@ producer, with no intermediate ever stored.
    reference's rule, *"the outermost expression independent of the parameter
    is the one to abstract"*, which is exactly the choice that maximizes
    invertibility — then `h(x, r_N, r_{N+1}) = g'(r_{N+1})(g'(r_N)⁻¹(x))`.
+   The template is substituted **after** the inverse is taken: the inverse is the
+   parameter solved at the step's own `r_N`, which is what the template is written
+   at, and substituting the producer first would solve at the next value instead —
+   a different repair function.
    Inversion is symbolic rewriting on the fragment's expression tree: each
    operator either names its inverse (`exp`/`ln`, `+c`/`−c`, `*c`/`÷c` for
    `c ≠ 0`) or the rewrite fails. **The symbolic `ln` is the only `ln` that

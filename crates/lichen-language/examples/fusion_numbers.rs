@@ -1,15 +1,12 @@
-//! The fusion chain, run numerically: the emitted rolling update against the two-pass form,
-//! and against the same chain as kernels.
+//! The fusion chain, run numerically.
+//! Run with `cargo run -p lichen-language --example fusion_numbers`.
 //!
 //! # Invariant
-//! Every column is built from one element function and one pair of declared reductions, and
-//! every host number is [`lichen_fusion::evaluate`] over an expression the engine or this file
-//! built — never a second implementation of the algorithm. The two-pass column applies the
-//! element function at the producer's **final** value; the fused column is the emitted rolling
-//! update; the kernel column is the same algorithm as `compute.parallel` kernels over
-//! `compute.buffer` inputs, run unfused on the cpu backend. Agreement between the host columns
-//! is the claim, and the kernel column is held to its class's own width.
-//! Run with `cargo run -p lichen-language --example fusion_numbers`.
+//! Every column derives from one element function and one pair of declared reductions, and
+//! every host number is [`lichen_fusion::evaluate`] over a tree the engine or this file
+//! built, never a second implementation: the columns are the two-pass form, the emitted
+//! rolling update, and the same chain as unfused `compute.parallel` kernels.
+//! `docs/notes/graph-fusion.md` §6.
 
 use lichen_fusion::{
     BinaryOp, Bindings, Expr, FusedReduction, Random, Reduction, Variable, derive, evaluate,

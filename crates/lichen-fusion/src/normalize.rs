@@ -182,8 +182,8 @@ fn fold_constant(operator: UnaryOp, operand: &Expr) -> Option<f64> {
     folded.is_finite().then_some(folded)
 }
 
-/// A relation is an operator with no inverse but an order, so a key adds into its
-/// operands instead of failing to cancel against them.
+/// A relation has no inverse, only an order: a key adds into its operands rather than
+/// failing to cancel against them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Relation {
     Max,

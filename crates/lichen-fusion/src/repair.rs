@@ -209,14 +209,10 @@ impl fmt::Display for FusionRefusal {
 /// Derives the fused rolling update for one producer reduction and one consumer reduction.
 ///
 /// # Invariant
-/// The abstraction is taken on the element function as written, before canonicalization,
-/// because the outermost producer-free subexpression is where an element function's custom
-/// logic is still one expression; and the emitted body is canonicalized, because what the
-/// run report prints and what the distributivity check compares must be the same tree.
-/// The repair is `g'(r_{N+1})(g'(r_N)⁻¹(x))`, and the two instantiations are why the template
-/// is substituted **after** the inverse is taken: the inverse is the parameter solved at the
-/// step's own producer value, which is what the template is written at, and substituting the
-/// producer first would solve at the next value instead.
+/// The abstraction reads the element function as written and the emitted body is
+/// canonicalized, so the run report and the distributivity check compare one tree. The
+/// template is substituted **after** the inverse is taken, which is what solves the
+/// parameter at this step's own producer value. `docs/notes/graph-fusion.md` §6.
 pub fn derive(
     producer: Reduction,
     element_function: Expr,
@@ -257,9 +253,8 @@ pub fn derive(
 /// # Invariant
 /// Abstraction and inversion do not run, so what the author wrote is what the kernel
 /// carries; what still runs is distributivity, which the rolling update rests on whatever
-/// `h` is, and the three slots `h` may read. The per-element identity is the author's: the
-/// engine has no obligation it can discharge on an expression it did not derive, so a
-/// differential harness is where that claim is kept.
+/// `h` is, and the three slots `h` may read. The per-element identity is the author's, and
+/// a differential harness is where that claim is kept (`docs/notes/graph-fusion.md` §5).
 pub fn derive_with_repair(
     producer: Reduction,
     element_function: Expr,
