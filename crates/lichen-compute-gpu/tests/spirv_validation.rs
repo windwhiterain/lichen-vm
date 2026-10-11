@@ -1308,6 +1308,187 @@ fn a_two_step_tiled_loop_prints() {
     }
 }
 
+/// The loop's carried state, asserted by `ValueId` rather than by eye.
+///
+/// # Invariant
+/// The hand-derived shape of a two-step loop, position by position: the header carries
+/// `[counter, value]`, the entry seeds them with `[zero, identity]`, the backedge hands the step's
+/// own results back, and the exit reads the header's `value`. A body that differs in any of those
+/// answers one step's contribution while looking correct in a diff.
+#[test]
+fn a_two_step_loop_carries_by_identity() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    body.add_param(entry);
+    let stop = body.add_const(entry, ScalarClass::Int, 2);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+
+    // Hand-derived: `reached` is `counter < stop`, `combined` is `current + one`, `advanced` is
+    // `next + one`, and the exit's value is the header's `value`.
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, stop],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, one],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined],
+        }),
+    );
+    body.set_terminator(
+        merged,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+
+    // The five facts, by identity.
+    let Terminator::Br(entry_edge) = &body.blocks[entry].terminator else {
+        panic!("the entry branches");
+    };
+    assert_eq!(entry_edge.target, header);
+    assert_eq!(entry_edge.args, vec![zero, zero], "the entry seeds both params");
+    let Terminator::CondBr { if_true, if_false, .. } = &body.blocks[header].terminator else {
+        panic!("the header tests");
+    };
+    assert_eq!(if_true.args, vec![counter, value], "the body edge passes the params through");
+    assert_eq!(if_false.args, vec![value], "the exit reads the header's value");
+    let Terminator::Br(back) = &body.blocks[step].terminator else {
+        panic!("the step loops");
+    };
+    assert_eq!(back.target, header);
+    assert_eq!(
+        back.args,
+        vec![advanced, combined],
+        "the backedge hands the step's own results back, in the params' positions"
+    );
+    let Terminator::Return { values } = &body.blocks[merged].terminator else {
+        panic!("the merge returns");
+    };
+    assert_eq!(values, &[result]);
+}
+
+/// The transform's own two-step loop, asserted by `ValueId` against the hand-derived shape.
+///
+/// # Invariant
+/// The same five facts the hand-built check asserts, read off the body `Loop::run` produces: a
+/// backedge operand that is not a definition the **step** block holds, or an exit that reads
+/// anything but the header's own `value`, is one step's contribution however valid the module is.
+#[test]
+fn the_transforms_two_step_loop_carries_by_identity() {
+    let body = Folding::new(
+        &Reduction {
+            combine: BinaryOp::Add,
+            identity: 0.0,
+        },
+        2,
+        Element::Buffer { position: 0 },
+        ScalarClass::Int,
+    )
+    .expect("a sum folds")
+    .per_lane();
+    body.validate().expect("the body is well formed");
+    let header = 1;
+    let step = 2;
+    let merged = 3;
+    let params = body.blocks[header].params.clone();
+    assert_eq!(params.len(), 3, "the header carries three values");
+    let Terminator::CondBr { if_true, if_false, .. } = &body.blocks[header].terminator else {
+        panic!("the header tests");
+    };
+    assert_eq!(if_true.target, step);
+    assert_eq!(
+        if_true.args, params,
+        "the body edge hands the header's own params over"
+    );
+    assert_eq!(
+        if_false.args,
+        vec![params[1]],
+        "the exit reads the header's accumulator"
+    );
+    let Terminator::Br(back) = &body.blocks[step].terminator else {
+        panic!("the step loops");
+    };
+    assert_eq!(back.target, header);
+    assert_eq!(
+        back.args.len(),
+        params.len(),
+        "the backedge hands every param back"
+    );
+    // **By role, not by position**: each backedge operand is the exact definition the step holds
+    // for that role — the advanced counter, the combine's result, the moved slot, the read — so an
+    // operand that is merely *some* step definition fails here.
+    let step_instrs = &body.blocks[step].instrs;
+    let advanced = step_instrs[step_instrs.len() - 2];
+    let combined = step_instrs[0];
+    let moved = *step_instrs.last().expect("the step computes");
+    assert_eq!(
+        back.args,
+        vec![advanced, combined, moved],
+        "the backedge's operands are, in the params' order, the advanced counter, the combine's \
+         result and the moved slot"
+    );
+    let returns: Vec<usize> = body
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| matches!(block.terminator, Terminator::Return { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(returns.len(), 1, "the body returns once: {returns:?}");
+    let Terminator::Return { values } = &body.blocks[returns[0]].terminator else {
+        panic!("the return block returns");
+    };
+    assert_eq!(values.len(), 1, "the merge leaves one value");
+    let _ = merged;
+}
+
 /// `out[i] = in[i] + a`, over `(n, a, index)` — the launch's runtime scalar.
 ///
 /// # Invariant

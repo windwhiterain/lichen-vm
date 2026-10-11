@@ -584,6 +584,467 @@ fn a_two_step_per_lane_fold_carries_on_the_device() {
     );
 }
 
+/// The one-seam pair: a loop whose exit value is its own step counter, seeded two ways.
+///
+/// # Invariant
+/// Both bodies are the same loop and differ only in where the carried state's initial value comes
+/// from — a constant and an entry block parameter. Its exit value is the counter, so a run answers
+/// how many steps it took and nothing else.
+#[test]
+fn a_loops_step_count_does_not_depend_on_where_its_seed_comes_from() {
+    let Some(context) =
+        common::context("a_loops_step_count_does_not_depend_on_where_its_seed_comes_from")
+    else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    for (what, seeded_from_a_parameter) in [("constant", false), ("entry parameter", true)] {
+        let mut body = KernelBody::new();
+        let entry = body.add_block();
+        body.add_param(entry);
+        let lane = body.add_param(entry);
+        let stop = body.add_const(entry, ScalarClass::Int, 2);
+        let zero = body.add_const(entry, ScalarClass::Int, 0);
+        let one = body.add_const(entry, ScalarClass::Int, 1);
+        let header = body.add_block();
+        let counter = body.add_param(header);
+        let value = body.add_param(header);
+        let step = body.add_block();
+        let next = body.add_param(step);
+        let current = body.add_param(step);
+        let merged = body.add_block();
+        let result = body.add_param(merged);
+        let reached = body.add_op(
+            header,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+            vec![counter, stop],
+            vec![ScalarClass::Int],
+        );
+        let seed = if seeded_from_a_parameter { lane } else { zero };
+        body.set_terminator(
+            entry,
+            Terminator::Br(Br {
+                target: header,
+                args: vec![zero, seed],
+            }),
+        );
+        body.set_terminator(
+            header,
+            Terminator::CondBr {
+                cond: reached,
+                if_true: Br {
+                    target: step,
+                    args: vec![counter, value],
+                },
+                if_false: Br {
+                    target: merged,
+                    args: vec![counter],
+                },
+            },
+        );
+        let combined = body.add_op(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![current, one],
+            vec![ScalarClass::Int],
+        );
+        let advanced = body.add_op(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![next, one],
+            vec![ScalarClass::Int],
+        );
+        body.set_terminator(
+            step,
+            Terminator::Br(Br {
+                target: header,
+                args: vec![advanced, combined],
+            }),
+        );
+        let after = body.add_block();
+        let left = body.add_param(after);
+        body.set_terminator(
+            merged,
+            Terminator::Br(Br {
+                target: after,
+                args: vec![result],
+            }),
+        );
+        let position = body.add_const(entry, ScalarClass::Int, 0);
+        body.add_op(
+            after,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            vec![position, zero, left],
+            Vec::new(),
+        );
+        body.set_terminator(
+            after,
+            Terminator::Return {
+                values: vec![position],
+            },
+        );
+        body.validate()
+            .unwrap_or_else(|broken| panic!("the {what}-seeded loop is well formed: {broken}"));
+        let fragment = KernelFragment {
+            roles: KernelRoles::default(),
+            param_shape: KernelShape::Tuple(vec![
+                KernelShape::Scalar(ScalarClass::Int),
+                KernelShape::Scalar(ScalarClass::Int),
+            ]),
+            body,
+            inputs: 0,
+            outputs: 1,
+            input_classes: Vec::new(),
+            output_classes: vec![ScalarClass::Int],
+            result_classes: vec![ScalarClass::Int; 1],
+            target: TargetFacts {
+                int_width: IntWidth::I64,
+                lane_width: LaneWidth::new(tile),
+            },
+            slices: Vec::new(),
+            marks: Vec::new(),
+        };
+        let resident = context
+            .run(&LaunchSet::single(&fragment), &[], tile as usize)
+            .unwrap_or_else(|refusal| panic!("the {what}-seeded loop is dispatched: {refusal}"));
+        let answer = words(context.fetch(resident[0], 1).expect("the answer comes back"));
+        context.release(resident[0]);
+        assert_eq!(
+            answer[0], 2,
+            "a loop seeded from a {what} takes its two steps"
+        );
+    }
+}
+
+/// The tiled fold's own first loop, hand-built: does a lane read past its first element?
+///
+/// # Invariant
+/// The loop is the transform's: `start = lane`, `stride = lane_width`, bound two, reading one
+/// buffer element per step. Its answer at `out[lane]` is `data[lane] + data[lane + lane_width]`,
+/// so a lane reaching only its first element is visible in the answer.
+#[test]
+fn a_strided_loop_reads_its_second_element_on_the_device() {
+    let Some(context) = common::context("a_strided_loop_reads_its_second_element_on_the_device")
+    else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let stride = tile;
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    body.add_param(entry);
+    let lane = body.add_param(entry);
+    let stop = body.add_const(entry, ScalarClass::Int, 2);
+    let zero = body.add_const(entry, ScalarClass::Int, 0);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let step_stride = body.add_const(entry, ScalarClass::Int, i64::from(stride));
+    let header = body.add_block();
+    let counter = body.add_param(header);
+    let value = body.add_param(header);
+    let slot = body.add_param(header);
+    let step = body.add_block();
+    let next = body.add_param(step);
+    let current = body.add_param(step);
+    let carried_slot = body.add_param(step);
+    let merged = body.add_block();
+    let result = body.add_param(merged);
+    let read = body.add_op(
+        header,
+        KernelInstr::BufferReadCall(ScalarClass::Int),
+        vec![zero, slot],
+        vec![ScalarClass::Int],
+    );
+    let reached = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![counter, stop],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![zero, zero, lane],
+        }),
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: reached,
+            if_true: Br {
+                target: step,
+                args: vec![counter, value, slot],
+            },
+            if_false: Br {
+                target: merged,
+                args: vec![value],
+            },
+        },
+    );
+    let combined = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![current, read],
+        vec![ScalarClass::Int],
+    );
+    let advanced = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    let moved = body.add_op(
+        step,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![carried_slot, step_stride],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        step,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![advanced, combined, moved],
+        }),
+    );
+    let after = body.add_block();
+    let left = body.add_param(after);
+    body.set_terminator(
+        merged,
+        Terminator::Br(Br {
+            target: after,
+            args: vec![result],
+        }),
+    );
+    let position = body.add_const(entry, ScalarClass::Int, 0);
+    body.add_op(
+        after,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, lane, left],
+        Vec::new(),
+    );
+    body.set_terminator(
+        after,
+        Terminator::Return {
+            values: vec![position],
+        },
+    );
+    body.validate()
+        .unwrap_or_else(|broken| panic!("the strided loop is well formed: {broken}"));
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(tile),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    };
+    let data: Vec<i64> = (0..(tile as i64 * 2)).collect();
+    let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let resident = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            tile as usize,
+        )
+        .unwrap_or_else(|refusal| panic!("the strided loop is dispatched: {refusal}"));
+    let answer = words(
+        context
+            .fetch(resident[0], tile as usize)
+            .expect("the answer comes back"),
+    );
+    context.release(resident[0]);
+    assert_eq!(
+        answer[1],
+        data[1] + data[1 + tile as usize],
+        "lane 1 reads its second element, so the strided address advances"
+    );
+}
+
+/// The 2×2: a two-step loop's accumulator by seed provenance and by stride.
+///
+/// # Invariant
+/// Four bodies, all the same `Loop` shape, differing in exactly two seams: whether the carried
+/// slot starts at a constant or at the entry's lane parameter, and whether the slot advances by
+/// one or by the lane width. The answer at `out[lane]` is the fold over `data[start]` and
+/// `data[start + stride]`, so a lane that took one step answers its first element alone.
+#[test]
+fn a_two_step_loops_answer_separates_seed_from_stride() {
+    let Some(context) = common::context("a_two_step_loops_answer_separates_seed_from_stride") else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    for (seeded_from_a_parameter, stride) in [
+        (false, 1u32),
+        (false, tile),
+        (true, 1),
+        (true, tile),
+    ] {
+        let what = format!(
+            "{} seed, stride {stride}",
+            if seeded_from_a_parameter { "param" } else { "const" }
+        );
+        let mut body = KernelBody::new();
+        let entry = body.add_block();
+        body.add_param(entry);
+        let lane = body.add_param(entry);
+        let stop = body.add_const(entry, ScalarClass::Int, 2);
+        let zero = body.add_const(entry, ScalarClass::Int, 0);
+        let one = body.add_const(entry, ScalarClass::Int, 1);
+        let step_stride = body.add_const(entry, ScalarClass::Int, i64::from(stride));
+        let header = body.add_block();
+        let counter = body.add_param(header);
+        let value = body.add_param(header);
+        let slot = body.add_param(header);
+        let step = body.add_block();
+        let next = body.add_param(step);
+        let current = body.add_param(step);
+        let carried_slot = body.add_param(step);
+        let merged = body.add_block();
+        let result = body.add_param(merged);
+        let read = body.add_op(
+            header,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
+            vec![zero, slot],
+            vec![ScalarClass::Int],
+        );
+        let reached = body.add_op(
+            header,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+            vec![counter, stop],
+            vec![ScalarClass::Int],
+        );
+        let seed = if seeded_from_a_parameter { lane } else { zero };
+        body.set_terminator(
+            entry,
+            Terminator::Br(Br {
+                target: header,
+                args: vec![zero, zero, seed],
+            }),
+        );
+        body.set_terminator(
+            header,
+            Terminator::CondBr {
+                cond: reached,
+                if_true: Br {
+                    target: step,
+                    args: vec![counter, value, slot],
+                },
+                if_false: Br {
+                    target: merged,
+                    args: vec![value],
+                },
+            },
+        );
+        let combined = body.add_op(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![current, read],
+            vec![ScalarClass::Int],
+        );
+        let advanced = body.add_op(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![next, one],
+            vec![ScalarClass::Int],
+        );
+        let moved = body.add_op(
+            step,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![carried_slot, step_stride],
+            vec![ScalarClass::Int],
+        );
+        body.set_terminator(
+            step,
+            Terminator::Br(Br {
+                target: header,
+                args: vec![advanced, combined, moved],
+            }),
+        );
+        let after = body.add_block();
+        let left = body.add_param(after);
+        body.set_terminator(
+            merged,
+            Terminator::Br(Br {
+                target: after,
+                args: vec![result],
+            }),
+        );
+        let position = body.add_const(entry, ScalarClass::Int, 0);
+        body.add_op(
+            after,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            vec![position, lane, left],
+            Vec::new(),
+        );
+        body.set_terminator(
+            after,
+            Terminator::Return {
+                values: vec![position],
+            },
+        );
+        body.validate()
+            .unwrap_or_else(|broken| panic!("the {what} loop is well formed: {broken}"));
+        let fragment = KernelFragment {
+            roles: KernelRoles::default(),
+            param_shape: KernelShape::Tuple(vec![
+                KernelShape::Scalar(ScalarClass::Int),
+                KernelShape::Scalar(ScalarClass::Int),
+            ]),
+            body,
+            inputs: 1,
+            outputs: 1,
+            input_classes: vec![ScalarClass::Int],
+            output_classes: vec![ScalarClass::Int],
+            result_classes: vec![ScalarClass::Int; 1],
+            target: TargetFacts {
+                int_width: IntWidth::I64,
+                lane_width: LaneWidth::new(tile),
+            },
+            slices: Vec::new(),
+            marks: Vec::new(),
+        };
+        let data: Vec<i64> = (0..(tile as i64 * 4)).collect();
+        let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let resident = context
+            .run(
+                &LaunchSet::single(&fragment),
+                &[BufferSlot::Host(&packed)],
+                tile as usize,
+            )
+            .unwrap_or_else(|refusal| panic!("the {what} loop is dispatched: {refusal}"));
+        let answer = words(
+            context
+                .fetch(resident[0], tile as usize)
+                .expect("the answer comes back"),
+        );
+        context.release(resident[0]);
+        // Lane l starts at `0` or at `l`, and folds the element there and `stride` past it.
+        let start = if seeded_from_a_parameter { 1 } else { 0 };
+        let expected = data[start] + data[start + stride as usize];
+        let took_two = answer[1] == expected;
+        let took_one = answer[1] == data[start];
+        println!(
+            "{what}: lane1 {} expected two-step {expected} one-step {} ({took_two} {took_one})",
+            answer[1], data[start]
+        );
+        assert!(
+            took_two || took_one,
+            "the {what} loop's lane 1 answers neither its one-step nor its two-step fold"
+        );
+    }
+}
+
 /// `out[i] = in[i] + in[i] + 1`.
 fn adds() -> KernelFragment {    KernelFragment {
         roles: KernelRoles::default(),
