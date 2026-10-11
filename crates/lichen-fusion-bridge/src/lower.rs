@@ -141,7 +141,9 @@ impl Walk<'_> {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
-            KernelInstr::Exp => Err(BridgeRefusal::Transcendental),
+            KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
+                Err(BridgeRefusal::Transcendental)
+            }
             KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),

@@ -3354,10 +3354,14 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitXor => KernelBin::BitXor,
         TypeOperator::Max => KernelBin::Max,
         TypeOperator::Min => KernelBin::Min,
-        // The class conversions and the exponential are unary: they lower to
-        // [`KernelInstr::Conv`] and [`KernelInstr::Exp`], answered before this mapping is
-        // reached.
-        TypeOperator::Int2Float | TypeOperator::Float2Int | TypeOperator::Exp => return None,
+        // The class conversions and the transcendental families are unary: they lower to
+        // [`KernelInstr::Conv`], [`KernelInstr::Exp`], [`KernelInstr::Sqrt`] and
+        // [`KernelInstr::Floor`], answered before this mapping is reached.
+        TypeOperator::Int2Float
+        | TypeOperator::Float2Int
+        | TypeOperator::Exp
+        | TypeOperator::Sqrt
+        | TypeOperator::Floor => return None,
         // A membership test is a refinement's check, not a computation: the
         // checker registers it as an assert beside the body.
         TypeOperator::InDomain => return None,
@@ -3385,11 +3389,11 @@ fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static
 /// The class a unary prefix operator computes in, if the kernel emitter lowers one directly.
 ///
 /// # Invariant
-/// `exp` is `Float`'s alone; the two conversions are not here because their own lowering
-/// answers a literal in the language's classes before any instruction is emitted.
+/// Every one of them is `Float`'s alone; the two conversions are not here because their own
+/// lowering answers a literal in the language's classes before any instruction is emitted.
 fn unary_class(operator: TypeOperator) -> Option<ScalarClass> {
     match operator {
-        TypeOperator::Exp => Some(ScalarClass::Float),
+        TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => Some(ScalarClass::Float),
         _ => None,
     }
 }

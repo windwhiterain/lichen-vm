@@ -637,6 +637,8 @@ impl Compiler {
                     crate::ast::PrefixOp::Max => PrefixOp::Max,
                     crate::ast::PrefixOp::Min => PrefixOp::Min,
                     crate::ast::PrefixOp::Exp => PrefixOp::Exp,
+                    crate::ast::PrefixOp::Sqrt => PrefixOp::Sqrt,
+                    crate::ast::PrefixOp::Floor => PrefixOp::Floor,
                 };
                 let operand_ids: Vec<ExprId> = operands
                     .iter()

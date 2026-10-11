@@ -425,7 +425,16 @@ producer, with no intermediate ever stored.
    invertibility — then `h(x, r_N, r_{N+1}) = g'(r_{N+1})(g'(r_N)⁻¹(x))`.
    Inversion is symbolic rewriting on the fragment's expression tree: each
    operator either names its inverse (`exp`/`ln`, `+c`/`−c`, `*c`/`÷c` for
-   `c ≠ 0`) or the rewrite fails.
+   `c ≠ 0`) or the rewrite fails. **The symbolic `ln` is the only `ln` that
+   exists**: the kernel vocabulary has `exp`, `sqrt` and `floor` as prefix
+   operators but no `ln`, because its range reduction is a loop and the IR's
+   definitions are one-block straight-line
+   ([floating-point](floating-point.md) §7). Nothing about this rewrite changes
+   with that: it is over the engine's own expression trees, and the bridge from a
+   kernel fragment refuses a projection through `sqrt` or `floor` by name — after
+   its expansion, a body that held one holds only primitives, so a marked
+   projection through either is refused as an unreadable shape rather than read as
+   something else ([operators](operators.md) §11).
 
    The candidate is taken **whole and unconditionally**: nothing inside `c` is
    ever inverted, and nothing inside it has to be. The per-element identity is

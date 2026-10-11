@@ -19,7 +19,7 @@ use lichen_lowlevel::{
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-use lichen_kernel_ir::exp_value;
+use lichen_kernel_ir::{exp_value, floor_value, sqrt_value};
 
 use crate::attr::{AttrSet, NoAttr};
 use crate::diagnostic::DiagKind;
@@ -578,6 +578,22 @@ pub enum TypeOperator {
     /// `Float`-only and total: the interpreter and every kernel compute the sequence in
     /// [`lichen_kernel_ir::exp_body`], so the answer does not depend on which ran it.
     Exp,
+    /// The square root of one `Float`, over `[value]`
+    /// (`docs/notes/floating-point.md` §7).
+    ///
+    /// # Invariant
+    /// `Float`-only and total: the interpreter and every kernel compute the sequence in
+    /// [`lichen_kernel_ir::sqrt_body`], so the answer does not depend on which ran it. A
+    /// negative operand answers `+0`, which is the definition's own answer and not IEEE's
+    /// `NaN`.
+    Sqrt,
+    /// The largest integral `Float` not above one `Float`, over `[value]`
+    /// (`docs/notes/floating-point.md` §7).
+    ///
+    /// # Invariant
+    /// `Float`-only and total: both targets have the operation as an instruction and it is
+    /// exactly specified, so this arm and the two emitters read one rule.
+    Floor,
     /// The two **class conversions** — unary, over `[value]`. See
     /// `docs/notes/floating-point.md` §4.2.
     ///
@@ -737,6 +753,8 @@ define_type_operator_codec! {
     Max = 19;
     Min = 20;
     Exp = 21;
+    Sqrt = 22;
+    Floor = 23;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -844,9 +862,9 @@ where
                     _ => None,
                 }
             }
-            // The exponential: one `Float`, and the one definition every execution model
-            // reads (`docs/notes/floating-point.md` §6).
-            TypeOperator::Exp => {
+            // The prefix scalar operators over one `Float`: each reads the one definition
+            // every execution model reads (`docs/notes/floating-point.md` §6, §7).
+            TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a prefix scalar operator expects a one-element operand array")
                 };
@@ -856,8 +874,16 @@ where
                 let Some(value) = module.node_value(items[0].node) else {
                     return None;
                 };
-                match value.as_enum() {
-                    Some(LowValue::Float(x)) => Some(P::Value::from(LowValue::Float(exp_value(x)))),
+                match (self, value.as_enum()) {
+                    (TypeOperator::Exp, Some(LowValue::Float(x))) => {
+                        Some(P::Value::from(LowValue::Float(exp_value(x))))
+                    }
+                    (TypeOperator::Sqrt, Some(LowValue::Float(x))) => {
+                        Some(P::Value::from(LowValue::Float(sqrt_value(x))))
+                    }
+                    (TypeOperator::Floor, Some(LowValue::Float(x))) => {
+                        Some(P::Value::from(LowValue::Float(floor_value(x))))
+                    }
                     _ => None,
                 }
             }
@@ -1001,7 +1027,11 @@ where
                         (!left.value_eq(&right)) as usize,
                     ))),
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
-                    TypeOperator::Int2Float | TypeOperator::Float2Int | TypeOperator::Exp => {
+                    TypeOperator::Int2Float
+                    | TypeOperator::Float2Int
+                    | TypeOperator::Exp
+                    | TypeOperator::Sqrt
+                    | TypeOperator::Floor => {
                         unreachable!("the prefix scalar operators are unary, and handled above")
                     }
                     // The refinement's membership test; the outer arm already
@@ -1066,7 +1096,7 @@ where
             | TypeOperator::BitXor => Some(LowShape::USize),
             TypeOperator::Int2Float => Some(LowShape::Float),
             TypeOperator::Float2Int => Some(LowShape::USize),
-            TypeOperator::Exp => Some(LowShape::Float),
+            TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => Some(LowShape::Float),
             // A membership test answers `0`/`1`, so its own class is the machine
             // scalar whatever its operands are.
             TypeOperator::InDomain => Some(LowShape::USize),

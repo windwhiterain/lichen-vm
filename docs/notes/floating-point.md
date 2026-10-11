@@ -510,3 +510,97 @@ infinity overflows through the squarings.
 `lichen_kernel_ir::exp_value`, the same sequence evaluated in Rust, so an ordinary
 program and a kernel agree. That is the reason the definition lives in the IR crate
 and not in either emitter: a third evaluation site is the one that would drift.
+
+## 7. `sqrt`, `floor`, and what is left of `ln`
+
+Three more `Float`-only prefix operators landed the way §6 landed `exp`, and one did
+not. The decision each one turns on is where its definition lives, and the answer is
+**the IR, for all three that landed** — the emitters read one sequence, the
+interpreter reads the same one, and a measurement is about the definition rather than
+about a target.
+
+**`floor` could not be emitted natively even in principle.** SPIR-V has no core
+`OpFloor`: GLSL's `floor` is an `OpExtInst` call into the `GLSL.std.450` instruction
+set, which means a second extension import, a capability and an instruction set wasm
+does not share. Emitting it would have been one operation against two instruction
+sets, which is exactly the shape this note exists to refuse. The definition is exact
+for every operand in the class, so nothing is lost:
+
+- the **magnitude** is taken first, because the conversion refuses a negative operand
+  (its destination is the language's unsigned `Int`, and wasm's `i64.trunc_f32_u`
+  traps on one) and `select` evaluates both arms — a guarded conversion would refuse
+  every negative;
+- `float2int` truncates it toward zero and `int2float` answers the same integer back,
+  both exact below `2^24`; above that the operand is an integer already and the
+  definition answers it unchanged, which is also what keeps an infinity and a `NaN`
+  off the conversion;
+- a negative operand takes one more off, which is the `ceil` that side of zero needs.
+
+**`sqrt` is defined rather than emitted, and both targets could have emitted it.**
+wasm's `f32.sqrt` and SPIR-V's `OpSqrt` are both correctly rounded, so a native
+emission would have been defensible. It is defined for two reasons: the interpreter
+gets an answer without a backend, and the accuracy number below is a property of the
+language's definition rather than of a driver. The definition is a range reduction
+over exact powers of two and then Newton's iteration:
+
+- a value below one is raised by `2^32`, and one at or above sixteen is lowered by
+  `2^-4`, and a track holds the square root of what scaled the argument, so the
+  answer is the estimate times the track and needs no separate unscaling. **The
+  reduction multiplies and never divides**: `OpFDiv` is the one float operation this
+  device does not round correctly (below), so the arithmetic the definition is built
+  from has to be the arithmetic the two targets are known to share;
+- Newton's iteration runs from `2`, which the reduction guarantees is within a factor
+  of two of `sqrt(m)`, and six steps take that start's error below the class's own
+  resolution.
+
+**What `sqrt` measures.** Over 1,134,592 samples spanning every exponent from
+`2^-149` through `f32::MAX`: **worst relative error `1.19e-7`** against the correctly
+rounded `f32` square root, with **74.9% of them bit-exact** — one or two units in the
+last place everywhere else. Its edges are the definition's own: a non-positive
+operand answers `+0` (the reduction maps it to zero, so `sqrt(-1)` is `0` and not a
+`NaN`), `sqrt(0)` is `+0`, and `sqrt(+inf)` is `NaN` — the reduction leaves an
+infinity alone and Newton's iteration then divides it by itself.
+
+**What `floor` measures.** **Zero differences** from the host's `floor` over the same
+sweep, both signs, the subnormals and the infinities included. The definition is
+exact rather than accurate: every operation in it is one the class performs exactly,
+and `crates/lichen-language/examples/math_operators.rs` is where both tables print.
+
+**The device's division is not correctly rounded, and that is a measured fact.** A
+probe of 256 quotients through one kernel: **85 of them differ from the correctly
+rounded `f32` answer for `/3` and 139 for `/7`, and none for `/4`**. So a sequence
+containing a division is a sequence on which the two backends can disagree, and
+`sqrt`'s own kernel column shows it — 21 of 64 elements of one sample set differ by
+one unit in the last place — while `floor`'s column, which divides nowhere, is
+identical on all 64. This is already the language's position for a kernel's float
+division (§4.4): it is unspecified there, and this is the mechanism behind that
+decision rather than a new finding. It is also the reason the reduction above
+multiplies by a constant instead of dividing by one.
+
+**`ln` is deferred, and the blocker is the inliner's shape rather than the
+arithmetic.** The shape that works is `x = m · 2^k` with `k` counted in a loop, then
+`ln(m) = 2·atanh((m − 1)/(m + 1))` on the reduced range, added to `k · ln 2`. The
+first half is a **loop**, because `k` spans about 150 values and a fixed number of
+conditional scalings is not the same thing as a loop:
+
+- **`KernelBody::expand_transcendentals` inlines a one-block, straight-line
+  definition.** `inline_definition` takes the definition's single block, renames its
+  values and splices them at the call site; a definition with a backedge has no such
+  splice, and teaching it one is a change to the inliner rather than a new
+  definition.
+- **The primitives cannot reduce the range without a loop.** The alternatives the
+  spike considered are still unavailable: there is no bitcast (so no exponent
+  extraction), no shift (so no `k` from a word), and no `floor`-driven exponent
+  recovery that is cheaper than the conditional chain itself. One *could* unroll the
+  reduction — about 250 conditional scalings, since the exponent range is 254 wide —
+  and the result would be a definition of roughly 1,500 instructions inlined at every
+  call site. That is a cost decision for a later step, not a definition this note can
+  claim, and the honest record is that `ln` is **not** in the kernel vocabulary yet.
+- **`ln` stays where it already was**: `lichen_fusion::UnaryOp::Ln`'s symbolic
+  vocabulary, with `Exp` as its named inverse in `invert.rs`'s table, where
+  [graph-fusion](graph-fusion.md) §6 uses it to derive `h(x, m_old, m_new) =
+  x · exp(m_old − m_new)`. Nothing about the symbolic engine changes.
+
+What unblocks it, in one sentence: **a multi-block definition the inliner can splice
+— a loop with a backedge and carried state — after which `ln` is the same kind of
+object `exp`, `sqrt` and `floor` are.**

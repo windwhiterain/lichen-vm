@@ -154,9 +154,9 @@ impl fmt::Display for BridgeRefusal {
             BridgeRefusal::Transcendental => write!(
                 formatter,
                 "the projection computes a transcendental, and no arm of this bridge builds a \
-                 unary expression: the IR names `Exp` and defines it, but the walk that reads a \
-                 marked body into the symbolic language has no unary case, so a projection \
-                 through one is refused rather than read as something else"
+                 unary expression: the IR names the exponential, the square root and the floor, \
+                 but the walk that reads a marked body into the symbolic language has no unary \
+                 case, so a projection through one is refused rather than read as something else"
             ),
             BridgeRefusal::MalformedBody { reason } => write!(
                 formatter,

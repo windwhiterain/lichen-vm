@@ -169,14 +169,15 @@ where
         crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
     }
 
-    /// A prefix keyword operator — the two class conversions, `max`/`min` and `exp`.
+    /// A prefix keyword operator — the two class conversions, `max`/`min` and the three
+    /// `Float`-only scalar operators.
     ///
     /// # Invariant
     /// One entry point for the whole prefix family, so the operand array's shape and the
     /// result class are stated once. A **conversion** unifies only a class the operand
     /// already states, since a unify binds every cell that class shares; `max`/`min` tie
-    /// their operands by [`Self::arithmetic_class`]; `exp` is `Float`'s alone and pins its
-    /// operand, having no other class to be.
+    /// their operands by [`Self::arithmetic_class`]; `exp`, `sqrt` and `floor` are `Float`'s
+    /// alone and pin their operand, having no other class to be.
     pub(super) fn check_prefix(
         &mut self,
         e: ExprId,
@@ -202,14 +203,14 @@ where
                 self.arithmetic_class(e, ids[0], types[0], ids[1], types[1]),
                 TypeOperator::from(operator),
             ),
-            PrefixOp::Exp => {
+            PrefixOp::Exp | PrefixOp::Sqrt | PrefixOp::Floor => {
                 self.check_unify(
                     types[0],
                     self.float_type,
                     self.loc(ids[0], 1),
                     DiagKind::BinOp,
                 );
-                (self.float_type, TypeOperator::Exp)
+                (self.float_type, TypeOperator::from(operator))
             }
         };
         // The operand array is the source's own list, in the order it was written.

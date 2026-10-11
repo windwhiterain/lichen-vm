@@ -101,6 +101,10 @@ pub enum PrefixOp {
     Min,
     /// `exp x` — the exponential of one `Float`.
     Exp,
+    /// `sqrt x` — the square root of one `Float`.
+    Sqrt,
+    /// `floor x` — the largest integral `Float` not above one `Float`.
+    Floor,
 }
 
 /// The [`TypeOperator`] each [`PrefixOp`] runs, as [`BinOp`] does.
@@ -112,6 +116,8 @@ impl From<PrefixOp> for TypeOperator {
             PrefixOp::Max => TypeOperator::Max,
             PrefixOp::Min => TypeOperator::Min,
             PrefixOp::Exp => TypeOperator::Exp,
+            PrefixOp::Sqrt => TypeOperator::Sqrt,
+            PrefixOp::Floor => TypeOperator::Floor,
         }
     }
 }

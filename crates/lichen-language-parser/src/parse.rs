@@ -496,6 +496,18 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 ),
                 prefix_op(
                     tokens,
+                    TokenKind::KwSqrt,
+                    PrefixOp::Sqrt,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwFloor,
+                    PrefixOp::Floor,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
                     TokenKind::KwMax,
                     PrefixOp::Max,
                     operand(tokens, atom.clone()),
@@ -854,6 +866,8 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwMax
             | TokenKind::KwMin
             | TokenKind::KwExp
+            | TokenKind::KwSqrt
+            | TokenKind::KwFloor
             | TokenKind::Dollar
             | TokenKind::LParen
             | TokenKind::LBracket

@@ -317,11 +317,11 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   The kernel-safe subset is the intersection of what the two backends compute the
   same way; an operator outside it would be a silent divergence between backends,
   not a feature. Floating point is in the set (`+ - * /` and the four order
-  comparisons over `Float`, plus §7's two crossings) and so are `max`, `min` and
-  `exp` (§11) — but `exp` is in the set as a **definition in the IR** rather than as
-  either target's instruction, and `sqrt`, `ln` and the trigonometric family wait
-  for a definition both targets can run. §11 and
-  [floating-point §6](floating-point.md) are the record.
+  comparisons over `Float`, plus §7's two crossings) and so are `max`, `min`,
+  `exp`, `sqrt` and `floor` (§11) — but the last three are in the set as
+  **definitions in the IR** rather than as either target's instruction, and `ln` and
+  the trigonometric family wait for a definition the whole domain can be reduced
+  into. §11 and [floating-point §6, §7](floating-point.md) are the record.
 
 ## 9. Where the coverage is
 
@@ -429,9 +429,9 @@ Verified with `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` and
 [tree-sitter-generated-files](tree-sitter-generated-files.md) for the CLI and
 the generated-files policy.
 
-## 11. The prefix scalar operators: `max`, `min`, `exp`
+## 11. The prefix scalar operators: `max`, `min`, `exp`, `sqrt`, `floor`
 
-Three operators were missing for the same reason and landed together.
+Five operators were missing for the same reason and landed in two steps.
 
 **`max`/`min`, because the language could not write a maximum.** The only
 spelling was `if a > b then a else b`, which lowers to a comparison, an
@@ -448,43 +448,43 @@ bit-for-bit agreement through native instructions is not achievable. The decisio
 its measurement and its cost are [floating-point §6](floating-point.md)'s; what
 belongs here is the *surface*.
 
-**The surface is a prefix keyword, and the alternative lost on the emitter's own
-terms.** The other candidate was a prelude function the emitter recognizes — the
-shape `+` has, where `1 + 2` routes onto `core`'s `add` and the kernel emitter
-reads `TypeOperator::Add` out of that binding's frozen body. Three things decided
-against it:
+**`sqrt` and `floor`, because the second and third could be *defined* even where they
+could not be emitted.** Both are the same surface — a prefix keyword, one operand by
+juxtaposition, `Float`'s alone — and both are *definitions in the IR* rather than a
+target's instruction, which is the decision `exp` established:
 
-- **The spelling is prefix, and a prelude binding is applied, not spelled.** A
-  `core` binding takes its operand group as one array (`add [1, 2]`), so the
-  author's `max a b` would have to be `max [a, b]`, and `exp x` a one-element
-  group. The requested surface is the prefix one, and the conversion keywords
-  already establish exactly that shape.
-- **The binding's body would still need a machine operator to name**, so the
-  routing would buy a keyword *and* a binding for one operator — and the body
-  could not be written in the primitives without becoming the `if`/`Select` shape
-  the operator exists to remove.
-- **The class tie is the checker's either way.** `+`'s routing exists to carry the
-  polymorphism contract (`in_ num`), and `arithmetic_class` *is* that contract
-  (below). Routing would be a second spelling of the same tie, not a second
-  mechanism.
+- **`floor` has no core SPIR-V instruction at all.** GLSL's `floor` is an
+  `OpExtInst` call into `GLSL.std.450` — a second extension import and capability, and
+  an instruction set wasm does not share — so a native emission would be one
+  operation against two instruction sets. Its definition is exact for every operand in
+  the class: it converts the *magnitude* (the conversion refuses a negative, and
+  `select` evaluates both arms, so a guarded conversion would refuse every negative),
+  and puts the sign back with the one-back correction a negative floor needs.
+- **`sqrt` could be emitted** — wasm's `f32.sqrt` and SPIR-V's `OpSqrt` are both
+  correctly rounded — **but it is defined for the interpreter's sake and for the
+  measurement's**: one sequence all three execution models read, and an accuracy
+  number that is about the definition rather than about a target.
+- **`ln` is not here, and the blocker is now precise.** See
+  [floating-point §7](floating-point.md): its range reduction is a *loop*, and the
+  inliner that `exp`, `sqrt` and `floor` ride is deliberately one-block straight-line.
 
 What the choice costs, stated plainly:
 
-- **A prefix keyword is reserved, so `max`, `min` and `exp` are no longer names a
-  program can bind.** `int2float`/`float2int` already were; the prelude's `add`
-  and `mul` are not, and are shadowable. That asymmetry is the price of the
-  spelling.
+- **A prefix keyword is reserved, so `max`, `min`, `exp`, `sqrt` and `floor` are no
+  longer names a program can bind.** `int2float`/`float2int` already were; the
+  prelude's `add` and `mul` are not, and are shadowable. That asymmetry is the price
+  of the spelling.
 - **The kernel emitter reaches no binding, so it lowers the operator node in the
   author's own body.** That is the property the task wanted: `compute/body.rs`
-  answers `TypeOperator::Max`/`Min` through `kernel_bin` and `TypeOperator::Exp`
-  through `unary_class`, and neither inlines a lichen-level body that would
-  collapse into `Select`.
-- **`ln` is not here.** The same mechanism would cover it only if the primitive set
-  could reduce the argument's range, which needs `floor`, a shift or a bitcast; none
-  exists. `ln` stays symbolic, in the fusion engine's inversion table
-  ([floating-point §6](floating-point.md)).
+  answers `TypeOperator::Max`/`Min` through `kernel_bin` and `TypeOperator::Exp`,
+  `Sqrt` and `Floor` through `unary_class`, and none inlines a lichen-level body that
+  would collapse into `Select`.
+- **A definition is a bigger body than an instruction.** `exp` inlines to about
+  forty instructions, `sqrt` to about four hundred and forty and `floor` to about
+  twenty — once per call site. That is the price of one sequence the two backends and
+  the interpreter all read, and it is paid at lowering time rather than at run time.
 
-### The rule the two share: `arithmetic_class`
+### The rule the three `Float`-only operators share
 
 `max`/`min` are the arithmetic tie, not comparisons. `Checker::arithmetic_class`
 is the one function `+ - * /` and `max`/`min` both call: a concrete `Float` operand
@@ -523,3 +523,27 @@ both are `lichen-compute`'s rather than the operator's:
   `KernelRoles` now carries the class each `Buf T` **states**, and a stated one is
   the authority; an open element cell still falls back to the write's class, which
   is what the older spelling means. `compute-buffer-wrapper.md` has the model.
+
+### What `sqrt` and `floor` cost, measured
+
+`crates/lichen-language/examples/math_operators.rs` sweeps each definition over every
+exponent of the class and prints the numbers, and runs each as a kernel on both
+backends over one fixed sample set. The measurements:
+
+- **`sqrt`**: worst relative error `1.19e-7` against the correctly rounded `f32`
+  square root over 1,134,592 samples spanning `2^-149` through `f32::MAX`, with 74.9%
+  of them bit-exact. `0`, a negative and `NaN` answer `+0` — the definition's own
+  answer, since the reduction maps a non-positive operand to zero — and `+inf`
+  answers `NaN`.
+- **`floor`**: **zero differences** from the host's `floor` over the same sweep, both
+  signs, subnormals and infinities included. The definition is exact, not an
+  approximation that happens to round right: every operation in it is one the class
+  performs exactly.
+- **The device disagrees with `sqrt`'s definition by one unit in the last place on 21
+  of those 64 kernel elements, and agrees with `floor`'s on all 64.** That is the
+  device's `OpFDiv`, not the definition: a probe of 256 quotients differed from the
+  correctly rounded `f32` answer in **85 of them for `/3` and 139 for `/7`**, and in
+  none for `/4`. This device's floating-point division is not correctly rounded, so
+  every Newton step written with a division can diverge — which is why
+  [floating-point §4.4](floating-point.md) already refuses to specify a kernel's
+  float division.

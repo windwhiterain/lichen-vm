@@ -291,6 +291,20 @@ Three class facts the walk carries:
 undefined here and IEEE on wasm, the recorded price of admitting floats
 ([floating-point](floating-point.md) §4.4).
 
+**A zero divisor is not the only way a division is unspecified here, and that is now
+measured.** A probe of 256 quotients through one kernel differed from the correctly
+rounded `f32` answer in **85 of them for `/3` and 139 for `/7`**, and in none for
+`/4` — **this target's `OpFDiv` is not correctly rounded**. So a kernel body that
+divides is a body the two backends can disagree on, element by element and by one
+unit in the last place: `sqrt`'s kernel column shows 21 of 64 elements differing for
+exactly that reason, while `floor`'s — which divides nowhere — is identical on all
+64. The lesson for an IR definition is the one `exp`, `sqrt` and `floor` all follow:
+**a definition the two targets must agree on bit for bit is built from
+multiplication, addition, comparison and `select`, and reaches for a division only
+where the language already refuses to specify one** (`crates/lichen-language/examples/
+math_operators.rs` prints both tables; [floating-point](floating-point.md) §7 has the
+numbers and the deferred `ln`).
+
 One position rule: a buffer operation's *position* selects **which**
 storage-buffer variable to reach, so it is read as a number rather than as an id.
 A position is a `Const` computed immediately before the call — a value that was
