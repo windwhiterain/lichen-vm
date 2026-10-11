@@ -618,22 +618,22 @@ pub enum KernelInstr {
     /// The class is the element class, as in [`Self::BufferReadCall`]; the position and the
     /// index are `Int`.
     BufferWriteCall(ScalarClass),
-    /// Write one element of one shared slot: `[slot, index, value]`.
+    /// Write one element of one slice: `[slice, index, value]`.
     ///
     /// # Invariant
-    /// The class is the element class, as in [`Self::BufferWriteCall`]; `slot` is a compile-time
-    /// ordinal into [`KernelFragment::shared_slots`] and `index` is `Int`. What it **leaves** is
-    /// the version a later [`Self::SharedReadCall`] names — the edge a barrier is derived from —
+    /// The class is the element class, as in [`Self::BufferWriteCall`]; `slice` is a compile-time
+    /// ordinal into [`KernelFragment::slices`] and `index` is `Int`. What it **leaves** is
+    /// the version a later [`Self::SliceReadCall`] names — the edge a barrier is derived from —
     /// so it produces one value (`docs/notes/shared-memory-and-barriers.md` §3).
-    SharedWriteCall(ScalarClass),
-    /// Read one element of one shared slot: `[slot, index, version]`.
+    SliceWriteCall(ScalarClass),
+    /// Read one element of one slice: `[slice, index, version]`.
     ///
     /// # Invariant
-    /// `slot` and `index` are as in [`Self::SharedWriteCall`]. The third operand is the
-    /// [`Self::SharedWriteCall`] whose result this read observes, so a pair says *which* write to
-    /// *which* slot it is ordered after rather than "after something"
+    /// `slice` and `index` are as in [`Self::SliceWriteCall`]. The third operand is the
+    /// [`Self::SliceWriteCall`] whose result this read observes, so a pair says *which* write to
+    /// *which* slice it is ordered after rather than "after something"
     /// (`docs/notes/shared-memory-and-barriers.md` §3).
-    SharedReadCall(ScalarClass),
+    SliceReadCall(ScalarClass),
 }
 
 /// The role of every field of a parallel kernel's parameter struct.
@@ -691,7 +691,7 @@ impl KernelInstr {
     ///
     /// # Invariant
     /// **One for everything except [`KernelInstr::BufferWriteCall`]**, the side effect that leaves
-    /// nothing: a shared write leaves the version its reader consumes. The whole of the arity
+    /// nothing: a slice write leaves the version its reader consumes. The whole of the arity
     /// question, so [`KernelBody::validate`](crate::KernelBody::validate) can check a definition
     /// against its declaration.
     pub fn produces(&self) -> usize {
@@ -720,7 +720,7 @@ impl KernelInstr {
             | KernelInstr::Floor => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
-            KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => 3,
+            KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
         })
     }
@@ -740,28 +740,44 @@ impl KernelInstr {
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)
             }
-            KernelInstr::SharedReadCall(class) | KernelInstr::SharedWriteCall(class) => {
-                Some(*class)
-            }
+            KernelInstr::SliceReadCall(class) | KernelInstr::SliceWriteCall(class) => Some(*class),
             KernelInstr::I32WrapI64 | KernelInstr::Select | KernelInstr::CallKernel(_) => None,
         }
     }
 }
 
-/// One shared slot a fragment declares: the class of its elements and how many it holds.
+/// Where a slice's elements live, as the plan names the choice.
 ///
 /// # Invariant
-/// `count` is the length of the `Workgroup` array the emitter declares, and an index that may
-/// reach it is refused ([`KernelFragment::barrier_scan`]). The automatic path derives the count
-/// from `target.lane_width` — the only length a fragment can supply while the surface that names
-/// one (`Shared(.n)`) is unbuilt — and states it here rather than leaving the emitter to read a
-/// width.
+/// The two spaces the plan admits (`docs/notes/graph-fusion.md` §5), and the vocabulary
+/// [`Slice::space`] states: a backend that cannot honour one refuses it **by name** rather than
+/// emitting the other. `Global` is not a member: a value two workgroups must exchange means the
+/// region did not fuse — the graph's decision, not a slice's home
+/// (`docs/notes/shared-memory-and-barriers.md` §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SharedSlot {
-    /// The class of one element of the slot.
+pub enum Space {
+    /// One array per lane, readable by the lane that wrote it and no other.
+    Register,
+    /// One array per workgroup, readable by every lane of it.
+    Shared,
+}
+
+/// One memory slice a fragment declares: the class of its elements, how many it holds, and where
+/// they live.
+///
+/// # Invariant
+/// `count` is the length of the array the emitter declares in `space`, and an index that may reach
+/// it is refused ([`KernelFragment::barrier_scan`]); a target that cannot honour `space` refuses the
+/// fragment by name. The fragment derives the count from `target.lane_width` while the surface that
+/// names one is unbuilt, so the bound and the declared array are one number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Slice {
+    /// The class of one element of the slice.
     pub class: ScalarClass,
-    /// How many elements the slot holds.
+    /// How many elements the slice holds.
     pub count: u32,
+    /// Where the elements live.
+    pub space: Space,
 }
 
 /// A compiled kernel-callable unit: a lowered body plus the facts a caller needs.
@@ -823,14 +839,14 @@ pub struct KernelFragment {
     /// crate carries as data rather than assumes — and [`fragment_digest`] hashes the whole
     /// struct, so a fact added here is in the digest by construction.
     pub target: TargetFacts,
-    /// Each shared slot this body addresses, one entry per ordinal.
+    /// Each slice this body addresses, one entry per ordinal.
     ///
     /// # Invariant
-    /// The length is the slot set: a [`KernelInstr::SharedWriteCall`]'s `slot` is an ordinal into
-    /// it, as a buffer write's position is into `outputs`. It is not a target fact — the slots are
-    /// the program's own memory — and [`fragment_digest`] hashes it: two fragments differing only
-    /// in their staging are two modules. [`SharedSlot`] carries the extent an access is bounded by.
-    pub shared_slots: Vec<SharedSlot>,
+    /// The length is the slice set: a [`KernelInstr::SliceWriteCall`]'s first operand is an ordinal
+    /// into it, as a buffer write's position is into `outputs`. It is not a target fact — the
+    /// slices are the program's own memory — and [`fragment_digest`] hashes it, so two fragments
+    /// differing only in a slice's space are two modules.
+    pub slices: Vec<Slice>,
     /// The marks expressions in the body carried, in the order the walk published them.
     ///
     /// # Invariant
@@ -883,7 +899,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
     fragment.result_classes.hash(&mut hasher);
     format!("{:?}", fragment.target).hash(&mut hasher);
-    format!("{:?}", fragment.shared_slots).hash(&mut hasher);
+    format!("{:?}", fragment.slices).hash(&mut hasher);
     format!("{:?}", fragment.marks).hash(&mut hasher);
     hasher.finish()
 }

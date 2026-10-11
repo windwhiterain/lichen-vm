@@ -12,7 +12,7 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
-    KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, SharedSlot,
+    KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, Slice, Space,
     TargetFacts, Terminator,
 };
 
@@ -51,7 +51,7 @@ fn adds() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -96,7 +96,7 @@ fn sums() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -133,7 +133,7 @@ fn with_a_runtime_scalar() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -347,7 +347,7 @@ fn stages_between_lanes() -> KernelFragment {
 
     let sixty_four = body.add_const(entry, ScalarClass::Int, 64);
     let one = body.add_const(entry, ScalarClass::Int, 1);
-    // The write: slot 0 holds `i + 1` at `i % 64`.
+    // The write: slice 0 holds `i + 1` at `i % 64`.
     let write_slot = body.add_const(entry, ScalarClass::Int, 0);
     let offset = body.add_op(
         entry,
@@ -363,7 +363,7 @@ fn stages_between_lanes() -> KernelFragment {
     );
     let write = body.add_op(
         entry,
-        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        KernelInstr::SliceWriteCall(ScalarClass::Int),
         vec![write_slot, offset, written],
         vec![ScalarClass::Int],
     );
@@ -383,7 +383,7 @@ fn stages_between_lanes() -> KernelFragment {
     );
     let read = body.add_op(
         entry,
-        KernelInstr::SharedReadCall(ScalarClass::Int),
+        KernelInstr::SliceReadCall(ScalarClass::Int),
         vec![read_slot, next_offset, write],
         vec![ScalarClass::Int],
     );
@@ -418,9 +418,10 @@ fn stages_between_lanes() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![SharedSlot {
+        slices: vec![Slice {
             class: ScalarClass::Int,
             count: 64,
+            space: Space::Shared,
         }],
         marks: Vec::new(),
     }

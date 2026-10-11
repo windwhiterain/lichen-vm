@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use lichen_kernel_ir::{
-    KernelBin, KernelFragment, KernelId, KernelInstr, LaunchSet, ScalarClass, SharedSlot,
+    KernelBin, KernelFragment, KernelId, KernelInstr, LaunchSet, ScalarClass, Slice, Space,
     Terminator, ValueDef, ValueId,
 };
 
@@ -185,16 +185,23 @@ pub enum SpirvRefusal {
         results: usize,
         at: usize,
     },
-    /// A buffer position that is not a compile-time constant, or a shared slot that is not
+    /// A buffer position that is not a compile-time constant, or a slice ordinal that is not
     /// one.
     NonConstantBufferPosition { at: usize },
-    /// A position outside the space it addresses, whether a buffer's or a shared slot's.
+    /// A position outside the space it addresses, whether a buffer's or a slice's.
     BufferPositionOutOfRange {
         position: i64,
         space: &'static str,
         bound: usize,
         at: usize,
     },
+    /// The fragment places a slice in a space this target cannot honour.
+    ///
+    /// # Invariant
+    /// Refused by name rather than placed in [`Space::Shared`]: a `Register`-placed slice is one
+    /// array per lane, so `Workgroup` storage would let a lane see another's elements — a different
+    /// program (`docs/notes/shared-memory-and-barriers.md` §5).
+    StagingNotOnThisBackend { space: Space, at: usize },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
     /// The fragment declares a workgroup width this target cannot schedule.
@@ -263,7 +270,7 @@ impl fmt::Display for SpirvRefusal {
             SpirvRefusal::NonConstantBufferPosition { at } => write!(
                 f,
                 "instruction {at} uses a position that is not a compile-time constant. A buffer \
-                 position and a shared slot are both emission ordinals by construction, so this \
+                 position and a slice ordinal are both emission ordinals by construction, so this \
                  fragment is malformed."
             ),
             SpirvRefusal::BufferPositionOutOfRange {
@@ -275,6 +282,14 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "instruction {at} names {space} position {position}, but this module has \
                  {bound} of them."
+            ),
+            SpirvRefusal::StagingNotOnThisBackend { space, at } => write!(
+                f,
+                "instruction {at} places a slice in the {space:?} space, which this target does \
+                 not emit. `Register` placement is one array per lane and needs `Private` \
+                 storage; this emitter declares `Workgroup` storage only, so emitting that here \
+                 would let a lane read another's elements — a different program than the \
+                 fragment states."
             ),
             SpirvRefusal::UnsupportedIntWidth { bits } => write!(
                 f,
@@ -495,14 +510,14 @@ struct BufferTypes {
     ptr_elem: u32,
 }
 
-/// The shared-memory type chain for one slot shape: the slot's `Workgroup` array and its two
+/// The shared-memory type chain for one slice shape: the slice's `Workgroup` array and its two
 /// pointers.
 ///
 /// # Invariant
-/// A slot is a **fixed-size array**, not a scalar, and its length is the count the fragment
+/// A slice is a **fixed-size array**, not a scalar, and its length is the count the fragment
 /// declares for it: `len` is the `OpConstant` that count is declared with, defined before the
 /// type that names it, so the array a body is bounded by and the array this module declares are
-/// one number. Two slots that differ only in length are two shapes.
+/// one number. Two slices that differ only in length are two shapes.
 #[derive(Clone, Copy)]
 struct SharedTypes {
     array: u32,
@@ -567,18 +582,18 @@ struct Ids {
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
-    /// The shared-memory type chain, keyed by the slot shape it declares.
+    /// The shared-memory type chain, keyed by the slice shape it declares.
     ///
     /// # Invariant
-    /// One chain per distinct [`SharedSlot`] a launch set stages, so two slots of one shape are
-    /// one `OpTypeArray`. The slot's ordinal is not a key: an id nothing defines is legal, and a
-    /// shape no slot has leaves no array emitted for it.
-    shared_types: HashMap<SharedSlot, SharedTypes>,
+    /// One chain per distinct `Shared`-placed [`Slice`] a launch set stages, so two slices of one
+    /// shape are one `OpTypeArray`. The slice's ordinal is not a key: an id nothing defines is
+    /// legal, and a shape no slice has leaves no array emitted for it.
+    shared_types: HashMap<Slice, SharedTypes>,
     /// The first of each function's own consecutive `Workgroup` variables, in the order the launch
     /// set is emitted.
     ///
     /// # Invariant
-    /// **The slot space is the fragment's**: a shared access's ordinal indexes the variables of the
+    /// **The slice space is the fragment's**: a slice access's ordinal indexes the variables of the
     /// function that reads it, so a callee's staging is not its caller's.
     shared: Vec<u32>,
     /// One `(count, constant id)` pair per distinct slot length, in the order the shapes name them.
@@ -663,9 +678,9 @@ impl Ids {
         self.buffer_types[class.index()]
     }
 
-    /// The shared-memory type chain for a slot of this shape.
-    fn shared_of(&self, slot: SharedSlot) -> SharedTypes {
-        self.shared_types[&slot]
+    /// The shared-memory type chain for a slice of this shape.
+    fn shared_of(&self, slice: Slice) -> SharedTypes {
+        self.shared_types[&slice]
     }
 }
 
@@ -765,20 +780,24 @@ fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<Scala
         .collect()
 }
 
-/// Every distinct slot shape a launch set stages, in the order the fragments name them.
+/// Every distinct `Shared`-placed slice shape a launch set stages, in the order the fragments name
+/// them.
 ///
 /// # Invariant
 /// The set the module declares a shared type chain and a length constant for: a launch set with no
-/// shared slot declares no `Workgroup` storage, no barrier and no array type. Deduplicated because
-/// two slots of one shape are one `OpTypeArray`, and ordered by first use so the ids a module
-/// assigns are a function of the fragment.
-fn shared_shapes(launch: &LaunchSet<'_>) -> Vec<SharedSlot> {
+/// `Shared` slice declares no `Workgroup` storage, no barrier and no array type. Deduplicated
+/// because two slices of one shape are one `OpTypeArray`, and ordered by first use so the ids a
+/// module assigns are a function of the fragment.
+fn shared_shapes(launch: &LaunchSet<'_>) -> Vec<Slice> {
     let mut seen = HashSet::new();
     let mut shapes = Vec::new();
     for fragment in launch.ordered().iter().copied() {
-        for slot in &fragment.shared_slots {
-            if seen.insert(*slot) {
-                shapes.push(*slot);
+        for slice in &fragment.slices {
+            if slice.space != Space::Shared {
+                continue;
+            }
+            if seen.insert(*slice) {
+                shapes.push(*slice);
             }
         }
     }
@@ -890,10 +909,10 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let function_types = take(ordered.len() as u32);
     let functions = take(ordered.len() as u32);
     let buffers = take(binding.total() as u32);
-    // Three ids per slot shape, one length constant per distinct count, then each function's own
+    // Three ids per slice shape, one length constant per distinct count, then each function's own
     // `Workgroup` variables.
     let shared = shared_shapes(launch);
-    let mut shared_types: HashMap<SharedSlot, SharedTypes> = HashMap::new();
+    let mut shared_types: HashMap<Slice, SharedTypes> = HashMap::new();
     let mut length_ids: HashMap<u32, u32> = HashMap::new();
     let mut shared_lengths: Vec<(u32, u32)> = Vec::new();
     for shape in &shared {
@@ -919,7 +938,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     }
     let shared_variables: Vec<u32> = ordered
         .iter()
-        .map(|fragment| take(fragment.shared_slots.len() as u32))
+        .map(|fragment| take(fragment.slices.len() as u32))
         .collect();
     let barrier_scope = take(1);
     let barrier_semantics = take(1);
@@ -1004,7 +1023,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
 
 /// One function's facts.
 struct Function<'a> {
-    /// The fragment whose buffers are bound, and the slots' classes read from.
+    /// The fragment whose buffers are bound, and the slices' classes read from.
     root: &'a KernelFragment,
     fragment: &'a KernelFragment,
     /// Whether this is position `0`: the entry point.
@@ -1582,9 +1601,9 @@ fn emit_function(
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
                         }
-                        KernelInstr::SharedWriteCall(_) => {
+                        KernelInstr::SliceWriteCall(_) => {
                             let index = operand(1)?;
-                            let (pointer, element_class) = shared_pointer(
+                            let (pointer, element_class) = slice_pointer(
                                 fragment,
                                 shared,
                                 ids,
@@ -1608,7 +1627,7 @@ fn emit_function(
                             )?;
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
                         }
-                        KernelInstr::SharedReadCall(_) => {
+                        KernelInstr::SliceReadCall(_) => {
                             // Immediately before the read's definition
                             // (`docs/notes/shared-memory-and-barriers.md` §9).
                             if barrier_reads.contains(&definition) {
@@ -1622,7 +1641,7 @@ fn emit_function(
                                 ));
                             }
                             let index = operand(1)?;
-                            let (pointer, element_class) = shared_pointer(
+                            let (pointer, element_class) = slice_pointer(
                                 fragment,
                                 shared,
                                 ids,
@@ -2564,7 +2583,7 @@ fn assemble(
     ids: &Ids,
     binding: Binding,
     classes: &[ScalarClass],
-    shared: &[SharedSlot],
+    shared: &[Slice],
     needs_int64: bool,
     literals: &[Inst],
     bodies: &[Vec<Inst>],
@@ -2711,7 +2730,8 @@ fn assemble(
         op::TYPE_POINTER,
         vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
     )]);
-    // A slot's `Workgroup` array is as long as the slot itself declares, never the lane width.
+    // A `Shared` slice's `Workgroup` array is as long as the slice itself declares, never the lane
+    // width.
     for &(count, length) in &ids.shared_lengths {
         types.push(Inst::new(op::CONSTANT, vec![ids.uint, length, count]));
     }
@@ -2880,12 +2900,17 @@ fn assemble(
     }
     // **Shared memory is not bound**: a `Workgroup` variable gets no descriptor set or binding.
     for (position, fragment) in launch.ordered().iter().copied().enumerate() {
-        for (slot, shape) in fragment.shared_slots.iter().enumerate() {
+        for (ordinal, slice) in fragment.slices.iter().enumerate() {
+            // **The ordinal is not renumbered**: an access names `slices[ordinal]`, so a gap stays
+            // a gap.
+            if slice.space != Space::Shared {
+                continue;
+            }
             globals.push(Inst::new(
                 op::VARIABLE,
                 vec![
-                    ids.shared_of(*shape).ptr_array,
-                    ids.shared[position] + slot as u32,
+                    ids.shared_of(*slice).ptr_array,
+                    ids.shared[position] + ordinal as u32,
                     storage_class::WORKGROUP,
                 ],
             ));
@@ -3054,36 +3079,37 @@ fn buffer_slot(
     Ok(base + value as usize)
 }
 
-/// The pointer a shared access names, and the class of the element it holds, with the access chain
+/// The pointer a slice access names, and the class of the element it holds, with the access chain
 /// emitted.
 ///
 /// # Invariant
-/// The slot is a compile-time ordinal into `fragment`'s **own** `shared_slots` — the rule a buffer
-/// position follows — and the index operand indexes the slot's `Workgroup` array, whose length is
-/// the count that slot itself declares. A slot that is not a constant, or is past the fragment's
-/// own count, is refused by name rather than addressing another function's variable.
-fn shared_pointer(
+/// The slice is a compile-time ordinal into `fragment`'s **own** `slices` — the rule a buffer
+/// position follows — the index operand indexes the array that slice's own count declares, and a
+/// space this target does not emit is refused rather than placed in `Workgroup` storage.
+fn slice_pointer(
     fragment: &KernelFragment,
     base: u32,
     ids: &Ids,
-    slot: Slot,
+    slice: Slot,
     index: Slot,
     at: usize,
     code: &mut Vec<Inst>,
     literals: &mut Literals,
     next: &mut u32,
 ) -> Result<(u32, ScalarClass), SpirvRefusal> {
-    let variable = buffer_slot(
-        slot,
-        at,
-        base as usize,
-        fragment.shared_slots.len(),
-        "shared",
-    )?;
-    let shape = fragment.shared_slots[variable - base as usize];
+    let variable = buffer_slot(slice, at, base as usize, fragment.slices.len(), "slice")?;
+    let shape = fragment.slices[variable - base as usize];
     let class = shape.class;
+    let chain = match shape.space {
+        Space::Shared => ids.shared_of(shape),
+        Space::Register => {
+            return Err(SpirvRefusal::StagingNotOnThisBackend {
+                space: shape.space,
+                at,
+            });
+        }
+    };
     let index = as_class(index, ScalarClass::Int, ids, literals, code, next, at)?;
-    let chain = ids.shared_of(shape);
     let pointer = *next;
     *next += 1;
     code.push(Inst::new(

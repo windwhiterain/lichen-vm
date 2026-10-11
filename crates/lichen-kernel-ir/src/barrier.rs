@@ -1,10 +1,10 @@
-//! The barrier scan: the pairs a body's shared accesses separate.
+//! The barrier scan: the pairs a body's slice accesses separate.
 //! See `docs/notes/shared-memory-and-barriers.md` §4.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Barrier, KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, SharedSlot, ValueDef,
+    Barrier, KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, Slice, ValueDef,
     ValueId,
 };
 
@@ -37,14 +37,14 @@ impl KernelFragment {
     /// The fragment-scope facts a body's own gate cannot see, refused by name.
     ///
     /// # Invariant
-    /// A slot declares at least one element: a zero-length `OpTypeArray` has no type to declare and
+    /// A slice declares at least one element: a zero-length `OpTypeArray` has no type to declare and
     /// no index it could bound, so nothing can stage through it
     /// (`docs/notes/shared-memory-and-barriers.md` §9).
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(ordinal) = self.shared_slots.iter().position(|slot| slot.count == 0) {
+        if let Some(ordinal) = self.slices.iter().position(|slice| slice.count == 0) {
             return Err(format!(
-                "the shared slot {ordinal} declares no element(s): a slot's count is the length of \
-                 the `Workgroup` array the emitter declares and the bound every access is refused \
+                "the slice {ordinal} declares no element(s): a slice's count is the length of \
+                 the array the emitter declares and the bound every access is refused \
                  against, so a zero-length array has no type to declare and no index it could \
                  bound (`docs/notes/shared-memory-and-barriers.md` §9)"
             ));
@@ -52,32 +52,28 @@ impl KernelFragment {
         Ok(())
     }
 
-    /// The pairs this fragment's shared accesses need a barrier between.
+    /// The pairs this fragment's slice accesses need a barrier between.
     ///
     /// # Invariant
     /// The extents the body's accesses are bounded by are this fragment's own
-    /// [`Self::shared_slots`], so an index that may leave its slot is refused against the length
+    /// [`Self::slices`], so an index that may leave its slice is refused against the length
     /// the emitter declares rather than one a caller supplied.
     pub fn barrier_scan(&self, lane: ValueId) -> Result<Vec<Barrier>, String> {
         self.validate()?;
-        self.body.barrier_scan(lane, &self.shared_slots)
+        self.body.barrier_scan(lane, &self.slices)
     }
 }
 
 impl KernelBody {
-    /// The pairs this body's shared accesses need a barrier between.
+    /// The pairs this body's slice accesses need a barrier between.
     ///
     /// # Invariant
-    /// `lane` is the parameter the invocation index arrives as and `slots` the slot extents the
+    /// `lane` is the parameter the invocation index arrives as and `slices` the extents the
     /// fragment declares; a body states neither, so the caller does. A pair is returned when the
     /// read observes the write across lanes, at addresses that may coincide, with no recorded
-    /// barrier between them; a contended write, and an access whose index may leave its slot,
+    /// barrier between them; a contended write, and an access whose index may leave its slice,
     /// are refused.
-    pub fn barrier_scan(
-        &self,
-        lane: ValueId,
-        slots: &[SharedSlot],
-    ) -> Result<Vec<Barrier>, String> {
+    pub fn barrier_scan(&self, lane: ValueId, slices: &[Slice]) -> Result<Vec<Barrier>, String> {
         let order = self.walk_order();
         let position: HashMap<ValueId, usize> = order
             .iter()
@@ -86,15 +82,16 @@ impl KernelBody {
             .collect();
         let incoming = self.incoming_arguments();
         let mut memo = HashMap::new();
-        self.refuse_bad_shared_accesses(&order, lane, &incoming, slots, &mut memo)?;
+        self.refuse_bad_slice_accesses(&order, lane, &incoming, slices, &mut memo)?;
         // **A recorded barrier is already between them**: the scan is a function of the body, not
         // of how often it has run.
         let mut separated: HashMap<u64, usize> = HashMap::new();
         for pair in &self.barriers {
-            if let (Some(slot), Some(&at)) = (self.shared_slot(pair.read), position.get(&pair.read))
+            if let (Some(slice), Some(&at)) =
+                (self.slice_ordinal(pair.read), position.get(&pair.read))
             {
                 separated
-                    .entry(slot)
+                    .entry(slice)
                     .and_modify(|held| *held = (*held).max(at))
                     .or_insert(at);
             }
@@ -102,7 +99,7 @@ impl KernelBody {
         let mut pairs = Vec::new();
         for &read in &order {
             let Some(ValueDef::Instr {
-                op: KernelInstr::SharedReadCall(_),
+                op: KernelInstr::SliceReadCall(_),
                 args,
                 ..
             }) = self.values.get(read.0 as usize)
@@ -126,18 +123,18 @@ impl KernelBody {
             if write_index == read_index {
                 continue;
             }
-            let write_slot = self.shared_slot(write);
-            let read_slot = self.shared_slot(read);
+            let write_slice = self.slice_ordinal(write);
+            let read_slice = self.slice_ordinal(read);
             if matches!(
-                (write_slot, read_slot),
+                (write_slice, read_slice),
                 (Some(written), Some(addressed)) if written != addressed
             ) {
                 continue;
             }
             let read_at = position.get(&read).copied();
-            let settled = match (position.get(&write).copied(), read_at, read_slot) {
-                (Some(write_at), Some(this_read_at), Some(slot)) => separated
-                    .get(&slot)
+            let settled = match (position.get(&write).copied(), read_at, read_slice) {
+                (Some(write_at), Some(this_read_at), Some(slice)) => separated
+                    .get(&slice)
                     .is_some_and(|&barrier| write_at < barrier && barrier <= this_read_at),
                 _ => false,
             };
@@ -151,25 +148,25 @@ impl KernelBody {
                 continue;
             }
             pairs.push(Barrier { write, read });
-            if let (Some(slot), Some(read_at)) = (read_slot, read_at) {
-                separated.insert(slot, read_at);
+            if let (Some(slice), Some(read_at)) = (read_slice, read_at) {
+                separated.insert(slice, read_at);
             }
         }
         Ok(pairs)
     }
 
-    /// The shared accesses a barrier decision cannot be made from, refused by name.
+    /// The slice accesses a barrier decision cannot be made from, refused by name.
     ///
     /// # Invariant
     /// Run before any pair is recorded, so a contended write is named rather than reported as
     /// an owed barrier and every read this scan pairs observes a real write — the obligation
     /// [`Self::validate`] could not discharge, because it only sees recorded pairs.
-    fn refuse_bad_shared_accesses(
+    fn refuse_bad_slice_accesses(
         &self,
         order: &[ValueId],
         lane: ValueId,
         incoming: &[Vec<Vec<ValueId>>],
-        slots: &[SharedSlot],
+        slices: &[Slice],
         memo: &mut HashMap<ValueId, Interval>,
     ) -> Result<(), String> {
         for &value in order {
@@ -177,35 +174,35 @@ impl KernelBody {
                 continue;
             };
             match op {
-                KernelInstr::SharedWriteCall(_) => {
-                    self.refuse_escaping_slot(value, "write", args, slots, memo)?;
+                KernelInstr::SliceWriteCall(_) => {
+                    self.refuse_escaping_slice(value, "write", args, slices, memo)?;
                     let Some(&index) = args.get(1) else {
                         continue;
                     };
                     if !self.depends_on(index, lane, incoming) {
                         return Err(format!(
-                            "the shared write {value:?} is contended: its index {index:?} does \
-                             not depend on the lane parameter, so every lane writes the one slot \
+                            "the slice write {value:?} is contended: its index {index:?} does \
+                             not depend on the lane parameter, so every lane writes the one slice \
                              and no barrier can order them \
                              (`docs/notes/shared-memory-and-barriers.md` §4)"
                         ));
                     }
                 }
-                KernelInstr::SharedReadCall(_) => {
-                    self.refuse_escaping_slot(value, "read", args, slots, memo)?;
+                KernelInstr::SliceReadCall(_) => {
+                    self.refuse_escaping_slice(value, "read", args, slices, memo)?;
                     let observed = args.get(2).copied();
                     let names_a_write = observed.is_some_and(|observed| {
                         matches!(
                             self.values.get(observed.0 as usize),
                             Some(ValueDef::Instr {
-                                op: KernelInstr::SharedWriteCall(_),
+                                op: KernelInstr::SliceWriteCall(_),
                                 ..
                             })
                         )
                     });
                     if !names_a_write {
                         return Err(format!(
-                            "the shared read {value:?} observes no shared write: its version \
+                            "the slice read {value:?} observes no slice write: its version \
                              operand is {observed:?}, and the scan owes the pairing \
                              [`Self::validate`] cannot require \
                              (`docs/notes/shared-memory-and-barriers.md` §9)"
@@ -218,28 +215,28 @@ impl KernelBody {
         Ok(())
     }
 
-    /// A shared access whose index interval may leave its slot, refused by name.
+    /// A slice access whose index interval may leave its slice, refused by name.
     ///
     /// # Invariant
-    /// The bound is the count the fragment declares for the slot, and `count` is at least one, so
-    /// a reach of `count` or more addresses past the `Workgroup` array — a fault no barrier orders
-    /// and `spirv-val` cannot see. An access to a slot the table does not reach is not bounded
-    /// here; a constant slot ordinal past the set is the emitter's refusal.
-    fn refuse_escaping_slot(
+    /// The bound is the count the fragment declares for the slice, and `count` is at least one, so
+    /// a reach of `count` or more addresses past the array — a fault no barrier orders
+    /// and `spirv-val` cannot see. An access to a slice the table does not reach is not bounded
+    /// here; a constant slice ordinal past the set is the emitter's refusal.
+    fn refuse_escaping_slice(
         &self,
         value: ValueId,
         what: &str,
         args: &[ValueId],
-        slots: &[SharedSlot],
+        slices: &[Slice],
         memo: &mut HashMap<ValueId, Interval>,
     ) -> Result<(), String> {
         let Some(&index) = args.get(1) else {
             return Ok(());
         };
         let Some(count) = self
-            .shared_slot(value)
-            .and_then(|ordinal| slots.get(ordinal as usize))
-            .map(|slot| slot.count)
+            .slice_ordinal(value)
+            .and_then(|ordinal| slices.get(ordinal as usize))
+            .map(|slice| slice.count)
         else {
             return Ok(());
         };
@@ -248,9 +245,9 @@ impl KernelBody {
             return Ok(());
         }
         Err(format!(
-            "the shared {what} {value:?} may leave its slot: the index {index:?} reaches {reach} \
-             and the slot holds {count} element(s), so the access can address past the \
-             `Workgroup` array — a fault no barrier orders and `spirv-val` cannot see \
+            "the slice {what} {value:?} may address past its slice: the index {index:?} reaches \
+             {reach} and the slice holds {count} element(s), so the access can address past the \
+             array — a fault no barrier orders and `spirv-val` cannot see \
              (`docs/notes/shared-memory-and-barriers.md` §9)"
         ))
     }
@@ -325,13 +322,13 @@ impl KernelBody {
         order
     }
 
-    /// The slot ordinal a shared access addresses, when its operand is the constant it must be.
+    /// The slice ordinal a slice access addresses, when its operand is the constant it must be.
     ///
     /// # Invariant
-    /// A slot is a compile-time ordinal, so an operand that is not an integer constant states
-    /// no slot — and a caller that cannot resolve one must not read the `None` as "another
-    /// slot", because that is the answer that drops a barrier.
-    fn shared_slot(&self, value: ValueId) -> Option<u64> {
+    /// A slice is a compile-time ordinal, so an operand that is not an integer constant states
+    /// no slice — and a caller that cannot resolve one must not read the `None` as "another
+    /// slice", because that is the answer that drops a barrier.
+    fn slice_ordinal(&self, value: ValueId) -> Option<u64> {
         let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
             return None;
         };

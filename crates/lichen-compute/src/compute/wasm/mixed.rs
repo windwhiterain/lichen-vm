@@ -151,13 +151,13 @@ fn check(
             // A write leaves nothing behind, and the class it answers is the absent one.
             Ok(OperandClass::Opaque)
         }
-        KernelInstr::SharedReadCall(class) => {
+        KernelInstr::SliceReadCall(class) => {
             // An access chain's index is an integer, as for a buffer read.
             as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
             Ok(OperandClass::Scalar(class))
         }
-        KernelInstr::SharedWriteCall(class) => {
-            // The value stored into a slot is the slot's element class, as for a buffer write.
+        KernelInstr::SliceWriteCall(class) => {
+            // The value stored into a slice is the slice's element class, as for a buffer write.
             as_operand_class(class_of(&args[2]), class, at)?;
             as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
             // What it leaves is the version a read names, which is no value of a class.

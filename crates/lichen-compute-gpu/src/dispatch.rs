@@ -8,7 +8,7 @@
 //! The Vulkan dispatch backend: device-local buffers, explicit ordering, host pools.
 //!
 //! # Invariant
-//! A launch set that stages a shared slot is dispatched over a whole number of workgroups
+//! A launch set that stages a slice is dispatched over a whole number of workgroups
 //! only, so no surplus lane writes a slot a real lane of its workgroup reads.
 //!
 //! # Invariant
@@ -46,7 +46,7 @@ pub enum RunError {
     },
     /// A run over no indices: Vulkan has no zero-sized allocation to give it.
     EmptyRun,
-    /// A launch that stages a shared slot at a count that is not a whole number of workgroups.
+    /// A launch that stages a slice at a count that is not a whole number of workgroups.
     ///
     /// # Invariant
     /// A dispatch rounds up to whole workgroups and runs the surplus lanes with zero-padded input,
@@ -123,7 +123,7 @@ impl fmt::Display for RunError {
             RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width } => write!(
                 f,
                 "the launch covers {count} indices, which is not a whole number of workgroups of \
-                 {lane_width} lanes, and this launch stages a shared slot: a dispatch rounds up \
+                 {lane_width} lanes, and this launch stages a slice: a dispatch rounds up \
                  and runs the surplus lanes with zero-padded input, so a surplus lane's fabricated \
                  value would reach a real lane's answer with no diagnostic. Launch a multiple of \
                  {lane_width}, or stage nothing (`docs/notes/shared-memory-and-barriers.md` §8)."
@@ -234,7 +234,7 @@ fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunE
     let stages = launch
         .ordered()
         .iter()
-        .any(|fragment| !fragment.shared_slots.is_empty());
+        .any(|fragment| !fragment.slices.is_empty());
     if stages && count % lane_width as usize != 0 {
         return Err(RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width });
     }

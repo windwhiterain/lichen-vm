@@ -3,7 +3,7 @@
 
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, ScalarClass, SharedSlot, TargetFacts, Terminator, ValueDef, ValueId,
+    KernelShape, LaneWidth, ScalarClass, Slice, Space, TargetFacts, Terminator, ValueDef, ValueId,
     from_flat,
 };
 
@@ -55,7 +55,7 @@ fn fragment() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -133,12 +133,13 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             },
         ),
         (
-            "shared_slots",
+            "slices",
             KernelFragment {
                 roles: KernelRoles::default(),
-                shared_slots: vec![SharedSlot {
+                slices: vec![Slice {
                     class: ScalarClass::Int,
                     count: 64,
+                    space: Space::Shared,
                 }],
                 ..base.clone()
             },
@@ -208,13 +209,13 @@ fn a_domain_flattens_to_exactly_its_leaf_count() {
     );
 }
 
-/// A body whose shared read sits either in a branch's arm or in the block it joins.
+/// A body whose slice read sits either in a branch's arm or in the block it joins.
 ///
 /// # Invariant
 /// The arm is reached only when the condition holds, so a barrier before a read there is
 /// divergent by construction; the join is on every path to the return, so a barrier there is
 /// uniform.
-fn branched_shared_read(in_the_arm: bool) -> (KernelBody, Barrier) {
+fn branched_slice_read(in_the_arm: bool) -> (KernelBody, Barrier) {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let _config = body.add_param(entry);
@@ -223,7 +224,7 @@ fn branched_shared_read(in_the_arm: bool) -> (KernelBody, Barrier) {
     let value = body.add_const(entry, ScalarClass::Int, 7);
     let version = body.add_op(
         entry,
-        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        KernelInstr::SliceWriteCall(ScalarClass::Int),
         vec![slot, index, value],
         vec![ScalarClass::Int],
     );
@@ -246,7 +247,7 @@ fn branched_shared_read(in_the_arm: bool) -> (KernelBody, Barrier) {
     );
     let read = body.add_op(
         if in_the_arm { arm } else { join },
-        KernelInstr::SharedReadCall(ScalarClass::Int),
+        KernelInstr::SliceReadCall(ScalarClass::Int),
         vec![slot, index, version],
         vec![ScalarClass::Int],
     );
@@ -276,7 +277,7 @@ fn branched_shared_read(in_the_arm: bool) -> (KernelBody, Barrier) {
 /// A barrier whose read a lane can skip is invalid rather than imprecise, so the gate refuses it.
 #[test]
 fn a_barrier_whose_read_sits_under_a_branch_is_refused() {
-    let (mut body, pair) = branched_shared_read(true);
+    let (mut body, pair) = branched_slice_read(true);
     body.barriers.push(pair);
     let refusal = body
         .validate()
@@ -288,18 +289,18 @@ fn a_barrier_whose_read_sits_under_a_branch_is_refused() {
 /// What the check does catch, from the other side: a read every path reaches needs no refusal.
 #[test]
 fn a_barrier_whose_read_every_lane_reaches_is_accepted() {
-    let (mut body, pair) = branched_shared_read(false);
+    let (mut body, pair) = branched_slice_read(false);
     body.barriers.push(pair);
     body.validate()
         .expect("a read on every path to the return carries a uniform barrier");
 }
 
-/// The `ValueId`s of a body's shared accesses of one kind, in the order they are defined.
+/// The `ValueId`s of a body's slice accesses of one kind, in the order they are defined.
 ///
 /// # Invariant
 /// A `from_flat` body numbers its values in the order its steps define them, so this names the
 /// access a test wrote there without counting the ids it happens to take.
-fn shared_accesses(body: &KernelBody, write: bool) -> Vec<ValueId> {
+fn slice_accesses(body: &KernelBody, write: bool) -> Vec<ValueId> {
     body.values
         .iter()
         .enumerate()
@@ -307,19 +308,19 @@ fn shared_accesses(body: &KernelBody, write: bool) -> Vec<ValueId> {
             let ValueDef::Instr { op, .. } = def else {
                 return None;
             };
-            let shared = match op {
-                KernelInstr::SharedWriteCall(_) => write,
-                KernelInstr::SharedReadCall(_) => !write,
+            let addressed = match op {
+                KernelInstr::SliceWriteCall(_) => write,
+                KernelInstr::SliceReadCall(_) => !write,
                 _ => return None,
             };
-            shared.then_some(ValueId(at as u32))
+            addressed.then_some(ValueId(at as u32))
         })
         .collect()
 }
 
 /// A write and a read at two different indices may meet across lanes, so they are separated.
 #[test]
-fn a_shared_write_and_a_read_by_another_index_are_a_pair() {
+fn a_slice_write_and_a_read_by_another_index_are_a_pair() {
     let body = from_flat(
         1,
         &[
@@ -330,8 +331,8 @@ fn a_shared_write_and_a_read_by_another_index_are_a_pair() {
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
             FlatOp::Read(0),
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
-            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
-            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceReadCall(ScalarClass::Int)),
         ],
     );
     let lane = body.parameters()[0];
@@ -341,15 +342,15 @@ fn a_shared_write_and_a_read_by_another_index_are_a_pair() {
     assert_eq!(
         pairs,
         vec![Barrier {
-            write: shared_accesses(&body, true)[0],
-            read: shared_accesses(&body, false)[0],
+            write: slice_accesses(&body, true)[0],
+            read: slice_accesses(&body, false)[0],
         }]
     );
 }
 
 /// A lane reads the address it wrote itself, in program order, so nothing is owed.
 #[test]
-fn a_shared_write_and_a_read_by_the_same_index_are_no_pair() {
+fn a_slice_write_and_a_read_by_the_same_index_are_no_pair() {
     let body = from_flat(
         1,
         &[
@@ -358,8 +359,8 @@ fn a_shared_write_and_a_read_by_the_same_index_are_no_pair() {
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
             FlatOp::Read(0),
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
-            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
-            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceReadCall(ScalarClass::Int)),
         ],
     );
     let lane = body.parameters()[0];
@@ -370,16 +371,16 @@ fn a_shared_write_and_a_read_by_the_same_index_are_no_pair() {
     );
 }
 
-/// A shared write every lane makes to one slot is contended, and no barrier can order it.
+/// A slice write every lane makes to one element is contended, and no barrier can order it.
 #[test]
-fn a_shared_write_whose_index_excludes_the_lane_is_refused() {
+fn a_slice_write_whose_index_excludes_the_lane_is_refused() {
     let body = from_flat(
         1,
         &[
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)),
-            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
         ],
     );
     let lane = body.parameters()[0];
@@ -393,7 +394,7 @@ fn a_shared_write_whose_index_excludes_the_lane_is_refused() {
     );
 }
 
-/// A fragment staging one `Int` slot of `count` elements, over the body a test supplies.
+/// A fragment staging one `Int` slice of `count` elements, over the body a test supplies.
 fn staging(count: u32, body: KernelBody) -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
@@ -411,30 +412,31 @@ fn staging(count: u32, body: KernelBody) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![SharedSlot {
+        slices: vec![Slice {
             class: ScalarClass::Int,
             count,
+            space: Space::Shared,
         }],
         marks: Vec::new(),
     }
 }
 
-/// A slot of zero elements has no type to declare, refused at the fragment's own gate.
+/// A slice of zero elements has no type to declare, refused at the fragment's own gate.
 #[test]
-fn a_fragment_staging_a_zero_length_slot_is_refused() {
+fn a_fragment_staging_a_zero_length_slice_is_refused() {
     let refusal = staging(0, body(1, true))
         .validate()
-        .expect_err("a slot with no elements cannot stage anything");
+        .expect_err("a slice with no elements cannot stage anything");
     assert!(
         refusal.contains("no element(s)"),
         "names the cause: {refusal}"
     );
-    assert!(refusal.contains('0'), "names the slot: {refusal}");
+    assert!(refusal.contains('0'), "names the slice: {refusal}");
 }
 
-/// An index the interval machinery cannot bound inside the slot is a GPU fault, refused by name.
+/// An index the interval machinery cannot bound inside the slice is a GPU fault, refused by name.
 #[test]
-fn a_shared_index_that_may_leave_its_slot_is_refused() {
+fn a_slice_index_that_may_address_past_its_slice_is_refused() {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let _extent = body.add_param(entry);
@@ -443,7 +445,7 @@ fn a_shared_index_that_may_leave_its_slot_is_refused() {
     let value = body.add_const(entry, ScalarClass::Int, 7);
     let written = body.add_op(
         entry,
-        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        KernelInstr::SliceWriteCall(ScalarClass::Int),
         vec![slot, index, value],
         vec![ScalarClass::Int],
     );
@@ -456,9 +458,9 @@ fn a_shared_index_that_may_leave_its_slot_is_refused() {
     let lane = body.parameters()[1];
     let refusal = staging(64, body)
         .barrier_scan(lane)
-        .expect_err("the lane's own value reaches past a slot of 64");
+        .expect_err("the lane's own value reaches past a slice of 64");
     assert!(
-        refusal.contains("may leave its slot"),
+        refusal.contains("may address past its slice"),
         "names the cause: {refusal}"
     );
     assert!(
@@ -467,9 +469,9 @@ fn a_shared_index_that_may_leave_its_slot_is_refused() {
     );
 }
 
-/// `i % 64` against a slot of 64 is in bounds, so the pair it stages is still recorded.
+/// `i % 64` against a slice of 64 is in bounds, so the pair it stages is still recorded.
 #[test]
-fn a_shared_index_bounded_by_the_slot_is_accepted() {
+fn a_slice_index_bounded_by_the_slice_is_accepted() {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let _extent = body.add_param(entry);
@@ -485,7 +487,7 @@ fn a_shared_index_bounded_by_the_slot_is_accepted() {
     );
     let written = body.add_op(
         entry,
-        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        KernelInstr::SliceWriteCall(ScalarClass::Int),
         vec![write_slot, offset, one],
         vec![ScalarClass::Int],
     );
@@ -504,7 +506,7 @@ fn a_shared_index_bounded_by_the_slot_is_accepted() {
     );
     let read = body.add_op(
         entry,
-        KernelInstr::SharedReadCall(ScalarClass::Int),
+        KernelInstr::SliceReadCall(ScalarClass::Int),
         vec![read_slot, next_offset, written],
         vec![ScalarClass::Int],
     );
@@ -512,7 +514,7 @@ fn a_shared_index_bounded_by_the_slot_is_accepted() {
     let lane = body.parameters()[1];
     let pairs = staging(64, body)
         .barrier_scan(lane)
-        .expect("a slot of 64 holds `i % 64`");
+        .expect("a slice of 64 holds `i % 64`");
     assert_eq!(
         pairs,
         vec![Barrier {

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, SharedSlot,
+    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, Slice, Space,
     TargetFacts,
 };
 
@@ -60,7 +60,7 @@ fn fragment(body: Vec<FlatOp>) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -330,12 +330,12 @@ fn boolean(class: ScalarClass, holds: bool) -> Scalar {
 ///
 /// # Invariant
 /// The interpreter runs one index at a time, so a barrier has no lanes to synchronise and a
-/// shared slot has no lifetime; a silent no-op here would read a barrier as a per-index
+/// slice has no lifetime; a silent no-op here would read a barrier as a per-index
 /// interpreter, which is the answer `docs/notes/shared-memory-and-barriers.md` §7 refuses.
 fn staging_refusal(access: lichen_kernel_ir::ValueId) -> String {
     format!(
-        "the reference refuses a shared access: {access:?} stages a value between lanes, and this \
-         interpreter evaluates one index at a time, so a barrier would be a no-op and the slot \
+        "the reference refuses a slice access: {access:?} stages a value between lanes, and this \
+         interpreter evaluates one index at a time, so a barrier would be a no-op and the slice \
          would hold one index's value for the next"
     )
 }
@@ -524,7 +524,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                 KernelInstr::CallKernel(_) => {
                     panic!("the reference emits no cross-kernel calls")
                 }
-                KernelInstr::SharedReadCall(_) | KernelInstr::SharedWriteCall(_) => {
+                KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => {
                     panic!("{}", staging_refusal(definition))
                 }
             }
@@ -889,7 +889,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -931,7 +931,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1083,12 +1083,12 @@ fn dropping_a_submission_nobody_waited_for_still_frees_it() {
     }
 }
 
-/// A body that writes one shared slot, leaving behind the version a read would name.
+/// A body that writes one slice, leaving behind the version a read would name.
 ///
 /// # Invariant
-/// The write's operands are `[slot, index, value]` and its result is the version, so the body
+/// The write's operands are `[slice, index, value]` and its result is the version, so the body
 /// stages a value between lanes; the trailing constant is the one value the ABI's result wants.
-fn stages_a_shared_slot() -> KernelFragment {
+fn stages_a_slice() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
@@ -1098,10 +1098,10 @@ fn stages_a_shared_slot() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the slot ordinal
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the slice ordinal
                 FlatOp::Read(1),                                        // the index into it
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
-                FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
             ],
         ),
@@ -1114,9 +1114,10 @@ fn stages_a_shared_slot() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![SharedSlot {
+        slices: vec![Slice {
             class: ScalarClass::Int,
             count: 64,
+            space: Space::Shared,
         }],
         marks: Vec::new(),
     }
@@ -1124,8 +1125,8 @@ fn stages_a_shared_slot() -> KernelFragment {
 
 /// The reference refuses staging instead of compiling a barrier into a per-index no-op.
 #[test]
-#[should_panic(expected = "refuses a shared access")]
-fn a_shared_access_is_refused_by_the_reference() {
+#[should_panic(expected = "refuses a slice access")]
+fn a_slice_access_is_refused_by_the_reference() {
     let input = vec![0i64; 8];
-    let _ = reference(&stages_a_shared_slot(), &input, input.len());
+    let _ = reference(&stages_a_slice(), &input, input.len());
 }

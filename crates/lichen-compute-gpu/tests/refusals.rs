@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
     Br, FlatOp, IntWidth, KernelBody, KernelFragment, KernelId, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator,
 };
 
 const ONE_IN_ONE_OUT: Binding = Binding {
@@ -34,7 +34,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -101,7 +101,7 @@ fn calls_kernel_7() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -224,7 +224,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     };
     let binding = Binding {
@@ -294,7 +294,7 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     };
     let refusal =
@@ -398,7 +398,7 @@ fn a_write_inside_a_loop_is_refused_by_name() {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     };
     fragment
@@ -435,5 +435,79 @@ fn a_lane_width_this_target_cannot_schedule_is_refused_by_name() {
     assert!(
         message.contains("does not schedule"),
         "says the target cannot honour it: {message}"
+    );
+}
+
+/// A body that writes one element of a slice in the space it is given.
+///
+/// # Invariant
+/// The operands are `[slice, index, value]` and the write leaves the version a read names, so the
+/// trailing constant is the one value the ABI's result wants.
+fn writes_a_slice(space: Space) -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the slice ordinal
+                FlatOp::Read(1),                                        // the index into it
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
+                FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: vec![Slice {
+            class: ScalarClass::Int,
+            count: 64,
+            space,
+        }],
+        marks: Vec::new(),
+    }
+}
+
+/// A space this target cannot honour is refused by name, not placed in the one it can.
+#[test]
+fn a_register_placed_slice_is_refused_by_name() {
+    let fragment = writes_a_slice(Space::Register);
+    fragment
+        .body
+        .validate()
+        .expect("the body is well formed; it is the *space* that is refused");
+    let refusal = spirv::compile(
+        &LaunchSet::single(&fragment),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .expect_err("this target emits `Shared` slices only");
+    match refusal {
+        SpirvRefusal::StagingNotOnThisBackend { space, .. } => {
+            assert_eq!(
+                space,
+                Space::Register,
+                "names the space the slice asked for"
+            )
+        }
+        other => panic!("refused for the space, not something else: {other:?}"),
+    }
+    let message = refusal.to_string();
+    assert!(message.contains("Register"), "names the space: {message}");
+    assert!(
+        message.contains("does not emit"),
+        "says why this target cannot honour it: {message}"
     );
 }

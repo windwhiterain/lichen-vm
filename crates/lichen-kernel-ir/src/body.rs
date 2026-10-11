@@ -81,13 +81,13 @@ pub struct Br {
 /// A separated `(write, read)` pair: the data a barrier is, before it is a position.
 ///
 /// # Invariant
-/// `write` names a [`KernelInstr::SharedWriteCall`] and `read` the [`KernelInstr::SharedReadCall`]
+/// `write` names a [`KernelInstr::SliceWriteCall`] and `read` the [`KernelInstr::SliceReadCall`]
 /// that observes it. Both are [`ValueId`]s and never positions, because the one restructuring in
 /// the tree moves an instruction between blocks and a value edge survives it
 /// (`docs/notes/shared-memory-and-barriers.md` §9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Barrier {
-    /// The shared write that must have happened.
+    /// The slice write that must have happened.
     pub write: ValueId,
     /// The read that must observe it.
     pub read: ValueId,
@@ -432,7 +432,7 @@ impl KernelBody {
     /// (1) The entry block exists, and every block a transfer names does; (2) every value
     /// a block reads exists in this body — **existence, not order**; (3) a branch's `args`
     /// are exactly its target's `params`; (4) each instruction's `classes` matches what it
-    /// produces — none for a write; (5) a barrier pairs a shared write with the read
+    /// produces — none for a write; (5) a barrier pairs a slice write with the read
     /// observing it, in a block every lane reaches.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
@@ -515,23 +515,23 @@ impl KernelBody {
             if !matches!(
                 self.values.get(pair.write.0 as usize),
                 Some(ValueDef::Instr {
-                    op: KernelInstr::SharedWriteCall(_),
+                    op: KernelInstr::SliceWriteCall(_),
                     ..
                 })
             ) {
                 return Err(format!(
-                    "the barrier ({:?}, {:?}) does not name a shared write",
+                    "the barrier ({:?}, {:?}) does not name a slice write",
                     pair.write, pair.read
                 ));
             }
             let Some(ValueDef::Instr {
-                op: KernelInstr::SharedReadCall(_),
+                op: KernelInstr::SliceReadCall(_),
                 args,
                 ..
             }) = self.values.get(pair.read.0 as usize)
             else {
                 return Err(format!(
-                    "the barrier ({:?}, {:?}) does not name a shared read",
+                    "the barrier ({:?}, {:?}) does not name a slice read",
                     pair.write, pair.read
                 ));
             };

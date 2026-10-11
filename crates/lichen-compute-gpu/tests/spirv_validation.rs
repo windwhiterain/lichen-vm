@@ -12,8 +12,8 @@ use std::process::{Command, Stdio};
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, SharedSlot, TargetFacts, Terminator, ValueDef,
-    ValueId,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator,
+    ValueDef, ValueId,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -60,7 +60,7 @@ fn adds_one() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -151,7 +151,7 @@ fn scales_a_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -174,7 +174,7 @@ fn one_integer_output(body: KernelBody) -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -569,7 +569,7 @@ fn index_to_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -616,7 +616,7 @@ fn crosses_both_ways() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -700,7 +700,7 @@ fn two_buffer_classes() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -720,7 +720,7 @@ fn nullary_callee() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -752,7 +752,7 @@ fn calls_a_nullary_kernel() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -863,7 +863,7 @@ fn unary_callee() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1037,7 +1037,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1079,7 +1079,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: Vec::new(),
+        slices: Vec::new(),
         marks: Vec::new(),
     }
 }
@@ -1210,29 +1210,29 @@ fn a_loop_header_leaves_on_its_own_exit_arm() {
     }
 }
 
-/// `slot[index] = 7`; barrier; `out = slot[index]` — one slot staged between lanes.
+/// `slice[index] = 7`; barrier; `out = slice[index]` — one slice staged between lanes.
 ///
 /// # Invariant
-/// The read's slot and index are pushed **before** the write's three operands: a step takes its
+/// The read's slice and index are pushed **before** the write's three operands: a step takes its
 /// operands in push order and the write's version is appended, so the read pops
-/// `[slot, index, version]` only when its own two sit below them
+/// `[slice, index, version]` only when its own two sit below them
 /// (`docs/notes/shared-memory-and-barriers.md` §4).
-fn stages_a_shared_slot() -> KernelFragment {
+fn stages_a_slice() -> KernelFragment {
     let mut body = KernelBody::from_flat(
         2,
         &[
-            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the read's slot
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the read's slice
             FlatOp::Read(1),                                        // the read's index
-            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the write's slot
+            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // the write's slice
             FlatOp::Read(1),                                        // the write's index
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 7)), // the value written
-            FlatOp::Instr(KernelInstr::SharedWriteCall(ScalarClass::Int)),
-            FlatOp::Instr(KernelInstr::SharedReadCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceWriteCall(ScalarClass::Int)),
+            FlatOp::Instr(KernelInstr::SliceReadCall(ScalarClass::Int)),
         ],
     );
     body.barriers.push(Barrier {
-        write: shared_value(&body, true),
-        read: shared_value(&body, false),
+        write: slice_value(&body, true),
+        read: slice_value(&body, false),
     });
     KernelFragment {
         roles: KernelRoles::default(),
@@ -1250,35 +1250,36 @@ fn stages_a_shared_slot() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![SharedSlot {
+        slices: vec![Slice {
             class: ScalarClass::Int,
             count: 64,
+            space: Space::Shared,
         }],
         marks: Vec::new(),
     }
 }
 
-/// The value `body` defines with a shared write, or with the read that observes it.
+/// The value `body` defines with a slice write, or with the read that observes it.
 ///
 /// # Invariant
 /// `from_flat` numbers one value per step, and a barrier's pair must be the body's own values:
 /// this reads them back rather than counting the steps that produced them.
-fn shared_value(body: &KernelBody, write: bool) -> ValueId {
+fn slice_value(body: &KernelBody, write: bool) -> ValueId {
     let at = body
         .values
         .iter()
         .position(|value| match value {
             ValueDef::Instr {
-                op: KernelInstr::SharedWriteCall(_),
+                op: KernelInstr::SliceWriteCall(_),
                 ..
             } => write,
             ValueDef::Instr {
-                op: KernelInstr::SharedReadCall(_),
+                op: KernelInstr::SliceReadCall(_),
                 ..
             } => !write,
             _ => false,
         })
-        .expect("the body holds the shared access it is asked for");
+        .expect("the body holds the slice access it is asked for");
     ValueId(at as u32)
 }
 
@@ -1292,7 +1293,7 @@ const CONTROL_BARRIER: u16 = 224;
 /// asserted here: a module that staged without synchronising would otherwise validate and race.
 #[test]
 fn a_body_that_stages_validates() {
-    let fragment = stages_a_shared_slot();
+    let fragment = stages_a_slice();
     fragment
         .body
         .validate()
@@ -1304,7 +1305,7 @@ fn a_body_that_stages_validates() {
             outputs: 1,
         },
     )
-    .unwrap_or_else(|refusal| panic!("a shared access is emitted: {refusal}"));
+    .unwrap_or_else(|refusal| panic!("a slice access is emitted: {refusal}"));
 
     let seen = opcodes(&words);
     assert!(
