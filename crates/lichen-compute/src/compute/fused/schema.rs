@@ -3,7 +3,9 @@
 //!
 //! # Invariant
 //! Every type here mirrors an IR type and names it as the JSON spells it, so a
-//! reader never invents a value the text did not carry.
+//! reader never invents a value the text did not carry. `Plan` and its parts are
+//! also a placement pack's spelling (`lichen-language`), so one plan text serves
+//! both artifacts and neither can drift from the other.
 
 use facet::Facet;
 

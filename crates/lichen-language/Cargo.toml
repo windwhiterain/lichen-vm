@@ -25,6 +25,12 @@ lichen-preprocess.workspace = true
 lichen-registry.workspace = true
 lichen-render.workspace = true
 lichen-utils.workspace = true
+# A placement pack is text a human writes, so the schema derives `Facet` and the
+# text is JSON rather than a hand-written codec. See docs/notes/graph-fusion.md §5.
+facet.workspace = true
+# The pack's reader, which refuses a hand-edited text with the field and the byte
+# offset it failed at rather than a message saying only that it failed.
+facet-json.workspace = true
 
 [dev-dependencies]
 # The seam test: a real lichen program dispatching to a real device.  This is a

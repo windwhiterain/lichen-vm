@@ -75,6 +75,12 @@ lichen-package = { path = "crates/lichen-package" }
 lichen-std-native = { path = "lichen-std-native" }
 
 clap = { version = "4", features = ["derive"] }
+# The two artifacts a human writes and a reader refuses by field — the fused kernel
+# and the placement pack — live in two members, so the schema crate is stated here.
+facet = "0.45"
+# The reader, which refuses a hand-edited text with the field and the byte
+# offset it failed at rather than a message saying only that it failed.
+facet-json = "0.44.7"
 logos = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

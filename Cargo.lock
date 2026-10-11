@@ -951,6 +951,8 @@ version = "0.1.0"
 name = "lichen-language"
 version = "0.1.0"
 dependencies = [
+ "facet",
+ "facet-json",
  "lichen-compute",
  "lichen-compute-gpu",
  "lichen-doc",

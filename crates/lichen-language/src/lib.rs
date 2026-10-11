@@ -22,6 +22,7 @@ mod dirty;
 pub mod fusion_claim;
 pub mod package;
 pub mod persist;
+pub mod placement_pack;
 pub mod preprocess;
 pub mod program;
 pub mod render;

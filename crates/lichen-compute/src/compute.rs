@@ -40,7 +40,7 @@ use graph::{Extent, Placed, RunArgument, RunResult};
 use wasm::assemble_module;
 
 pub use fused::{
-    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, read_fused_kernel,
+    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, malformed_at, read_fused_kernel,
     write_fused_kernel,
 };
 pub use graph::GraphId;

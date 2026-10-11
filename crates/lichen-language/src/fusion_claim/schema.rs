@@ -37,6 +37,24 @@ impl SchemaHash {
     pub fn hex(&self) -> String {
         hex(&self.0)
     }
+
+    /// The hash a `sha256:<64 hex>` spelling names, or `None` when the text is not one.
+    ///
+    /// # Invariant
+    /// The one spelling both sides of a pack agree on: a reader takes the text as it is printed,
+    /// so a wrong digit count or a non-hex character is `None` rather than a shorter digest.
+    pub fn parse(text: &str) -> Option<SchemaHash> {
+        let digits = text.strip_prefix("sha256:")?;
+        if digits.len() != 64 {
+            return None;
+        }
+        let mut bytes: Hash = [0; 32];
+        for (byte, pair) in bytes.iter_mut().zip(digits.as_bytes().chunks(2)) {
+            let pair = std::str::from_utf8(pair).ok()?;
+            *byte = u8::from_str_radix(pair, 16).ok()?;
+        }
+        Some(SchemaHash(bytes))
+    }
 }
 
 impl fmt::Display for SchemaHash {
@@ -123,6 +141,37 @@ impl SchemaNode {
             .map(|projection| &projection.canonical)
     }
 
+    /// The canonical text of this node alone, without its position.
+    ///
+    /// # Invariant
+    /// One node, one pack: the position is deliberately absent, so a plan written for a node
+    /// serves it wherever a region puts it. [`RegionSchema::canonical_form`] writes the position
+    /// and then exactly this text, so the two granularities cannot drift.
+    pub fn canonical_form(&self) -> String {
+        let mut text = String::new();
+        self.write_form(&mut text);
+        text
+    }
+
+    /// The hash of [`Self::canonical_form`], as `sha256:<hex>` prints.
+    ///
+    /// # Invariant
+    /// The text is the one a report prints, so a pack author recomputes this from what they see
+    /// (`docs/notes/graph-fusion.md` §4).
+    pub fn hash(&self) -> SchemaHash {
+        SchemaHash(sha256(self.canonical_form().as_bytes()))
+    }
+
+    /// This node's form, with no position of its own, appended to `text`.
+    fn write_form(&self, text: &mut String) {
+        let _ = writeln!(text, "interface {}", self.interface);
+        for projection in &self.projections {
+            let _ = write!(text, "role {} ", projection.role);
+            write_canonical(&projection.canonical, text);
+            text.push('\n');
+        }
+    }
+
     /// The reduction this node's `combine` and `identity` projections declare.
     ///
     /// # Invariant
@@ -206,17 +255,14 @@ impl RegionSchema {
     /// Printing it and hashing it are the same text, so a pack author recomputes the hash from
     /// what a report shows. The interfaces, their canonical projections, the between code and
     /// the ports' roles and classes are in it; kernel ids, graph value numbers, a constant
-    /// extent's value and every raw fragment body are out.
+    /// extent's value and every raw fragment body are out. A node is its position and then the
+    /// node's own form.
     pub fn canonical_form(&self) -> String {
         let mut text = String::new();
         let _ = writeln!(text, "region {}", self.nodes.len());
         for node in &self.nodes {
-            let _ = writeln!(text, "node {} interface {}", node.position, node.interface);
-            for projection in &node.projections {
-                let _ = write!(text, "role {} ", projection.role);
-                write_canonical(&projection.canonical, &mut text);
-                text.push('\n');
-            }
+            let _ = write!(text, "node {} ", node.position);
+            node.write_form(&mut text);
         }
         for between in &self.between {
             let _ = write!(

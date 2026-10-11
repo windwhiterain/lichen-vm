@@ -7,7 +7,7 @@
 //! to, so a machine's placement is not lost between compile and emit.
 
 mod convert;
-mod schema;
+pub mod schema;
 
 use lichen_graph_ir::{Graph, GraphRefusal};
 use lichen_kernel_ir::{KernelClaim, KernelFragment, Plan, PlanRefusal};
@@ -196,14 +196,26 @@ pub fn land_fused_kernel(
     Ok(kernel)
 }
 
+/// Where a `facet_json` parse error stopped, and what it said.
+///
+/// # Invariant
+/// The path and the byte span travel beside the message rather than folded into it, so a reader
+/// that refuses a hand-edited text can point at the field a human has to edit. One helper, so
+/// every artifact this crate reads refuses a text the same way.
+pub fn malformed_at(
+    error: facet_json::DeserializeError,
+) -> (Option<String>, Option<(usize, usize)>, String) {
+    (
+        error.path.as_ref().map(|path| path.format()),
+        error
+            .span
+            .map(|span| (span.offset as usize, span.len as usize)),
+        error.kind.to_string(),
+    )
+}
+
 /// The refusal a `facet_json` parse error earns, with where it happened.
 fn malformed(error: facet_json::DeserializeError) -> FusedRefusal {
-    let at = error
-        .span
-        .map(|span| (span.offset as usize, span.len as usize));
-    FusedRefusal::Malformed {
-        path: error.path.as_ref().map(|path| path.format()),
-        at,
-        message: error.kind.to_string(),
-    }
+    let (path, at, message) = malformed_at(error);
+    FusedRefusal::Malformed { path, at, message }
 }

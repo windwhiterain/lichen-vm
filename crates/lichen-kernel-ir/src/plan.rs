@@ -142,6 +142,21 @@ impl PlanRefusal {
     pub fn message(&self) -> String {
         self.to_string()
     }
+
+    /// The refusal's name, for a report that has to say which check refused a plan.
+    ///
+    /// # Invariant
+    /// One variant, one name: a report that printed the sentence alone could not be matched
+    /// against the variant a caller reads, so the two would drift.
+    pub fn name(&self) -> &'static str {
+        match self {
+            PlanRefusal::UnknownStagedValue { .. } => "UnknownStagedValue",
+            PlanRefusal::AmbiguousStagedValue { .. } => "AmbiguousStagedValue",
+            PlanRefusal::NotAStagedValue { .. } => "NotAStagedValue",
+            PlanRefusal::StagingWidthNotAWidth { .. } => "StagingWidthNotAWidth",
+            PlanRefusal::PlanContradicted { .. } => "PlanContradicted",
+        }
+    }
 }
 
 impl std::fmt::Display for PlanRefusal {
