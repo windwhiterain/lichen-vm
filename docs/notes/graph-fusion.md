@@ -625,6 +625,37 @@ merge carries `combine` twice: the kernel IR's reader refuses it as `AmbiguousSt
 language's `marked_value` silently takes the first, so the two must be made to agree), and **whether
 two slices are one** (two bodies staging into ordinal `0` collide, and unifying them claims one value).
 
+**The composition landed** (`027447ab`): `lichen_kernel_ir::compose(producer, consumer, absorbed) ->
+Result<KernelFragment, ComposeRefusal>`, in the crate that depends on nothing, because the splice is
+pure `KernelFragment` data. It renumbers the consumer's values and blocks by the producer's counts,
+binds the value the producer **writes** where the consumer read the absorbed position (a write produces
+nothing, so the forwarded value is the write's value operand), **inlines the consumer's entry block**
+into the producer's return block, compacts the value table so no `BlockParam` survives whose block does
+not list it, and validates its own answer. Three things it settles by **contract** rather than by a
+caller's decision: the producer's **store** goes (its outputs are not the merged fragment's, and a store
+that survives is a write the program never made — benign on the measured chain only because both writes
+land on the same lane index), its **marks** go (they name roles of an interface that no longer exists,
+so the merged fragment speaks the consumer's), and `roles` is **empty** (a merged fragment has no single
+parameter struct for a path to name). Measured on `examples/fusion_schema.rs`'s chain: 38 values, 9
+blocks, one write, one input, three marks, and the three-way agreement — merged, the two-pass reference
+and the program's own recorded graph, element for element at 8, 100 and 1024 elements against
+`n − n(n+1)/2` — plus a round trip through the fused artifact.
+
+The four decisions are **named refusals**, not guesses: `ForwardedValueIsLaneDependent` (the forwarded
+value is reachable from the producer's invocation index, so binding it in-lane would read another
+lane's — a slice and a barrier rather than an inlining), `DuplicatedMark` (two of the **surviving**
+marks carry one text, which dropping a side cannot resolve), `SlicesCollide`, and a shape, target or
+class disagreement. Its preconditions are the caller's, and they are stated rather than checked
+infallibly: equal `param_shape`, `target` and entry-parameter counts with the entry parameters
+corresponding position for position; the producer's output ordinals and the consumer's surviving input
+ordinals naming the same buffers in the same order; exactly one producer write and one return block; a
+consumer entry block that is no branch target; and constant read positions. **`compose` never sees the
+graph** — the region between a composed fragment and the graph rebuild that repoints the edges is the
+next slice's. Unproven and carried: no emitter-level test reproduces the `MixedClasses` refusal a
+straight block splice earns, so the entry-block inlining is evidenced only by the merged body running;
+two of the refusals are the function's own gates rather than decisions; and the compaction path that
+would drop an unread `SliceWriteCall`'s version is unreached, because two slice lists are refused.
+
 ### The memory plan: the second thing a pack hands over
 
 A fused body is a DAG, not a chain. Once a kernel's read and write are a value —
@@ -1066,7 +1097,7 @@ about shrinks exactly where fusion fires.
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
-| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing, and there is no fusion to request yet** | §5 measured at `ebae69bc`: **no code path in `crates/` fuses two kernels at all** — `derive_regions` has no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production is the intra-kernel tiling of one reduction. What a merge needs, in order: a body composition (nothing composes two fragments), a landing path that is not `replace_kernel` (its `FragmentShape` gate refuses a merged fragment), and a renumbering for a merge away from the tail. The graph side is already there: a pass can return a merged graph and the runner accepts it |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **the body half landed; nothing drives it** | §5 measured at `ebae69bc`: **no code path in `crates/` fuses two kernels at all** — `derive_regions` has no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production is the intra-kernel tiling of one reduction. **The body composition then landed** at `027447ab` (`lichen_kernel_ir::compose`: two chained fragments become one, its four decisions named refusals, and a device differential against the two-pass reference and the recorded graph). What a merge still needs: a **caller** — the graph rebuild that drops the absorbed node, repoints `returns` and renumbers — and, for a merge whose ports differ from the target node's, a landing path that is not `replace_kernel` (a merge whose shape matches the producer's already lands). The graph side is already there: a pass can return a merged graph and the runner accepts it |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
