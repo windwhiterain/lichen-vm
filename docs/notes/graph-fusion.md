@@ -566,15 +566,24 @@ session's to settle; these seams are the interface:
 implements = schema "sha256:9f2c…"
 requires   = { class = f32 }
 reference  = <the region's derivation>
-kernel     = cfg => { …the hand-written fused body, with Shared slots… } "gpu"
+kernel     = cfg => { …dataflow, and the staged values it exchanges. It names no
+                        space: a slice is a thing, a space is where it lives. … } "gpu"
 plan       = {
   -- `value` is a mark the body published: the plan's only stable way to name one.
+  -- `.n` is a **constraint on this placement** — the group width the facts are checked
+  -- against — and not the origin of a length: a slice's element count is the body's.
   staging = [ { value = "tile", space = Shared(.n 64) } ]   -- Register | Shared
   -- `auto` is the scan. An explicit sync names the two marks it separates, never a
   -- position: a position drifts under re-spelling.
   sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
 }
 ```
+
+**This block is the only place above the IR that names a space**, and that is the rule the
+mechanism is built on rather than a convention of this note:
+[shared-memory-and-barriers](shared-memory-and-barriers.md) §5 states it with the layer table,
+and with the three quantities — a slice's element count, a staging group's width, a device's
+lane width — that keep being read as one.
 
 The refusals this interface owes, each naming its cause: `PlanContradicted` (a
 declared plan the three facts refute), `UncertifiedCrossLaneRead` (a cross-lane

@@ -75,6 +75,15 @@ collect = (b : (Buf _))   => $collect(b)
   precisely.
 - `Read`/`Write` keep their `_` instantiation spelling at the call sites
   (`(compute.Read _)(…)`): the element cell is what the buffer's `.element` binds.
+- **`Buf` carries no length, and that is the bound/owned distinction rather than an
+  omission.** A buffer is sized by whoever binds it — the host — so a body never names
+  that, which is why a `Read` needs only `.element`. A **staging slice** is the other
+  case: it has no binder, so the body states its element class *and* its count, and that
+  is the whole of the asymmetry between `Buf` and the designed
+  `Shared = T => struct<.native _, .element T, .n Int>`. Where a slice *lives* —
+  registers, shared, global — is a **placement** and not part of its identity, which is
+  why the name of one space was the wrong name for the thing
+  ([shared-memory-and-barriers](shared-memory-and-barriers.md) §5).
 
 ## The parameter is a named struct, and its `.out` group is the result
 

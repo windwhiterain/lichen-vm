@@ -637,6 +637,49 @@ per-lane loop, and therefore what lets the automatic plan be a floor rather than
 choice. [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over)
 §5 carries the interface this rule feeds and §7 the acceptance case that needs it.
 
+### The placement names a space, and nothing above the plan may
+
+The walk decides a space; **the thing it decides the space *of* is a memory slice**, and the
+two were one name for too long. A slice is an owned staging area with an element class and a
+length, and register, shared and global are three places it may live. Naming the slice after
+one of them — which is what `Shared` did — turns a placement into an identity, and then
+nothing can move it. The paper keeps the two apart and that is the right shape:
+`view(T, N, DP)` is the space-agnostic slice, while `shared(T,N)` and `ptr(T,N)` are views
+that carry a `DP`. So, once:
+
+> **Above the plan, nothing names a space.** The logic and a pack's body state dataflow and
+> the staging structure; the plan states the space; the IR carries the space it was given;
+> a backend emits what that space means for its target, or refuses by name.
+
+| layer | what it states | may it name a space |
+|---|---|---|
+| the logic DSL | dataflow | **no** |
+| a pack's kernel body | dataflow, and **where values are staged** — a name, an element class, a length | **no** |
+| the plan (the shadow file) | the **space** of each staged value, and the synchronisation | **only here** |
+| the IR | the decided space, on the slice | it is *post*-decision, so yes |
+| a backend | what that space means here, or a named refusal | yes |
+
+**Three quantities keep being read as one, and they belong to three owners.**
+
+| quantity | what it is | whose |
+|---|---|---|
+| a slice's **element count** | how many elements the staging area holds | the **algorithm's**: `i % n` and the escape refusal both read it |
+| the staging **group width** | how many lanes take part in the exchange | the **plan's**, and what `StagingWidthNotAWidth` checks against a device |
+| the device's **lane width** | how many lanes a workgroup runs | the **fragment's**, declared as a target fact (§4) |
+
+They coincide for a one-element-per-lane exchange, which is the reduction's case, and that
+coincidence is how a wrong derivation survived review: the count was read off `lane_width`, so
+it was right for the acceptance case and wrong in general. A tiled matmul stages a 16×16 tile —
+**256 elements over 64 lanes** — so the count is the algorithm's, and the lane width is only
+what a *barrier* must synchronise. The plan's `Shared(.n 64)` therefore reads as a **constraint
+on the placement**, not as the origin of a length.
+
+**And a `Buf` has no length because it is bound, not because lengths are unneeded.** A buffer
+is sized by whoever binds it, so a body never names that; a slice has no binder, so the body
+must. That is the whole of the asymmetry between `Buf = T => struct<.native _, .element T>` and
+a slice carrying an element class and a count
+([compute-buffer-wrapper](compute-buffer-wrapper.md#the-prelude-algebra)).
+
 ## 6. The shape of the two halves
 
 ### 6.1 `DP`: deferred, the nominal wrapper already answers it
@@ -870,6 +913,19 @@ two backends against each other, and `gpu_matches_cpu` is the regression that
 keeps them equal — and shared-memory algorithms are exactly the class that loses
 it. Their evidence will have to be the SPIR-V structural tests plus on-device
 runs, until segmentation lands.
+
+**How to read that deferral, and what it decides in the meantime.** It is not a property of
+the host: `run_parallel_range` is a per-index call loop, and the segment path above is how a
+host runs a body that is a function of a group instead. So "GPU only" means *until
+segmentation lands*, and a reader who takes it for "a CPU cannot do this" has the wrong model —
+which is a mistake this note's own summaries made, since the refusal is the cheapest line in
+the table and the path that removes it sits one paragraph up. What it does decide meanwhile is
+the **order**: the acceptance case (§9) is a tiled reduction, and running it before
+segmentation judges it with the closed form and the per-lane reference but **without**
+cross-backend agreement, which is this project's strongest oracle and the one `gpu_matches_cpu`
+exists to keep. Whether segmentation lands before the acceptance case, or the acceptance case
+accepts the weaker evidence for one landing, is **open**; the argument for waiting is that
+segmentation needs a staged body to cut at its barriers, so the surface comes first either way.
 
 ## 8. What the loop rule does and does not change
 
