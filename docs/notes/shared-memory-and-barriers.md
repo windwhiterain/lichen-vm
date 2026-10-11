@@ -988,13 +988,14 @@ the host: `run_parallel_range` is a per-index call loop, and the segment path ab
 host runs a body that is a function of a group instead. So "GPU only" means *until
 segmentation lands*, and a reader who takes it for "a CPU cannot do this" has the wrong model —
 which is a mistake this note's own summaries made, since the refusal is the cheapest line in
-the table and the path that removes it sits one paragraph up. What it does decide meanwhile is
-the **order**: the acceptance case (§9) is a tiled reduction, and running it before
-segmentation judges it with the closed form and the per-lane reference but **without**
-cross-backend agreement, which is this project's strongest oracle and the one `gpu_matches_cpu`
-exists to keep. Whether segmentation lands before the acceptance case, or the acceptance case
-accepts the weaker evidence for one landing, is **open**; the argument for waiting is that
-segmentation needs a staged body to cut at its barriers, so the surface comes first either way.
+the table and the path that removes it sits one paragraph up. What it does decide is the
+**order**, and that is settled the other way: **the acceptance case goes first and segmentation
+waits.** The tiled reduction is judged by the closed form and the per-lane reference and
+**not** by cross-backend agreement, which is this project's strongest oracle and the one
+`gpu_matches_cpu` exists to keep — so for this landing the weaker evidence is accepted
+deliberately, with the reason stated rather than with the test weakened: `gpu_matches_cpu` keeps
+its refusal of a staged body, and segmentation is a later step that pays the second emitter
+shape, the host loop and the shared-scratch layout on its own.
 
 ## 8. What the loop rule does and does not change
 
