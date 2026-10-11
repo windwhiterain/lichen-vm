@@ -527,7 +527,11 @@ cell nothing forced, the launch answered `parameterized`, and the program still
 printed a type (`array<?a, ?b>`), so it read like a program that computed
 something. The `Parameterized` fallback is not wrong in general — it is what makes
 a kernel's own read deferrable — but a program array is **decided**, so it is not
-the case the fallback exists for, and a diagnostic is the honest answer.
+the case the fallback exists for, and a diagnostic is the honest answer. **The
+thing the author wanted now exists**: `compute.buffer` copies an array into a
+`Buf` whose element class is the array's own, so the refusal that names the
+position also names the operation that fills it
+([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.3).
 
 **A wrapper's parameter cell is filled by normalizing the wrapper, never by an
 apply.** `f`'s parameter type states the argument's type, so a wrapper
