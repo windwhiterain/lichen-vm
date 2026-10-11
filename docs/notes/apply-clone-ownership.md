@@ -71,7 +71,7 @@ A clone inherits the template's answer, but only when that answer is a fact abou
 the **template** rather than about whichever call ran last. Two node axes decide,
 and they are not to be conflated:
 
-- `runned` — the source's **own operator** produced the value. `false` with a
+- `runned` — the source's **own operator** produced the value. Zero with a
   value present means a unification wrote it (an assertion, not a computation).
 - `evaluated_deep` — the **deep pass** evaluated this node, which is what makes
   the answer a template fact every call shares.
@@ -84,7 +84,8 @@ in it — but the clone does **not** claim the operator's run. The claim follows
 mapped answer, not merely its presence:
 
 ```rust
-runned = mapped.is_some_and(|value| !answer_elements_are_undecided(value));
+let claimed = mapped.is_some_and(|value| !answer_elements_are_undecided(value));
+self.stamp_node_ran_if(clone, claimed);
 ```
 
 The test is **one level deep by design**: a structure whose own elements are

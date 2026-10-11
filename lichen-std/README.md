@@ -19,7 +19,7 @@ functions) is the module's export.  `import "std"` binds that module; fields
 are accessed as `std.add`, `std.succ`, and so on.
 
 `std.type_of` is the type read: `std.type_of (1)` is `Int : Type`,
-`std.type_of [1, 2]` is `array<Int, 2>`, and in a type position it *is* the
+`std.type_of [1, 2]` is `array{Int, 2}`, and in a type position it *is* the
 operand's type, so `5 : std.type_of (5)` checks.  It is an ordinary lichen
 function —
 

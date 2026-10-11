@@ -451,7 +451,7 @@ pub enum ExprKind<L> {
     /// A set `set{a, b, …}`, homogeneous like an [`Self::Array`].
     ///
     /// # Invariant
-    /// The instance is typed by the set kind, not by `array<T, n>`: the *value* is
+    /// The instance is typed by the set kind, not by `array{T, n}`: the *value* is
     /// the members and the set's identity is its type, so no value-level tag is
     /// needed.
     Set(ChildRange),

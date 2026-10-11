@@ -145,7 +145,7 @@ makes one written occurrence one nominal type:
 - The **field types stay out of the identity** — they ride in the shape. An
   occurrence applied to two different arguments therefore stays one occurrence
   (`A Int` and `A Float` share the id and differ because their shapes differ),
-  and two `struct<…>` written apart remain two declarations because each written
+  and two `struct{…}` written apart remain two declarations because each written
   occurrence allocated its own id. Without the pin, `A In` written twice was two
   nominal types, which made a type constructor that is not a function: a derived
   type could not be named by writing its expression, only by binding it once.

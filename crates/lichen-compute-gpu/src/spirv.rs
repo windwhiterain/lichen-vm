@@ -215,6 +215,19 @@ pub enum SpirvRefusal {
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
     MixedClasses { at: usize },
+    /// A block parameter's own reads ask it to be two classes at once.
+    ///
+    /// # Invariant
+    /// A phi has one type however its edges were written, so a parameter one read wants `Int` and
+    /// another wants `Float` has no type to declare: the classes it was asked to be are carried
+    /// rather than the fact alone, because which two met is what tells the fragment's author which
+    /// read to fix. A parameter **nothing** reads is not this case — see [`read_class`].
+    BlockParameterClassDisagrees {
+        /// The parameter, as the body numbers it.
+        parameter: ValueId,
+        /// The classes its reads asked for, in name order.
+        classes: Vec<ScalarClass>,
+    },
     /// The body computes a transcendental, which this target has no instruction for.
     ///
     /// # Invariant
@@ -314,6 +327,15 @@ impl fmt::Display for SpirvRefusal {
                  do not convert in either direction, so nothing here can make the two operands \
                  meet: this is a malformed fragment rather than an unsupported shape."
             ),
+            SpirvRefusal::BlockParameterClassDisagrees { parameter, classes } => {
+                write!(
+                    f,
+                    "the block parameter {parameter:?} is read as one class in one place and \
+                     another in another ({classes:?}). A block parameter is one `OpPhi` and has one \
+                     type however its edges were written, and this target does not guess between \
+                     them."
+                )
+            }
             SpirvRefusal::UnexpandedTranscendental { at } => write!(
                 f,
                 "instruction {at} computes a transcendental, which this target emits only through \
@@ -1064,6 +1086,8 @@ fn emit_function(
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
     }
+    // **The root's class, not this fragment's**: every function in one module computes in it.
+    let module = module_class(root)?;
     if fragment.target.int_width.bits() != 64 {
         return Err(SpirvRefusal::UnsupportedIntWidth {
             bits: fragment.target.int_width.bits(),
@@ -1716,6 +1740,8 @@ fn emit_function(
                     entry,
                     ids: &ids,
                     plan: &plan,
+                    launch,
+                    module,
                     blocks: &mut blocks,
                     slots: &mut slots,
                     literals: &mut literals,
@@ -1732,6 +1758,8 @@ fn emit_function(
                     entry,
                     ids: &ids,
                     plan: &plan,
+                    launch,
+                    module,
                     blocks: &mut blocks,
                     slots: &mut slots,
                     literals: &mut literals,
@@ -1788,10 +1816,182 @@ fn type_of(ids: &Ids, kind: Kind) -> u32 {
 
 /// The kind a block parameter has: an `OpPhi` has one type however its edges were
 /// written.
-fn resolved(kind: Kind, ids: &Ids) -> Kind {
+///
+/// # Invariant
+/// A literal is not a class of its own, so `resolved` answers `None` for one and the caller asks
+/// [`value_class`] instead: an edge's kind says nothing, and the module's class is what [`type_of`]
+/// falls back to for a value no definition states a class for.
+fn resolved(kind: Kind) -> Option<Kind> {
     match kind {
-        Kind::Literal(_) => Kind::Scalar(ids.class),
-        other => other,
+        Kind::Literal(_) => None,
+        other => Some(other),
+    }
+}
+
+/// The class a block of the body computes `parameter` in, or `None` when nothing about it says.
+///
+/// # Invariant
+/// The class comes from the block's own instruction list, through [`operand_class`], the rule each
+/// emission uses. Two reads stating two classes are
+/// [`SpirvRefusal::BlockParameterClassDisagrees`], because a phi has one type. `None` is not a
+/// refusal: no read computes it in any class, so no type it is given is observed.
+fn read_class(
+    fragment: &KernelFragment,
+    launch: &LaunchSet<'_>,
+    module: ScalarClass,
+    block: usize,
+    parameter: ValueId,
+) -> Result<Option<ScalarClass>, SpirvRefusal> {
+    let mut stated: Option<ScalarClass> = None;
+    for &definition in &fragment.body.blocks[block].instrs {
+        let Some(ValueDef::Instr { op, args, .. }) =
+            fragment.body.values.get(definition.0 as usize)
+        else {
+            continue;
+        };
+        for (position, &operand) in args.iter().enumerate() {
+            if operand != parameter {
+                continue;
+            }
+            let Some(class) = operand_class(launch, module, op, position) else {
+                continue;
+            };
+            match stated {
+                Some(seen) if seen != class => {
+                    let mut classes = vec![seen, class];
+                    classes.sort_by_key(|class| class.index());
+                    classes.dedup();
+                    return Err(SpirvRefusal::BlockParameterClassDisagrees { parameter, classes });
+                }
+                Some(_) => {}
+                None => stated = Some(class),
+            }
+        }
+    }
+    Ok(stated)
+}
+
+/// The class the body computes `value` in, from the body's own declarations.
+///
+/// # Invariant
+/// A value's class is its **definition's**: an instruction states the class its emission reads and
+/// writes in, and a parameter's is what its reads say ([`read_class`]) or, if nothing reads it,
+/// what its edges carry. `visiting` bounds that walk, so a cycle of parameters nothing reads takes
+/// the module's class — a value no operation observes has no class to be wrong about.
+fn value_class(
+    fragment: &KernelFragment,
+    launch: &LaunchSet<'_>,
+    module: ScalarClass,
+    value: ValueId,
+    visiting: &mut Vec<ValueId>,
+) -> Result<ScalarClass, SpirvRefusal> {
+    let Some(definition) = fragment.body.values.get(value.0 as usize) else {
+        return Ok(module);
+    };
+    // **A constant states its own class**, which no position can reclassify.
+    if let ValueDef::Instr {
+        op: KernelInstr::Const(class, _),
+        ..
+    } = definition
+    {
+        return Ok(*class);
+    }
+    let ValueDef::BlockParam { block, index } = definition else {
+        let ValueDef::Instr { op, .. } = definition else {
+            return Ok(module);
+        };
+        return Ok(operand_class(launch, module, op, 0).unwrap_or(module));
+    };
+    let (block, index) = (*block, *index as usize);
+    if let Some(class) = read_class(fragment, launch, module, block, value)? {
+        return Ok(class);
+    }
+    if !visiting.contains(&value) {
+        visiting.push(value);
+        let mut stated: Option<ScalarClass> = None;
+        for carried in incoming_edges(fragment, block) {
+            let Some(&argument) = carried.get(index) else {
+                continue;
+            };
+            let class = value_class(fragment, launch, module, argument, visiting)?;
+            match stated {
+                Some(seen) if seen != class => {
+                    let mut classes = vec![seen, class];
+                    classes.sort_by_key(|class| class.index());
+                    classes.dedup();
+                    return Err(SpirvRefusal::BlockParameterClassDisagrees {
+                        parameter: value,
+                        classes,
+                    });
+                }
+                Some(_) => {}
+                None => stated = Some(class),
+            }
+        }
+        visiting.pop();
+        if let Some(class) = stated {
+            return Ok(class);
+        }
+    }
+    Ok(module)
+}
+
+/// Every edge into `block`, as the value it carries per position of the block's parameter list.
+fn incoming_edges(fragment: &KernelFragment, block: usize) -> Vec<&[ValueId]> {
+    let mut edges = Vec::new();
+    for candidate in &fragment.body.blocks {
+        let carried = match &candidate.terminator {
+            Terminator::Return { .. } => None,
+            Terminator::Br(br) => (br.target == block).then_some(br.args.as_slice()),
+            Terminator::CondBr {
+                if_true, if_false, ..
+            } => {
+                if if_true.target == block {
+                    Some(if_true.args.as_slice())
+                } else if if_false.target == block {
+                    Some(if_false.args.as_slice())
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(carried) = carried {
+            edges.push(carried);
+        }
+    }
+    edges
+}
+
+/// The class the operand at `position` of `op` is computed in, or `None` when `op` fixes none.
+///
+/// # Invariant
+/// One arm per operand position: an operator's operands are the class it names; a read's index
+/// and a write's position are access-chain indices, so `Int` whatever the buffer holds; a slice
+/// access's third operand is a version the emission ignores; a `Select`'s selector is a condition
+/// and its arms the module's class; a conversion's operand is the class it comes from.
+fn operand_class(
+    launch: &LaunchSet<'_>,
+    module: ScalarClass,
+    op: &KernelInstr,
+    position: usize,
+) -> Option<ScalarClass> {
+    match *op {
+        KernelInstr::Bin(class, _) => Some(class),
+        KernelInstr::Conv { from, .. } => (position == 0).then_some(from),
+        KernelInstr::Select => (position != 2).then_some(module),
+        KernelInstr::BufferReadCall(_) => (position == 0).then_some(ScalarClass::Int),
+        KernelInstr::SliceReadCall(_) => (position == 0).then_some(ScalarClass::Int),
+        KernelInstr::BufferWriteCall(class) => (position == 2).then_some(class),
+        KernelInstr::SliceWriteCall(class) => (position == 2).then_some(class),
+        KernelInstr::CallKernel(callee) => {
+            let (_, target) = launch.callee(callee)?;
+            target.param_shape.leaf_classes().get(position).copied()
+        }
+        KernelInstr::Const(_, _)
+        | KernelInstr::I32WrapI64
+        | KernelInstr::Exp
+        | KernelInstr::Sqrt
+        | KernelInstr::Floor => None,
     }
 }
 
@@ -2346,6 +2546,10 @@ struct Emitter<'a> {
     entry: bool,
     ids: &'a Ids,
     plan: &'a Plan,
+    /// The launch set, so a call's operands read the callee's own leaves.
+    launch: &'a LaunchSet<'a>,
+    /// The module's numeric class, which a `Select`'s arms are stated in.
+    module: ScalarClass,
     blocks: &'a mut Vec<Block>,
     slots: &'a mut HashMap<ValueId, Slot>,
     literals: &'a mut Literals,
@@ -2367,12 +2571,66 @@ impl Emitter<'_> {
         Ok(as_condition(slot, self.ids, self.literals, code, self.next))
     }
 
+    /// The kind the value at `offset` of plan node `to` is computed in, given the edge's `arg`.
+    ///
+    /// # Invariant
+    /// The body decides it, through [`value_class`]. **The edge's own kind is never the answer** —
+    /// that is what a literal would become — and an edge already carrying a class only has to agree
+    /// with the body's, a disagreement being [`SpirvRefusal::MixedClasses`]. A plan node the emitter
+    /// added holds no IR values and falls back to the module's class.
+    fn value_kind(
+        &self,
+        to: usize,
+        offset: usize,
+        arg: &Slot,
+        at: usize,
+    ) -> Result<Kind, SpirvRefusal> {
+        // **A plan node is not an IR block**: a block the plan added stands for another and holds
+        // no IR values of its own.
+        let Some(block) = self.ir_block(to) else {
+            return Ok(match resolved(arg.kind) {
+                Some(kind) => kind,
+                None => Kind::Scalar(self.module),
+            });
+        };
+        let Some(&value) = received(self.fragment, block).get(offset) else {
+            return Ok(Kind::Scalar(self.module));
+        };
+        let class = value_class(
+            self.fragment,
+            self.launch,
+            self.module,
+            value,
+            &mut Vec::new(),
+        )?;
+        if let Some(Kind::Scalar(seen)) = resolved(arg.kind)
+            && seen != class
+        {
+            return Err(SpirvRefusal::MixedClasses { at });
+        }
+        Ok(Kind::Scalar(class))
+    }
+
+    /// The IR block plan node `node` stands for, or `None` for a block the plan added.
+    ///
+    /// # Invariant
+    /// A `LoopMerge` or a `PassThrough` carries the arity of the block it stands for and is not a
+    /// block of the body, so a question about the body's own values is asked of `None` rather than
+    /// of whatever real block happens to share its number.
+    fn ir_block(&self, node: usize) -> Option<usize> {
+        match self.plan.nodes.get(node) {
+            Some(Node::Real(block)) => Some(*block),
+            _ => None,
+        }
+    }
+
     /// Record the edge `from → to` and the values it passes.
     ///
     /// # Invariant
-    /// The first edge to arrive fixes one kind per parameter, because an `OpPhi`
-    /// has one type, and every later edge is coerced to it. A coercion belongs to
-    /// the predecessor's block, so it lands before that block's terminator.
+    /// A parameter's kind is the body's fact: an edge spells a `Literal`, which no class fixes, so
+    /// the kind comes from [`value_class`] over the target's own values and the edge's kind only
+    /// checks against it. The first edge fixes one kind per parameter, because an `OpPhi` has one
+    /// type, and every later edge is coerced to it inside the predecessor's own block.
     fn record(
         &mut self,
         to: usize,
@@ -2393,13 +2651,11 @@ impl Emitter<'_> {
         }
         if arity > 0 && self.blocks[to].params.is_empty() {
             let mut params = Vec::with_capacity(arity);
-            for arg in &args {
+            for (offset, arg) in args.iter().enumerate() {
                 let id = *self.next;
                 *self.next += 1;
-                params.push(Slot {
-                    id,
-                    kind: resolved(arg.kind, self.ids),
-                });
+                let kind = self.value_kind(to, offset, arg, at)?;
+                params.push(Slot { id, kind });
             }
             for (offset, value) in received(self.fragment, to).iter().enumerate() {
                 self.slots.insert(*value, params[offset]);

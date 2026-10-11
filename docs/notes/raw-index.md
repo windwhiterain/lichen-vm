@@ -10,7 +10,7 @@
 
 The glued `<` postfix — the delimiter the array type used to occupy — reads component
 `e` of an expression's **value** from a **tuple type value**: `X<e>`.  The array type is
-spelled `array<T, n>` (keyword-led), so the two cannot be confused.
+spelled `array{T, n}` (keyword-led), so the two cannot be confused.
 
 ## What it does
 
@@ -24,23 +24,23 @@ every *value* guard the typed forms apply:
 The container's **type** is checked, though: it must be the tuple kind, stated once as a
 unify.  A decided container is refused where it stands:
 
-- a tuple *value* (`(1, 2)<0>`): its type is the tuple shape `<Int, Int>`, not the kind
-  `TypeTuple` — `expected TypeTuple, found <Int, Int>`;
+- a tuple *value* (`(1, 2)<0>`): its type is the tuple shape `tuple{Int, Int}`, not the kind
+  `TypeTuple` — `expected TypeTuple, found tuple{Int, Int}`;
 - a struct type value: its kind is `TypeStruct` and its components read by name (`X::a`)
   — `expected TypeTuple, found TypeStruct`;
-- an array or an atomic type: `expected TypeTuple, found array<Int, 2>` / `found Int`;
+- an array or an atomic type: `expected TypeTuple, found array{Int, 2}` / `found Int`;
 
 An undecided container (a parameter, a call result) is **pinned** to the tuple kind,
 so the apply that binds it refuses a wrong-kind actual per call. Without that pin,
 an array container would reach the element read at run time.
 
-So it reads a component of a *type-as-value*: `<Int, string><0>` is the `Int` type.  An
+So it reads a component of a *type-as-value*: `tuple{Int, string}<0>` is the `Int` type.  An
 out-of-bounds subscript is still an evaluation error, recorded during the definition
 pass, so the build is refused.
 
 The result is the component's own pair — value slot element 0, type slot element 1.  The
 **value** slot is read lazily; the **type** slot is computed when the read is checked, and
-it is the component type value's *kind* (`Type` for `<Int, string><0>`, a `TypeStruct` kind
+it is the component type value's *kind* (`Type` for `tuple{Int, string}<0>`, a `TypeStruct` kind
 for a component that is itself a struct type), which is what lets a later check compare the
 read's type instead of writing into it — the same rule, and the same measurement, as the
 named sibling ([raw-field.md](raw-field.md#check-time-not-raw)).  A read the kind

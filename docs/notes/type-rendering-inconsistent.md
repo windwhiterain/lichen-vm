@@ -20,10 +20,10 @@ f = (x : Int) => x
 
 | argument | what the message prints as the found side |
 |---|---|
-| `struct<.a Int>` | `TypeStruct` |
-| `array<Int, 3>` | `TypeArray` |
+| `struct{.a Int}` | `TypeStruct` |
+| `array{Int, 3}` | `TypeArray` |
 | `Int -> Int` | `TypeFunction` |
-| `(Int, Int)` | `<Type, Type>` |
+| `(Int, Int)` | `tuple{Type, Type}` |
 
 Three print their **kind's marker tag**; the tuple prints a **structured form of
 its element types**. None prints the value that was written, and two values of
@@ -39,9 +39,9 @@ is a cascade, and each branch spells a node differently:
 2. `[head, K]` with a self-looping universe tail → the head, through
    `type_constant`, which spells the markers `Type`, `TypeStruct`, `TypeArray`,
    `TypeFunction`, `TypeTuple` and `TypeId(n)`;
-3. a full struct type `[shape, [[payload, TypeStruct], K]]` → `struct<…>`,
+3. a full struct type `[shape, [[payload, TypeStruct], K]]` → `struct{…}`,
    optionally `#n`;
-4. `[shape, [marker, K]]` → `in -> out` / `<T…>` / `array<T, len>`;
+4. `[shape, [marker, K]]` → `in -> out` / `tuple{T…}` / `array{T, len}`;
 5. a checker-registered arrow shape;
 6. **fallback: the raw elements**, spelled `raw[a, b]` — the raw mark.
 
@@ -50,14 +50,14 @@ printer, and step 6 is the cascade admitting it may recognise nothing at all.
 
 The tuple is the row that reaches step 4. `fields_any` renders a shape
 elementwise, and each shape element is a `[value, type]` pair — whose rendering
-yields the pair's **type** half. That is why the shape of `<Int, Int>` prints
+yields the pair's **type** half. That is why the shape of `tuple{Int, Int}` prints
 `Type` per field rather than `Int`.
 
 ## 3. What is not traced
 
 **Which step fires for each of the four rows is not traced.** Step 1 is
 documented as matching a struct *kind* "as opposed to a struct type term
-`[shape, kind]`, whose kind slot is such a node", so a full `struct<.a Int>`
+`[shape, kind]`, whose kind slot is such a node", so a full `struct{.a Int}`
 should not match it and should reach step 3 — yet it printed the tag. Two
 readings fit, and this note does not choose between them:
 
@@ -72,7 +72,7 @@ Neither is written.
 ## 4. Why it matters
 
 A type diagnostic is how a user reads a type error. Two type values of the same
-standing printing as `TypeStruct` and `<Type, Type>` means the message cannot be
+standing printing as `TypeStruct` and `tuple{Type, Type}` means the message cannot be
 used to decide *what was compared*. A raw fallback is reachable in the same slot,
 but it is spelled `raw[a, b]`, so it no longer reads as a value list where a type
 is meant; what a reader still cannot separate is a **marker tag** from a

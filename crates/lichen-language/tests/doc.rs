@@ -6,9 +6,9 @@ mod common;
 use lichen_language::compile;
 use lichen_language::run::evaluate;
 
-/// `Doc = struct<.name string, .description string>` — a user-made 2-field
+/// `Doc = struct{.name string, .description string}` — a user-made 2-field
 /// struct.
-const DOC: &str = "Doc = struct<.name string, .description string>\n";
+const DOC: &str = "Doc = struct{.name string, .description string}\n";
 
 /// The doc rides the expression's attribute slot, not its value.
 #[test]
@@ -53,7 +53,7 @@ fn a_doc_annotation_overrides_a_prior_one() {
 #[test]
 fn a_doc_rides_a_struct_definition() {
     let src = format!(
-        "{DOC}Point = struct<.x Int, .y Int> ? Doc(.name \"Point\", .description \"a point\")\n(Point, Point(1, 2))"
+        "{DOC}Point = struct{{.x Int, .y Int}} ? Doc(.name \"Point\", .description \"a point\")\n(Point, Point(1, 2))"
     );
     assert!(
         compile(&src).ok(),

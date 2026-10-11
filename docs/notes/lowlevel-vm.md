@@ -97,8 +97,12 @@ example `[then, else][i]`) is never evaluated. Two gates decide a read:
   later binding is observed.
 - `Node::runned` is the other axis, read through `Module::has_no_result_yet`:
   "has this node's own computation produced an answer". A slot holding a value
-  while `runned` is false means a unification wrote the value, not the operator —
+  while the stamp is zero means a unification wrote the value, not the operator —
   so the operator still owes its own answer and re-runs.
+- A node whose operator **ran and could not decide** records the value epoch it
+  ran at, and a read while no value has changed since answers without running it
+  again: the operator's reads would decide the same. See
+  [stalled-rerun-epoch](stalled-rerun-epoch.md).
 
 `LowValue::Error` is the opposite of undecided: it is the **decided** value of a
 failed read (an out-of-bounds index, an apply of a not-callable, a table miss),
@@ -224,7 +228,7 @@ The arms, in order:
   nothing is written, because a class that already holds a value is not a hole and
   overwriting it would mask the conflict the comparison exists to find. Every fact a
   static ref brings into a unification rides on that write: an imported
-  `struct<.x Int, .y Int>`'s field types reach the importer's cells as `Int`, so a
+  `struct{.x Int, .y Int}`'s field types reach the importer's cells as `Int`, so a
   placeholder instantiation across the boundary never learns its field types.
 
 Two rules decide what a class's members then hold:

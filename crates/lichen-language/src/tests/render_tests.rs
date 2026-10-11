@@ -78,10 +78,10 @@ fn a_struct_conflict_keeps_the_nominal_ids() {
     // Two source occurrences are different nominal types, so the message keeps
     // each side's nominal id.
     let report = crate::compile(
-        "s1 = struct<.f Int, .g Int>; s2 = struct<.f Int, .g Int>; [s1(1, 2), s2(1, 2)]",
+        "s1 = struct{.f Int, .g Int}; s2 = struct{.f Int, .g Int}; [s1(1, 2), s2(1, 2)]",
     );
     let message = &report.diagnostics[0].message;
-    assert!(message.contains("struct<.f Int, .g Int>#"), "{}", message);
+    assert!(message.contains("struct{.f Int, .g Int}#"), "{}", message);
 }
 
 #[test]
@@ -108,16 +108,16 @@ fn output(source: &str) -> String {
 fn a_struct_type_value_renders_in_type_syntax() {
     // The raw shape is `[Int, Type]`; read against its kind it prints as source.
     assert_eq!(
-        output("A = struct<.f Int, .t Type>\nA"),
-        "struct<.f Int, .t Type>: TypeStruct"
+        output("A = struct{.f Int, .t Type}\nA"),
+        "struct{.f Int, .t Type}: TypeStruct"
     );
 }
 
 #[test]
 fn a_struct_instance_renders_its_field_tuple() {
     assert_eq!(
-        output("A = struct<.f Int, .t Type>\na = A(1, Int)\n(A, a, a.f, a.t)"),
-        "(struct<.f Int, .t Type>, (1, Int), 1, Int): <TypeStruct, struct<.f Int, .t Type>, Int, Type>"
+        output("A = struct{.f Int, .t Type}\na = A(1, Int)\n(A, a, a.f, a.t)"),
+        "(struct{.f Int, .t Type}, (1, Int), 1, Int): tuple{TypeStruct, struct{.f Int, .t Type}, Int, Type}"
     );
 }
 
@@ -125,8 +125,8 @@ fn a_struct_instance_renders_its_field_tuple() {
 fn a_single_field_struct_instance_keeps_the_tuple_comma() {
     // A one-element tuple's comma `(1,)` shows even though the source `B(1)` has none.
     assert_eq!(
-        output("B = struct<.f Int>\nb = B(1,)\n(B, b)"),
-        "(struct<.f Int>, (1,)): <TypeStruct, struct<.f Int>>"
+        output("B = struct{.f Int}\nb = B(1,)\n(B, b)"),
+        "(struct{.f Int}, (1,)): tuple{TypeStruct, struct{.f Int}}"
     );
 }
 
@@ -134,19 +134,19 @@ fn a_single_field_struct_instance_keeps_the_tuple_comma() {
 fn a_tuple_value_renders_with_parens() {
     // The type says tuple, so the value reads as the source tuple, not
     // the raw `[1, Int]` array layout.
-    assert_eq!(output("(1, Int)"), "(1, Int): <Int, Type>");
+    assert_eq!(output("(1, Int)"), "(1, Int): tuple{Int, Type}");
 }
 
 #[test]
 fn an_array_value_keeps_brackets() {
-    assert_eq!(output("[1, 2, 3]"), "[1, 2, 3]: array<Int, 3>");
+    assert_eq!(output("[1, 2, 3]"), "[1, 2, 3]: array{Int, 3}");
 }
 
 #[test]
 fn a_compound_type_value_renders_in_type_syntax() {
     // A type expression's value is the type, so it reads in type syntax.
-    assert_eq!(output("<Int, Type>"), "<Int, Type>: TypeTuple");
-    assert_eq!(output("array<Int, 3>"), "array<Int, 3>: TypeArray");
+    assert_eq!(output("tuple{Int, Type}"), "tuple{Int, Type}: TypeTuple");
+    assert_eq!(output("array{Int, 3}"), "array{Int, 3}: TypeArray");
 }
 
 #[test]
@@ -158,21 +158,21 @@ fn a_written_arrow_is_a_function() {
 #[test]
 fn a_raw_index_reads_a_type_component() {
     // `X<e>` reads component `e` of a tuple type value, refused for another kind.
-    assert_eq!(output("<Int, string><0>"), "Int: Type");
-    assert_eq!(output("<Int, string><1>"), "string: Type");
-    assert_eq!(output("<Int, string, Type><0>"), "Int: Type");
+    assert_eq!(output("tuple{Int, string}<0>"), "Int: Type");
+    assert_eq!(output("tuple{Int, string}<1>"), "string: Type");
+    assert_eq!(output("tuple{Int, string, Type}<0>"), "Int: Type");
 }
 
 #[test]
 fn a_raw_named_read_yields_the_field_type() {
     // `X::a` reads the named field's type; `.a` reads the instance's field value.
-    assert_eq!(output("S = struct<.a Int, .b string>\nS::a"), "Int: Type");
+    assert_eq!(output("S = struct{.a Int, .b string}\nS::a"), "Int: Type");
     assert_eq!(
-        output("S = struct<.a Int, .b string>\nS::b"),
+        output("S = struct{.a Int, .b string}\nS::b"),
         "string: Type"
     );
     assert_eq!(
-        output("S = struct<.a Int, .b string>\ns = S(.a 1, .b \"h\")\ns.a"),
+        output("S = struct{.a Int, .b string}\ns = S(.a 1, .b \"h\")\ns.a"),
         "1: Int"
     );
 }
@@ -180,7 +180,7 @@ fn a_raw_named_read_yields_the_field_type() {
 #[test]
 fn a_type_second_slot_does_not_collapse_an_array() {
     // The raw `[head, K]` heuristic would drop the head; the type chain keeps both.
-    assert_eq!(output("(1, Type)"), "(1, Type): <Int, Type>");
+    assert_eq!(output("(1, Type)"), "(1, Type): tuple{Int, Type}");
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn type_of_reads_the_operands_type() {
     assert_eq!(with_type_of("type_of 1"), "Int: Type");
     assert_eq!(
         with_type_of("(type_of (1), type_of Int, type_of Type)"),
-        "(Int, Type, Type): <Type, Type, Type>"
+        "(Int, Type, Type): tuple{Type, Type, Type}"
     );
 }
 
@@ -220,8 +220,11 @@ fn type_of_is_first_class() {
 
 #[test]
 fn type_of_reads_compound_types() {
-    assert_eq!(with_type_of("type_of [1, 2]"), "array<Int, 2>: TypeArray");
-    assert_eq!(with_type_of("type_of (1, Int)"), "<Int, Type>: TypeTuple");
+    assert_eq!(with_type_of("type_of [1, 2]"), "array{Int, 2}: TypeArray");
+    assert_eq!(
+        with_type_of("type_of (1, Int)"),
+        "tuple{Int, Type}: TypeTuple"
+    );
     assert_eq!(with_type_of("type_of (type_of (1))"), "Type: Type");
 }
 

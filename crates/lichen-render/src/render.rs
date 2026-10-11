@@ -166,7 +166,7 @@ where
     /// The attribute registry, the same callback [`render_attributes`] reads;
     /// `None` spells no element attribute.
     attrs: Option<Attrs<'a, P>>,
-    /// Render a struct type's nominal id as `struct<…>#n`, on for the diagnostic
+    /// Render a struct type's nominal id as `struct{…}#n`, on for the diagnostic
     /// printer only.
     show_struct_id: bool,
 }

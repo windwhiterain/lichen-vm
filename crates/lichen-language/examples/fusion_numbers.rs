@@ -220,8 +220,8 @@ fn kernel_source(data: &[f64]) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In   = struct<.d (compute.Buf Float)>
-OutR = struct<.r (compute.Buf Float)>
+In   = struct{{.d (compute.Buf Float)}}
+OutR = struct{{.r (compute.Buf Float)}}
 Par  = compute.P (compute.KT _)(.I In, .O OutR)
 producer = (k : Par) => {{
   i = compute.range k.n
@@ -229,8 +229,8 @@ producer = (k : Par) => {{
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0)))
 }}
 prod = compute.parallel producer "cpu"
-In2  = struct<.d (compute.Buf Float), .p (compute.Buf Float)>
-OutZ = struct<.z (compute.Buf Float)>
+In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
+OutZ = struct{{.z (compute.Buf Float)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer = (k : Par2) => {{
   i = compute.range k.n
@@ -239,7 +239,7 @@ consumer = (k : Par2) => {{
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0))))
 }}
 cons = compute.parallel consumer "cpu"
-data  = (compute.buffer ([{elements}] : array<Float, {length}>) : (compute.Buf _))
+data  = (compute.buffer ([{elements}] : array{{Float, {length}}}) : (compute.Buf _))
 total = (compute.plrun prod ((compute.A In)(.n {length}, .I In(.d data))) : OutR)
 worst = (compute.plrun cons ((compute.A In2)(.n {length}, .I In2(.d data, .p total.r))) : OutZ)
 compute.read ((compute.Read _)(.from worst.z, .at 0))
@@ -424,8 +424,8 @@ fn producer_program() -> &'static str {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct<.d (compute.Buf _)>
-Out = struct<.r (compute.Buf _)>
+In  = struct{.d (compute.Buf _)}
+Out = struct{.r (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 producer_raw = (k : Par) => {
   i = compute.range k.n

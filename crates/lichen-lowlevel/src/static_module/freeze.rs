@@ -131,9 +131,9 @@ impl<P: Program> StaticModule<P> {
                     equality.tail().map(|t| node_map[&t]),
                     equality.size(),
                 ),
-                // The two axes of [`Node::value`] travel uncollapsed; [`StaticNode::undecided`]
-                // collapses on read.
-                runned: node.runned,
+                // The two axes of [`Node::value`] travel uncollapsed; the run axis
+                // is the stamp's zero test.
+                runned: node.runned != 0,
                 evaluated_deep: node.evaluated_deep,
             });
         }

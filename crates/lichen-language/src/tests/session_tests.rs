@@ -299,9 +299,9 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
 
 #[test]
 fn a_bracket_swap_between_forms_rebuilds_instead_of_reusing() {
-    // `[a, b]`, `(a, b)` and `<a, b>` lower differently, so a bracket swap
+    // `[a, b]`, `(a, b)` and `tuple{a, b}` lower differently, so a bracket swap
     // rebuilds.
-    let forms = ["z = [1, 2]\nz\n", "z = (1, 2)\nz\n", "z = <1, 2>\nz\n"];
+    let forms = ["z = [1, 2]\nz\n", "z = (1, 2)\nz\n", "z = tuple{1, 2}\nz\n"];
     for (i, target) in forms.iter().enumerate() {
         let previous = forms[(i + forms.len() - 1) % forms.len()];
         let mut sess = BufferSession::<LangProgram>::new(previous);

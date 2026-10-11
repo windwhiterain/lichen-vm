@@ -750,12 +750,13 @@ pub struct Node<P: Program> {
     ///
     /// # Invariant
     /// This slot carries two axes: decided or not (an empty slot is undecided, read by
-    /// [`Module::node_value`]) and has-run or not (the `runned` field, read by
+    /// [`Module::node_value`]) and has-run or not (the run stamp, read by
     /// [`Module::has_no_result_yet`]). An operation-bearing member of a decided class holds
-    /// that value while `runned` stays false: the slot is an assertion still owed an answer.
+    /// that value while the stamp stays zero: the slot is an assertion still owed an answer.
     value: Option<P::Value>,
-    /// Whether the node's operator has run: a produced answer versus an asserted one.
-    runned: bool,
+    /// The value epoch the node's operator ran under: zero means it never ran — a produced
+    /// answer versus an asserted one.
+    runned: u32,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     low_shape: Option<LowShape>,
     /// The node's computation (operator plus one operand), or `None` for a value node; private.
@@ -807,7 +808,8 @@ pub struct StaticNode<P: Program> {
     pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
-    /// Whether the source node's operator had run; the static mirror of [`Node::runned`].
+    /// Whether the source node's operator had run: an artifact carries no run clock, so this
+    /// mirror is its zero test.
     pub runned: bool,
     /// The source node's deep-pass verdict. See [`Node::evaluated_deep`].
     pub evaluated_deep: Option<EvaluatedDeep>,
@@ -912,6 +914,14 @@ pub struct Module<P: Program> {
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
+    /// How many value-slot writes this module has made — the run stamps' clock.
+    ///
+    /// # Invariant
+    /// It starts at one, because zero is the run stamp's "never ran". Only
+    /// [`Module::bump_value_epoch`] writes it, and every site that changes a
+    /// [`Node::value`] slot calls that once per slot written: a node's run stamp equal to
+    /// this counter means no value changed since that run.
+    value_epoch: u32,
 }
 
 /// One diagnostic a layer above the lowlevel recorded. See [`Module::record_extension_diagnostic`].

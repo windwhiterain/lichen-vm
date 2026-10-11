@@ -161,7 +161,6 @@ fn a_two_step_folded_loop_carries_on_the_device() {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        2,
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -225,7 +224,6 @@ fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        u64::from(tile),
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -477,7 +475,6 @@ fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        u64::from(tile) * u64::from(steps),
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -547,7 +544,6 @@ fn a_two_step_per_lane_fold_carries_on_the_device() {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        tile as u64 * 2,
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )

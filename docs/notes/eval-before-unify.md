@@ -6,7 +6,10 @@
 > requirement in both tiers (the decided one as a kind unify, the undecided one as
 > a registered `IsStructType` condition re-checked per apply clone, which also
 > closed `X::a`'s panic). The class-attached blocked list remains a sketch, and
-> the rest of §5 stays a sketch.
+> the rest of §5 stays a sketch. The **ordering** half of the question is settled
+> and measured: reordering evaluation against unification cannot be the fix, and
+> the runtime's own answer is a memoization on the stalled node
+> ([stalled-rerun-epoch](stalled-rerun-epoch.md)).
 >
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (`unify`/`unify_inner`,
 > `add_equality`, `write_node_value`), `crates/lichen-lowlevel/src/evaluation.rs`
@@ -20,7 +23,8 @@
 > decided once and stated on the class; this note is about the *read* side being
 > taken too early), [lowlevel-vm](lowlevel-vm.md) (the unification and write
 > rules), [unify-without-forcing](unify-without-forcing.md) (the wider question
-> the open residue belongs to).
+> the open residue belongs to), [stalled-rerun-epoch](stalled-rerun-epoch.md)
+> (what the runtime *can* do about a read it must retake).
 
 ## 1. The problem
 
@@ -49,8 +53,8 @@ Each pair below differs **only in statement order**.
 ```lichen
 -- read first, annotate after                    -- annotate first, then read
 f = x => {                                       f = x => {
-  a = x(0) + x(0)                                  p = x: <Int, Int>
-  p = x: <Int, Int>                                a = x(0) + x(0)
+  a = x(0) + x(0)                                p = x: tuple{Int, Int}
+  p = x: tuple{Int, Int}                         a = x(0) + x(0)
   a                                                a
 }                                                }
 f (10, 20)                                       f (10, 20)
@@ -82,8 +86,8 @@ decision that read it — which is what §5.1 closes.
 ```lichen
 -- read first, annotate after                    -- annotate first, then read
 f = x => {                                       f = x => {
-  a = x(0) + x(0)                                  p = x: array<Int, 3>
-  p = x: array<Int, 3>                           a = x(0) + x(0)
+  a = x(0) + x(0)                                p = x: array{Int, 3}
+  p = x: array{Int, 3}                           a = x(0) + x(0)
   a                                                a
 }                                                }
 f [10, 20, 30]                                   f [10, 20, 30]
@@ -91,7 +95,7 @@ f [10, 20, 30]                                   f [10, 20, 30]
 
 | order | output |
 |---|---|
-| read, then annotate | **refused**: `error: expected <?a, …>, found array<Int, 3>` — the read's pin meets the array at the annotation that binds it (before: `20: ?a`, **accepted**) |
+| read, then annotate | **refused**: `error: expected tuple{?a, …}, found array{Int, 3}` — the read's pin meets the array at the annotation that binds it (before: `20: ?a`, **accepted**) |
 | annotate, then read | refused: the decided container is judged where it stands |
 
 The paren read `a(k)` **is** the tuple read, and arrays read with `a[i]`. The old
@@ -140,7 +144,7 @@ f [10, 20]         f (10, 20)
 
 | read | before | now |
 |---|---|---|
-| paren `x(0)`, array argument | `10: Int` — **accepted**; nothing ever asked whether an array may be paren-read | `error: expected <?a, …>, found array<Int, 2>` — refused at the apply, the pin route |
+| paren `x(0)`, array argument | `10: Int` — **accepted**; nothing ever asked whether an array may be paren-read | `error: expected tuple{?a, …}, found array{Int, 2}` — refused at the apply, the pin route |
 | bracket `x[0]`, tuple argument | refused at the apply, statically, with a span | unchanged |
 
 So §2.2's order flip was one face of a wider gap: the paren read's deferral had
@@ -159,9 +163,9 @@ with no annotation and no statement order:
 
 | read | concrete container | deferred container (a parameter) |
 |---|---|---|
-| `l.a` on an array | `error: expected TypeStruct, found TypeArray` | before: two runtime diagnostics about tables; **now** those two *plus* `error: expected a struct type, found array<Int, 2>`, the read's registered condition firing at the apply (§5.2) |
-| `l::a` on an array | `error: expected TypeStruct, found array<Int, 2>` | before: **a panic** — `unreachable!("TableGet target must be a table")`; **now**: refused at the apply, `expected TypeStruct, found array<Int, 2>` (the struct-kind unify) |
-| `l.a` / `l::a` on a tuple | `expected TypeStruct, found TypeTuple` / `found <Int, Int>` | — |
+| `l.a` on an array | `error: expected TypeStruct, found TypeArray` | before: two runtime diagnostics about tables; **now** those two *plus* `error: expected a struct type, found array{Int, 2}`, the read's registered condition firing at the apply (§5.2) |
+| `l::a` on an array | `error: expected TypeStruct, found array{Int, 2}` | before: **a panic** — `unreachable!("TableGet target must be a table")`; **now**: refused at the apply, `expected TypeStruct, found array{Int, 2}` (the struct-kind unify) |
+| `l.a` / `l::a` on a tuple | `expected TypeStruct, found TypeTuple` / `found tuple{Int, Int}` | — |
 
 Only `.a`'s **decided** tier is judged where it stands; its undecided tier
 registers the requirement as a condition and re-checks it per apply (§5.2), which
@@ -395,7 +399,7 @@ fixed by the commit reaching the class (§5.1) rather than by asking later.
 - **The paren read is the tuple read, and every struct field is named.** Chosen so
   that `a(k)`'s accepted set is **one** kind, which is what lets its check be a
   plain unify instead of a re-checkable condition. The cost is a language change,
-  taken deliberately: `s(0)` and `struct<Int, Type>` are refused, and a struct
+  taken deliberately: `s(0)` and `struct{Int, Type}` are refused, and a struct
   instance reads by name only — which is also what makes the named reads' gap the
   *only* way to read one. A block's record is unaffected beyond that: its fields
   are its **bindings**, and an expression statement is an ordinary statement. The
@@ -481,7 +485,7 @@ rejected one.
 > (`[payload, TypeStruct]`), so the three read sites no longer share one wording
 > and `DiagKind::IndexTarget` has no producer left: `.a`'s decided tier refuses
 > `expected TypeStruct, found TypeArray` (or `TypeTuple`), `::a` refuses
-> `expected TypeStruct, found array<Int, 2>`, and `.a`'s undecided tier renders
+> `expected TypeStruct, found array{Int, 2}`, and `.a`'s undecided tier renders
 > `expected a struct type, found …` (§5.2). The analysis below is the record of
 > the pre-tag state; the wording it asks for is what landed.
 
@@ -507,6 +511,17 @@ and is corrected to describe the Guard-style refusal.
 - Should a woken re-check be able to **retract** a diagnostic, if some future
   wakeup needs it? Answered *no* for now (§6.1), on the order-independence
   argument alone.
+
+### 6.5 Closed: the phase order is not a lever
+
+The other reading of this note's problem — "evaluation runs too early, so unify
+should go first" — was measured and closed. A node that stalls on an undecided
+class is not re-asked too soon: it is re-asked **without knowing whether anything
+changed**, and a schedule (a second pass, a later phase) does not give it that
+fact. What does is one number per node — the value epoch it ran at
+([stalled-rerun-epoch](stalled-rerun-epoch.md)). Deferring the checker's
+decisions to run time would also cost the tier that expresses them (§3.2), so the
+order stays as it is.
 
 ## Recovered measurements
 
@@ -540,7 +555,7 @@ and is corrected to describe the Guard-style refusal.
   (`shape::field_type`) — the same node an `Index(Index(container_ty, 0), key)`
   would evaluate to, *one unify earlier*. That earliness is observable because a
   class question is asked of a **cell** (`shape::low_type_of_slot`), which cannot
-  see through an unevaluated `Index`: `(x : struct<.a Float>) => x.a + x.a` used to
+  see through an unevaluated `Index`: `(x : struct{.a Float}) => x.a + x.a` used to
   find neither operand concretely `Float`, pin the operation to the `Int` default
   in `check_binop`, and then refuse both operands against it.
 - A constant subscript is not an optimisation but the whole difference for the
@@ -582,7 +597,7 @@ and is corrected to describe the Guard-style refusal.
   the requirement into the read's class and asks nothing — the guard passes over an
   array or a tuple instead of refusing it. Measured: `l.a` on `[10, 20]` reported
   the generic "not a container" plus a name-table miss, where the raw sibling
-  `l::a` on the same container states `expected TypeStruct, found array<Int, 2>`.
+  `l::a` on the same container states `expected TypeStruct, found array{Int, 2}`.
   The shared "tuple, array, or struct" wording is likewise what this read does not
   accept, and is why the *kind* is the requirement rather than the shape. A
   container whose type is stated through a class is readable: `inbuf`
@@ -653,5 +668,5 @@ and is corrected to describe the Guard-style refusal.
   struct type value's named field, and `.a` / `::a` over an array are the two named
   sides of one refusal — `.a` states the container's *kind*, `::a` its whole type.
   A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the shape
-  `<Int, Int>`, not `TypeTuple`. A deferred container is refused at the argument,
+  `tuple{Int, Int}`, not `TypeTuple`. A deferred container is refused at the argument,
   where this used to be an internal panic at the apply.

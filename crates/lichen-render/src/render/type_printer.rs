@@ -209,8 +209,8 @@ where
             let fields = struct_fields_with_names(&fields, &names);
             let id = struct_kind_id(self.module, unsafe { kind.items() });
             return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
-                _ => format!("struct<{}>", fields.join(", ")),
+                (true, Some(n)) => format!("struct{{{}}}#{n}", fields.join(", ")),
+                _ => format!("struct{{{}}}", fields.join(", ")),
             };
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
@@ -241,7 +241,7 @@ where
                 }
                 Some(m) if m == P::Value::tuple_type_marker() => {
                     // An open field list — an undecided shape — shows its
-                    // placeholder with an ellipsis, so `<?a>` is not a tuple.
+                    // placeholder with an ellipsis, so `tuple{?a}` is not a tuple.
                     let open = !matches!(
                         self.module
                             .node_value(elements[0].node)
@@ -250,13 +250,13 @@ where
                     );
                     let fields = self.slot_fields_any(elements[0].node);
                     return if open {
-                        format!("<{}, …>", fields.join(", "))
+                        format!("tuple{{{}, …}}", fields.join(", "))
                     } else {
-                        format!("<{}>", fields.join(", "))
+                        format!("tuple{{{}}}", fields.join(", "))
                     };
                 }
                 Some(m) if m == P::Value::array_type_marker() => {
-                    // shape = [element slot, length] — render `array<T, len>`,
+                    // shape = [element slot, length] — render `array{T, len}`,
                     // the element as source so a pin is stated.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
@@ -266,7 +266,7 @@ where
                         && s.len() == 2
                     {
                         return format!(
-                            "array<{}, {}>",
+                            "array{{{}, {}}}",
                             self.slot_any(s[0].node),
                             self.any_node(s[1].node)
                         );
@@ -274,7 +274,7 @@ where
                 }
                 Some(m) if m == P::Value::set_type_marker() => {
                     // A set has no length, which is what separates it from
-                    // `array<T, n>`.
+                    // `array{T, n}`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         // SAFETY: `shape` is the payload of a value read from
@@ -610,8 +610,8 @@ where
             let fields = struct_fields_with_names(&fields, &names);
             let id = struct_kind_id(self.module, unsafe { kind.items() });
             return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
-                _ => format!("struct<{}>", fields.join(", ")),
+                (true, Some(n)) => format!("struct{{{}}}#{n}", fields.join(", ")),
+                _ => format!("struct{{{}}}", fields.join(", ")),
             };
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
@@ -641,7 +641,7 @@ where
                 }
                 Some(m) if m == P::Value::tuple_type_marker() => {
                     let fields = self.static_fields(elements[0].node, visiting);
-                    return format!("<{}>", fields.join(", "));
+                    return format!("tuple{{{}}}", fields.join(", "));
                 }
                 Some(m) if m == P::Value::array_type_marker() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
@@ -652,7 +652,7 @@ where
                         && s.len() == 2
                     {
                         return format!(
-                            "array<{}, {}>",
+                            "array{{{}, {}}}",
                             match self.slot_type_any(s[0].node) {
                                 Some(ty) => self.static_any(ty, visiting),
                                 None => self.static_any(s[0].node, visiting),

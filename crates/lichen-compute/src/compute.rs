@@ -31,12 +31,17 @@ use lichen_utils::extend::AsEnum;
 
 mod body;
 use body::Lower;
+pub mod fused;
 pub mod graph;
 pub(crate) mod wasm;
 
 use graph::{Extent, Placed, RunArgument, RunResult};
 use wasm::assemble_module;
 
+pub use fused::{
+    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, read_fused_kernel,
+    write_fused_kernel,
+};
 pub use graph::GraphId;
 
 /// The diagnostic a graph's own refusals are recorded under.
@@ -2620,7 +2625,7 @@ where
 /// A fragment's parameter leaves, as classes, in flattening order.
 ///
 /// # Invariant
-/// A leaf's own class, not the fragment's: an `array<Float, 3>` position is one
+/// A leaf's own class, not the fragment's: an `array{Float, 3}` position is one
 /// `f32` local inside a body that may compute integers, and the argument encoding
 /// follows the same per-leaf answer.
 pub(crate) fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
@@ -2650,7 +2655,7 @@ pub(crate) fn buffer_import_name(class: ScalarClass, kind: &str) -> String {
 /// is the author's statement.
 const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when the kernel is \
 compiled: a kernel is lowered for one class, so the function must state it — annotate the \
-parameter (for example `p : <Int, Int>` for a tuple domain, or `y : Int` for a scalar one)";
+parameter (for example `p : tuple{Int, Int}` for a tuple domain, or `y : Int` for a scalar one)";
 
 /// The other facts [`UNDECIDED_DOMAIN`] used to cover.
 ///
@@ -2741,7 +2746,7 @@ fn first_unreadable_position(domain: &LowShape) -> Option<Vec<usize>> {
 /// Total on purpose: a shape with no IR counterpart folds to [`KernelShape::Scalar`]
 /// with its element's class, flattening to one leaf exactly as [`flat_arity`]
 /// does — a refusal arm would change behaviour for a shape that path tolerates.
-/// A compound leaf takes its element's class, so an `array<Float, 3>` is one
+/// A compound leaf takes its element's class, so an `array{Float, 3}` is one
 /// `f32` local.
 fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {

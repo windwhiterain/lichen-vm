@@ -75,9 +75,9 @@ it is not.
 
 | Program | Before | After |
 |---|---|---|
-| `Par = struct<.n Int, .alpha Float>; (x : Par) => x.alpha + x.alpha` | `expected Int, found Float` (both operands) | `1.0: Float` |
-| `(x : <Int, Float>) => x(1) + x(1)` | `expected Int, found Float` | `1.0: Float` |
-| `Outer = struct<.in Inner>; (x : Outer) => x.in.a + x.in.a` | `expected Int, found Float` | `1.0: Float` |
+| `Par = struct{.n Int, .alpha Float}; (x : Par) => x.alpha + x.alpha` | `expected Int, found Float` (both operands) | `1.0: Float` |
+| `(x : tuple{Int, Float}) => x(1) + x(1)` | `expected Int, found Float` | `1.0: Float` |
+| `Outer = struct{.in Inner}; (x : Outer) => x.in.a + x.in.a` | `expected Int, found Float` | `1.0: Float` |
 | the same three with one concrete `Float` operand (`x.alpha * 2.0`) | already worked | unchanged |
 
 The last row is why this is the *class* question and not the unify: a unify
@@ -312,7 +312,7 @@ the two functions' cells when it reaches one.
 A set instance is typed `[members, [[element type], [TypeSet, Type]]]`, whose
 shape is the element type *alone* — a set has no length, so `set{a}` and
 `set{a, b}` share one type, and that is what separates the set kind from
-`array<T, n>`. The value is an ordinary array node, exactly the node an array
+`array{T, n}`. The value is an ordinary array node, exactly the node an array
 literal's elements make, and nothing tags it.
 
 ### The kind-marker registry
@@ -344,14 +344,14 @@ child list.
 **kind** (`container_ty[1][0][1]`); `RawNamedField` (`X::a`) reads it directly
 from the container's **type**, which must be a TypeStruct (`container_ty[0][1]`),
 and yields the field's *type* as a value — `S::a` on
-`struct<.a Int, .b string>` is `Int : Type`. The raw form's requirement is a
+`struct{.a Int, .b string}` is `Int : Type`. The raw form's requirement is a
 check-time unify (a concretely non-TypeStruct container is a diagnostic), so it
 is *not* raw in the no-validation sense of `RawIndex`. `RawIndex` (`X<e>`) is
 the genuinely unvalidated read — no array-type pinning, no guard, no bounds
 assert — reading a component of a type-as-value or of any expression's value,
 both lazily, so an undecided container resolves at the apply; this is the form
 the `T<e>` array-type postfix used to be, and the array type is now `TypeArray`,
-spelled `array<T, n>`. `Field` (`a(k)`) works over a tuple element or a struct
+spelled `array{T, n}`. `Field` (`a(k)`) works over a tuple element or a struct
 field because both shapes are positional type lists and the nominal struct id
 lives in the kind. The read *forms* are distinguished syntactically and the
 source spelling is the whole rule: the adjacent single-expression paren

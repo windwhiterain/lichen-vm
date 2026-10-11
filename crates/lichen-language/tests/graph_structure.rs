@@ -159,15 +159,15 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct<.a Int>
-OutA = struct<.z (compute.Buf _)>
+InA  = struct{.a Int}
+OutA = struct{.z (compute.Buf _)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "Cpu"
-InB  = struct<.b (compute.Buf _)>
-OutB = struct<.w (compute.Buf _)>
+InB  = struct{.b (compute.Buf _)}
+OutB = struct{.w (compute.Buf _)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
@@ -175,8 +175,8 @@ doubler = compute.parallel ((k : ParB) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
 }) "Cpu"
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-InS  = struct<.b (compute.Buf _)>
-OutS = struct<.unused (compute.Buf _)>
+InS  = struct{.b (compute.Buf _)}
+OutS = struct{.unused (compute.Buf _)}
 ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 step = (s : ParS) => {
   out = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b data.z))) : OutB)
@@ -249,15 +249,15 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct<.a Int>
-OutA = struct<.z (compute.Buf _)>
+InA  = struct{.a Int}
+OutA = struct{.z (compute.Buf _)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "Cpu"
-InB  = struct<.b (compute.Buf _)>
-OutB = struct<.w (compute.Buf _)>
+InB  = struct{.b (compute.Buf _)}
+OutB = struct{.w (compute.Buf _)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 step = (s : ParB) => {
   out = (compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a 0))) : OutA)
@@ -366,15 +366,15 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
-InA  = struct<.a Int>
-OutA = struct<.z (compute.Buf _)>
+InA  = struct{.a Int}
+OutA = struct{.z (compute.Buf _)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "cpu"
-InB  = struct<.b (compute.Buf _)>
-OutB = struct<.w (compute.Buf _)>
+InB  = struct{.b (compute.Buf _)}
+OutB = struct{.w (compute.Buf _)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n

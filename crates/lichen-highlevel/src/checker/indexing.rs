@@ -282,11 +282,11 @@ where
         pair
     }
 
-    /// A set `set{a, b, …}` typed by the **set kind**, not by `array<T, n>`.
+    /// A set `set{a, b, …}` typed by the **set kind**, not by `array{T, n}`.
     ///
     /// # Invariant
     /// The shape is the element type alone, so `set{a}` and `set{a, b}` are one
-    /// type; the separate kind keeps a set from flowing into an `array<T, n>`
+    /// type; the separate kind keeps a set from flowing into an `array{T, n}`
     /// and makes `s[i]` a refusal. See [`crate::set`].
     pub(super) fn check_set_term(&mut self, e: ExprId) -> NodeId {
         let members = self.range_children(e);

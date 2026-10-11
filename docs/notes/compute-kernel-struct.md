@@ -20,7 +20,7 @@ a per-language render hook (`is_function_kind`) and a vocabulary kind (`TypeKern
 ## Design (shipped): kernels are generic structs; the wrapper parses them
 
 Drop `TypeKernel`/`TypeParKernel` and `is_function_kind`. A kernel is an ordinary lichen
-**struct** `struct<.native _, .I _, .O _>`:
+**struct** `struct{.native _, .I _, .O _}`:
 
 - `.native` — the opaque compiled wasm artifact (a `Kernel(KernelId)` / `ParKernel(KernelId,
   backend)` value), typed `_` (a fresh placeholder cell).
@@ -29,33 +29,33 @@ Drop `TypeKernel`/`TypeParKernel` and `is_function_kind`. A kernel is an ordinar
   earlier version of this note argued for: the domain and the codomain are read separately,
   and a launch's result is `.O`.
 
-A **buffer** is the same kind of wrapper, `Buf = T => struct<.native _, .element T>` — the
+A **buffer** is the same kind of wrapper, `Buf = T => struct{.native _, .element T}` — the
 `.native` field is the packed payload and `.element` its element type — where it used to be
 a bare extension value the type system special-cased. There is no `TypeBuffer`/`TypeWrite`
 marker either.
 
 Because the vocabulary no longer special-cases a kernel kind, the renderer prints the raw
-struct: a `jit` result reads `struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`
+struct: a `jit` result reads `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}`
 (domain and codomain visible in `.I`/`.O`, no core-renderer special case).
 
 ### The embedded wrapper
 
 ```
 let type_of = x => {t = _; x: t; t}
-KT = _x => struct<.I _, .O _>
-K = _x => struct<.native _, .I _, .O _>
-A = I => struct<.n Int, .I I>
-P = T: KT _ => struct<.n Int, .in T.I, .out T.O>
+KT = _x => struct{.I _, .O _}
+K = _x => struct{.native _, .I _, .O _}
+A = I => struct{.n Int, .I I}
+P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
 S = T: KT _ => A T.I -> T.O
-Buf = T => struct<.native _, .element T>
+Buf = T => struct{.native _, .element T}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I => {r = $call(k.native, a); r: k.O; r}
 parallel = f => b: string => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O I::out)}
 plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => $range(x): Int
-Read = T => struct<.from (Buf T), .at Int>
-Write = T => struct<.to (Buf T), .at Int, .value T>
+Read = T => struct{.from (Buf T), .at Int}
+Write = T => struct{.to (Buf T), .at Int, .value T}
 read = (x : (Read _)) => $read(x.from, x.at): x.from.element
 write = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
@@ -131,12 +131,12 @@ undecided cell costs a host read is
 ## Consequences
 
 - `tests/compute.rs` renders a **generic** kernel struct as
-  `struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` — the frozen wrapper's
+  `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}` — the frozen wrapper's
   fields are undecided cells, so each carries the raw mark — and `launch` results resolve
   their codomain lazily (`6 : Int`, `12 : Int`).
 - An **applied** kernel binding renders its `value: type` by name
   (`a_kernel_value_and_type_render_by_name`):
-  `(raw Kernel, Int, Int): struct<.native raw[?a, ?b], .I Type, .O Type>`. Each signature
+  `(raw Kernel, Int, Int): struct{.native raw[?a, ?b], .I Type, .O Type}`. Each signature
   field's **type** is `Type`, not `Int`: the field holds a *type value* — the domain, the
   codomain — and the universe is the type of one, so its **value** half reads as that same
   `Int`. `.native` is the artifact's own dump (`raw Kernel`), because the struct's type names
@@ -144,8 +144,8 @@ undecided cell costs a host read is
   boundary has to carry — see
   [the kernel parameter's class](kernel-parameter-class.md), which records the defect where
   they arrived empty instead.
-- A **tuple** domain renders `(raw Kernel, <Int, Int>, Int): struct<.native raw[?a, ?b], .I
-  TypeTuple, .O Type>`: a tuple of element types is itself a tuple, so its type is the tuple
+- A **tuple** domain renders `(raw Kernel, tuple{Int, Int}, Int): struct{.native raw[?a, ?b], .I
+  TypeTuple, .O Type}`: a tuple of element types is itself a tuple, so its type is the tuple
   universe. Only a *tuple* codomain dumps nested.
 
 ## Kernel bodies are SSA, and a body may compute its own state and branch back
@@ -190,7 +190,7 @@ routed operators, which the kernel body has no node for
 ## The parallel parameter struct
 
 A parallel kernel's parameter **is** the named struct
-`struct<.n Int, .in …, .out …>`, built by `compute.P (compute.KT _)(.I In, .O Out)`, so that a
+`struct{.n Int, .in …, .out …}`, built by `compute.P (compute.KT _)(.I In, .O Out)`, so that a
 read names its buffer (`k.in.x`) instead of counting a position and the kernel can take
 runtime scalars (`k.alpha`) beside its count. The retired tuple form's `cfg(0)` is `k.n` and
 its `cfg(1)(k)` is a field under `.in`; `Write`'s `.to` is an output `Buf`, not the count. The

@@ -55,8 +55,8 @@ The property this buys, stated once because everything below is a
 consequence: **the logical code is the reference implementation, and it is
 always runnable.** Interfaces are additive metadata; a program with none runs
 exactly as written, unfused, correctly. Every optimisation is a substitution
-justified against the schema, so the worst case of any implementation —
-engine-derived or hand-written — is that the logic itself runs.
+justified against the schema, so the worst case of any steering —
+engine-derived or runner-installed — is that the logic itself runs.
 
 ## 2. The three artifacts, and who writes each
 
@@ -64,7 +64,7 @@ engine-derived or hand-written — is that the logic itself runs.
 |---|---|---|---|
 | logical code + interface claims | the logic author, once | yes — it *is* the package | yes — the author's bug, reported as such |
 | schema | the compiler, from the logic alone | derived on demand, content-addressed | no — a derivation, not a decision |
-| implementation | the engine (built in), or an **optimization pack** (runner-installed) | **no — never ships with logic** | engine: no (by construction); pack: caught by the differential obligation |
+| implementation | **the engine, and only the engine**; a **pack** steers it (runner-installed) | **no — never ships with logic** | no, by construction — a steering artifact is *refused*, never wrong |
 
 The third row is a distribution rule, not a packaging detail: **a logic
 package's artifact contains logic and nothing else; optimisation is a
@@ -195,7 +195,7 @@ five findings, and what this one did with each:
   payload is still a string rather than a record: text is what keeps the mark out of
   the pair layout, so a record payload is a later decision, not a smaller one.
 - **A scalar element kernel's class is its body's** — *unchanged, and not the mark
-  channel's business*. `(p : <Float, Float>) => p(0) * p(1)` lowers its leaves in
+  channel's business*. `(p : tuple{Float, Float}) => p(0) * p(1)` lowers its leaves in
   `Int`, because the body states no concrete float operand, so the bridge refuses the
   projection by name (see [floating-point](floating-point.md) §5.1). An element
   function that must be `Float` has to carry a float operand of its own.
@@ -227,10 +227,19 @@ The ordering constraint the measurement establishes, with the code path:
    nodes. `Lower::apply` is never entered, so `Lower::lower_loop`
    (`crates/lichen-compute/src/compute/body.rs`) never runs, the entering call's state
    is never read, and the seed literal is never lowered.
-3. **Therefore the anchor is never visited.** `Lower::publish_mark` only ever sees nodes
-   the walk lowers, and the marked seed is not one of them. The same expression's
-   `combine` mark survives by luck alone: its anchor sits on the add the unrolled chain
-   still lowers.
+3. **Therefore the marked *seed* is never visited, and the marked *combine* is visited but
+   answered from the pair.** `Lower::publish_mark` only ever sees nodes the walk lowers, so the
+   `identity` mark on the seed (`fold (6, 0.0 ~ "identity")`) never publishes at all — that is
+   the role `RoleNotMarked { interface, role }` names. The `combine` mark fails differently: its
+   anchor **is** lowered and its **text does publish**, but the value it is published against is
+   the pair's element 0, so what a reader bridges back is the fold's base case rather than the
+   operator. Measured, in `crates/lichen-language/examples/reduction_algebra.rs` — the only
+   program that bridges a literal-count projection: with the seed `0.0` the published `combine`
+   bridges to the constant `0`, and with a distinctive seed `3.5` it bridges to **`3.5`**, the
+   seed, never `+`. A literal-count fold therefore loses **both halves of the algebra** for one
+   cause, and the two acceptance tests that hard-code `Reduction { combine: Add, identity: 0.0 }`
+   (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) record that accurately
+   rather than lazily.
 
 **The `lower_loop` path is reachable, and the discriminator is measured.** It fires when
 the checker leaves the loop *undecided* — when the entering state is a run-time value, so
@@ -258,6 +267,42 @@ compilation hook the `Ctx` boundary does not expose today (the plugin's
 `NativeOp::build` has the argument's *value node*, not `&mut Module`) — so it is recorded
 here rather than attempted. Until it lands, the fix is in the loop conversion and
 *not* in the mark channel, exactly as this subsection first said.
+
+**The cheapest fix is one predicate, and its price is a constant-folding optimization.** The
+nest is still live in the module — `write_node_value` sets only the apply node's `value`, never
+clears its `Apply` operation, and `Module::loop_conversion` re-derives the whole conversion
+read-only — so nothing would have to be recorded a second time. A peel that declined to resolve
+`Index(pair, 0)` (and `pair_value_half`) off a target that still carries an `Apply` whose callee
+is a `looping` function would let `Lower::apply`/`lower_loop`/`loop_state` build the nest, and
+the literal case would then read like the runtime one. The cost is not free and is recorded
+with it: every literal-bound `@loop` in a kernel would stop being constant-folded into
+straight-line code, so every such fragment's **body and digest change** (artifact caches
+invalidate, any test pinning an unrolled shape moves) and a kernel folding a literal count emits
+a real nest. The benefit is narrow too: a literal count is where tiling has least to offer,
+because the whole fold already fits one lane. That is why the reorder above is preferred to the
+predicate, and why the practical road to a declared algebra is a **runtime** extent.
+
+**And the wall an integer reduction meets is the class, not an operator.** The bridge refuses a
+projection that computes in the machine-integer class at all — `Const(Int, _)`, `Bin(Int, _)` and
+`BufferReadCall(Int)` each earn `MachineInteger`
+(`crates/lichen-fusion-bridge/src/lower.rs`) — on the reason that "`Int` wraps and `f64` does not
+hold every value" (`crates/lichen-fusion-bridge/src/refusal.rs`). Measured, that wall is the
+**only** thing between an integer reduction and a readable algebra when its count is a runtime
+value: both marks publish there, and the class refuses both halves. Neither repair is cheap:
+
+- **Narrowing the refusal by operator** is sound only where the class's arithmetic agrees with the
+  reals: `Max`/`Min` bridge cleanly, because the `f64` conversion is monotone and
+  `max(f64 a, f64 b)` is `f64(max a b)`, and an exactly-representable `Const` does too. It buys
+  almost nothing, though: the integer operation worth reading is a **sum**, and a sum is precisely
+  the wrapping case, so `Add`/`Sub`/`Mul` stay unreadable and the refusal stands where it matters.
+- **Giving the symbolic language an integer class** is the honest repair: wrapping `i64` addition
+  is associative with identity `0` — it is Z/2⁶⁴ — so an integer sum's algebra is real, and
+  `BinaryOp::associative` would be a truthful licence rather than one borrowed from the reals. Its
+  price is the whole symbolic path, because `Expr`, `normalize` and the repair-function derivation
+  would each have to say which class they are in.
+
+So an integer reduction does not fuse today, and that is a limit of the symbolic language rather
+than a hole in the mark channel.
 
 **And the discriminator is enough to get out of it from the program side, which is what
 `reduction_interface` now does.** A fold whose count is a **runtime** value — the buffer's
@@ -414,21 +459,28 @@ same definition's other half. What is *not* claimed: the expansion rewrites the
 marked value in place, so a mark on a transcendental is the one body mark whose
 instruction lowering does not preserve.
 
-## 5. Optimization packs: implementations the runner installs
+## 5. Optimization packs: guidance the runner installs
 
-A pack is the hand-written half of the system — the place for register-level
-tiling, shared-memory choreography, instruction scheduling, everything the
-engine provably derives *correctly* and therefore conservatively. A pack is
-an ordinary artifact installed on the runner's machine (via the package
+A pack is the **guidance** half of the system, and it is guidance rather than an
+implementation because the computation has exactly one source. What a pack supplies is what
+the engine cannot derive and what only *this* machine knows: the **algebra** a region's
+fusion needs, the **placement** of the values the fusion stages, and the **directives** that
+decide which of the region's operations run in one kernel. It never supplies the arithmetic
+— an artifact that carried a body would be a second source of truth for what the program
+computes, and *faster, never wrong* would then rest on a differential harness instead of on
+construction.
+
+A pack is an ordinary artifact installed on the runner's machine (via the package
 manager into Lichen Home, beside the toolchain), and it binds by schema, not
 by name and not by the logic author's say-so:
 
 ```lichen
 --- inside a pack, schematically ---
-implements = schema "sha256:9f2c…"          -- the region schema's skeleton hash
+implements = schema "sha256:9f2c…"           -- the region schema's skeleton hash
 requires   = { class = f32, axis = "last" }  -- explicit constraints on fragments/ports
-reference  = <the region's derivation>       -- what this claims to equal
-kernel     = cfg => { …the hand-written fused body… } "gpu"
+reference  = <the algebra this claims>       -- what the region's derivation must equal
+fuse       = { region = …, as = one_kernel }  -- a directive: which operations share a kernel
+plan       = { staging = …, sync = … }       -- where the values the fusion stages live
 ```
 
 The rules, each a decision:
@@ -455,19 +507,38 @@ The rules, each a decision:
   matches (schema 9f2c… → 41b0…)`. So an installed pack can make a program
   **faster, never wrong**: the fallback is the reference implementation
   itself.
-- **Equivalence is an obligation with teeth.** A pack ships a differential
-  harness — its output against the reference region's output over generated
-  inputs — run where the pack is authored and published, the way the graph
-  suite compares against hand-derived closed forms rather than a second run
-  of the same code. At install and at run time the system checks hash and
-  constraints only, the same way a cached artifact is trusted. A pack that
-  cannot name its `reference` region is refused at install: an implementation
-  of nothing is nothing. A pack that hands the engine its *repair function*
-  (§6) has one more thing that harness has to cover: the per-element identity,
-  which the engine checks symbolically only for a function it derived itself.
+- **Equivalence is an obligation with teeth, and it lands on the algebra rather than on a
+  body.** Because a pack hands over no arithmetic, the placement half cannot be *wrong*: the
+  worst a placement directive can do is be **refused** — by the three facts (§5's second
+  half), by a target that cannot honour a space, or by an interface that never declared the
+  name the directive used. What remains is the algebra, and that is where the harness
+  belongs: a differential run of the region's derivation against the reference region's over
+  generated inputs, the way the graph suite compares against hand-derived closed forms rather
+  than a second run of the same code. Part of it the engine checks symbolically and refuses
+  **by name**, which is stronger than a harness: a `combine` that is not associative is
+  refused rather than tiled (`BinaryOp::associative`), and the per-element identity of a
+  repair function the engine derived itself it checks for free. A pack that cannot name its
+  `reference` is refused at install: a claim about nothing is nothing.
 - **Pack beats engine.** When both cover a region, the pack applies and the
   report says so — a derived fusion is the floor, not the ceiling, and a
   human who wrote a pack knew something the engine did not.
+
+**The one directive that is neither algebra nor placement, and the two gaps under it.** A
+pack also needs to say *which of the region's operations are one kernel*, and that is a
+directive rather than an implementation, because computing a region in one kernel is an
+inlining the engine can perform — it needs no arithmetic from anyone. Two gaps stand between
+that sentence and the tree, and both are `missing` rather than merely unimplemented:
+
+- **the engine cannot fuse on request.** It derives fusion for a
+  producer→code→consumer chain and refuses a region that is not one (below), so for a
+  fan-out body there is nothing for a directive to drive — and a fan-out body is the shape
+  this subsection's staging is about.
+- **the domain correspondence has no surface.** Inlining one operation into another is legal
+  only where the two domains line up: which element of `B` a given element of `A` feeds.
+  Where both run over one `compute.range k.n` the engine reads it off, but a non-trivial
+  mapping has nowhere to be stated. The paper's `partition`/`claim` are that surface and
+  lichen does not have it, which is the same absence
+  [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 records.
 
 ### The memory plan: the second thing a pack hands over
 
@@ -505,8 +576,10 @@ plan, and what the engine does with it.
   authority. A pack that declares a barrier where none is needed wastes a
   synchronisation; a pack that **omits** one the facts require is
   `PlanContradicted` and refused by name. A plan is a proposal the engine
-  validates, which is what keeps §5's *faster, never wrong* true of a
-  hand-written body too. **And the check is a comparison rather than a second
+  validates, and that is *all* a plan can be: a placement directive the facts refuse is
+  **refused**, which is what makes §5's *faster, never wrong* true of a runner-installed
+  pack by construction rather than by a harness. **And the check is a comparison rather
+  than a second
   derivation**, because the automatic scan and a declared `sync` produce the *same
   artifact*: both are a set of `(write, read)` pairs, named by mark in a plan and by
   `ValueId` in a fragment, and the fragment resolves one to the other (below).
@@ -559,6 +632,26 @@ plan, and what the engine does with it.
   conflated them would serve one kernel's shader for another's. The first rule keeps
   a cost decision from becoming a semantic one; the second keeps a cache from lying.
 
+- **The artifact is text, and it carries the plan — which is what gives a placement a route to
+  the emit.** A fused kernel crosses as an **artifact** whose format `lichen-compute` defines and
+  reads back (`crates/lichen-compute/src/compute/fused/`, **landed** at `fb0574c`): pretty JSON
+  through `facet`, holding the fragment, the claim it is interned with, and the plan it was
+  checked against. `read_fused_kernel` parses, converts, runs **both** IR gates —
+  `KernelBody::validate` and `KernelFragment::validate`, each of which sees a fact the other
+  cannot — and then `check_plan`; it is **pure**, interning nothing and consulting no global, so
+  the same text reads back as the same kernel in any process. Carrying the plan is the point
+  rather than bookkeeping: `KernelFragment` has no plan field, `LaunchSet` has none, and
+  `ParallelBackend::run` takes none, so before this artifact a placement had **no route to the
+  emit at all**. `land_fused_kernel` closes the loop: it reads the text (every check runs
+  before anything is replaced) and puts the fragment into the **recorded graph node the runner
+  reads**, so the fused body is what runs. The text is spelled for a person — `ValueId` is a
+  bare number, every enum is a lower-case string, and a value-table entry's position *is* its
+  identity — because a fused kernel is something a human tunes by hand, and a refusal names the
+  field's path and the byte range rather than only that the text failed. Two things are
+  recorded rather than hidden: a stray key inside an enum **variant** is ignored
+  (`deny_unknown_fields` does not reach variant structs in `facet` 0.45), and the dependency
+  brings `facet-reflect`'s `smallvec` **alpha** with it.
+
 **What a pack author writes, schematically.** The spelling is the implementing
 session's to settle; these seams are the interface:
 
@@ -566,15 +659,16 @@ session's to settle; these seams are the interface:
 implements = schema "sha256:9f2c…"
 requires   = { class = f32 }
 reference  = <the region's derivation>
-kernel     = cfg => { …dataflow, and the staged values it exchanges. It names no
-                        space: a slice is a thing, a space is where it lives. … } "gpu"
 plan       = {
-  -- `value` is a mark the body published: the plan's only stable way to name one.
+  -- `mark` is a mark the body published: the plan's only stable way to name one.
   -- `space` is a plan value — `Register | Shared` — and names no length.
   -- `group_width` is a **constraint on this placement** — the group width the facts
   -- are checked against — and not the origin of a length: a slice's element count is
   -- the body's, and a plan's width is the plan's own group width.
-  staging = [ { value = "tile", space = Shared, group_width = 64 } ]
+  -- `mark` names the value by the **path** the body published — §3's channel, and now a
+  -- path rather than a text. It is resolved against the region's interface and is
+  -- **relative**, so one plan serves every region whose structure matches.
+  staging = [ { mark = "tile", space = Shared, group_width = 64 } ]
   -- `auto` is the scan. An explicit sync names the two marks it separates, never a
   -- position: a position drifts under re-spelling.
   sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
@@ -582,8 +676,10 @@ plan       = {
 ```
 
 **This block is the only place above the IR that names a space** — the buffer's **type** names
-the `DP`, and a space is what the plan puts inside it — and that is the rule the
-mechanism is built on rather than a convention of this note:
+the `DP`, and a space is what the plan puts inside it — and the pack names no body either: the
+body is the engine's, from the region's own dataflow, so *a slice is a thing and a space is
+where it lives*. That is the rule the mechanism is built on rather than a convention of this
+note:
 [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 states it with the layer table,
 and with the three quantities — a slice's element count, a staging group's width, a device's
 lane width — that keep being read as one.
@@ -604,7 +700,7 @@ records which of its steps carries which.
 that is not a producer→code→consumer chain, so a fan-out body — the shape whose
 staging this subsection is about — is not fusable today at all
 ([compute-graph-jit](compute-graph-jit.md)'s missing general builder). The
-interface is written now, ahead of that, because a pack that hands over a body
+interface is written now, ahead of that, because a pack that steers a region
 must hand over a *plan* with it, and the engine owes a stated contract to check
 the plan against rather than a silent acceptance.
 
@@ -849,8 +945,11 @@ about shrinks exactly where fusion fires.
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
-| the **memory plan** interface | **interface and selection rule stated, implementation staged** | the four seams a pack hands a plan over through — pack-side data, checked against the three facts, an automatic fallback, and `# p` as the certificate — plus the width the check needs and the three-step walk that chooses a space, both [shared-memory-and-barriers](shared-memory-and-barriers.md) §4/§5. The mechanism is that note's §9, staged: the width as a fragment fact, the vocabulary, the walk, the surface, the plan's carriage, and a tiled reduction as the first automatic consumer |
+| the **memory plan** interface | **the carrier, the check and the landing landed; matching and the fact checks remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed on this branch: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. What remains: the plan **matched by schema**, checked against the three facts (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), and its `sync`. The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
+| **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |
+| a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
 
@@ -887,7 +986,7 @@ Settled by the superior's review of the first draft:
 - **The memory plan is a pack's, and the engine validates it** (§5). A body that is
   not a chain needs staging — registers, shared, or global — and while the
   conservative plan is derivable, the last factor of performance in a real operator
-  is hand-orchestrated, so the plan rides the pack. It is checked against
+  is a **placement decision only the machine knows**, so the plan rides the pack. It is checked against
   [shared-memory-and-barriers](shared-memory-and-barriers.md) §4's three facts, never
   believed, and it does not enter the schema hash. **The mechanism is another
   session's to implement**; this design fixes only the interface it implements
@@ -901,12 +1000,49 @@ Still open, cheapest to settle before the interface syntax is written:
   property harness is believed — more coverage, and the harness is one more
   artifact to define). This note is written symbolic-only; §3's
   `UnverifiableInstance` is where a second tier would slot in.
-- **The mark payload's richness** — the spike's payload is one string literal, because
-  text is exactly what keeps a mark out of the pair layout. A record payload (a claim
-  naming its interface and roles as fields rather than as `claim:Name(role,…)` text)
-  is the natural next step, and the mark channel is already positioned for it: the
-  fragment's payload is a *list* of fields per mark, so a reader that wants "the mark's
-  own text" reads the unnamed field rather than a second variant.
+- **The mark payload's richness, and with it mark *paths* — measured, and deferred.** The
+  spike's payload is one string literal, because text is exactly what keeps a mark out of the
+  pair layout, and the channel is positioned for a record: a mark's payload is a *list* of
+  fields, so a reader that wants "the mark's own text" reads the unnamed field rather than a
+  second variant. Keying a mark by the **path** of the marks enclosing it, rooted at the
+  fragment's interface, is what would let a plan name a value durably — and it is blocked by a
+  surface rather than by a design:
+  - **No surface produces a named field.** `mark_payload`
+    (`crates/lichen-language-parser/src/parse.rs`) takes a string literal and nothing else, the
+    AST, the IR and the module carry one `Vec<String>` per mark, `MarkField`'s only producer
+    writes `name: None` (`crates/lichen-compute/src/compute/body.rs`), and
+    `KernelMark::field(name)` has no caller. So a claim's interface and its roles either gain a
+    grammar or are parsed back out of `claim:Name(role,…)` — the mini-language a record payload
+    exists to end.
+  - **The names a plan may use have to be declared somewhere, and §4 is why.** The canonical
+    form commits to the interface and to each required role's canonical projection, and to
+    nothing else: not a mark's anchor, not a mark that is not a role. A plan naming one of
+    *those* would be matched by a hash that does not fix what the name points at, so two kernels
+    with one algebra and that mark on two different expressions would take one plan. A claim's
+    declaration is therefore load-bearing rather than a restatement of the interface.
+  - The three spellings are a **named mark** (`~ interface "Reduction" ~ role "combine"`), a
+    **registry** keyed by interface in the IR, and **nothing declared** at all. Only the first
+    keeps the declaration in the program — and so inside the hash — while ending the
+    mini-language; only the first two keep `RoleNotMarked` and the undeclared-name refusal
+    reachable.
+  - **Two families of existing marks are what any of the three has to answer for.** The
+    `accumulator` marks (`crates/lichen-language/examples/reduction_interface.rs`,
+    `crates/lichen-language/examples/fusion_numbers.rs`) are not roles of `Reduction` and are
+    read today as roles no claim requires; and `element` in all four chains of
+    `crates/lichen-language/examples/fusion_schema.rs` sits *inside* the `combine` mark, because
+    a consumer's per-element function is used inside its own combine, so a path reads
+    `Reduction/combine/element` where the interface declares `element`. Resolving a role by the
+    mark's own segment rather than by its whole path is the reading that keeps that example as
+    written.
+  - **A path cannot be completed by ancestry alone.** Every example's claim mark rides the *use
+    site* (`compute.parallel (producer_raw ~ "claim:…")`), whose anchor is the function
+    template's parameter node rather than an `ExprId` ancestor of the body, so a checker can
+    compute only the relative chain among body marks and the root has to be applied where the
+    interface is known — the kernel compile, or the lowering that publishes them.
+
+  **Deferred deliberately**, because its only consumer is the plan: §5's functional half — a plan
+  that is data, checked against the three facts, and refused by name — is the thing to build
+  first.
 - **Pack trust beyond correctness** — signing/provenance of installed packs
   is the package manager's roadmap item, deliberately not this design's.
 

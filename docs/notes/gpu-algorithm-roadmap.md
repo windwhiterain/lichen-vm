@@ -353,7 +353,7 @@ the unroll, and it is the largest single item in this roadmap:
 > rather than in a new buffer *kind*, because a buffer is already a struct
 > wrapper. The one bullet below that the note **corrects** is "a new buffer
 > kind": it is not a second wrapper but the one buffer type at `block[1]`,
-> `Shared = T => struct<.native _, .element T, .n Int>` — the paper's
+> `Shared = T => struct{.native _, .element T, .n Int}` — the paper's
 > `view(T, N, DP)` with the argument written. The note removes that bullet's
 > other two shapes as well: the language layer keeps one `write` and one
 > `read`, because a space is the plan's and the `DP` is the type's and neither
@@ -713,7 +713,7 @@ instead of worked around.
 `compute.read`, `compute.collect` and a launch's `cfg(1)` all took the lazy
 fallback for a value that was not a buffer, so `compute.read ((compute.Read _)(.from data, .at i))` on a
 plain array ran to completion, printed `parameterized`, and still showed the
-type `array<?a, ?b>`. The fallback is right for an *undecided* value and wrong
+type `array{?a, ?b}`. The fallback is right for an *undecided* value and wrong
 for a decided one; all three refuse by name now.
 
 Neither is a gap in the primitive, but the second is the symptom of axis A, and

@@ -592,7 +592,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
         // `>` is both the comparison and a delimiter: it compares only when an
         // expression follows it **unglued**.
 
-        // Otherwise it closes the angle bracket it is in
+        // Otherwise it closes the raw index it is in
         // (`docs/notes/operators.md` §4).
         let comparison_loose = choice((
             token(TokenKind::LAngle).to(BinOp::Lt),
@@ -882,7 +882,6 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::LParen
             | TokenKind::LBracket
             | TokenKind::LBrace
-            | TokenKind::LAngle
     )
 }
 
@@ -950,7 +949,6 @@ fn atom_parser<'a>(
             set_literal(tokens, expr.clone()),
             tuple_slots(tokens, expr.clone()),
             block(tokens, expr.clone()),
-            angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
             array_type(tokens, expr.clone()),
             if_expr(tokens, expr.clone()),
@@ -1120,8 +1118,8 @@ fn paren_fields<'a>(
     comma_list(expr)
 }
 
-/// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value (angle brackets
-/// spell the tuple type).
+/// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value (`tuple{…}`
+/// spells the tuple type).
 fn paren<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1236,7 +1234,7 @@ fn set_literal<'a>(
         .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
 }
 
-/// A keyword-led tuple type, `tuple{slot, …}` — the spelled-out `<…>`.
+/// A keyword-led tuple type, `tuple{slot, …}`.
 ///
 /// # Invariant
 /// A slot is `value : type`, so a top-level `:` makes an element a value slot; an
@@ -1306,31 +1304,7 @@ fn shallow_depth<'a>() -> impl Parser<'a, In<'a>, usize, E<'a>> + Clone {
         .then_ignore(token(TokenKind::RParen))
 }
 
-/// `<e1, …, en>` — always a `TypeTuple`, with at least two elements.
-fn angle_tuple<'a>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    token(TokenKind::LAngle)
-        .ignore_then(expr.clone())
-        .then(
-            separators_between()
-                .ignore_then(expr.clone())
-                .repeated()
-                .at_least(1)
-                .collect::<Vec<_>>(),
-        )
-        .then(separator_run())
-        .then_ignore(token(TokenKind::RAngle))
-        .map_with(|((first, rest), _trailing), me| {
-            Expr::TypeTuple(
-                std::iter::once(first).chain(rest).collect(),
-                span_at(tokens, me.span().start),
-            )
-        })
-}
-
-/// One `struct<…>` field: `.name type`, or a bare (positional) type.
+/// One `struct{…}` field: `.name type`, or a bare (positional) type.
 fn struct_field<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, StructField, E<'a>> + Clone {
@@ -1342,7 +1316,7 @@ fn struct_field<'a>(
     choice((named, unnamed))
 }
 
-/// `struct<…>` — a nominal struct type; the field list is optional (`struct<>`).
+/// `struct{…}` — a nominal struct type; the field list is optional (`struct{}`).
 fn struct_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1350,14 +1324,14 @@ fn struct_type<'a>(
     let field = struct_field(expr.clone());
     token(TokenKind::KwStruct)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LAngle))
+        .ignore_then(token(TokenKind::LBrace))
         // The separator flag is the instantiation split's, not a struct type's.
         .ignore_then(comma_list(field).map(|(fields, _saw_separator)| fields))
-        .then_ignore(token(TokenKind::RAngle))
+        .then_ignore(token(TokenKind::RBrace))
         .map_with(|fields, me| Expr::StructType(fields, span_at(tokens, me.span().start)))
 }
 
-/// `array<T, n>` — the array type, keyword-led like `struct<…>`, with exactly
+/// `array{T, n}` — the array type, keyword-led like `struct{…}`, with exactly
 /// two fields.
 fn array_type<'a>(
     tokens: &'a [Token],
@@ -1365,11 +1339,11 @@ fn array_type<'a>(
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     token(TokenKind::KwArray)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LAngle))
+        .ignore_then(token(TokenKind::LBrace))
         .ignore_then(expr.clone())
         .then(separators_between().ignore_then(expr.clone()))
         .then(separator_run())
-        .then_ignore(token(TokenKind::RAngle))
+        .then_ignore(token(TokenKind::RBrace))
         .map_with(|((element_type, length), _trailing), me| Expr::TypeArray {
             element_type: Box::new(element_type),
             length: Box::new(length),

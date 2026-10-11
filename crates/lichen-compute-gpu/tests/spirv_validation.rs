@@ -1019,7 +1019,6 @@ fn a_folded_reduction_validates() {
                     combine: BinaryOp::Add,
                     identity: 0.0,
                 },
-                600,
                 Element::Buffer { position: 0 },
                 ScalarClass::Int,
             )
@@ -1034,7 +1033,6 @@ fn a_folded_reduction_validates() {
                     combine: BinaryOp::Add,
                     identity: 0.0,
                 },
-                600,
                 Element::Buffer { position: 0 },
                 ScalarClass::Int,
             )
@@ -1277,19 +1275,18 @@ fn a_hand_built_accumulating_loop_validates() {
     assert!(!words.is_empty(), "the accumulating loop emitted nothing");
 }
 
-/// A two-step tiled body printed for comparison against the tree's own lowering.
+/// The transform's tiled body printed for comparison against the tree's own lowering.
 ///
 /// # Invariant
-/// The emitted IR is the artefact a human has to read to see why a carried accumulator answers one
-/// step: one iteration boundary is enough, and a 64-step body hides it.
+/// The emitted IR is the artefact a human has to read to see the extent's step count beside the
+/// carried accumulator and the slice fold; the step bound is a value, so nothing here pins one.
 #[test]
-fn a_two_step_tiled_loop_prints() {
+fn the_tiled_loop_prints() {
     let body = Folding::new(
         &Reduction {
             combine: BinaryOp::Add,
             identity: 0.0,
         },
-        u64::from(LOCAL_SIZE_X) * 2,
         Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -1441,7 +1438,6 @@ fn the_transforms_two_step_loop_carries_by_identity() {
             combine: BinaryOp::Add,
             identity: 0.0,
         },
-        2,
         Element::Buffer { position: 0 },
         ScalarClass::Int,
     )

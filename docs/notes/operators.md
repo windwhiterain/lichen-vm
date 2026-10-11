@@ -138,37 +138,30 @@ spelling and `max (a + 1) b` is — the operator's own arity decides the level, 
 
 ## 4. Two tokens, two jobs: `<` and `>`
 
-`<` and `>` were already the delimiters of every angle-bracket form —
-`<a, b>` (tuple type), `struct<…>`, `array<T, n>`, and `X<e>` (raw index) — and
-they are now comparisons as well. There is no mode flag and no whitespace rule
+`<` and `>` are the delimiters of the raw index `X<e>`, and they are comparisons
+as well. There is no mode flag and no whitespace rule
 beyond the **Glue** marker that was already there (a delimiter glued to the
 previous token is a postfix form); the two jobs are told apart by the shape
 around the token:
 
 - **`>`** — a `>` followed by an expression is the comparison; a `>` followed by
-  anything else closes the bracket it is in. An infix operator needs a right
+  anything else closes the raw index it is in. An infix operator needs a right
   operand, so this is not a heuristic: it is the grammar reading its own rule.
   Two implementation points, and the second is the one that is easy to get wrong:
   - The test is a **zero-width lookahead *at* the `>`**, not a peek at the token
     after it. A `filter` on the following token records its error one token
     further on, which wins chumsky's furthest-error rule — and then every
-    malformed angle bracket (`<Int>`, `f <3>`) reports "at the end of the
-    program" instead of at the bracket it is in. The parser's own unit test for
-    that span is what caught it.
-  - The check has to include **`Glue`**. A glued delimiter after the `>` belongs
-    to the angle form, so it is not the start of an operand: without that,
-    `struct<Int, Int>(1, 2)` parses as a comparison whose right operand is the
-    tuple `(1, 2)`, and the instantiation stops existing. This is the case the
-    first version of the guard missed, and two pre-existing tests failed on it.
-- **`<`** — a **glued** `<` is still the raw index `X<e>`, and a spaced one is
-  either the comparison or a tuple type at an operand position. Application binds
-  tighter, so `f <Int, Type>` is still `f` applied to the tuple type, and
-  `a < b` becomes the comparison **only because the application fails first**:
-  the argument `<b>` is not a tuple type (one element), so the atom attempt is
-  rewound and the comparator gets its chance. No existing form is displaced —
-  what used to be a parse error is now a comparison.
+    malformed raw index reports "at the end of the program" instead of at the
+    token it is in. The parser's own unit test for that span is what caught it.
+  - The check has to include **`Glue`**. A glued delimiter after the `>` is a
+    postfix form, never the start of an operand, so the `>` closes the raw index
+    (`X<0>(1)` reads a component and then applies the result) instead of
+    comparing with the group that follows.
+- **`<`** — a **glued** `<` is the raw index `X<e>`, a spaced one the comparison:
+  `a<b>` reads a component and `a < b` compares. No form is displaced — what used
+  to be an atom at a spaced `<` is now a comparison.
 
-Pinned by `comparisons_share_their_tokens_with_the_angle_bracket_forms`.
+Pinned by `comparisons_share_their_tokens_with_the_raw_index`.
 
 ## 5. An `Int` is unsigned
 
@@ -292,7 +285,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   [prelude `core`](core-prelude.md) carries `Num`, `in_num` and one binding per
   polymorphic operator (`add`, `sub`, `mul`, `div`, `less`, `greater`,
   `less_or_equal`, `greater_or_equal`), each taking the **operand group** and
-  refining its elements' **classes** (`array<(_ ! in_num), 2>` — the array's
+  refining its elements' **classes** (`array{(_ ! in_num), 2}` — the array's
   homogeneity is the operand tie and its length the arity), and the *surface*
   operators lower onto those bindings, so `1 + 1.5` is refused by the prelude's own
   tie.  The costs that routing carries — kernel bodies until the kernel
@@ -300,7 +293,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   a routed statement's missing value snapshot — are measured in
   [operator-polymorphism](operator-polymorphism.md) §7.1.
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
-  angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
+  angle forms — the raw index `X<Y<0>>` ends `>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to
   the frontend's token model rather than one more operator. Named rather than
   half-done.
@@ -375,13 +368,13 @@ two changes, and the second is the interesting one.
   too, and `queries/highlights.scm` (mirrored in the Zed extension) colours
   every operator in §1's table.
 - **`<` and `>` are two tokens, not one.** The real parser re-reads the
-  expression it just parsed to decide whether a `<` opens a bracket or
+  expression it just parsed to decide whether a `<` opens a raw index or
   compares (§4). A tree-sitter table is LR: it must decide at the token, and
-  the decision needs more lookahead than one token — `a < b` and `f <Int, Type>`
+  the decision needs more lookahead than one token — `a < b` and `f<A, B>`
   are both decided *at* the `<`. Whitelisting the conflict in `conflicts` and
   letting the GLR fork pick was tried and is unsound here: the two stacks
   merge again two tokens later, and the losing reading is dropped mid-parse
-  (it turns `f <Int, Type>` into a comparison with a `MISSING` operand).
+  (it turns `f<A, B>` into a comparison with a `MISSING` operand).
 
   What works is deciding it in the *lexer*, with the one Glue rule the real
   language has: `angle_tuple` opens with `choice(token.immediate('<'), '<')`,
@@ -394,10 +387,8 @@ two changes, and the second is the interesting one.
   Two consequences are worth naming, because they are deviations from the real
   parser rather than costs of the approach:
 
-  - **A tuple type applied to a bare atom must be written glued**: `f<A, B>`,
-    not `f <A, B>`. Every occurrence in this repository already writes it glued
-    (`array<Int, 3>`, `struct<…>`), and an operand position is unaffected
-    (`x : <Int, Int>`).
+  - **An atom applied to a bare angle form must be written glued**: `f<A, B>`,
+    not `f <A, B>`, which reads as a comparison.
   - **A comparison is not an angle form's element.** `_angle_element` is every
     expression form but a comparison, because the `>` that *closes* an angle
     form is also the comparison operator and the table would otherwise read
@@ -405,12 +396,21 @@ two changes, and the second is the interesting one.
     an index, so nothing real is lost; without it, every angle form with three
     or more elements stops parsing.
 
+**This grammar has not been migrated to the braced type forms.** The language
+retired `<…>` for `tuple{…}`, and `struct<…>` and `array<…>` for `struct{…}` and
+`array{…}` ([no-type-mode](no-type-mode.md)), but `grammar.js` still models the
+retired `angle_tuple` and `struct<…>`, and only the CLI regenerates it
+([tree-sitter-generated-files](tree-sitter-generated-files.md)). So the spelling
+in this section is the *grammar's*, not the language's, and an editor reads a
+braced tuple type as a block until the grammar follows. The compiler's parser,
+the language server and the printer know only the braced forms.
+
 The one thing this grammar still cannot do is model the raw index `X<e>` as its
 own node: the fresh-atom reading of a glued `<` is the lenient one-or-more angle
-form the grammar has always had, so `X<0>` and `array<Int, 3>` are an
-application of an atom to an `angle_tuple`. That is the tree it produced before
-the comparison operators existed, so nothing regresses; the node is only a
-coarser reading, and an editor grammar's job is colouring.
+form the grammar has always had, so `X<0>` is an application of an atom to an
+`angle_tuple`. That is the tree it produced before the comparison operators
+existed, so nothing regresses; the node is only a coarser reading, and an editor
+grammar's job is colouring.
 
 **And the one thing it does not yet know is §7's and §11's five keywords.**
 `int2float`, `float2int`, `max`, `min` and `exp` colour as identifiers there,

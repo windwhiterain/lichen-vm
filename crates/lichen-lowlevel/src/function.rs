@@ -333,15 +333,16 @@ impl<P: Program> Module<P> {
             None => ctx.tag,
         };
         ctx.remap.insert(node, clone);
-        // `runned` is whether the operator runs; `evaluated_deep` is the other axis.
-        // See `docs/notes/apply-clone-ownership.md`.
+        // The run stamp is whether the operator runs; `evaluated_deep` is the other axis
+        // (`apply-clone-ownership.md`).
         let operation = operation.map(|operation| Operation {
             operand: operation
                 .operand
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        let template_answer = self.nodes[node].runned && self.nodes[node].evaluated_deep.is_some();
+        let template_answer =
+            self.nodes[node].runned != 0 && self.nodes[node].evaluated_deep.is_some();
         let carried = match &operation {
             None => true,
             Some(_) => {
@@ -357,10 +358,10 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        // An answer with open slots is the operator's result structure: it carries, but
-        // `runned` stays false.
-        self.nodes[clone].runned =
-            mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
+        // An answer with open slots is the operator's result structure: it carries, but the run
+        // stamp stays zero.
+        let carried_answer = mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
+        self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
         // A clone is a singleton class here, so the slot write *is* the class write.
         if let Some(low_shape) = low_shape {

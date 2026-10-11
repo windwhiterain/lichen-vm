@@ -53,7 +53,7 @@ unrolling forever — the previous `[head, K]` collapse cut that cycle by
 | `ValuePrinter::raw_any` | a runtime value the type chain named **no class** for: a list `raw[…]`, an atomic `raw x` |
 
 ```lichen
-P = ins => struct<.I ins.x, .O ins.y>
+P = ins => struct{.I ins.x, .O ins.y}
 y = (P _)(.I Int, .O Int)
 ```
 
@@ -62,7 +62,7 @@ error: expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct
 ```
 
 The same branch is reached from a struct field — a kernel binding renders
-`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` — and from the
+`struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}` — and from the
 value side: `compute.call` on a tuple-codomain kernel types its result as a
 fresh cell, so the result prints `raw[raw 6, raw 14]: ?a`. A bare `[in, out]`
 shape on the CLI output path is a third entry, since that path carries no
@@ -88,8 +88,8 @@ mark. Naming them is what makes the mark mean something: it says the printer
   wrote it, so its tail names **that** module's canonical `[Type, ↺]` rather than
   the replica itself. Requiring the tail to be the very node — the rule until this was
   measured — made every such pair fall back to `raw[…]`: a package's
-  `double = x => x + x` printed `(43, 44): <raw[Int, Type], raw[Int, Type]>` where
-  the same program printed `<Int, Int>` before the operator's contract was written
+  `double = x => x + x` printed `(43, 44): tuple{raw[Int, Type], raw[Int, Type]}` where
+  the same program printed `tuple{Int, Int}` before the operator's contract was written
   in lichen. The head check is what keeps "is the universe" apart from "contains
   the universe" ([universe-containment](universe-containment.md) §2); the tail only
   has to *be* the universe, so it is read through the ref.
@@ -118,7 +118,7 @@ The fallback was not only a fallback: it was also how a *scalar* rendered. An
 `Int`-typed value read `1` not through a branch of the cascade but by falling
 off its end into the raw layout, which happened to spell `1` correctly. Marking
 the fallback therefore marked `1` too, and `examples/array.lichen` printed
-`[raw 1, raw 2, raw 3]: array<Int, 3>`.
+`[raw 1, raw 2, raw 3]: array{Int, 3}`.
 
 `leaf_class` is what separates the two: the cascade now reads every value whose
 type names a class *before* the fallback is reached, so what is left at the
@@ -143,8 +143,8 @@ means no form was recognised at all.
 
 - **The reading table the mark separates from the fallback.** `print_value`:
   a value whose type is the universe is an atomic type constant (`Int` / `Type`);
-  a value whose type is a kind is a compound type (`struct<.f Int, .g Type>`,
-  `Int -> Int`, `<Int, Type>`, `array<Int, 3>`); a tuple type reads `(1, Int)`,
+  a value whose type is a kind is a compound type (`struct{.f Int, .g Type}`,
+  `Int -> Int`, `tuple{Int, Type}`, `array{Int, 3}`); a tuple type reads `(1, Int)`,
   an array type `[1, 2, 3]`, a struct type its field tuple. All of those are
   **reads**, so all of them carry no mark — that is what makes the mark say
   something.
@@ -155,7 +155,7 @@ means no form was recognised at all.
   layer's render hooks spell the compute leaves by name — `Kernel`,
   `ParKernel`, `Buffer`. A kernel value is an opaque compiled artifact whose
   *signature* rides in the struct's `.I`/`.O` fields rather than in a marker, so
-  one name suffices and its type renders as `struct<.native _, .I in, .O out>`.
+  one name suffices and its type renders as `struct{.native _, .I in, .O out}`.
   The backend is deliberately not rendered: a value's name is its kind, and which
   backend a run dispatches to is a property of the program, not of one value.
 - **Raw layout behind the reads.** A struct type value's raw shape is

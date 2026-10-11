@@ -324,7 +324,7 @@ written because three of them decide what every implementation agent builds:
   meaningless.
 - **What a compound position is.** Following the existing filler (`flat_arity`
   answers `1` for every non-scalar and non-tuple, as a total function), an
-  `array<Float, 3>` parameter is **one local of the element's class**, not three.
+  `array{Float, 3}` parameter is **one local of the element's class**, not three.
   That keeps `flat_arity`'s convention and `KernelShape`'s fold agreeing, and it is
   why a *position* has one class even where a fragment's values do not.
 - **The class rides in two places, not one.** The **parameter** class goes on

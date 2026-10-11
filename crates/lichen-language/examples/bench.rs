@@ -16,8 +16,8 @@ fn run(source: &str) -> Result<String, Vec<String>> {
 /// dispatch and a download.
 const ONE: &str = r#"
 --- compute = import "compute.lichen" ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 mk = (k : Par1) => {
   i = compute.range k.n
@@ -25,8 +25,8 @@ mk = (k : Par1) => {
 }
 kx = compute.parallel mk "BACKEND"
 x = (compute.plrun kx ((compute.A In1)(.n COUNT, .I In1(.a 0))) : Out1)
-In2  = struct<.b (compute.Buf _)>
-Out2 = struct<.w (compute.Buf _)>
+In2  = struct{.b (compute.Buf _)}
+Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 axpy = (k : Par2) => {
   i = compute.range k.n
@@ -41,16 +41,16 @@ compute.read ((compute.Read _)(.from out.w, .at COUNT / 2))
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
 const CHAIN: &str = r#"
 --- compute = import "compute.lichen" ---
-InX  = struct<.a Int>
-OutX = struct<.z (compute.Buf _)>
+InX  = struct{.a Int}
+OutX = struct{.z (compute.Buf _)}
 ParX = compute.P (compute.KT _)(.I InX, .O OutX)
 mk = (k : ParX) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
-InK  = struct<.b (compute.Buf _)>
-OutK = struct<.w (compute.Buf _)>
+InK  = struct{.b (compute.Buf _)}
+OutK = struct{.w (compute.Buf _)}
 ParK = compute.P (compute.KT _)(.I InK, .O OutK)
 k1 = compute.parallel ((h : ParK) => {
   i = compute.range h.n
@@ -62,8 +62,8 @@ k2 = compute.parallel ((h : ParK) => {
   v = compute.read ((compute.Read _)(.from h.in.b, .at i))
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + v))
 }) "BACKEND"
-InG  = struct<.b (compute.Buf _)>
-OutG = struct<.unused (compute.Buf _)>
+InG  = struct{.b (compute.Buf _)}
+OutG = struct{.unused (compute.Buf _)}
 ParG = compute.P (compute.KT _)(.I InG, .O OutG)
 grow = (g : ParG) => {
   a = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b g.in.b))) : OutK)

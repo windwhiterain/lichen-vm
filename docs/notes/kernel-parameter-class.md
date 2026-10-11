@@ -60,7 +60,7 @@ Two files, no operator, no `.native`, no `jit` — `b.lichen` is frozen because 
 is imported:
 
 ```lichen
-S = _x => struct<.I _, .O _>
+S = _x => struct{.I _, .O _}
 mk = x => (S _)(.I x, .O x)
 ```
 
@@ -74,9 +74,9 @@ s = w.mk Int
 s
 ```
 
-Measured: `(raw Int, raw Int): struct<.I raw[?a, ?b], .O raw[?c, ?d]>`, and the
+Measured: `(raw Int, raw Int): struct{.I raw[?a, ?b], .O raw[?c, ?d]}`, and the
 field read `s.I` is `raw Int: raw[?a, ?b]`. The **same two lines in one file**
-give `(Int, Int): struct<.I Type, .O Type>` and `s.I` is `Int: Type`.
+give `(Int, Int): struct{.I Type, .O Type}` and `s.I` is `Int: Type`.
 
 **It is not tuple-specific and not compute-specific.** Necessary and sufficient
 among the variants measured: the struct constructor is in a frozen module *and*
@@ -85,11 +85,11 @@ decides the cell:
 
 | program | render |
 |---|---|
-| frozen `mk 5` (a scalar argument) | `(raw 5, raw 5): struct<.I raw[?a, ?b], .O raw[?c, ?d]>` |
-| frozen `(w.S _)(.I Int, .O Int)` (a literal argument, no parameter indirection) | `(Int, Int): struct<.I Type, .O Type>` |
-| frozen `mk <Int, Int>` | `(raw[raw[raw Int, …]], raw[raw[raw Int, …]]): struct<.I raw[?a, ?b], .O raw[?c, ?d]>` |
+| frozen `mk 5` (a scalar argument) | `(raw 5, raw 5): struct{.I raw[?a, ?b], .O raw[?c, ?d]}` |
+| frozen `(w.S _)(.I Int, .O Int)` (a literal argument, no parameter indirection) | `(Int, Int): struct{.I Type, .O Type}` |
+| frozen `mk tuple{Int, Int}` | `(raw[raw[raw Int, …]], raw[raw[raw Int, …]]): struct{.I raw[?a, ?b], .O raw[?c, ?d]}` |
 | the `compute.jit` shape with `.native 1` instead of a kernel | the parked defect, no compute and no operator |
-| the same `jit` local | `(1, Int, Int): struct<.native Int, .I Type, .O Type>` |
+| the same `jit` local | `(1, Int, Int): struct{.native Int, .I Type, .O Type}` |
 
 **Why, measured: the static apply dropped a residual operation's cached answer.**
 The frozen template's field-type entries and the applied function's parameter
@@ -114,7 +114,7 @@ from the latter rather than stored beside it; `freeze` copies both instead of
 collapsing them; and `static_node_apply` runs the dynamic clone rule itself,
 with the policy stated once — `apply::answer_elements_are_undecided`, read by
 both walks. Measured, the two-line repro's imported render is **byte-identical
-to its local control**, `(Int, Int): struct<.I Type, .O Type>`.
+to its local control**, `(Int, Int): struct{.I Type, .O Type}`.
 
 The rule the maintainer ruled for, and the note's load-bearing statement: **an
 applied kernel struct's type must carry the signature, and a class write must
@@ -138,13 +138,13 @@ Measured structure of the parameter's type cell:
 |---|---|---|---|
 | `Int` | `Int` | `USize` | `[none, [none, ↺…]]` |
 | `Int -> Float` | `Int -> Float` | **`Unknown`** | `[Function(fid), [Function(…), ↺…]]` |
-| `<Int, Int -> Float>` | `<Int, Int -> Float>` | `Tuple([USize, Unknown])` | the tuple, whose second element is the row above |
+| `tuple{Int, Int -> Float}` | `tuple{Int, Int -> Float}` | `Tuple([USize, Unknown])` | the tuple, whose second element is the row above |
 | a local arrow wrapper's parameter | `raw[?a, ?b] -> raw[?c, ?d]` | **`Unknown`** | the same self-cycle |
 
 **The arrow's node shape is the variable, not freezing**: the same node was
 `Unknown` in a local module. Downstream, `compile_fragment` seeds from
 `low_type_of_slot` and `kernel_domain` refused with `UNDECIDED_DOMAIN`, so
-`compute.jit (p : <Int, Int -> Float> => p(0))` was refused **at the `jit`** even
+`compute.jit (p : tuple{Int, Int -> Float} => p(0))` was refused **at the `jit`** even
 though the parameter was annotated and its first position *is* decided.
 
 **The fix.** `Module::function_type_signature` reads the function type's domain
@@ -158,8 +158,8 @@ mutable borrow. Measured, the refusal moves to where it can name a position:
 
 | program | before | after |
 |---|---|---|
-| `jit (p : <Int, Int -> Float> => p(0))` | `UNDECIDED_DOMAIN`, at the `jit` | `kernel_launch: argument element 1 is a function, not a concrete Int or Float` |
-| `jit (p : <Int -> Float, Int> => p(1))` | `UNDECIDED_DOMAIN` | the same, at **element 0** |
+| `jit (p : tuple{Int, Int -> Float} => p(0))` | `UNDECIDED_DOMAIN`, at the `jit` | `kernel_launch: argument element 1 is a function, not a concrete Int or Float` |
+| `jit (p : tuple{Int -> Float, Int} => p(1))` | `UNDECIDED_DOMAIN` | the same, at **element 0** |
 | `jit (p : Int -> Float => p)` | `UNDECIDED_DOMAIN` | `kernel domain must be a scalar or a tuple of scalars` |
 | a float-domain kernel, an unannotated parameter, the scalar control, the function-codomain program, the frozen two-file probe | — | **unchanged** |
 
@@ -195,5 +195,5 @@ Gating it was what left a frozen function type decoding as
 **Three measured `DomainStatement` shapes, and why the refusal reads the type cell
 rather than the decoded shape.** `p : In` (a struct) decodes to
 `Array(Unknown, 2)`; an unannotated `y => y + y` to `Array(Array(Unknown, 2), 2)`;
-`p : <Int, _>` to `Tuple([USize, Unknown])`. Only the third says a position is
+`p : tuple{Int, _}` to `Tuple([USize, Unknown])`. Only the third says a position is
 missing, and only the first says the domain is a struct.

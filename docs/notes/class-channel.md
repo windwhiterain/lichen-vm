@@ -71,10 +71,10 @@ That split is what makes today's behaviour accidental rather than stated:
   side is a *pending* `Index`/`Apply` and the other holds a type; on `Merge` the
   lowlevel commits the class's value (`equality.rs:554-558`, `pin_committed_value`
   at `:884-903`). Measured: a single-kernel `collect` of a `plrun` result prints
-  `array<?a, ?b>` (nothing was ever committed), while the GPU chain test prints
-  `array<Int, ?d>` — because the consumer's **array** argument supplied the pending
+  `array{?a, ?b}` (nothing was ever committed), while the GPU chain test prints
+  `array{Int, ?d}` — because the consumer's **array** argument supplied the pending
   read that triggered the commit. The same test with a **tuple or struct** argument
-  prints `array<?d, ?e>`: no pending read, no commit.
+  prints `array{?d, ?e}`: no pending read, no commit.
 - **Which node a reader asks decides what it sees.** `pin_committed_value` writes
   to the representative (and to the class's pending ops, for the apply cloner's
   sake), so a member that is neither reads nothing — an allocation-order accident,
@@ -455,7 +455,7 @@ and left every member's own slot as it was.  Deleting the carrier turned the
 merge into a second, unconditional write site, and that is the whole of both
 regressions.
 
-**What was measured.**  `((n => ([1, 2, 3] : array<Int, n>)) 5)` must fail to
+**What was measured.**  `((n => ([1, 2, 3] : array{Int, n})) 5)` must fail to
 compile: the annotation pins the parameter `n` to 3, and applying 5 clashes at
 the apply.  Green at `4be9180`, red from `03ed3e2` + `dde4011`.  One node dump at
 the apply and one `evaluate_node` trace per tree (worktree
@@ -622,18 +622,18 @@ nothing from it (`observed_low_shape`, `equality.rs:1190`: a `Buffer` is not a
 **(ii) A low-type seed cannot change the printed type.**  The failing reader here
 is the printer, and `type_printer::node` (`type_printer.rs:62-79`) renders a cell
 that holds no value as its **class name** (`class_name` keys on
-`representative`) and never consults low types.  `array<?a, ?b>` →
-`array<Int, ?b>` therefore requires the element cell's **class to hold the `Int`
+`representative`) and never consults low types.  `array{?a, ?b}` →
+`array{Int, ?b}` therefore requires the element cell's **class to hold the `Int`
 type value** — a `write_node_value`, not a seed.  This is §2's lesson applied to
 §3: the reader asks for a value.
 
-**What today's `array<Int, ?d>` actually is** (measured on a "cpu" probe pair,
+**What today's `array{Int, ?d}` actually is** (measured on a "cpu" probe pair,
 scratch files, deleted):
 
 | spelling | printed |
 |---|---|
-| a two-kernel chain with the reads **and** the collect in one tuple | `(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<Int, ?d>>` |
-| the same chain, `collect` alone | `[10, 11, 12]: array<?a, ?b>` |
+| a two-kernel chain with the reads **and** the collect in one tuple | `(20, 22, 24, [20, 22, 24]): tuple{?a, ?b, ?c, array{Int, ?d}}` |
+| the same chain, `collect` alone | `[10, 11, 12]: array{?a, ?b}` |
 
 The `Int` exists only where a *consumer's array literal* is present, and the
 printer renders it at a node created during that consumer's check — the array
@@ -642,7 +642,7 @@ cell in one class, and the deferral's `pin_committed_value` then replicates that
 committed type value into the element cell.  Read strictly, the `Int` printed
 there may be the **ordinal's** type rather than the buffer element's, which is
 exactly "accidental rather than stated".  So the struct-argument migration does
-not lose an answer when it prints `array<?d, ?e>`; it removes a coincidence, and
+not lose an answer when it prints `array{?d, ?e}`; it removes a coincidence, and
 the decided answer it needs is the one §5 states.
 
 **Where a statement is possible today**: only where types are stated — a
@@ -678,8 +678,8 @@ get its own inferred type rather than sharing one lambda application).
 whose `_` cells the first instantiation specializes —
 
 ```lichen
-Read  = _x => struct<.from _, .at _>
-Write = _x => struct<.to _, .at _, .value _>
+Read  = _x => struct{.from _, .at _}
+Write = _x => struct{.to _, .at _, .value _}
 read  = (x : Read _)  => $read(x.from, x.at)
 write = (x : Write _) => $write(x.to, x.at, x.value)
 ```
@@ -696,7 +696,7 @@ parenthesized site a bracket-shaped script could not see) use the struct spellin
 result and the refuted `_` spelling).  The one remaining failure after the
 migration is the element cell that §3 could not state and that §5.2's statement
 owns — so the migration's acceptance is 57 of 58, with the honest answer for the
-struct spelling being `array<?d, ?e>`, which is *more* correct than the array
+struct spelling being `array{?d, ?e}`, which is *more* correct than the array
 spelling's accidental `Int`.
 
 **Not to forget**: the migration touches `crates/lichen-language/tests/*`,
@@ -740,7 +740,7 @@ annotated = compute.jit ((y : Int) => y + y)
 annotated
 ```
 
-prints `(raw Kernel, raw parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` —
+prints `(raw Kernel, raw parameterized): struct{.native raw[?a, ?b], .sig Int -> Int}` —
 the target string, already, on today's tree.  The red target is the *unannotated*
 body, where `+`'s class is open and the recorded choice is the class domain's
 `default`.  So the slice is: **choose the class where the domain says to choose
@@ -758,7 +758,7 @@ this artifact is for, and a body that left its class open is refused by name
 ([`UNDECIDED_DOMAIN`]: "the kernel parameter's class is not decided when the
 kernel is compiled … annotate the parameter").  Measured: `compute.jit (y => y +
 y)` is refused, `compute.jit (y : Int => y + y)` is `(raw Kernel, raw
-parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` and launches `3 + 3 = 6`, and the
+parameterized): struct{.native raw[?a, ?b], .sig Int -> Int}` and launches `3 + 3 = 6`, and the
 function itself stays polymorphic for its other uses (`f = y => y + y; k =
 compute.jit f; f 1.5` is `3.0: Float` — the refusal does not touch the class).
 `open_class_of` and `compile_fragment`'s `open_class` parameter are **deleted**;
@@ -776,7 +776,7 @@ measured on this tree:
   `InDomain` out of `module.functions[fid].asserts`, and after the routing the
   jitted function's assert list is **empty** while the only `InDomain` in the
   program is inside frozen module `158` (the `core` prelude): the *callee's*
-  refinement (`add = operands => { operands : array<(_ ! in_num), 2>; … }`) is
+  refinement (`add = operands => { operands : array{(_ ! in_num), 2}; … }`) is
   what confines the class now, and it is enforced by the apply, in the callee's
   own module.  So `compute.jit (y => y + y)` is refused with `UNDECIDED_DOMAIN`
   again — the parallel path is unaffected only because the ABI seeds every scalar
@@ -895,7 +895,7 @@ of `(type_of f)`, and the operator was deleted once the struct carried
 `.I`/`.O`.
 
 Measured this session: the wrapper definition then rendered
-`Function: ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>` — a native call
+`Function: ?a -> ?b -> struct{.native raw[?c, ?d], .sig ?a -> ?b}` — a native call
 *is* accepted in a type position and its term is what the field type becomes — and
 an applied result then rendered `.sig ?c -> ?c`, with the tree at `57 of 58` and
 every other suite unchanged.  `$sig`'s *value* node was the shape: the node §5.2's
@@ -967,12 +967,12 @@ rule says they need.
 The probes that pin the rest (scratch files, not committed):
 
 - **§5's own probe** (the decided element cell, stated where types are stated): a
-  single-kernel `plrun` + `collect` must print `array<Int, ?b>`; today it prints
-  `array<?a, ?b>` on the array API and on every other spelling.
+  single-kernel `plrun` + `collect` must print `array{Int, ?b}`; today it prints
+  `array{?a, ?b}` on the array API and on every other spelling.
 - **§4's own assertion, measured and corrected**:
   `a_gpu_program_chains_two_kernels_on_a_device`
   (`crates/lichen-language/tests/compute.rs:1308-1345`) does **not** keep its
-  `array<Int, ?d>` under the struct spelling — it renders `array<?d, ?e>` with the
+  `array{Int, ?d}` under the struct spelling — it renders `array{?d, ?e}` with the
   same values, which is the element cell §5.2 states and the same commit path
   measured above.  The earlier
   reading of this bullet as "must keep" was written before §1's measurement showed

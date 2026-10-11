@@ -322,30 +322,6 @@ impl KernelBody {
         order
     }
 
-    /// The slice ordinal a slice access addresses, when its operand is the constant it must be.
-    ///
-    /// # Invariant
-    /// A slice is a compile-time ordinal, so an operand that is not an integer constant states
-    /// no slice — and a caller that cannot resolve one must not read the `None` as "another
-    /// slice", because that is the answer that drops a barrier.
-    fn slice_ordinal(&self, value: ValueId) -> Option<u64> {
-        let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
-            return None;
-        };
-        self.constant(args.first().copied())
-    }
-
-    /// The integer constant `value` is, when it is one.
-    fn constant(&self, value: Option<ValueId>) -> Option<u64> {
-        match self.values.get(value?.0 as usize) {
-            Some(ValueDef::Instr {
-                op: KernelInstr::Const(ScalarClass::Int, bits),
-                ..
-            }) => Some(*bits as u64),
-            _ => None,
-        }
-    }
-
     /// A conservative bound on the index `value` takes, over every lane.
     ///
     /// # Invariant

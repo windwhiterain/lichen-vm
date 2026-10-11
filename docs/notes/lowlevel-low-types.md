@@ -221,9 +221,13 @@ was undecided **has** run (the attempt happened and could not resolve, and the
 slot stays empty), while a pure cell with an empty slot has nothing to run at
 all.
 
-The axis is a **stored field** (`Node::runned`) with one named read,
+The axis is a **stored field** (`Node::runned`, whose value is the value epoch the
+operator ran at — zero for "never ran") with one named read,
 `Module::has_no_result_yet` — the evaluator's own run gate, so the definition and
-its only use cannot drift apart — and `Node::value`'s own doc states both axes.
+its only use cannot drift apart — and `Node::value`'s own doc states both axes. The
+epoch rides the same field because it answers the next question the run axis is
+asked: whether a *stalled* operator's reads would still decide the same
+([stalled-rerun-epoch](stalled-rerun-epoch.md)).
 The axis was first *derived* from the slot through a pair of predicates that the
 class scans read; what broke that derivation is the distinction the class channel
 needs: an answer an operator *produced* versus a value a unification *asserted*

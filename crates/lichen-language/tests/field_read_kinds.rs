@@ -31,7 +31,7 @@ fn a_paren_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x(0)\nf [10, 20]");
     assert_eq!(kind, DiagKind::Assert);
     assert!(
-        message.contains("expected a tuple type") && message.contains("array<Int, 2>"),
+        message.contains("expected a tuple type") && message.contains("array{Int, 2}"),
         "the requirement is the tuple kind, the found side the array: {message}"
     );
 }
@@ -50,7 +50,7 @@ fn a_paren_read_of_a_decided_array_is_refused() {
 /// A struct instance is not a tuple, and its fields are read by name.
 #[test]
 fn a_paren_read_of_a_struct_instance_is_refused() {
-    let (message, kind) = refused("S = struct<.x Int, .y Type>\ns = S(.x 1, .y Int)\ns(0)");
+    let (message, kind) = refused("S = struct{.x Int, .y Type}\ns = S(.x 1, .y Int)\ns(0)");
     assert_eq!(kind, DiagKind::Guard);
     assert!(
         message.contains("TypeTuple") && message.contains("TypeStruct"),
@@ -75,7 +75,7 @@ fn a_bracket_read_of_a_tuple_is_refused() {
         "the same apply tier the tuple read uses"
     );
     assert!(
-        message.contains("expected an array type") && message.contains("found <Int, Int>"),
+        message.contains("expected an array type") && message.contains("found tuple{Int, Int}"),
         "the array requirement refuses a tuple: {message}"
     );
 }
@@ -85,7 +85,7 @@ fn a_bracket_read_of_a_tuple_is_refused() {
 /// An unnamed field has no read, so the definition is refused.
 #[test]
 fn an_unnamed_struct_field_is_refused() {
-    let report = compile("A = struct<Int, Type>\nA");
+    let report = compile("A = struct{Int, Type}\nA");
     assert!(!report.ok(), "the definition is refused");
     let first = &report.diagnostics[0];
     assert_eq!(
@@ -98,7 +98,7 @@ fn an_unnamed_struct_field_is_refused() {
 /// A block's fields are its bindings; a bare expression is an ordinary statement.
 #[test]
 fn a_bare_expression_in_a_block_is_not_a_field() {
-    assert_eq!(output("a = { 1; x = 2 }\na"), "(2,): struct<.x Int>");
+    assert_eq!(output("a = { 1; x = 2 }\na"), "(2,): struct{.x Int}");
     assert_eq!(output("a = { 1; x = 2 }\na.x"), "2: Int");
 }
 
@@ -106,12 +106,12 @@ fn a_bare_expression_in_a_block_is_not_a_field() {
 #[test]
 fn a_named_struct_and_a_named_block_read_by_name() {
     assert_eq!(
-        output("A = struct<.f Int, .g Type>\na = A(.f 1, .g Type)\n(a.f, a.g)"),
-        "(1, Type): <Int, Type>"
+        output("A = struct{.f Int, .g Type}\na = A(.f 1, .g Type)\n(a.f, a.g)"),
+        "(1, Type): tuple{Int, Type}"
     );
     assert_eq!(
         output("a = { x = 1; y = Int }\n(a.x, a.y)"),
-        "(1, Int): <Int, Type>"
+        "(1, Int): tuple{Int, Type}"
     );
 }
 
@@ -120,7 +120,7 @@ fn a_named_struct_and_a_named_block_read_by_name() {
 /// `X<e>` reads a tuple type value, so a `TypeStruct` container is refused.
 #[test]
 fn a_raw_index_of_a_struct_type_value_is_refused() {
-    let (message, kind) = refused("struct<.a Int, .b string><0>");
+    let (message, kind) = refused("struct{.a Int, .b string}<0>");
     assert_eq!(kind, DiagKind::Guard);
     assert_eq!(message, "expected TypeTuple, found TypeStruct");
 }
@@ -130,7 +130,7 @@ fn a_raw_index_of_a_struct_type_value_is_refused() {
 fn a_raw_index_of_a_tuple_value_is_refused() {
     let (message, kind) = refused("(1, 2)<0>");
     assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeTuple, found <Int, Int>");
+    assert_eq!(message, "expected TypeTuple, found tuple{Int, Int}");
 }
 
 /// `.a` states the container's kind, `::a` its whole type; an array is
@@ -142,7 +142,7 @@ fn a_named_read_of_an_array_is_refused() {
     assert_eq!(message, "expected TypeStruct, found TypeArray");
     let (message, kind) = refused("l = [10, 20]\nl::a");
     assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
+    assert_eq!(message, "expected TypeStruct, found array{Int, 2}");
 }
 
 /// A deferred container is refused at the argument; this used to panic inside
@@ -151,7 +151,7 @@ fn a_named_read_of_an_array_is_refused() {
 fn a_raw_named_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x::a\nf [10, 20]");
     assert_eq!(kind, DiagKind::Runtime);
-    assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
+    assert_eq!(message, "expected TypeStruct, found array{Int, 2}");
 }
 
 // --- the deferred `.a`: a registered condition, not a pin ------------------
@@ -168,7 +168,7 @@ fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
         .find(|d| matches!(d.check.as_ref().map(|c| c.kind), Some(DiagKind::Assert)))
         .expect("the requirement is a check diagnostic");
     assert_eq!(diag.stage, Stage::Check);
-    assert_eq!(diag.message, "expected a struct type, found array<Int, 2>");
+    assert_eq!(diag.message, "expected a struct type, found array{Int, 2}");
     assert_eq!(diag.span, Some((1, 5)), "the caret is the container");
 }
 
@@ -177,12 +177,12 @@ fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
 #[test]
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
-        output("S = struct<.a Int, .b string>\nf = x => x.a\nf (S(.a 1, .b \"h\"))"),
+        output("S = struct{.a Int, .b string}\nf = x => x.a\nf (S(.a 1, .b \"h\"))"),
         "1: Int"
     );
     assert_eq!(
         output("f = k => (k.a, k.b)\nf { a = 1; b = 2 }"),
-        "(1, 2): <Int, Int>"
+        "(1, 2): tuple{Int, Int}"
     );
 }
 
@@ -191,7 +191,7 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
     for (source, found) in [
-        ("f = x => x.a\nf (1, 2)", "<Int, Int>"),
+        ("f = x => x.a\nf (1, 2)", "tuple{Int, Int}"),
         ("f = x => x.a\nf 5", "Int"),
     ] {
         let report = compile(source);

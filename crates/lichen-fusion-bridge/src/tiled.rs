@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_kernel_ir::{
-    Barrier, Br, KernelBin, KernelBody, KernelInstr, ScalarClass, Terminator, ValueId,
+    Barrier, Br, KernelBin, KernelBody, KernelInstr, KernelMark, MarkField, ScalarClass,
+    Terminator, ValueId,
 };
 
 use crate::operators::lowered;
@@ -139,17 +140,21 @@ impl std::fmt::Display for TileRefusal {
 }
 
 /// One fold's declared combine and identity, and the elements it is a fold over.
+///
+/// # Invariant
+/// **No count is carried here.** The bound a body folds is the launch's — an extent parameter for
+/// a tiled fold and the lane's own index for a per-lane one — so a count stored beside the algebra
+/// would be a number the body ignores while its caller believes it is the bound.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Folding {
     combine: KernelBin,
     class: ScalarClass,
     identity: Identity,
-    count: u64,
     element: Element,
 }
 
 impl Folding {
-    /// The fold a declared reduction names over `count` elements of `element`.
+    /// The fold a declared reduction names over `element`.
     ///
     /// # Invariant
     /// The combine is the declaration's, converted once, and the licence is read from the
@@ -157,7 +162,6 @@ impl Folding {
     /// form however it is scheduled.
     pub fn new(
         reduction: &Reduction,
-        count: u64,
         element: Element,
         class: ScalarClass,
     ) -> Result<Folding, TileRefusal> {
@@ -178,36 +182,8 @@ impl Folding {
             combine,
             class,
             identity,
-            count,
             element,
         })
-    }
-
-    /// How many elements the fold is over.
-    pub const fn count(&self) -> u64 {
-        self.count
-    }
-
-    /// How many elements a tiled fold's iteration space holds: a whole workgroup tile.
-    ///
-    /// # Invariant
-    /// A whole number of tiles, so the last tile has an element for every lane: a lane the tile
-    /// does not reach reaches the barrier with a slot no lane wrote.
-    pub fn tiled_count(&self, lane_width: u32) -> Result<u64, TileRefusal> {
-        if lane_width == 0 {
-            return Err(TileRefusal::LaneWidthIsNotAWholeCount { lane_width });
-        }
-        Ok(self.count.div_ceil(u64::from(lane_width)) * u64::from(lane_width))
-    }
-
-    /// How many elements past [`Self::count`] a caller pads a tiled fold's input with.
-    ///
-    /// # Invariant
-    /// A caller pads the elements past [`Self::count`] with the identity of the declared combine,
-    /// which is the one value the combine is indifferent to
-    /// (`docs/notes/shared-memory-and-barriers.md` §9).
-    pub fn tail(&self, lane_width: u32) -> Result<u64, TileRefusal> {
-        Ok(self.tiled_count(lane_width)? - self.count)
     }
 
     /// The body that folds the whole space once, in one lane.
@@ -250,21 +226,21 @@ impl Folding {
         builder.body
     }
 
-    /// The body that folds the space across the workgroup's lanes.
+    /// The body that folds the space across the workgroup's lanes, staging into slice `slice`.
     ///
     /// # Invariant
-    /// Every lane folds the strided subset `[lane, lane + lane_width, …]` into the slot its own
-    /// index names, a recorded barrier separates those writes from the reads, and the fold then
-    /// continues over the slice's elements with the same declared combine. `slice` is the ordinal
-    /// of a slice the fragment declares with `lane_width` elements.
+    /// The domain is `(extent, index)` — the launch's count first, the invocation index second —
+    /// which a caller's `KernelFragment::param_shape` must match or the dispatch binds one leaf's
+    /// value under another. Each lane folds `[lane, lane + lane_width, …]` for `ceil(extent /
+    /// lane_width)` steps behind a recorded barrier, and the fold over the slice uses the same
+    /// combine.
     pub fn tiled(&self, lane_width: u32, slice: usize) -> Result<Tiled, TileRefusal> {
         if lane_width == 0 {
             return Err(TileRefusal::LaneWidthIsNotAWholeCount { lane_width });
         }
-        let count = self.tiled_count(lane_width)?;
         let mut builder = Builder::new(self.class);
         let entry = builder.body.entry;
-        builder.body.add_param(entry);
+        let extent = builder.body.add_param(entry);
         let lane = builder.body.add_param(entry);
         let width = builder.constant(ScalarClass::Int, i64::from(lane_width));
         let slot = builder.push(
@@ -273,12 +249,21 @@ impl Folding {
             vec![lane, width],
         );
         let identity = builder.constant(self.class, self.identity.bits());
-        // **The steps a lane takes are per lane**, so the bound is the tile over the stride.
-        let steps = count / u64::from(lane_width);
-        let stop = builder.constant(ScalarClass::Int, steps as i64);
+        // **The steps a lane takes are `ceil(extent / lane_width)`**, so the bound is the extent's.
+        let bias = builder.constant(ScalarClass::Int, i64::from(lane_width) - 1);
+        let biased = builder.push(
+            entry,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![extent, bias],
+        );
+        let steps = builder.push(
+            entry,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Div),
+            vec![biased, width],
+        );
         let lane_slot = builder.constant(ScalarClass::Int, 0);
         let folded = Fold {
-            stop,
+            stop: steps,
             start: lane,
             identity,
             stride: u64::from(lane_width),
@@ -321,18 +306,44 @@ impl Folding {
         );
         let dummy = builder.constant(self.class, self.identity.bits());
         builder.finish(vec![dummy]);
-        return Ok(Tiled {
+        Ok(Tiled {
             body: builder.body,
             element: self.element,
-        });
+            staged: write,
+            staged_count: lane_width,
+        })
     }
 }
 
-/// A tiled fold's body, with the element source it folded.
+/// How many elements a tiled fold's iteration space holds: a whole workgroup tile.
+///
+/// # Invariant
+/// A whole number of tiles, so the last tile has an element for every lane: a lane the tile does
+/// not reach reaches the barrier with a slot no lane wrote. The count is the caller's, because the
+/// body folds the extent its own launch fixes and carries no count to read this off.
+pub fn tiled_count(count: u64, lane_width: u32) -> Result<u64, TileRefusal> {
+    if lane_width == 0 {
+        return Err(TileRefusal::LaneWidthIsNotAWholeCount { lane_width });
+    }
+    Ok(count.div_ceil(u64::from(lane_width)) * u64::from(lane_width))
+}
+
+/// How many elements past `count` a caller pads a tiled fold's input with.
+///
+/// # Invariant
+/// A caller pads the elements past `count` with the identity of the declared combine, which is
+/// the one value the combine is indifferent to (`docs/notes/shared-memory-and-barriers.md` §9).
+pub fn tail(count: u64, lane_width: u32) -> Result<u64, TileRefusal> {
+    Ok(tiled_count(count, lane_width)? - count)
+}
+
+/// A tiled fold's body, the element source it folded, and the value it staged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tiled {
     body: KernelBody,
     element: Element,
+    staged: ValueId,
+    staged_count: u32,
 }
 
 impl Tiled {
@@ -344,6 +355,43 @@ impl Tiled {
     /// The element source the body folds.
     pub fn element(&self) -> Element {
         self.element
+    }
+
+    /// The slice write's result: the value the body staged into the slice.
+    ///
+    /// # Invariant
+    /// The result of the body's own `SliceWriteCall`, so `KernelBody::staged_slice`
+    /// answers that write's slice and a mark on this value names the staging itself
+    /// (`docs/notes/graph-fusion.md` §5).
+    pub fn staged(&self) -> ValueId {
+        self.staged
+    }
+
+    /// The element count of the slice the body stages into.
+    ///
+    /// # Invariant
+    /// One element per lane, so the count is the lane width the fold was tiled at. A caller
+    /// declares the fragment's slice with **this** count and the plan's space: a slice's count is
+    /// the body's and a plan's group width is the plan's, and reading one off the other is right
+    /// only in the case where they coincide (`docs/notes/shared-memory-and-barriers.md` §5).
+    pub fn staged_count(&self) -> u32 {
+        self.staged_count
+    }
+
+    /// The marks publishing `name` for the staged value.
+    ///
+    /// # Invariant
+    /// One mark in the shape the channel already uses — a single unnamed field — attached to
+    /// the slice write's result, so a plan naming `name` resolves to the staging and never to
+    /// a value the fold read (`docs/notes/graph-fusion.md` §5).
+    pub fn marks(&self, name: &str) -> Vec<KernelMark> {
+        vec![KernelMark {
+            value: self.staged,
+            payload: vec![MarkField {
+                name: None,
+                text: name.to_string(),
+            }],
+        }]
     }
 
     /// The body, taken.
@@ -590,12 +638,11 @@ impl Builder {
     }
 }
 
-/// The fold a declared reduction names, over `count` elements of `element`.
+/// The fold a declared reduction names, over `element`.
 pub fn fold(
     reduction: &Reduction,
-    count: u64,
     element: Element,
     class: ScalarClass,
 ) -> Result<Folding, TileRefusal> {
-    Folding::new(reduction, count, element, class)
+    Folding::new(reduction, element, class)
 }

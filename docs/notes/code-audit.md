@@ -252,7 +252,7 @@ entry records as the escape:
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
      : (Int -> Int) -> Int -> Int -> Int
 inc = x => x + 1
-(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): tuple{Int, Int, Int}
 ```
 
 **The blast radius is wider than loops, and the repository's own example is
@@ -273,7 +273,7 @@ place. **`examples/gcd.lichen` dodges this twice over**: it takes a **tuple**
 parameter rather than two curried ones *and* writes the type out —
 
 ```text
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
+gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 ```
 
 — and its `doc` attributes the annotation to a *different* reason ("under
@@ -1007,8 +1007,8 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   `s(1, 2)[0]` "is the first field".
 
   The two are not reconcilable, and they differ on what a written program means,
-  not on how it is spelled: `(1, 2)[0]` is `expected array<Int, Int>, found
-  <Int, Int>` today and would be `1` under the spec. **Chosen — the doc fix:**
+  not on how it is spelled: `(1, 2)[0]` is `expected array{Int, Int}, found
+  tuple{Int, Int}` today and would be `1` under the spec. **Chosen — the doc fix:**
   the code's intent is explicit, its doc argues *why* (syntax picks the
   operator, never a runtime kind dispatch — the same rule that keeps `e[i]`,
   `a(k)` and `t{k}` three different things), every example agrees, and a
@@ -1037,7 +1037,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
 - **D17 — Is a `compute.write` the codomain does not reach a silently dropped
   effect, or a dead expression? — DECIDED: a dead expression; `P1-42` is
   `wontfix`.** The index function's type settles it. `S = T: KT _ => A T.I -> T.O`
-  and `P = T: KT _ => struct<.n Int, .in T.I, .out T.O>`, so an index function takes
+  and `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, so an index function takes
   the extent, the inputs **and the outputs**, and returns the outputs. Walking the
   returned value therefore necessarily covers every declared output, and two gates
   already enforce that they are the same set: each codomain position must reduce to a

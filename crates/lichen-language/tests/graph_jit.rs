@@ -147,16 +147,16 @@ fn fail(source: &str) -> Vec<String> {
 /// Two kernels, one with no inputs and one with one, so which node a value
 /// reached is visible in the numbers.
 const KERNELS: &str = r#"
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "gpu"
-In2  = struct<.b (compute.Buf _)>
-Out2 = struct<.w (compute.Buf _)>
+In2  = struct{.b (compute.Buf _)}
+Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
@@ -168,8 +168,8 @@ k2 = compute.parallel f2 "gpu"
 
 /// A body that dispatches twice, the second over the first's output.
 const CHAIN: &str = r#"
-InS  = struct<.a Int>
-OutS = struct<.unused (compute.Buf _)>
+InS  = struct{.a Int}
+OutS = struct{.unused (compute.Buf _)}
 ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 step = (s : ParS) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
@@ -248,8 +248,8 @@ fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
 ---
 {KERNELS}
 held = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
-InS  = struct<.a Int>
-OutS = struct<.unused (compute.Buf _)>
+InS  = struct{{.a Int}}
+OutS = struct{{.unused (compute.Buf _)}}
 ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 step = (s : ParS) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
@@ -327,7 +327,7 @@ fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
   compute = import "compute.lichen"
 ---
 {KERNELS}
-GArg = struct<.n Int, .in In1>
+GArg = struct{{.n Int, .in In1}}
 step = (s : GArg) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   pulled = compute.collect first.z
@@ -352,7 +352,7 @@ compute.collect (compute.graphrun built 3)
   compute = import "compute.lichen"
 ---
 {KERNELS}
-GArg = struct<.n Int, .in In1>
+GArg = struct{{.n Int, .in In1}}
 step = (s : GArg) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   at_zero = compute.read ((compute.Read _)(.from first.z, .at 0))
@@ -440,16 +440,16 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
         r#"---
   compute = import "compute.lichen"
 ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{.a Int}
+Out1 = struct{.z (compute.Buf _)}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
 }
 k1 = compute.parallel f1 "gpu"
-In2  = struct<.b (compute.Buf _)>
-Out2 = struct<.w (compute.Buf _)>
+In2  = struct{.b (compute.Buf _)}
+Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
@@ -457,7 +457,7 @@ f2 = (k : Par2) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a))
 }
 k2 = compute.parallel f2 "cpu"
-GArg = struct<.n Int, .in In1>
+GArg = struct{.n Int, .in In1}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
@@ -480,8 +480,8 @@ compute.graphrun built 3
 #[test]
 fn a_graph_dispatches_exactly_what_the_program_dispatches() {
     let (_guard, stub) = stub();
-    let body = r#"InS  = struct<.a Int>
-GArg = struct<.n Int, .in InS>
+    let body = r#"InS  = struct{.a Int}
+GArg = struct{.n Int, .in InS}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   dead = (compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z))) : Out2)
@@ -538,16 +538,16 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
             r#"---
   compute = import "compute.lichen"
 ---
-In1  = struct<.a Int>
-Out1 = struct<.z (compute.Buf _)>
+In1  = struct{{.a Int}}
+Out1 = struct{{.z (compute.Buf _)}}
 Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
 f1 = (k : Par1) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }}
 k1 = compute.parallel f1 "{backend}"
-In2  = struct<.b (compute.Buf _)>
-Out2 = struct<.w (compute.Buf _)>
+In2  = struct{{.b (compute.Buf _)}}
+Out2 = struct{{.w (compute.Buf _)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {{
   i = compute.range k.n
@@ -555,7 +555,7 @@ f2 = (k : Par2) => {{
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }}
 k2 = compute.parallel f2 "{backend}"
-GArg = struct<.n Int, .in In1>
+GArg = struct{{.n Int, .in In1}}
 step = (s : GArg) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))

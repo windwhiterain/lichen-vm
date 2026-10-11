@@ -2,6 +2,8 @@
 
 use lichen_kernel_ir::KernelFragment;
 
+use crate::refusal::FragmentShape;
+
 /// One value a node produces, named by its position in the graph's value table.
 ///
 /// # Invariant
@@ -127,6 +129,37 @@ impl Graph {
         &self.nodes
     }
 
+    /// Replace a kernel node's `fragment`, leaving the rest of the graph as it was.
+    ///
+    /// # Invariant
+    /// A replacement's `inputs`, `outputs` and `param_shape.flat_arity()` must equal the
+    /// node's: those are the facts the graph's edges, its value numbering and a launch's
+    /// scalar leaves were built against, and every other field is the body's own. Nothing
+    /// else is touched, so the value count, the return, the edges and the node order are
+    /// the same afterwards.
+    pub fn replace_kernel(
+        &mut self,
+        node: usize,
+        fragment: KernelFragment,
+    ) -> Result<(), crate::GraphRefusal> {
+        use crate::GraphRefusal;
+        let nodes = self.nodes.len();
+        let held = self
+            .nodes
+            .get_mut(node)
+            .ok_or(GraphRefusal::NoSuchNode { node, nodes })?;
+        let kind = held.kind();
+        let Some(slot) = held.fragment_mut() else {
+            return Err(GraphRefusal::NotAKernelNode { node, found: kind });
+        };
+        let (had, got) = (FragmentShape::of(slot), FragmentShape::of(&fragment));
+        if had != got {
+            return Err(GraphRefusal::ShapeDisagrees { node, had, got });
+        }
+        *slot = fragment;
+        Ok(())
+    }
+
     /// How many values the graph defines in total.
     pub fn value_count(&self) -> usize {
         self.values
@@ -166,6 +199,24 @@ impl Node {
     pub fn outputs(&self) -> usize {
         match self {
             Node::Kernel(kernel) => kernel.fragment.outputs,
+        }
+    }
+
+    /// What kind of node this is, for a refusal that has to name it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Node::Kernel(_) => "a kernel node",
+        }
+    }
+
+    /// The fragment this node dispatches, if this kind of node dispatches one.
+    ///
+    /// # Invariant
+    /// An `Option` because the node enum is where a second kind would go: a kind that
+    /// carries no fragment is refused by name rather than being unreachable.
+    fn fragment_mut(&mut self) -> Option<&mut KernelFragment> {
+        match self {
+            Node::Kernel(kernel) => Some(&mut kernel.fragment),
         }
     }
 }

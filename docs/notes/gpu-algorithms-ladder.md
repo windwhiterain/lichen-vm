@@ -117,7 +117,7 @@ answers `parameterized`, on both backends, with no diagnostic. The `read` of a
 non-buffer stays a lazy `Index` that nothing ever forces; the `collect` of a
 value that is not a buffer is likewise lazy. A program written this way is a
 plausible-looking program that computes nothing, and its *type* still prints as
-`array<?a, ?b>`.
+`array{?a, ?b}`.
 
 > **Since this ladder: the silence is gone and the feature is not.** A decided
 > non-buffer at any of the three sites is refused by name now — see
@@ -255,7 +255,7 @@ escape, which is the whole difference:
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
      : (Int -> Int) -> Int -> Int -> Int
 inc = x => x + 1
-(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): tuple{Int, Int, Int}
 ```
 
 **So the operator is one annotated line of lichen and works today** on the

@@ -255,16 +255,16 @@ rewritten** rather than compared: the annotation's type was written into the
 instance's type cell, and
 
 ```lichen
-A  = I => struct<.n Int, .I I>
+A  = I => struct{.n Int, .I I}
 S1 = A Int
 S2 = A Float
 x  = S1(.n 3, .I 5)
 y  = (x : S2)
 ```
 
-printed `(3, 5): struct<.n Int, .I Float>` — the annotation's own type — instead
+printed `(3, 5): struct{.n Int, .I Float}` — the annotation's own type — instead
 of failing. With the step in place the same program is refused:
-`expected struct<.n Int, .I Float>#0, found struct<.n Int, .I Int>#0` — the
+`expected struct{.n Int, .I Float}#0, found struct{.n Int, .I Int}#0` — the
 refusal `pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity`
 pins.
 
@@ -318,7 +318,7 @@ expression's value, and there is no label-specific literal. A **`Doc`** is there
 plain, generic struct-typed value the *user* defines and constructs:
 
 ```lichen
-Doc = struct<.name string, .description string>
+Doc = struct{.name string, .description string}
 5 ? Doc(.name "five", .description "an int")
 ```
 

@@ -208,8 +208,8 @@ pub enum Expr {
     Tuple(Vec<Expr>, Span),
     /// `<T1, ..., Tn>` — a tuple type (angle brackets always produce one).
     TypeTuple(Vec<Expr>, Span),
-    /// `struct<.a Int, .b string>` — a nominal struct type; the field list is
-    /// optional (`struct<>`).
+    /// `struct{.a Int, .b string}` — a nominal struct type; the field list is
+    /// optional (`struct{}`).
     StructType(Vec<StructField>, Span),
     /// `C(.x 1, .y Int)` — struct instantiation; the `(` is adjacent to the
     /// callee (`C(e)` alone is a slot read).
@@ -228,7 +228,7 @@ pub enum Expr {
     Set(Vec<Expr>, Span),
     /// `@shallow e` — a shallow-marked position; `usize::MAX` is the bare form.
     Shallow(Box<Expr>, usize, Span),
-    /// `array<T, n>` — an array type: the element type `T` and the length `n`.
+    /// `array{T, n}` — an array type: the element type `T` and the length `n`.
     TypeArray {
         element_type: Box<Expr>,
         length: Box<Expr>,
@@ -283,7 +283,7 @@ pub struct Binding {
     pub looping: bool,
 }
 
-/// One field of a `struct<…>` type: an optional name plus the field's type.
+/// One field of a `struct{…}` type: an optional name plus the field's type.
 #[derive(Clone, Debug)]
 pub struct StructField {
     pub name: Option<String>,
