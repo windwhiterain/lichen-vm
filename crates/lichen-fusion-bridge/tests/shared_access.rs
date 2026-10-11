@@ -7,7 +7,7 @@
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape, LaneWidth,
-    ScalarClass, TargetFacts, ValueDef, ValueId,
+    ScalarClass, SharedSlot, TargetFacts, ValueDef, ValueId,
 };
 
 /// A body that writes one shared slot, leaving behind the version a read would name.
@@ -41,7 +41,10 @@ fn stages_a_shared_slot() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![ScalarClass::Int],
+        shared_slots: vec![SharedSlot {
+            class: ScalarClass::Int,
+            count: 64,
+        }],
         marks: Vec::new(),
     }
 }

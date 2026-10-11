@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use lichen_kernel_ir::{
-    KernelBin, KernelFragment, KernelId, KernelInstr, LaunchSet, ScalarClass, Terminator, ValueDef,
-    ValueId,
+    KernelBin, KernelFragment, KernelId, KernelInstr, LaunchSet, ScalarClass, SharedSlot,
+    Terminator, ValueDef, ValueId,
 };
 
 /// SPIR-V opcodes.  Not from memory: these are the `SpvOp*` values in the
@@ -495,18 +495,20 @@ struct BufferTypes {
     ptr_elem: u32,
 }
 
-/// The shared-memory type chain for one class: the slot's `Workgroup` array and its two pointers.
+/// The shared-memory type chain for one slot shape: the slot's `Workgroup` array and its two
+/// pointers.
 ///
 /// # Invariant
-/// A slot is a **fixed-size array**, not a scalar: a shared access names an element of it, and the
-/// length is the fragment's declared lane width, the same fact `OpExecutionMode LocalSize`
-/// states — a slot has room for exactly one element per lane. One chain per element class serves
-/// every slot of that class (`docs/notes/shared-memory-and-barriers.md` §4).
+/// A slot is a **fixed-size array**, not a scalar, and its length is the count the fragment
+/// declares for it: `len` is the `OpConstant` that count is declared with, defined before the
+/// type that names it, so the array a body is bounded by and the array this module declares are
+/// one number. Two slots that differ only in length are two shapes.
 #[derive(Clone, Copy)]
 struct SharedTypes {
     array: u32,
     ptr_array: u32,
     ptr_elem: u32,
+    len: u32,
 }
 
 /// Every module-scope id, allocated before anything is emitted.
@@ -565,12 +567,13 @@ struct Ids {
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
-    /// The per-class shared-memory type chain, keyed by [`ScalarClass::index`].
+    /// The shared-memory type chain, keyed by the slot shape it declares.
     ///
     /// # Invariant
-    /// One chain per class a shared slot holds, and an id nothing defines is legal: a class no slot
-    /// holds leaves its chain undefined and no `OpTypeArray` is emitted for it.
-    shared_types: [SharedTypes; ScalarClass::ALL.len()],
+    /// One chain per distinct [`SharedSlot`] a launch set stages, so two slots of one shape are
+    /// one `OpTypeArray`. The slot's ordinal is not a key: an id nothing defines is legal, and a
+    /// shape no slot has leaves no array emitted for it.
+    shared_types: HashMap<SharedSlot, SharedTypes>,
     /// The first of each function's own consecutive `Workgroup` variables, in the order the launch
     /// set is emitted.
     ///
@@ -578,8 +581,13 @@ struct Ids {
     /// **The slot space is the fragment's**: a shared access's ordinal indexes the variables of the
     /// function that reads it, so a callee's staging is not its caller's.
     shared: Vec<u32>,
-    /// The id of the `OpConstant` a slot's `OpTypeArray` takes its length from.
-    shared_len: u32,
+    /// One `(count, constant id)` pair per distinct slot length, in the order the shapes name them.
+    ///
+    /// # Invariant
+    /// An `OpTypeArray` names its length by id and a length can serve several shapes, so a constant
+    /// is declared once per distinct count — emitted in this order, because a map's own order is
+    /// not a function of the fragment and a module that differed between runs would not cache.
+    shared_lengths: Vec<(u32, u32)>,
     /// The barrier's three operands name these two ids: the scope constant, and the semantics.
     barrier_scope: u32,
     barrier_semantics: u32,
@@ -655,9 +663,9 @@ impl Ids {
         self.buffer_types[class.index()]
     }
 
-    /// The shared-memory type chain for `class`.
-    fn shared_of(&self, class: ScalarClass) -> SharedTypes {
-        self.shared_types[class.index()]
+    /// The shared-memory type chain for a slot of this shape.
+    fn shared_of(&self, slot: SharedSlot) -> SharedTypes {
+        self.shared_types[&slot]
     }
 }
 
@@ -757,22 +765,24 @@ fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<Scala
         .collect()
 }
 
-/// Every class a launch set's shared slots hold, in [`ScalarClass::ALL`] order.
+/// Every distinct slot shape a launch set stages, in the order the fragments name them.
 ///
 /// # Invariant
-/// The set the module declares a shared type chain for, and the condition a barrier belongs to: a
-/// launch set with no shared slot declares no `Workgroup` storage, no barrier and no shared
-/// constant.
-fn shared_classes(launch: &LaunchSet<'_>) -> Vec<ScalarClass> {
-    ScalarClass::ALL
-        .into_iter()
-        .filter(|class| {
-            launch
-                .ordered()
-                .iter()
-                .any(|fragment| fragment.shared_slots.contains(class))
-        })
-        .collect()
+/// The set the module declares a shared type chain and a length constant for: a launch set with no
+/// shared slot declares no `Workgroup` storage, no barrier and no array type. Deduplicated because
+/// two slots of one shape are one `OpTypeArray`, and ordered by first use so the ids a module
+/// assigns are a function of the fragment.
+fn shared_shapes(launch: &LaunchSet<'_>) -> Vec<SharedSlot> {
+    let mut seen = HashSet::new();
+    let mut shapes = Vec::new();
+    for fragment in launch.ordered().iter().copied() {
+        for slot in &fragment.shared_slots {
+            if seen.insert(*slot) {
+                shapes.push(*slot);
+            }
+        }
+    }
+    shapes
 }
 
 /// The class a fragment's arithmetic is built for, and the answer for one with no
@@ -880,26 +890,37 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let function_types = take(ordered.len() as u32);
     let functions = take(ordered.len() as u32);
     let buffers = take(binding.total() as u32);
-    // Three ids per shared class, then each function's own `Workgroup` variables.
-    let shared = shared_classes(launch);
-    let mut shared_types = [SharedTypes {
-        array: 0,
-        ptr_array: 0,
-        ptr_elem: 0,
-    }; ScalarClass::ALL.len()];
-    for used in &shared {
+    // Three ids per slot shape, one length constant per distinct count, then each function's own
+    // `Workgroup` variables.
+    let shared = shared_shapes(launch);
+    let mut shared_types: HashMap<SharedSlot, SharedTypes> = HashMap::new();
+    let mut length_ids: HashMap<u32, u32> = HashMap::new();
+    let mut shared_lengths: Vec<(u32, u32)> = Vec::new();
+    for shape in &shared {
         let base = take(3);
-        shared_types[used.index()] = SharedTypes {
-            array: base,
-            ptr_array: base + 1,
-            ptr_elem: base + 2,
+        let length = match length_ids.get(&shape.count) {
+            Some(&length) => length,
+            None => {
+                let length = take(1);
+                length_ids.insert(shape.count, length);
+                shared_lengths.push((shape.count, length));
+                length
+            }
         };
+        shared_types.insert(
+            *shape,
+            SharedTypes {
+                array: base,
+                ptr_array: base + 1,
+                ptr_elem: base + 2,
+                len: length,
+            },
+        );
     }
     let shared_variables: Vec<u32> = ordered
         .iter()
         .map(|fragment| take(fragment.shared_slots.len() as u32))
         .collect();
-    let shared_len = take(1);
     let barrier_scope = take(1);
     let barrier_semantics = take(1);
     // The push-constant block's ids: struct, pointer, variable, per-class
@@ -935,7 +956,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         buffers,
         shared_types,
         shared: shared_variables,
-        shared_len,
+        shared_lengths,
         barrier_scope,
         barrier_semantics,
         push_block,
@@ -2543,7 +2564,7 @@ fn assemble(
     ids: &Ids,
     binding: Binding,
     classes: &[ScalarClass],
-    shared: &[ScalarClass],
+    shared: &[SharedSlot],
     needs_int64: bool,
     literals: &[Inst],
     bodies: &[Vec<Inst>],
@@ -2690,18 +2711,15 @@ fn assemble(
         op::TYPE_POINTER,
         vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
     )]);
-    // A slot's `Workgroup` array: the lane width, defined before the type that names it.
-    if !shared.is_empty() {
-        types.push(Inst::new(
-            op::CONSTANT,
-            vec![ids.uint, ids.shared_len, lane_width],
-        ));
+    // A slot's `Workgroup` array is as long as the slot itself declares, never the lane width.
+    for &(count, length) in &ids.shared_lengths {
+        types.push(Inst::new(op::CONSTANT, vec![ids.uint, length, count]));
     }
-    for used in shared {
-        let chain = ids.shared_of(*used);
-        let scalar = ids.type_of(*used);
+    for shape in shared {
+        let chain = ids.shared_of(*shape);
+        let scalar = ids.type_of(shape.class);
         types.extend([
-            Inst::new(op::TYPE_ARRAY, vec![chain.array, scalar, ids.shared_len]),
+            Inst::new(op::TYPE_ARRAY, vec![chain.array, scalar, chain.len]),
             Inst::new(
                 op::TYPE_POINTER,
                 vec![chain.ptr_array, storage_class::WORKGROUP, chain.array],
@@ -2862,11 +2880,11 @@ fn assemble(
     }
     // **Shared memory is not bound**: a `Workgroup` variable gets no descriptor set or binding.
     for (position, fragment) in launch.ordered().iter().copied().enumerate() {
-        for (slot, class) in fragment.shared_slots.iter().enumerate() {
+        for (slot, shape) in fragment.shared_slots.iter().enumerate() {
             globals.push(Inst::new(
                 op::VARIABLE,
                 vec![
-                    ids.shared_of(*class).ptr_array,
+                    ids.shared_of(*shape).ptr_array,
                     ids.shared[position] + slot as u32,
                     storage_class::WORKGROUP,
                 ],
@@ -3042,7 +3060,7 @@ fn buffer_slot(
 /// # Invariant
 /// The slot is a compile-time ordinal into `fragment`'s **own** `shared_slots` — the rule a buffer
 /// position follows — and the index operand indexes the slot's `Workgroup` array, whose length is
-/// the fragment's declared lane width. A slot that is not a constant, or is past the fragment's
+/// the count that slot itself declares. A slot that is not a constant, or is past the fragment's
 /// own count, is refused by name rather than addressing another function's variable.
 fn shared_pointer(
     fragment: &KernelFragment,
@@ -3062,9 +3080,10 @@ fn shared_pointer(
         fragment.shared_slots.len(),
         "shared",
     )?;
-    let class = fragment.shared_slots[variable - base as usize];
+    let shape = fragment.shared_slots[variable - base as usize];
+    let class = shape.class;
     let index = as_class(index, ScalarClass::Int, ids, literals, code, next, at)?;
-    let chain = ids.shared_of(class);
+    let chain = ids.shared_of(shape);
     let pointer = *next;
     *next += 1;
     code.push(Inst::new(

@@ -3,7 +3,8 @@
 
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, ScalarClass, TargetFacts, Terminator, ValueDef, ValueId, from_flat,
+    KernelShape, LaneWidth, ScalarClass, SharedSlot, TargetFacts, Terminator, ValueDef, ValueId,
+    from_flat,
 };
 
 /// A one-parameter body: `p0 + first`, in SSA.
@@ -135,7 +136,10 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             "shared_slots",
             KernelFragment {
                 roles: KernelRoles::default(),
-                shared_slots: vec![ScalarClass::Int],
+                shared_slots: vec![SharedSlot {
+                    class: ScalarClass::Int,
+                    count: 64,
+                }],
                 ..base.clone()
             },
         ),
@@ -332,7 +336,7 @@ fn a_shared_write_and_a_read_by_another_index_are_a_pair() {
     );
     let lane = body.parameters()[0];
     let pairs = body
-        .barrier_scan(lane)
+        .barrier_scan(lane, &[])
         .expect("a lane-dependent write and a read at another index are well formed");
     assert_eq!(
         pairs,
@@ -360,7 +364,7 @@ fn a_shared_write_and_a_read_by_the_same_index_are_no_pair() {
     );
     let lane = body.parameters()[0];
     assert!(
-        body.barrier_scan(lane)
+        body.barrier_scan(lane, &[])
             .expect("a lane-dependent write and the same read index are well formed")
             .is_empty()
     );
@@ -380,11 +384,127 @@ fn a_shared_write_whose_index_excludes_the_lane_is_refused() {
     );
     let lane = body.parameters()[0];
     let refusal = body
-        .barrier_scan(lane)
+        .barrier_scan(lane, &[])
         .expect_err("every lane writes one slot, so the write is refused");
     assert!(refusal.contains("contended"), "names the cause: {refusal}");
     assert!(
         refusal.contains("lane parameter"),
         "names what it excludes: {refusal}"
+    );
+}
+
+/// A fragment staging one `Int` slot of `count` elements, over the body a test supplies.
+fn staging(count: u32, body: KernelBody) -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 0,
+        input_classes: Vec::new(),
+        output_classes: Vec::new(),
+        result_classes: vec![ScalarClass::Int],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        shared_slots: vec![SharedSlot {
+            class: ScalarClass::Int,
+            count,
+        }],
+        marks: Vec::new(),
+    }
+}
+
+/// An index the interval machinery cannot bound inside the slot is a GPU fault, refused by name.
+#[test]
+fn a_shared_index_that_may_leave_its_slot_is_refused() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let index = body.add_param(entry);
+    let slot = body.add_const(entry, ScalarClass::Int, 0);
+    let value = body.add_const(entry, ScalarClass::Int, 7);
+    let written = body.add_op(
+        entry,
+        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        vec![slot, index, value],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![written],
+        },
+    );
+    let lane = body.parameters()[1];
+    let refusal = staging(64, body)
+        .barrier_scan(lane)
+        .expect_err("the lane's own value reaches past a slot of 64");
+    assert!(
+        refusal.contains("may leave its slot"),
+        "names the cause: {refusal}"
+    );
+    assert!(
+        refusal.contains("64 element(s)"),
+        "names the length it leaves: {refusal}"
+    );
+}
+
+/// `i % 64` against a slot of 64 is in bounds, so the pair it stages is still recorded.
+#[test]
+fn a_shared_index_bounded_by_the_slot_is_accepted() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let index = body.add_param(entry);
+    let sixty_four = body.add_const(entry, ScalarClass::Int, 64);
+    let one = body.add_const(entry, ScalarClass::Int, 1);
+    let write_slot = body.add_const(entry, ScalarClass::Int, 0);
+    let offset = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![index, sixty_four],
+        vec![ScalarClass::Int],
+    );
+    let written = body.add_op(
+        entry,
+        KernelInstr::SharedWriteCall(ScalarClass::Int),
+        vec![write_slot, offset, one],
+        vec![ScalarClass::Int],
+    );
+    let read_slot = body.add_const(entry, ScalarClass::Int, 0);
+    let next = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![index, one],
+        vec![ScalarClass::Int],
+    );
+    let next_offset = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem),
+        vec![next, sixty_four],
+        vec![ScalarClass::Int],
+    );
+    let read = body.add_op(
+        entry,
+        KernelInstr::SharedReadCall(ScalarClass::Int),
+        vec![read_slot, next_offset, written],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(entry, Terminator::Return { values: vec![read] });
+    let lane = body.parameters()[1];
+    let pairs = staging(64, body)
+        .barrier_scan(lane)
+        .expect("a slot of 64 holds `i % 64`");
+    assert_eq!(
+        pairs,
+        vec![Barrier {
+            write: written,
+            read
+        }]
     );
 }

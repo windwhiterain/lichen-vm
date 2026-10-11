@@ -748,6 +748,22 @@ impl KernelInstr {
     }
 }
 
+/// One shared slot a fragment declares: the class of its elements and how many it holds.
+///
+/// # Invariant
+/// `count` is the length of the `Workgroup` array the emitter declares, and an index that may
+/// reach it is refused ([`KernelFragment::barrier_scan`]). The automatic path derives the count
+/// from `target.lane_width` — the only length a fragment can supply while the surface that names
+/// one (`Shared(.n)`) is unbuilt — and states it here rather than leaving the emitter to read a
+/// width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SharedSlot {
+    /// The class of one element of the slot.
+    pub class: ScalarClass,
+    /// How many elements the slot holds.
+    pub count: u32,
+}
+
 /// A compiled kernel-callable unit: a lowered body plus the facts a caller needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelFragment {
@@ -807,14 +823,14 @@ pub struct KernelFragment {
     /// crate carries as data rather than assumes — and [`fragment_digest`] hashes the whole
     /// struct, so a fact added here is in the digest by construction.
     pub target: TargetFacts,
-    /// The element class of each shared slot this body addresses, one entry per ordinal.
+    /// Each shared slot this body addresses, one entry per ordinal.
     ///
     /// # Invariant
     /// The length is the slot set: a [`KernelInstr::SharedWriteCall`]'s `slot` is an ordinal into
     /// it, as a buffer write's position is into `outputs`. It is not a target fact — the slots are
     /// the program's own memory — and [`fragment_digest`] hashes it: two fragments differing only
-    /// in their staging are two modules.
-    pub shared_slots: Vec<ScalarClass>,
+    /// in their staging are two modules. [`SharedSlot`] carries the extent an access is bounded by.
+    pub shared_slots: Vec<SharedSlot>,
     /// The marks expressions in the body carried, in the order the walk published them.
     ///
     /// # Invariant

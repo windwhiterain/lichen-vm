@@ -12,7 +12,8 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
-    KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, TargetFacts, Terminator,
+    KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, SharedSlot, TargetFacts,
+    Terminator,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -417,7 +418,10 @@ fn stages_between_lanes() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![ScalarClass::Int],
+        shared_slots: vec![SharedSlot {
+            class: ScalarClass::Int,
+            count: 64,
+        }],
         marks: Vec::new(),
     }
 }

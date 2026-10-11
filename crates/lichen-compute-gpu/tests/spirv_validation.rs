@@ -12,7 +12,8 @@ use std::process::{Command, Stdio};
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator, ValueDef, ValueId,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, SharedSlot, TargetFacts, Terminator, ValueDef,
+    ValueId,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -1249,7 +1250,10 @@ fn stages_a_shared_slot() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![ScalarClass::Int],
+        shared_slots: vec![SharedSlot {
+            class: ScalarClass::Int,
+            count: 64,
+        }],
         marks: Vec::new(),
     }
 }

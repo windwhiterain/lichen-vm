@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, TargetFacts,
+    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, SharedSlot,
+    TargetFacts,
 };
 
 /// A one-fragment launch set: every kernel here stands alone, and a set's
@@ -1113,7 +1114,10 @@ fn stages_a_shared_slot() -> KernelFragment {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
         },
-        shared_slots: vec![ScalarClass::Int],
+        shared_slots: vec![SharedSlot {
+            class: ScalarClass::Int,
+            count: 64,
+        }],
         marks: Vec::new(),
     }
 }

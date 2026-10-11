@@ -3,13 +3,18 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{Barrier, KernelBin, KernelBody, KernelInstr, ScalarClass, ValueDef, ValueId};
+use crate::{
+    Barrier, KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, SharedSlot, ValueDef,
+    ValueId,
+};
 
 /// A conservative bound on the slot index an expression takes over the lanes.
 ///
 /// # Invariant
-/// The index every lane computes lies inside `[low, high]`, so two intervals that do not
-/// intersect are two access sets that cannot meet — which is the only way this is read.
+/// The index every lane computes lies inside `[low, high]`, so two intervals that do not intersect
+/// are two access sets that cannot meet, and a high that reaches a slot's declared count is an
+/// access that may leave it. Both readings need the bound to be a superset: a bound that excludes
+/// a reachable slot is how a barrier goes missing.
 #[derive(Clone, Copy)]
 struct Interval {
     low: u64,
@@ -28,15 +33,32 @@ impl Interval {
     }
 }
 
+impl KernelFragment {
+    /// The pairs this fragment's shared accesses need a barrier between.
+    ///
+    /// # Invariant
+    /// The extents the body's accesses are bounded by are this fragment's own
+    /// [`Self::shared_slots`], so an index that may leave its slot is refused against the length
+    /// the emitter declares rather than one a caller supplied.
+    pub fn barrier_scan(&self, lane: ValueId) -> Result<Vec<Barrier>, String> {
+        self.body.barrier_scan(lane, &self.shared_slots)
+    }
+}
+
 impl KernelBody {
     /// The pairs this body's shared accesses need a barrier between.
     ///
     /// # Invariant
-    /// `lane` is the parameter the invocation index arrives as, which a body cannot name and the
-    /// caller states. A pair is returned when the read observes the write, the writer may be
-    /// another lane, the addresses may coincide, and no recorded barrier between them settles it.
-    /// A shared write whose index's definition cone excludes `lane` is refused.
-    pub fn barrier_scan(&self, lane: ValueId) -> Result<Vec<Barrier>, String> {
+    /// `lane` is the parameter the invocation index arrives as and `slots` the slot extents the
+    /// fragment declares; a body states neither, so the caller does. A pair is returned when the
+    /// read observes the write across lanes, at addresses that may coincide, with no recorded
+    /// barrier between them; a contended write, and an access whose index may leave its slot,
+    /// are refused.
+    pub fn barrier_scan(
+        &self,
+        lane: ValueId,
+        slots: &[SharedSlot],
+    ) -> Result<Vec<Barrier>, String> {
         let order = self.walk_order();
         let position: HashMap<ValueId, usize> = order
             .iter()
@@ -44,8 +66,8 @@ impl KernelBody {
             .map(|(at, &value)| (value, at))
             .collect();
         let incoming = self.incoming_arguments();
-        self.refuse_bad_shared_accesses(&order, lane, &incoming)?;
         let mut memo = HashMap::new();
+        self.refuse_bad_shared_accesses(&order, lane, &incoming, slots, &mut memo)?;
         // **A recorded barrier is already between them**: the scan is a function of the body, not
         // of how often it has run.
         let mut separated: HashMap<u64, usize> = HashMap::new();
@@ -128,6 +150,8 @@ impl KernelBody {
         order: &[ValueId],
         lane: ValueId,
         incoming: &[Vec<Vec<ValueId>>],
+        slots: &[SharedSlot],
+        memo: &mut HashMap<ValueId, Interval>,
     ) -> Result<(), String> {
         for &value in order {
             let Some(ValueDef::Instr { op, args, .. }) = self.values.get(value.0 as usize) else {
@@ -135,6 +159,7 @@ impl KernelBody {
             };
             match op {
                 KernelInstr::SharedWriteCall(_) => {
+                    self.refuse_escaping_slot(value, "write", args, slots, memo)?;
                     let Some(&index) = args.get(1) else {
                         continue;
                     };
@@ -148,6 +173,7 @@ impl KernelBody {
                     }
                 }
                 KernelInstr::SharedReadCall(_) => {
+                    self.refuse_escaping_slot(value, "read", args, slots, memo)?;
                     let observed = args.get(2).copied();
                     let names_a_write = observed.is_some_and(|observed| {
                         matches!(
@@ -171,6 +197,43 @@ impl KernelBody {
             }
         }
         Ok(())
+    }
+
+    /// A shared access whose index interval may leave its slot, refused by name.
+    ///
+    /// # Invariant
+    /// The bound is the count the fragment declares for the slot, and `count` is at least one, so
+    /// a reach of `count` or more addresses past the `Workgroup` array — a fault no barrier orders
+    /// and `spirv-val` cannot see. An access to a slot the table does not reach is not bounded
+    /// here; a constant slot ordinal past the set is the emitter's refusal.
+    fn refuse_escaping_slot(
+        &self,
+        value: ValueId,
+        what: &str,
+        args: &[ValueId],
+        slots: &[SharedSlot],
+        memo: &mut HashMap<ValueId, Interval>,
+    ) -> Result<(), String> {
+        let Some(&index) = args.get(1) else {
+            return Ok(());
+        };
+        let Some(count) = self
+            .shared_slot(value)
+            .and_then(|ordinal| slots.get(ordinal as usize))
+            .map(|slot| slot.count)
+        else {
+            return Ok(());
+        };
+        let reach = self.interval(index, memo).high;
+        if reach < u64::from(count) {
+            return Ok(());
+        }
+        Err(format!(
+            "the shared {what} {value:?} may leave its slot: the index {index:?} reaches {reach} \
+             and the slot holds {count} element(s), so the access can address past the \
+             `Workgroup` array — a fault no barrier orders and `spirv-val` cannot see \
+             (`docs/notes/shared-memory-and-barriers.md` §9)"
+        ))
     }
 
     /// Whether `value`'s definition cone reaches `lane`.

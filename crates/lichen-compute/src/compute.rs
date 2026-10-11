@@ -6100,7 +6100,7 @@ mod parallel_launch_tests {
     use super::*;
     // **`KernelBody` and `FlatOp` reach a hand-written body**, which is the test's own
     // construction.
-    use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId};
+    use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId, SharedSlot};
 
     /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1`, `out1[i] = i + i`.
     ///
@@ -6179,7 +6179,10 @@ mod parallel_launch_tests {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
             },
-            shared_slots: vec![ScalarClass::Int],
+            shared_slots: vec![SharedSlot {
+                class: ScalarClass::Int,
+                count: 64,
+            }],
             marks: Vec::new(),
         }
     }

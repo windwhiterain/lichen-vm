@@ -484,8 +484,17 @@ early. They do not: there is no bounds test, so every lane runs the whole shader
 and reaches every barrier, and a partial group's barrier is arrived at by all 64.
 What remains a hang is a barrier under **divergent** control flow, which is a
 refusal and not a padding question — see
-[shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-is-already-discharged-for-free).
+[shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-convergence-is-free-the-slots-content-is-not).
 There is no barrier in the emitter today; that section records where one goes.
+
+**What the padding does not discharge is what the surplus lanes *write*.** A padded
+lane runs the whole shader, so it runs every `swrite` too, at the index its own
+invocation id computes — and a shared slot is not an ABI output whose surplus
+element is never read back: a real lane's read can reach an element only a surplus
+lane wrote, and then the staged value is the padding's. That obligation, and the
+staged exchange that shows it, are recorded in
+[shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-convergence-is-free-the-slots-content-is-not);
+no barrier and no `spirv-val` run can see it.
 
 **An uninitialised output buffer is safe only because a write is reached by every
 invocation.** `dispatch` allocates output buffers and does not initialise them, so
