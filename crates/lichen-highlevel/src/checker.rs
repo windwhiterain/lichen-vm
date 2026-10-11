@@ -196,6 +196,12 @@ where
     /// The shared `[string, Type]` type expression, paired into every `Str`
     /// literal.
     string_type: NodeId,
+    /// The shared wildcard value node: a compound type's unconstrained positions.
+    ///
+    /// # Invariant
+    /// One node is enough: unification neither merges nor writes it, so no class
+    /// can bind it and no use is distinguishable from another.
+    any_value: NodeId,
     /// The canonical universe `[Type, ↺]`.
     type_expr: NodeId,
     // The two shared index constants.
@@ -479,6 +485,7 @@ where
             int_type: NodeId::default(),
             float_type: NodeId::default(),
             string_type: NodeId::default(),
+            any_value: NodeId::default(),
             type_expr: NodeId::default(),
             zero_value: NodeId::default(),
             one_value: NodeId::default(),
@@ -671,6 +678,8 @@ where
         self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
         self.float_type = self.array_node(root, &[self.markers.float_marker, self.type_expr]);
         self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
+        // The wildcard: one node, because unification neither merges nor writes it.
+        self.any_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::Any)));
         // The positional-read constants, the subscripts of `Index(pair, 0)` and
         // `Index(pair, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
@@ -687,6 +696,11 @@ where
     /// read uses.
     pub(super) fn one(&self) -> NodeId {
         self.one_value
+    }
+
+    /// The shared wildcard value node — the `@any` spelling's value.
+    pub(super) fn any(&self) -> NodeId {
+        self.any_value
     }
 
     /// A constant `USize` node — a subscript or table key a rule states rather

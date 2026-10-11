@@ -442,8 +442,17 @@ fn typed_tuple_is_a_kinded_tuple() {
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
-    assert!(is_int_type(&b, shape_ids[0]));
-    assert!(is_int_type(&b, shape_ids[1]));
+    // Each shape element is an element slot `[value, type, attrs…]`, so the
+    // element's type is its slot's type position.
+    for slot in shape_ids {
+        let slot_ids = array_ids(&b, slot);
+        assert_eq!(slot_ids.len(), 3, "the value, the type, one attribute");
+        assert!(is_int_type(&b, slot_ids[1]));
+        assert!(matches!(
+            b.module.node_value(AnyNodeId::Dynamic(slot_ids[0])),
+            Some(HighProgramValue::LowValue(LowValue::Any))
+        ));
+    }
     let kind_ids = array_ids(&b, ids[1]);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
@@ -1008,13 +1017,16 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     let b = build(whole, ir);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
-    // The resolved root type is the tuple type `<Int, Type>`.
+    // The resolved root type is the tuple type `<Int, Type>`; each element's
+    // type is its slot's type position.
     let pair = array_ids(&b, b.root_ty);
     assert_eq!(pair.len(), 2);
     let shape = array_ids(&b, pair[0]);
-    assert!(is_int_type(&b, shape[0]), "element 0's cell syncs to int");
+    let e0 = array_ids(&b, shape[0]);
+    assert!(is_int_type(&b, e0[1]), "element 0's cell syncs to int");
+    let e1 = array_ids(&b, shape[1]);
     assert_eq!(
-        b.module.node_value(AnyNodeId::Dynamic(shape[1])),
+        b.module.node_value(AnyNodeId::Dynamic(e1[1])),
         b.module.node_value(AnyNodeId::Dynamic(b.type_expr)),
         "element 1's cell syncs to Type's"
     );
@@ -1552,22 +1564,21 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    // The two shapes are the same field-type list, so the nominal distinction
-    // lives at the kind's marker slot.
+    // A bare field list against a slot list; the marker-level clash is
+    // `two_struct_type_occurrences_do_not_unify`'s.
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
-    assert!(
-        matches!(
-            (&a, &b),
-            (
-                Some(HighProgramValue::LowValue(LowValue::Array(_))),
-                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
-            ) | (
-                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
-                Some(HighProgramValue::LowValue(LowValue::Array(_)))
-            )
-        ),
-        "marker-level nominal clash: got {a:?} vs {b:?}"
+    let item_count = |value: &Option<HighProgramValue>| match value {
+        Some(HighProgramValue::LowValue(LowValue::Array(array))) => {
+            // SAFETY: the value was just read from a live node of `module`.
+            Some(unsafe { array.items() }.len())
+        }
+        _ => None,
+    };
+    assert_eq!(
+        (item_count(&a), item_count(&b)),
+        (Some(2), Some(3)),
+        "a bare field type against an element slot: got {a:?} vs {b:?}"
     );
 }
 

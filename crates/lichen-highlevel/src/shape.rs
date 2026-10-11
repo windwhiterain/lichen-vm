@@ -12,8 +12,9 @@ use lichen_lowlevel::{
 };
 use lichen_utils::extend::AsEnum;
 
+use crate::attr::AttrSet;
 use crate::ir::LocStep;
-use crate::program::ValueType;
+use crate::program::{HighProgram, ValueType};
 
 // --- the kind-marker registry ---
 //
@@ -88,6 +89,17 @@ pub const fn attr_slot(index: usize) -> usize {
 /// [`attr_slot`].
 pub const fn attr_index(slot: usize) -> usize {
     slot - PAIR_ATTR_BASE
+}
+
+/// The **element-slot width** of a compound type: the value, the type, and one
+/// slot per attribute.
+///
+/// # Invariant
+/// Every element of every compound kind has this width, so a written type's
+/// slots and a value's unify however few positions either one spells. See
+/// `docs/notes/compound-element-slots.md`.
+pub fn slot_width<P: HighProgram>() -> usize {
+    PAIR_ATTR_BASE + P::Attr::ORDER.len()
 }
 
 // --- kinded-type layout: `[shape, kind]` with kind `[marker, universe]` ------
@@ -503,6 +515,34 @@ impl TypeRef {
     }
 }
 
+/// The type an element **slot** names — its own `type` position.
+pub fn slot_type<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Option<AnyNodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    unsafe { array_items(module, slot) }?
+        .get(PAIR_TYPE_SLOT)
+        .map(|item| item.node)
+}
+
+/// Which layout a compound type's shape elements have. See
+/// `docs/notes/compound-element-slots.md`.
+///
+/// # Invariant
+/// The layout is the **kind's** decision, so the reader that already knows which
+/// kind it holds states it rather than re-deriving it from a node that may not be
+/// evaluated yet; the struct step makes every compound's element a slot and this
+/// enum goes with it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapeElements {
+    /// Each element is a bare type value — a struct type, today.
+    Types,
+    /// Each element is a `[value, type, attrs…]` slot — a tuple type, today.
+    Slots,
+}
+
 /// The **field-type list** of a value type — its term's shape: a struct's
 /// fields and a tuple's elements share the slot.
 pub fn field_list<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>
@@ -514,16 +554,23 @@ where
 
 /// The type at field position `k` of a value type. See
 /// `docs/notes/checker-encoding-instability.md`.
-pub fn field_type<P: Program>(module: &Module<P>, ty: TypeRef, k: usize) -> Option<AnyNodeId>
+pub fn field_type<P: Program>(
+    module: &Module<P>,
+    ty: TypeRef,
+    k: usize,
+    elements: ShapeElements,
+) -> Option<AnyNodeId>
 where
     P::Value: AsEnum<LowValue>,
 {
     let shape = field_list(module, ty)?;
     // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    unsafe { array_items(module, shape) }?
-        .get(k)
-        .map(|item| item.node)
+    let element = unsafe { array_items(module, shape) }?.get(k)?.node;
+    match elements {
+        ShapeElements::Types => Some(element),
+        ShapeElements::Slots => slot_type(module, element),
+    }
 }
 
 /// The **named fields** of a struct type, in field order, or `None`.
@@ -674,7 +721,8 @@ where
         return LowShape::Unknown;
     };
     if marker == P::Value::tuple_type_marker() {
-        // A tuple type's shape *is* its element-type list.
+        // A tuple type's shape *is* its element-slot list, so each element's
+        // type is its slot's type position.
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
@@ -684,7 +732,10 @@ where
         return LowShape::Tuple(
             elements
                 .iter()
-                .map(|element| low_type_of(module, element.node))
+                .map(|element| match slot_type(module, element.node) {
+                    Some(ty) => low_type_of(module, ty),
+                    None => LowShape::Unknown,
+                })
                 .collect(),
         );
     }

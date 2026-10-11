@@ -80,11 +80,11 @@ pub enum LowValue {
     /// **The wildcard**: it unifies with any value and constrains nothing.
     ///
     /// # Invariant
-    /// Unification against a class holding `Any` neither merges the classes nor writes
-    /// a value, so the wildcard never propagates and its node stays reusable across
-    /// every use. Every other reader treats it as **undecided** — evaluation answers
-    /// no value, and it states no low type — so a wildcard can never leak into a
-    /// computed result. See docs/notes/compound-element-slots.md.
+    /// Unification against a class holding `Any` neither merges nor writes, so the
+    /// wildcard never propagates and its node stays reusable. A value reader treats it
+    /// as **undecided** — no value, no low type — so it never leaks into a computed
+    /// result; the **concreteness verdict** alone takes it as decided, which is what
+    /// lets a written type be proven concrete and reused in place.
     Any,
 }
 
