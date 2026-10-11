@@ -4292,9 +4292,6 @@ fn class_name(class: ScalarClass) -> &'static str {
     match class {
         ScalarClass::Int => "Int",
         ScalarClass::Float => "Float",
-        ScalarClass::State => {
-            unreachable!("a state token carries nothing, so it is never a buffer element")
-        }
     }
 }
 
