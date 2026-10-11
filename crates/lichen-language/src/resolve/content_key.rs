@@ -275,6 +275,7 @@ impl KeyWriter {
                 perspective,
                 doc,
                 refinement,
+                marks,
                 ..
             } => {
                 self.u(16);
@@ -283,6 +284,10 @@ impl KeyWriter {
                 self.opt_expr(perspective);
                 self.opt_expr(doc);
                 self.opt_expr(refinement);
+                // A mark is part of what the source wrote.
+                for mark in marks {
+                    self.str(mark);
+                }
             }
             Expr::Arrow {
                 parameter,

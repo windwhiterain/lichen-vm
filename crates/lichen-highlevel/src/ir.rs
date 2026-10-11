@@ -7,9 +7,12 @@
 //! indices suffices. A `Checker` holds it as an `Arc<IR>`, which makes that
 //! read-only-ness compiler-checked.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use lichen_kernel_ir::ClaimRefusal;
 
 use crate::attr::{AttrSpec, NoAttr};
+use crate::marks::InterfaceInstance;
 use crate::program::{HighProgramLiteral, TypeOperator};
 
 /// The static schema of an expression: which attributes ride on its runtime
@@ -222,6 +225,26 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     pub schemas: Vec<SchemaId>,
     /// The interned schema table (see [`Schema`]); [`SchemaId`]s index it.
     pub schema_table: Vec<Schema<A>>,
+    /// The marks each expression carries, keyed by the expression they were written on.
+    ///
+    /// # Invariant
+    /// **A side table, not a kind.** A mark rides an expression without becoming one, so
+    /// every `match` on [`ExprKind`] is unchanged and no reader that does not want a mark
+    /// ever meets one. The payload is text, so a mark can never reach the pair layout
+    /// ([docs/notes/graph-fusion.md] §3).
+    pub marks: HashMap<ExprId, Vec<String>>,
+    /// The interface instance each kernel expression declares, keyed by that expression.
+    ///
+    /// # Invariant
+    /// Assembled once by [`IR::assemble_interfaces`] and read-only afterwards: the coverage
+    /// check happens there, so every instance here has every projection resolved.
+    pub claims: HashMap<ExprId, InterfaceInstance>,
+    /// What the assembly refused, as the kernel expression and the reason.
+    ///
+    /// # Invariant
+    /// A refusal is reported, never silently dropped: a claim that cannot be read is a
+    /// mistake at the declaration, and the report names it.
+    pub claim_refusals: Vec<(ExprId, ClaimRefusal)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -420,11 +443,12 @@ pub enum ExprKind<L> {
     /// builds the table eagerly — keys must be deep-evaluated to hash them — and
     /// drops an entry whose key is not concrete.
     Table(ChildRange),
-    /// An array instance with `~`-marked positions — `[v1, ~ v2, ~2 v3]`.
+    /// An array instance with `@shallow`-marked positions — `[v1, @shallow v2,
+    /// @shallow(2) v3]`.
     ///
     /// # Invariant
     /// Typed like a tuple, not an [`Self::Array`]: a homogeneous element type
-    /// would reject `[x, ~ f(x+1)]` with an `Int` head and a `Stream` tail.
+    /// would reject `[x, @shallow f(x+1)]` with an `Int` head and a `Stream` tail.
     ShallowArray {
         range: ChildRange,
         depths: ChildRange,
@@ -681,6 +705,9 @@ impl<A: AttrSpec, L> IR<A, L> {
             // Slot 0 is always the default (empty-tail) schema, so a fresh
             // `alloc` (which stamps `SchemaId(0)`) needs no write.
             schema_table: vec![Schema::default()],
+            marks: HashMap::new(),
+            claims: HashMap::new(),
+            claim_refusals: Vec::new(),
         }
     }
 
@@ -894,6 +921,10 @@ impl<A: AttrSpec, L> IR<A, L> {
             self.root = to;
         }
         self.block_roots.remove(&from);
+        // A mark rides the expression it was written on, so it re-points with it.
+        if let Some(marks) = self.marks.remove(&from) {
+            self.marks.entry(to).or_default().extend(marks);
+        }
     }
 }
 

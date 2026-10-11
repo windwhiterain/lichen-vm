@@ -143,6 +143,9 @@ pub(crate) fn compile_resolved_with_cells(
     // No tuple cascade at the top level: the statement ids go to `stmt_roots`.
     compiler.ir.set_stmt_roots(statements);
     compiler.ir.set_root(final_id);
+    // **The interface instances are assembled here**, once the whole program
+    // is lowered.
+    compiler.ir.assemble_interfaces();
     (compiler.ir, compiler.spans, compiler.compiled_cells)
 }
 
@@ -652,6 +655,7 @@ impl Compiler {
                 perspective,
                 refinement,
                 doc,
+                marks,
                 span,
             } => {
                 let value = self.compile_expr(value);
@@ -670,10 +674,20 @@ impl Compiler {
                 spelled.sort_by_key(|(marker, _)| marker.order_index());
                 let tail: Vec<LangAttr> = spelled.iter().map(|(marker, _)| *marker).collect();
                 let attrs: Vec<ExprId> = spelled.into_iter().map(|(_, value)| value).collect();
-                let id = self.alloc_annotation(value, r#type, &attrs, span);
-                // The attribute tail stamps the annotated node's static schema.
-                if !tail.is_empty() {
-                    self.ir.set_schema(id, Schema { tail });
+                // **A mark allocates nothing**: it is a side table entry against the
+                // expression it was written on.
+                let id = if r#type.is_none() && attrs.is_empty() {
+                    value
+                } else {
+                    let id = self.alloc_annotation(value, r#type, &attrs, span);
+                    // The attribute tail stamps the annotated node's static schema.
+                    if !tail.is_empty() {
+                        self.ir.set_schema(id, Schema { tail });
+                    }
+                    id
+                };
+                for mark in marks {
+                    self.ir.add_mark(id, mark.clone());
                 }
                 id
             }

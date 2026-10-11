@@ -276,54 +276,95 @@ fn an_overflowing_literal_is_a_lex_error() {
 }
 
 #[test]
-fn a_tilde_is_a_shallow_marker_token() {
+fn an_at_shallow_is_the_shallow_marker_token() {
     assert_eq!(
-        kinds("[1, ~ f (x + 1), ~2 y]"),
+        kinds("[1, @shallow f (x + 1), @shallow(2) y]"),
         vec![
             TokenKind::LBracket,
             TokenKind::Int(1),
-            TokenKind::Tilde(usize::MAX),
+            TokenKind::KwShallow,
             TokenKind::Name("f".to_string()),
             TokenKind::LParen,
             TokenKind::Name("x".to_string()),
             TokenKind::Plus,
             TokenKind::Int(1),
             TokenKind::RParen,
-            TokenKind::Tilde(2),
+            TokenKind::KwShallow,
+            TokenKind::LParen,
+            TokenKind::Int(2),
+            TokenKind::RParen,
             TokenKind::Name("y".to_string()),
             TokenKind::RBracket,
             TokenKind::Eof,
         ]
     );
     assert_eq!(
-        kinds("~0 x"),
+        kinds("@shallow(0) x"),
         vec![
-            TokenKind::Tilde(0),
+            TokenKind::KwShallow,
+            TokenKind::LParen,
+            TokenKind::Int(0),
+            TokenKind::RParen,
             TokenKind::Name("x".to_string()),
             TokenKind::Eof
         ]
     );
+    // The depth parens are a **glued** postfix, so a spaced `(` is the
+    // element itself rather than a depth.
     assert_eq!(
-        kinds("~ 1"),
+        kinds_all("@shallow(2) x"),
         vec![
-            TokenKind::Tilde(usize::MAX),
-            TokenKind::Int(1),
+            TokenKind::KwShallow,
+            TokenKind::Glue,
+            TokenKind::LParen,
+            TokenKind::Int(2),
+            TokenKind::RParen,
+            TokenKind::Name("x".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds("@shallow (2)"),
+        vec![
+            TokenKind::KwShallow,
+            TokenKind::LParen,
+            TokenKind::Int(2),
+            TokenKind::RParen,
             TokenKind::Eof
         ]
     );
 }
 
 #[test]
+fn a_tilde_is_the_mark_sigil() {
+    assert_eq!(
+        kinds("e ~ \"combine\""),
+        vec![
+            TokenKind::Name("e".to_string()),
+            TokenKind::Tilde,
+            TokenKind::Str("combine".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn an_overflowing_shallow_depth_is_a_lex_error() {
-    // An out-of-range depth must not become the bare `~` (`usize::MAX`); report
-    // and drop it, like an `Int`.
-    let source = "~99999999999999999999999999999999999999 x";
+    // The depth is an integer literal, so an out-of-range depth is the
+    // `Int` lexer's own refusal.
+    let source = "@shallow(99999999999999999999999999999999999999) x";
     let lexed = lex(source);
     assert_eq!(lexed.errors.len(), 1);
-    assert_eq!(lexed.errors[0].message, "shallow marker depth out of range");
+    assert_eq!(lexed.errors[0].message, "integer literal out of range");
     assert_eq!(
         kinds(source),
-        vec![TokenKind::Name("x".to_string()), TokenKind::Eof]
+        vec![
+            TokenKind::KwShallow,
+            TokenKind::LParen,
+            TokenKind::RParen,
+            TokenKind::Name("x".to_string()),
+            TokenKind::Eof
+        ]
     );
 }
 

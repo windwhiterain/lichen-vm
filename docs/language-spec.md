@@ -45,7 +45,7 @@ sep      := newline | ';' | ','                      -- one uniform Separator to
 
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
-annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), refinement ('!'), and/or doc ('?') annotation, right-assoc
+annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow) | ('~' str_literal))*   -- type (':'), perspective ('#'), refinement ('!'), doc ('?') and/or mark ('~') annotation, right-assoc; each wraps the whole expression to its left
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
 cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=' | '@in') bits)*   -- comparison and set membership, left-assoc; yield 0/1
 bits     := bitxor ('|' bitxor)*                    -- bitwise or
@@ -82,7 +82,7 @@ postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '{' expr '}'                     -- table lookup  t{k}
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
-element  := '~'n? expr                              -- shallow marker (inside array literals only)
+element  := '@shallow' glued '(' n ')' expr           -- shallow marker, bare or with a depth (inside array literals only)
 pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
            | expr                                   -- a bare expression statement: never a struct field
@@ -93,13 +93,12 @@ farg     := '.' name expr                         -- named instantiation argumen
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `=>`, `->`, `:`.  The
-  `@`-led keywords — `@loop`, `@assert`, and the membership operator `@in` — are
+  `@`-led keywords — `@loop`, `@assert`, `@shallow`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
   The
   two conversion keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
-  `$`, `::`, `==>`,
-  `~`, `!`, and the
+  `$`, `::`, `==>`, `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
   it may reference and recurse with the block's other bindings) and gets the
@@ -250,9 +249,22 @@ farg     := '.' name expr                         -- named instantiation argumen
   `Num = set{Int, Float}` ([operator-polymorphism](notes/operator-polymorphism.md)
   §3).
 - **Shallow markers.**  Inside an array literal, an element may be prefixed
-  with `~` (`~e`, `~2 e`): a *shallow* marker that keeps the value slot at
-  each of the first `n` levels of the element's type spine shallow (a bare
-  `~` marks the whole subtree).  `~` is accepted nowhere else.
+  with `@shallow` (`@shallow e`, `@shallow(2) e`): a *shallow* marker that keeps
+  the value slot at each of the first `n` levels of the element's type spine
+  shallow (a bare `@shallow` marks the whole subtree).  The depth's parens are a
+  **glued** postfix, like every other postfix form in the language, so
+  `@shallow (2)` is the element `(2)` and not a depth; `@shallow` is accepted
+  nowhere else.
+- **Marks (`~`).**  `expr ~ "text"` is a **mark**: compile-time metadata pinned to
+  the expression it is written on.  It is not an attribute and never becomes a
+  value — no pair slot, no unification, no propagation, no evaluation — and the
+  payload is a string literal, never an expression, because a mark the compiler
+  cannot place is not a mark.  Several marks may pin one expression
+  (`e ~ "a" ~ "b"`), they accumulate, and each wraps the whole expression to its
+  left exactly as `#` and `?` do.  Today the only reader is the interface claim
+  of graph fusion, which spells its payload `claim:Interface(role,…)`
+  ([graph-fusion](notes/graph-fusion.md) §3); the payload's meaning is that
+  reader's, not the language's.
 - **Native operators.**  `$name(args…)` is an atom: a `$`, a plain name, and a
   parenthesized comma-separated argument list — `$jit(f)`, `$launch(f, n)`,
   `$noop()`.  A trailing separator is tolerated, there is no named-argument
@@ -805,7 +817,8 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
-| `[e1, ~e2, ~2 e3]` | `ShallowArray { range, depths }` — any `~`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `~`, n = the value slot shallow at the first n levels of the element's type spine) |
+| `[e1, @shallow e2, @shallow(2) e3]` | `ShallowArray { range, depths }` — any `@shallow`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `@shallow`, n = the value slot shallow at the first n levels of the element's type spine) |
+| `e ~ "text"` | **no kind at all** — a mark is an entry in `IR::marks` keyed by `e`'s `ExprId`, and the expression lowers to what it would lower to without it.  An annotation node is allocated only when the chain also spells a type, a perspective, a refinement or a doc |
 | `array<T, n>` | `TypeArray { element_type, length }` |
 | `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |

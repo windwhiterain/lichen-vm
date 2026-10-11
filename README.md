@@ -168,7 +168,7 @@ a = x => (1, Int)(x)
   order = "2"
   output = "(raw 1, raw 2, raw 3): <?a, ?b, ?c>"
 ---
-f = x => [x, ~ f (x + 1)]
+f = x => [x, @shallow f (x + 1)]
 inf = f 0
 (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))
 ```

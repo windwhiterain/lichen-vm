@@ -64,9 +64,9 @@ reject it.  `X<e>` is the escape hatch for generic code that inspects type value
 ## Recovered measurements
 
 - The shallow array is typed as a tuple for a measured reason: a homogeneous `Array`
-  type would reject `[x, ~ f(x+1)]` with an `Int` head and a `Stream` tail.  A bare `~`
-  position's whole subtree stays lazy in the deep pass, and a read forces the single
-  element on demand.
+  type would reject `[x, @shallow f(x+1)]` with an `Int` head and a `Stream` tail.  A
+  bare `@shallow` position's whole subtree stays lazy in the deep pass, and a read forces
+  the single element on demand.
 - The out-of-bounds *slot* read this form replaced is now unreachable: it read the
   container's element as a one-element array whose type slot 1 is missing, and a
   tuple-kinded value's components are always `[value, type]` pairs.  `X::a` is the same

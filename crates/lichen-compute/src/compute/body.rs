@@ -7,11 +7,12 @@
 //! buffer ordinals a backend reads are [`Positions`], filled by this walk so
 //! that the fragment's input and output classes cannot disagree.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::program::ValueType;
 use lichen_kernel_ir::{
-    Br, KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
+    Br, KernelBin, KernelBody, KernelInstr, KernelMark, KernelShape, MarkField, ScalarClass,
+    Terminator, ValueId,
 };
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
@@ -67,6 +68,12 @@ pub struct Lower<'a, P: Program> {
     depth: usize,
     /// The class each emitted value was declared in, keyed by the node it came from.
     classes: HashMap<NodeId, ScalarClass>,
+    /// The nodes whose marks have already been published, keyed by the stamped node.
+    ///
+    /// # Invariant
+    /// Keyed by the **anchor**, not by the lowered node: an expanded recurrence lowers one
+    /// anchor once per copy, and every copy is the same mark on the same expression.
+    published_marks: HashSet<NodeId>,
     /// The entry block's parameters' classes in flattening order; [`param_classes_of`]
     /// states whose list that is.
     leaf_classes: Vec<ScalarClass>,
@@ -168,6 +175,7 @@ where
             values: HashMap::new(),
             depth: 0,
             classes: HashMap::new(),
+            published_marks: HashSet::new(),
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
             block: entry,
@@ -221,6 +229,7 @@ where
             values: HashMap::new(),
             depth: 0,
             classes: HashMap::new(),
+            published_marks: HashSet::new(),
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
             block: entry,
@@ -251,6 +260,7 @@ where
         if let Some(index) = self.loop_owner(node)
             && let Some(value) = self.loop_value(index, node)?
         {
+            self.publish_mark(node, value);
             return Ok(value);
         }
         if let Some(&value) = self.values.get(&node) {
@@ -293,7 +303,12 @@ where
                 Some(value) => value,
                 None => match self.module.define_in(self.function, node) {
                     Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
-                    Define::Computed(definition) => self.definition(definition)?,
+                    Define::Computed(definition) => {
+                        let value = self.definition(definition)?;
+                        // Both ends of a definition edge can be the anchor.
+                        self.publish_mark(definition, value);
+                        value
+                    }
                     Define::Opaque => self.opaque(node)?,
                 },
             },
@@ -304,13 +319,40 @@ where
         if target.is_some() {
             self.block = enclosing;
         }
-        // A labelled value publishes its mark here, where its value is known.
-        if let Some(slot) = self.module.label_of(node) {
-            let mark = super::mark_of(self.module, value, slot)?;
-            self.tally.marks.push(mark);
-        }
+        self.publish_mark(node, value);
         self.values.insert(node, value);
         Ok(value)
+    }
+
+    /// Publish the marks `node` carries, once, against the value it produced.
+    ///
+    /// # Invariant
+    /// The lookup is a table read through the apply clone walk's origins, never a walk of
+    /// the body looking for marks, so a dispatched kernel's per-call clone publishes what
+    /// its template carries. **One `~ "text"` is one mark**, and the de-duplication is on
+    /// the *stamped* node: an expanded recurrence lowers one anchor once per copy, and
+    /// those copies are one mark.
+    fn publish_mark(&mut self, node: NodeId, value: ValueId) {
+        let Some((source, payloads)) = self.module.marks_at(node) else {
+            return;
+        };
+        if !self.published_marks.insert(source) {
+            return;
+        }
+        // Copied out: the table read borrows the module and the pushes borrow the tally.
+        let payloads: Vec<MarkField> = payloads
+            .iter()
+            .map(|text| MarkField {
+                name: None,
+                text: text.clone(),
+            })
+            .collect();
+        for payload in payloads {
+            self.tally.marks.push(KernelMark {
+                value,
+                payload: vec![payload],
+            });
+        }
     }
 
     // ------------------------------------------------------------------ loops
@@ -1412,9 +1454,10 @@ where
         // any emission.
         let (shape, callee_params, results) = {
             let fragments = kernels().lock().unwrap();
-            let fragment = fragments
+            let fragment = &fragments
                 .get(&kid)
-                .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
+                .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?
+                .fragment;
             (
                 fragment.param_shape.clone(),
                 param_classes(fragment),

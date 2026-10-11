@@ -12,13 +12,15 @@
 > The graph JIT this sits on is current
 > ([compute-graph-jit](compute-graph-jit.md)); the fusion mathematics is the
 > worked example in [reduction fusion](../reference/reduction%20fusion.typ)
-> (Neptune, PLDI'26); the attribute machinery that carries an interface claim
-> is current ([attributes](attributes.md)).
+> (Neptune, PLDI'26); the mark primitive that carries an interface claim is
+> current (`~`; `crates/lichen-highlevel/src/marks.rs`), and the attribute
+> machinery it deliberately bypasses is current
+> ([attributes](attributes.md)).
 >
 > Companions: [compute-graph-jit](compute-graph-jit.md) (the recorded graph this
 > rewrites), [lichen-compute](lichen-compute.md) (the fragment IR the engine
 > reads), [loop-conversion](loop-conversion.md) (the dynamic loop a fused
-> reduction body needs), [attributes](attributes.md) (the claim carrier),
+> reduction body needs), [attributes](attributes.md) (what a mark is not),
 > [artifact-cache](artifact-cache.md) (the content-addressed store schema
 > artifacts and packs ride on).
 
@@ -85,27 +87,59 @@ Reduction { combine, identity, element }   -- combine: associative, identity: it
 
 **The claim rides on the kernel, and the projections ride the kernel's own body.**
 Fusion operates on kernels, so the interface is declared at kernel granularity: the
-structural claim is a label on the kernel value, and every role the interface
-requires is a **mark** — the same `?` label slot — on the expression inside the
-kernel's body that *is* that projection. Spike spelling of the two:
+structural claim is a **mark** on the expression that produces the kernel, and every
+role the interface requires is a **mark** on the expression inside the kernel's body
+that *is* that projection. A mark is written `e ~ "payload"`, where the payload is a
+string literal. Spike spelling:
 
 ```lichen
--- the claim: which interface this kernel implements, and the roles it marks
+-- the claim: which interface this kernel implements, and the roles it requires
 producer_raw = (k : Par) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1)
-    else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ? "combine")
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (6, 0.0 ? "identity")))
+    else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (6, 0.0 ~ "identity")))
 }
-producer_raw ? Claim(.name "Reduction", .roles ("combine", "identity"))
+producer_raw ~ "claim:Reduction(combine,identity)"
 ```
 
 The kernel carries **a list of interface instances** — each an interface name and the
-roles it requires — and a body mark names the role it is the projection of. The
-spelling is the spike's interim syntax, not a decision: what is load-bearing is that
-the projections are *inside the body the claim is about*, so **a claim cannot diverge
-from the code it describes** — nothing is restated, and a body edit that changes the
-algebra changes the projection the mark points at.
+roles it requires — and a body mark names the role it is the projection of. What is
+load-bearing is that the projections are *inside the body the claim is about*, so **a
+claim cannot diverge from the code it describes** — nothing is restated, and a body
+edit that changes the algebra changes the projection the mark points at.
+
+### A mark is a compile-time primitive, not an attribute
+
+A mark **rides an expression**: it is a side table beside the IR tree, keyed by
+`ExprId`, and the expression lowers to exactly what it would lower to without it. There
+is no `ExprKind` for it, so every `match` on expression kinds is unchanged and a reader
+that does not want a mark never meets one. Three facts make this the right carrier, and
+each is a way the attribute slot was the wrong one:
+
+- **A mark never unifies.** An attribute slot is padded, propagated and
+  meet-combined; a mark must stay pinned to one expression, so it has no slot to
+  combine over. The checked form is the type, not a convention: the mark's payload is
+  **text**, and a table of text has no path to the pair layout at all.
+- **The interface check is structural, not a lattice.** Whether a claim's roles are
+  covered is a question about *which expressions the body marks*, answered by table
+  lookups over the IR — never a compare-and-combine over values.
+- **A label's pair is unreachable from its own value.** The checker makes an
+  annotated expression's *value node* the pair's element 0, so no graph edge points at
+  the pair and a reader holding the value cannot find the pair. That is why the
+  attribute channel needed a side table of its own (`Module::stamp_label`, the
+  clone-travel in `node_apply`, the GC retention) — all of which is gone with it.
+
+The one thing that *does* cross from the highlevel into the lowlevel is a mark's
+**position**, and it crosses in exactly one place: the anchor (`Checker::anchor_marks`
+in `crates/lichen-highlevel/src/checker.rs`). The anchor is *the node a reader walks* —
+the expression's own value node for a value expression, and a function template's
+parameter node for a claim, which is the one node of a function that an instantiation
+still names. A body the dispatcher compiles is a **clone**, so the clone carries
+nothing and `Module::marks_of` resolves it through its origin chain to the template's
+anchor; the claim is read at kernel-compile time, from the function being compiled, and
+stored in the kernel registry beside the fragment. The runtime kernel value carries
+nothing.
 
 Three facts make this minimal rather than merely small:
 
@@ -116,71 +150,73 @@ Three facts make this minimal rather than merely small:
   already lowers to a `KernelFragment` — an expression tree the engine can read,
   invert and distribute over. The interface surface is exactly the gap between what
   code says and what fusion needs.
-- **The claim is attached to the value, not to a name.** The `?` label rides the
-  expression's schema tail and its runtime pair ([attributes](attributes.md)), so it
-  survives inlining, renaming and reformatting, and it points at the dataflow, not at
-  a function somebody might rename. Renaming the function cannot detach the claim;
-  changing the algebra can (§4).
+- **The claim is attached to the expression, not to a name.** A mark rides the
+  expression's own IR id, so it survives inlining, renaming and reformatting, and it
+  points at the dataflow, not at a function somebody might rename. Renaming the
+  function cannot detach the claim; changing the algebra can (§4).
 - **A claim is checked, and a claim that cannot be checked is refused, not
   believed.** Where the body normalizes symbolically to the declared combine, the
   checker proves the instance; where it cannot, fusion of that instance is refused by
   name and the logic runs unfused. The refusal list (§6) is the interface layer's
   teeth: a wrong `combine` is a wrong answer, so the engine would rather fuse nothing.
 
-`matmul` needs no operator: its inner contraction is a loop annotated
-`Claim(.name "Reduction", .roles ("combine", "identity"))`. That is what makes
-attention's *third* reduction the same kind of citizen as softmax's two, without
-anyone having written the word `matmul` in an operator registry.
+`matmul` needs no operator: its inner contraction is a loop marked
+`~ "claim:Reduction(combine,identity)"`. That is what makes attention's *third*
+reduction the same kind of citizen as softmax's two, without anyone having written the
+word `matmul` in an operator registry.
 
-### What the mark channel cost, measured
+### What the mark channel cost, measured, and what closed
 
-The spike built the channel and measured where it stops. The findings, in the order
-they bite:
+The first spike built the channel over attributes and measured where it stopped. The
+five findings, and what this one did with each:
 
-- **A label's pair is reachable from nothing.** `Checker::check_ann` makes an
-  annotated expression's *value node* the pair's own element 0, so no graph edge
-  points at the pair, and a reader holding the value cannot find the label. The
-  checker therefore **publishes** the label against the value node
-  (`Module::stamp_label` / `Module::label_of`, `crates/lichen-lowlevel`), and the
-  build computes each slot's payload so a reader can read it.
-- **The kernel emitter reads the marks.** `Lower::value` asks
-  `Module::label_of` for every value it lowers and publishes what it finds as
-  `KernelFragment::marks` — a mark names the *fragment's* value and carries the
-  payload as text. The field is additive metadata: no backend reads it (a mark says
-  what a value means, not what the kernel computes), and `fragment_digest` hashes it
-  so two fragments differing only in their marks never share an id.
-- **A per-call clone loses the mark.** `compute.parallel f "cpu"` compiles a
-  *clone* of the body: the apply walk (`Module::node_apply`) mints fresh nodes, and
-  the checker's stamps are keyed by template nodes. Carrying the label across the
-  clone walk was attempted and is not enough: the clones the dispatcher's compile
-  walks have origins that are *not* the stamped expressions, so `marks` comes out
-  empty for the dispatched path while the same body compiled from the value the host
-  holds publishes its marks. What this needs is the emitter to resolve a mark through
-  the **value it lowered** rather than through the node it walked — i.e. a
-  class-level or origin-level lookup shared by both paths — and that is the one
-  change this spike did not land.
-- **A body cannot carry three marks today.** Two `?` marks in a `@loop` recurrence
-  together with a third mark in the same lambda fail to *parse*: the annotation level
-  and the loop's `if`-sugar interact, and only the count of marks triggers it (a
-  payload that is a record instead of a string triggers it at two). The spike spells
-  marks as bare strings for that reason, and writes the consumer's element function as
-  its own small kernel — a spelling the design admits (a projection is a function of
-  the datum and the producer's value) but not the one it prefers.
-- **A scalar element kernel's class is its body's.** `(p : <Float, Float>) =>
-  p(0) * p(1)` lowers its leaves in `Int`, because the body states no concrete float
-  operand, so the bridge refuses the projection by name (see
-  [floating-point](floating-point.md) §5.1). An element function that must be `Float`
-  has to carry a float operand of its own.
+- **A label's pair is reachable from nothing** — *closed, by not riding a pair at
+  all*. A mark's payload is text, so there is no slot node for the unreachable-pair
+  problem to exist in; the side table, the `node_apply` clone-travel and the GC
+  retention that worked around it are deleted.
+- **The kernel emitter reads the marks** — *kept, and it is now the only reader*.
+  `Lower::value` asks `Module::marks_at` for every value it lowers and publishes what
+  it finds as `KernelFragment::marks`. No backend reads the field (a mark says what a
+  value means, not what the kernel computes) and `fragment_digest` hashes it, so two
+  fragments differing only in their marks never share an id.
+- **A per-call clone loses the mark** — *closed, by the origin hop*. The dispatcher
+  compiles a **clone**, so the clone carries nothing; `Module::marks_at` walks the
+  clone's origin chain to the template node the checker anchored, which is the one
+  lookup both paths share. The lesson recorded from the first attempt: the anchor must
+  be **the node the reader walks**, never a node synthesized to read it. Anchoring on
+  `Checker::value_of` — which mints a fresh `Index(pair, 0)` — published marks on a
+  node no emitter ever lowers, and every body mark was silently lost. The anchor is
+  the expression's own value node, or its term for the kinds whose value is decided
+  only at the apply, and a **function** template's parameter node for a claim.
+- **A body cannot carry three marks** — *closed, by a fresh production*. `~` is its
+  own sigil at the annotation level with a string-literal payload, so `e ~ "a" ~ "b"`
+  is two marks and a `@loop` recurrence carries three (`combine`, `accumulator`,
+  `identity` in the spike's example) with no interaction with the `if`-sugar. The
+  payload is still a string rather than a record: text is what keeps the mark out of
+  the pair layout, so a record payload is a later decision, not a smaller one.
+- **A scalar element kernel's class is its body's** — *unchanged, and not the mark
+  channel's business*. `(p : <Float, Float>) => p(0) * p(1)` lowers its leaves in
+  `Int`, because the body states no concrete float operand, so the bridge refuses the
+  projection by name (see [floating-point](floating-point.md) §5.1). An element
+  function that must be `Float` has to carry a float operand of its own.
 
-The chain the spike *does* demonstrate end to end: a kernel's claim and its roles are
-read off the label (`crates/lichen-language/src/fusion_claim`), the fragment is
-compiled from the body, and a marked subexpression is bridged to
-`lichen_fusion::Expr` over `Variable::DATUM`, `Variable::PRODUCER` and
-`Variable::CONSUMER_STATE` by `crates/lichen-fusion-bridge`
-(`cargo run -p lichen-language --example reduction_interface` prints each step and
-each refusal; the in-body attribute channel is the same one the `Perspective`
-attribute needs, so axis C of [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md)
-inherits it).
+**One measurement is still open.** A mark reaches the fragment only where the emitter
+*lowers* its anchor: on the dispatched path the kernel compiler walks the clone the
+checker's definition pass already evaluated, so an expression whose value that pass
+decided is never lowered and its mark never publishes. In the spike's program that is
+the reduction's `identity` (`fold (6, 0.0 ~ "identity")`), because the entering call's
+state is read as a domain parameter rather than lowered — the `@loop` nest is not
+lowered on the dispatched path at all. The refusal is named
+(`RoleNotMarked { interface, role }`), and the fix is in the loop conversion rather
+than in the mark channel.
+
+The chain the spike *does* demonstrate end to end: a kernel's claim is read from the
+registry the compile filled and its roles from the fragment beside it
+(`crates/lichen-language/src/fusion_claim`), the fragment is the one the **dispatcher**
+compiled, and a marked subexpression is bridged to `lichen_fusion::Expr` over
+`Variable::DATUM`, `Variable::PRODUCER` and `Variable::CONSUMER_STATE` by
+`crates/lichen-fusion-bridge` (`cargo run -p lichen-language --example
+reduction_interface` prints each step and each refusal).
 
 ## 4. The schema: derived from the interface graph, stable under everything else
 
@@ -298,8 +334,8 @@ analyzable element-wise code `g(d_i, r_i, r_N)` depending on the producer's
 combine `f`):
 
 ```
-r   = … # Reduction(.combine op, .identity e_op)
-out = … # Reduction(.combine f,  .identity e_f)   over  i => g(d_i, r_i, r)
+r   = … ~ "claim:Reduction(combine,identity)"
+out = … ~ "claim:Reduction(combine,identity)"     over  i => g(d_i, r_i, r)
 ```
 
 The `r_N` inside `g` is what blocks naive fusion: the consumer's step needs
@@ -390,11 +426,11 @@ Walk attention *as production code writes it* through the engine — with a
 bias and a slope no operator vocabulary would carry:
 
 ```lichen
-scores = <contraction loop over k>   # Reduction(.combine add, .identity 0)
-m      = <row max loop>              # Reduction(.combine max, .identity neg_inf)
+scores = <contraction loop over k>   ~ "claim:Reduction(combine,identity)"
+m      = <row max loop>              ~ "claim:Reduction(combine,identity)"
 -- custom element-wise: exp(x + alibi·i − m), bias folded in — read, not declared
-s      = <sum loop over that>        # Reduction(.combine add, .identity 0)
-o      = <second contraction>        # Reduction(.combine add, .identity 0)
+s      = <sum loop over that>        ~ "claim:Reduction(combine,identity)"
+o      = <second contraction>        ~ "claim:Reduction(combine,identity)"
 ```
 
 - The engine matches `m → g → s`. Inversion on `g = exp((x + alibi·i) − m)`:
@@ -479,14 +515,14 @@ about shrinks exactly where fusion fires.
 | dependency | status | what this design needs from it |
 |---|---|---|
 | recorded graph, value table, policies | **in** ([compute-graph-jit](compute-graph-jit.md)) | the rewrite substrate, unchanged |
-| attributes with a checked payload | **in** ([attributes](attributes.md)) | the interface claim's carrier — and fusion becomes the first real *consumer* of the schema tail |
+| marks as a compile-time primitive | **in** (`~`; `crates/lichen-highlevel/src/marks.rs`, `crates/lichen-lowlevel`'s anchor table) | the interface claim's carrier — a side table beside the IR, never a value |
 | dynamic loop in a kernel body | **in** ([loop-conversion](loop-conversion.md)) | the fused reduction's inner loop |
 | fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of, and where an in-body mark is published (`KernelFragment::marks`) |
 | symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; `crates/lichen-fusion-bridge` carries a *marked subexpression* of a `KernelFragment` to it, for the arithmetic subset and the three slots a projection reads |
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
-| in-body marks surviving the dispatcher's compile | **missing** | §3's measured finding: a mark reaches the fragment when the body is compiled from the value a host holds, and is lost when `compute.parallel` compiles a per-call clone of it |
+| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement: the dispatched compile walks a clone the definition pass already evaluated, so an expression whose value that pass decided is not lowered and its mark does not publish (today the reduction's `identity`) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 
@@ -517,6 +553,11 @@ Settled by the superior's review of the first draft:
   It was rejected because the payload then restates the algebra beside the code that
   performs it — a claim free to diverge from the body — and because fusion operates on
   kernels, so a claim about a kernel should ride the kernel.
+- **A mark is a primitive, not an attribute** (§3). The carrier was the attribute slot
+  until it was measured: slots unify and the interface check is structural, and the
+  slot's pair is unreachable from the value it annotates. `~` is a side table beside
+  the expression tree, and the one thing that crosses into the lowlevel is its
+  position — the anchor, written once.
 
 Still open, cheapest to settle before the interface syntax is written:
 
@@ -526,12 +567,12 @@ Still open, cheapest to settle before the interface syntax is written:
   property harness is believed — more coverage, and the harness is one more
   artifact to define). This note is written symbolic-only; §3's
   `UnverifiableInstance` is where a second tier would slot in.
-- **The attribute payload's exact shape** — how `combine`/`identity` lambdas
-  are named inside `# Reduction(...)` so the schema tail stays
-  canonical-order ([attributes](attributes.md) §canonical order) and the
-  projections lower to fragments. §3's kernel-unit model has narrowed this to the
-  *mark* spelling (`? "combine"` today; a record payload in a body with more than two
-  marks does not parse) and to whether a claim carries one instance or a list.
+- **The mark payload's richness** — the spike's payload is one string literal, because
+  text is exactly what keeps a mark out of the pair layout. A record payload (a claim
+  naming its interface and roles as fields rather than as `claim:Name(role,…)` text)
+  is the natural next step, and the mark channel is already positioned for it: the
+  fragment's payload is a *list* of fields per mark, so a reader that wants "the mark's
+  own text" reads the unnamed field rather than a second variant.
 - **Pack trust beyond correctness** — signing/provenance of installed packs
   is the package manager's roadmap item, deliberately not this design's.
 
@@ -557,8 +598,8 @@ Still open, cheapest to settle before the interface syntax is written:
 - [compute-graph-jit.md](compute-graph-jit.md) — the substrate: nodes, values,
   policies, and the measured fusion economics this extends from dispatch
   overhead to memory footprint.
-- [attributes.md](attributes.md) — the claim carrier; fusion is the consumer
-  the schema tail has been waiting for.
+- [attributes.md](attributes.md) — what a mark deliberately is **not**; fusion is the
+  consumer the schema tail was waiting for, and the mark channel is its replacement.
 - [gpu-algorithm-roadmap.md](gpu-algorithm-roadmap.md) — axes B and C, the
   capabilities the fused kernel body needs.
 - [loop-conversion.md](loop-conversion.md) — the dynamic loop, landed, that a

@@ -613,6 +613,9 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                     token(TokenKind::Question)
                         .ignore_then(operand(tokens, term3.clone()))
                         .map(AnnPiece::Doc),
+                    token(TokenKind::Tilde)
+                        .ignore_then(mark_payload())
+                        .map(AnnPiece::Mark),
                 ))
                 .repeated()
                 .collect::<Vec<_>>(),
@@ -666,6 +669,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                                             perspective: None,
                                             refinement: Some(refinement),
                                             doc: None,
+                                            marks: Vec::new(),
                                             span: parameter_span,
                                         })],
                                         expr: rhs,
@@ -726,17 +730,33 @@ where
     combine(first, acc)
 }
 
-/// One `: T`, `# p`, `! r`, or `? e` partner of an annotation chain.
+/// A mark payload: a string literal, the only shape a mark takes.
+///
+/// # Invariant
+/// The payload is text the parser reads out of the literal, never an expression a
+/// checker would evaluate: a mark is compile-time metadata, so a payload that only a run
+/// could decide is not a mark the compiler can place.
+fn mark_payload<'a>() -> impl Parser<'a, In<'a>, String, E<'a>> + Clone {
+    any::<In<'a>, E<'a>>()
+        .filter_map(|t: Token| match t.kind {
+            TokenKind::Str(text) => Some(text),
+            _ => None,
+        })
+        .labelled("a string literal")
+}
+
+/// One `: T`, `# p`, `! r`, `? e`, or `~ "m"` partner of an annotation chain.
 #[derive(Clone, Debug)]
 enum AnnPiece {
     Type(Expr),
     Perspective(Expr),
     Refinement(Expr),
     Doc(Expr),
+    Mark(String),
 }
 
-/// Accumulate a `: T` / `# p` / `! r` / `? e` chain into one
-/// [`Expr::Annotation`]; a later one of a kind overwrites.
+/// Accumulate an annotation chain into one [`Expr::Annotation`]; a later one of
+/// a kind overwrites, and marks accumulate.
 fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     if rest.is_empty() {
         return first;
@@ -747,12 +767,14 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     let mut perspective = None;
     let mut refinement = None;
     let mut doc = None;
+    let mut marks = Vec::new();
     for piece in rest {
         match piece {
             AnnPiece::Type(t) => r#type = Some(Box::new(t)),
             AnnPiece::Perspective(p) => perspective = Some(Box::new(p)),
             AnnPiece::Refinement(r) => refinement = Some(Box::new(r)),
             AnnPiece::Doc(d) => doc = Some(Box::new(d)),
+            AnnPiece::Mark(mark) => marks.push(mark),
         }
     }
     Expr::Annotation {
@@ -761,6 +783,7 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
         perspective,
         refinement,
         doc,
+        marks,
         span,
     }
 }
@@ -1083,13 +1106,13 @@ fn native_call<'a>(
         })
 }
 
-/// `[e1, …, en]` — an array literal, where an element may carry the `~` shallow
+/// `[e1, …, en]` — an array literal, where an element may carry the `@shallow`
 /// marker.
 fn array_literal<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    let element = tilde_marked(expr.clone());
+    let element = shallow_marked(tokens, expr.clone());
     token(TokenKind::LBracket)
         .ignore_then(element.clone())
         .then(
@@ -1154,23 +1177,44 @@ fn set_literal<'a>(
         .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
 }
 
-/// An array element with an optional `~` prefix; the marker wraps it as
-/// [`Expr::Shallow`].
-fn tilde_marked<'a>(
+/// An array element with an optional `@shallow` prefix; the marker wraps it
+/// as [`Expr::Shallow`].
+fn shallow_marked<'a>(
+    tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    any::<In<'a>, E<'a>>()
-        .filter_map(|t: Token| match t.kind {
-            TokenKind::Tilde(depth) => Some((depth, t.span)),
-            _ => None,
-        })
-        .labelled("'~'")
+    token(TokenKind::KwShallow)
+        // A bare `@shallow` marks the whole subtree, read as `usize::MAX`.
+        .ignore_then(shallow_depth().or_not())
+        .map(|depth| depth.unwrap_or(usize::MAX))
         .or_not()
         .then(expr)
-        .map(|(marker, element)| match marker {
-            Some((depth, span)) => Expr::Shallow(Box::new(element), depth, span),
+        .map_with(|(depth, element), me| match depth {
+            Some(depth) => {
+                Expr::Shallow(Box::new(element), depth, span_at(tokens, me.span().start))
+            }
             None => element,
         })
+}
+
+/// The `@shallow(n)` depth: a **glued** parenthesized integer.
+///
+/// # Invariant
+/// The parens must be glued, so a spaced `(` is the element itself rather than a
+/// depth — the one distinction the two spellings differ by, and the reason the
+/// bare `@shallow e` form cannot be ambiguous with the depth form.
+fn shallow_depth<'a>() -> impl Parser<'a, In<'a>, usize, E<'a>> + Clone {
+    token(TokenKind::Glue)
+        .ignore_then(token(TokenKind::LParen))
+        .ignore_then(
+            any::<In<'a>, E<'a>>()
+                .filter_map(|t: Token| match t.kind {
+                    TokenKind::Int(depth) => Some(depth),
+                    _ => None,
+                })
+                .labelled("an integer depth"),
+        )
+        .then_ignore(token(TokenKind::RParen))
 }
 
 /// `<e1, …, en>` — always a `TypeTuple`, with at least two elements.

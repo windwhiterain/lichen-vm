@@ -693,7 +693,7 @@ fn index_errors_carry_spans() {
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '~', '@assert', 'int2float', 'float2int', or an expression, found ']'"
+        "expected '@shallow', '@assert', 'int2float', 'float2int', or an expression, found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));

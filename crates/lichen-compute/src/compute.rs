@@ -17,8 +17,8 @@ use lichen_highlevel::shape::{
     field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelMark, KernelRoles,
-    KernelShape, MarkField, ResidentId, ScalarClass, ScalarData, ScalarLeaf, ValueId,
+    BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
+    KernelMark, KernelRoles, KernelShape, ResidentId, ScalarClass, ScalarData, ScalarLeaf,
     fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
@@ -78,54 +78,88 @@ pub use lichen_kernel_ir::KernelId;
 /// ownership, and the length is in *bytes*, never elements.
 pub type BufferPayload = AnyHandle<[u8]>;
 
-/// The process kernel registry: compiled fragments, keyed by [`KernelId`].
+/// The process kernel registry: compiled fragments and the claims they were compiled
+/// for, keyed by [`KernelId`].
 ///
 /// # Invariant
 /// Kernels are immutable artifacts shared across modules; the fragment is the
-/// durable JIT output and the module bytes are derived on demand at launch.
-static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelFragment>>> = OnceLock::new();
-fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
+/// durable JIT output and the module bytes are derived on demand at launch. The claim is
+/// **read at compile time and stored here**, never on the kernel value: a runtime kernel is
+/// a `Copy` id, so a claim that rode it would be a second, mutable copy of what the
+/// registry already knows.
+static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelEntry>>> = OnceLock::new();
+fn kernels() -> &'static Mutex<HashMap<KernelId, KernelEntry>> {
     KERNELS.get_or_init(Default::default)
 }
+
+/// One registered kernel: its compiled fragment, and the interface instance it was
+/// compiled for.
+///
+/// # Invariant
+/// The two are interned **together**: they are one kernel, so two kernels that differ only
+/// in the interface they declare are two entries and never share one id. The claim is
+/// `None` for a kernel no claim named, which is every kernel in an ordinary program.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KernelEntry {
+    /// What the kernel's body compiled to.
+    pub fragment: KernelFragment,
+    /// The interface the kernel claims, or `None`.
+    pub claim: Option<KernelClaim>,
+}
+
 /// The fallback id allocator — monotone, so an id minted here never aliases.
 static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
 fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The content index: a fragment's digest → the id it is registered under.
+/// The content index: an entry's digest → the id it is registered under.
 ///
 /// # Invariant
 /// Ids are content-addressed (`D15`): the same source recompiled yields the same
 /// id, which the derived-module cache is keyed on. A digest is not an identity —
-/// the index is an intern table, [`intern_kernel`] verifies the fragment, and a
+/// the index is an intern table, [`intern_kernel`] verifies the entry, and a
 /// collision falls back to a unique id, costing a recompile and never a wrong
-/// fragment.
+/// entry.
 static KERNEL_INDEX: OnceLock<Mutex<HashMap<u64, KernelId>>> = OnceLock::new();
 fn kernel_index() -> &'static Mutex<HashMap<u64, KernelId>> {
     KERNEL_INDEX.get_or_init(Default::default)
 }
 
-/// Register `fragment` and return its id — the existing id when an identical
-/// fragment is already registered.
+/// The digest an entry is interned under: the fragment's own, folded with the claim.
+///
+/// # Invariant
+/// The claim is **not** a fragment field, so the fragment's digest says what the body is
+/// while this says what the kernel is; folding the two together is what keeps two kernels
+/// with the same body and different claims from sharing an id.
+fn entry_digest(entry: &KernelEntry) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    fragment_digest(&entry.fragment).hash(&mut hasher);
+    format!("{:?}", entry.claim).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Register `fragment` under the interface it `claim`s, and return its id.
 ///
 /// # Invariant
 /// The lookup and the insert are one decision, so both registries are held
 /// across it: otherwise a concurrent intern of the same digest can land its own
 /// id after this caller read the entry, handing out a second id for one
-/// fragment. Lock order is `kernels()` before `kernel_index()`.
-fn intern_kernel(fragment: KernelFragment) -> KernelId {
-    let digest = fragment_digest(&fragment);
+/// kernel. Lock order is `kernels()` before `kernel_index()`.
+fn intern_kernel(fragment: KernelFragment, claim: Option<KernelClaim>) -> KernelId {
+    let entry = KernelEntry { fragment, claim };
+    let digest = entry_digest(&entry);
     // Lock order: `kernels()` then `kernel_index()`, as the doc says.
     let mut registry = kernels().lock().unwrap();
     let mut index = kernel_index().lock().unwrap();
     if let Some(id) = index.get(&digest).copied()
-        && registry.get(&id) == Some(&fragment)
+        && registry.get(&id) == Some(&entry)
     {
         return id;
     }
     let id = alloc_kernel_id();
-    registry.insert(id, fragment);
+    registry.insert(id, entry);
     index.insert(digest, id);
     id
 }
@@ -251,8 +285,8 @@ mod kernel_intern_tests {
     #[test]
     fn the_same_fragment_interns_to_one_id() {
         let one = KernelBody::from_flat(1, &[FlatOp::Read(0)]);
-        let first = intern_kernel(fragment(one.clone()));
-        let second = intern_kernel(fragment(one));
+        let first = intern_kernel(fragment(one.clone()), None);
+        let second = intern_kernel(fragment(one), None);
         assert_eq!(
             first, second,
             "a recompiled identical fragment must reuse its id"
@@ -263,8 +297,8 @@ mod kernel_intern_tests {
     /// would serve one kernel's module for another's.
     #[test]
     fn a_different_fragment_gets_a_different_id() {
-        let a = intern_kernel(fragment(KernelBody::from_flat(1, &[FlatOp::Read(0)])));
-        let b = intern_kernel(fragment(KernelBody::from_flat(2, &[FlatOp::Read(1)])));
+        let a = intern_kernel(fragment(KernelBody::from_flat(1, &[FlatOp::Read(0)])), None);
+        let b = intern_kernel(fragment(KernelBody::from_flat(2, &[FlatOp::Read(1)])), None);
         assert_ne!(a, b, "different content must not share an id");
         // Both stay registered under their own ids.
         let registry = kernels().lock().unwrap();
@@ -1047,17 +1081,32 @@ where
             }
             match self {
                 ComputeOperator::Jit => {
-                    let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
+                    // The operand is `[function]`, like every other kernel operator's:
+                    // the argument node is the anchor a claim is read from.
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         // A non-function jit target is a reported type error; stay
                         // lazy rather than panicking.
                         return None;
                     };
+                    // SAFETY: `operands` is the operand array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(LowValue::Function(function)) = operands
+                        .first()
+                        .and_then(|item| module.node_value(item.node))
+                        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+                    else {
+                        return None;
+                    };
                     match compile_fragment(module, function) {
                         Ok(fragment) => {
-                            // Content-addressed (`D15`): a recompile keeps one id,
-                            // so the derived-module cache hits.
-                            let id = intern_kernel(fragment);
+                            // The claim is read **here**, where the kernel is compiled,
+                            // and stored beside the fragment: the value carries none.
+                            let claim = compile_claim(module, function);
+                            // Content-addressed like `jit`'s: the backend is not in
+                            // the fragment, so both backends share one id.
+                            let id = intern_kernel(fragment, claim);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::Kernel(id),
                             ))
@@ -1167,9 +1216,12 @@ where
                     };
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
+                            // The claim is read **here**, where the kernel is compiled,
+                            // and stored beside the fragment: the value carries none.
+                            let claim = compile_claim(module, function);
                             // Content-addressed like `jit`'s: the backend is not in
                             // the fragment, so both backends share one id.
-                            let id = intern_kernel(fragment);
+                            let id = intern_kernel(fragment, claim);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::ParKernel(id, backend),
                             ))
@@ -1697,104 +1749,6 @@ where
     Some((names, shape))
 }
 
-/// The mark a labelled value carries, read from the label slot the checker published.
-///
-/// # Invariant
-/// The slot is the annotation value's `[value, type]` pair, and the mark's payload is that
-/// pair's value: **one text** (published as the payload's unnamed field) or a **record** of
-/// named scalar fields. Any other shape is refused **by name**: a fragment that published a
-/// half-read mark would hand its consumer a claim the body does not carry.
-fn mark_of<P>(module: &Module<P>, value: ValueId, slot: NodeId) -> Result<KernelMark, String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    // SAFETY: `slot` is a live node of `module`; nothing here releases a block.
-    let pair = unsafe { module.array_items(slot) }
-        .ok_or_else(|| "a mark's slot is not a [value, type] pair".to_string())?;
-    let payload = pair
-        .first()
-        .map(|item| item.node)
-        .ok_or_else(|| "a mark's slot holds no payload".to_string())?;
-    if let Some(text) = text_of_value(module, payload) {
-        return Ok(KernelMark {
-            value,
-            payload: vec![MarkField { name: None, text }],
-        });
-    }
-    let names = pair
-        .get(PAIR_TYPE_SLOT)
-        .and_then(|item| field_names(module, TypeRef::Term(item.node)))
-        .unwrap_or_default();
-    // SAFETY: `payload` is a field of the payload pair, a live node of `module`.
-    let Some(LowValue::Array(fields)) = module
-        .node_value(payload)
-        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-    else {
-        return Err(
-            "a mark's payload is not a text, and a mark names what its value means: spell \
-             it as a string, or as a struct of scalar fields"
-                .to_string(),
-        );
-    };
-    let mut read = Vec::with_capacity(unsafe { fields.items() }.len());
-    // SAFETY: `fields` is the payload value read from the live node `payload`.
-    for (at, item) in unsafe { fields.items() }.iter().enumerate() {
-        let text = mark_field_text(module, item.node)?;
-        let name = names
-            .get(at)
-            .copied()
-            .flatten()
-            .ok_or_else(|| format!("a mark's payload field {at} has no name"))?;
-        read.push(MarkField {
-            name: Some(name.to_string()),
-            text,
-        });
-    }
-    Ok(KernelMark {
-        value,
-        payload: read,
-    })
-}
-
-/// One payload field's text, or the refusal that names what the field is.
-///
-/// # Invariant
-/// A mark's payload crosses into the fragment as text, so only the scalars a fragment can
-/// spell are read; an aggregate is refused rather than flattened into a form its reader
-/// would have to guess the shape of.
-fn mark_field_text<P>(module: &Module<P>, node: AnyNodeId) -> Result<String, String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    text_of_value(module, node).ok_or_else(|| {
-        "a mark's payload field is not a scalar, and a mark crosses into the fragment as \
-         text: spell it as a string, an Int or a Float"
-            .to_string()
-    })
-}
-
-/// The text a scalar value holds, or `None` when it is not one.
-fn text_of_value<P>(module: &Module<P>, node: AnyNodeId) -> Option<String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    match module
-        .node_value(node)
-        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-    {
-        Some(LowValue::Str(text)) => Some(text.to_string()),
-        Some(LowValue::USize(number)) => Some(number.to_string()),
-        Some(LowValue::Float(number)) => Some(number.to_string()),
-        _ => None,
-    }
-}
-
 /// The class of every scalar leaf of a parallel parameter, in signature order.
 ///
 /// # Invariant
@@ -2186,7 +2140,44 @@ where
 /// host that holds a kernel *value* — not the artifact `jit` built from it — needs to reach
 /// what the kernel compiled to. See docs/notes/graph-fusion.md §3.
 pub fn kernel_fragment(id: KernelId) -> Option<KernelFragment> {
-    kernels().lock().unwrap().get(&id).cloned()
+    kernels()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|entry| entry.fragment.clone())
+}
+
+/// The interface instance a registered kernel claims, or `None` when it claims none.
+///
+/// # Invariant
+/// Read from the registry beside the fragment, so a host never reads a claim off a runtime
+/// value: the claim was read once, when the kernel was compiled.
+pub fn kernel_claim(id: KernelId) -> Option<KernelClaim> {
+    kernels().lock().unwrap().get(&id)?.claim.clone()
+}
+
+/// The claim the kernel `function` declares, read at kernel-compile time.
+///
+/// # Invariant
+/// The anchor is the **template's parameter node**, which every per-call clone's origin
+/// chain reaches: the parameter is the one node of a function template that an
+/// instantiation still names. So this is a table read, never a walk of the module to find
+/// the claim.
+fn compile_claim<P>(module: &Module<P>, function: AnyFunctionId) -> Option<KernelClaim>
+where
+    P: Program,
+{
+    let AnyFunctionId::Dynamic(function) = function else {
+        return None;
+    };
+    let Some(function) = module.functions.get(function) else {
+        return None;
+    };
+    module
+        .marks_of(function.parameter)
+        .iter()
+        .find(|payload| payload.starts_with(CLAIM_PREFIX))
+        .and_then(|payload| KernelClaim::parse(payload).ok())
 }
 
 /// The body's value resolved into the leaves a wasm body must leave on the stack.
@@ -2874,7 +2865,7 @@ fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
     let fragment = fragments
         .get(&id)
         .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    Ok(param_classes(fragment)[..fragment.scalar_leaves()].to_vec())
+    Ok(param_classes(&fragment.fragment)[..fragment.fragment.scalar_leaves()].to_vec())
 }
 
 /// The facts a run reads off the fragment's register: the walk's paths, and each
@@ -2889,9 +2880,9 @@ fn fragment_facts(id: KernelId) -> FragmentFacts {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|fragment| FragmentFacts {
-            roles: fragment.roles.clone(),
-            output_classes: fragment.output_classes.clone(),
+        .map(|entry| FragmentFacts {
+            roles: entry.fragment.roles.clone(),
+            output_classes: entry.fragment.output_classes.clone(),
         })
         .unwrap_or(FragmentFacts {
             roles: KernelRoles::default(),
@@ -4337,7 +4328,7 @@ where
     let fragment = {
         let kernels = kernels().lock().unwrap();
         match kernels.get(&id) {
-            Some(fragment) => fragment.clone(),
+            Some(entry) => entry.fragment.clone(),
             None => {
                 refuse(
                     module,
@@ -5144,9 +5135,10 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
     // again.
     let (expected, results, class) = {
         let fragments = kernels().lock().unwrap();
-        let fragment = fragments
+        let fragment = &fragments
             .get(&id)
-            .ok_or_else(|| format!("kernel {id} is not registered"))?;
+            .ok_or_else(|| format!("kernel {id} is not registered"))?
+            .fragment;
         (
             param_classes(fragment),
             fragment.result_classes.len(),
@@ -5225,7 +5217,7 @@ fn ordered_launch_set(id: KernelId) -> Result<OrderedLaunchSet, String> {
     while let Some(k) = queue.pop_front() {
         let frag = fragments
             .get(&k)
-            .cloned()
+            .map(|entry| entry.fragment.clone())
             .ok_or_else(|| format!("kernel {k} is not registered"))?;
         index.insert(k, ordered.len() as u32);
         for instr in frag.body.instrs() {
@@ -5479,9 +5471,10 @@ fn run_parallel_kernel(
     // in: an id is content-addressed.
     let (outputs, class, input_classes, leaf_classes, output_classes) = {
         let fragments = kernels().lock().unwrap();
-        let fragment = fragments
+        let fragment = &fragments
             .get(&id)
-            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
+            .fragment;
         (
             fragment.outputs,
             fragment_class(fragment),
@@ -5983,7 +5976,7 @@ mod parallel_launch_tests {
             released: Mutex::new(Vec::new()),
         });
         lichen_kernel_ir::install_parallel_backend(stub.clone());
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let outputs = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
             .expect("the installed backend runs");
         lichen_kernel_ir::clear_parallel_backend();
@@ -6076,7 +6069,7 @@ mod parallel_launch_tests {
         let _serialized = BACKEND_SLOT.lock().unwrap();
         let stub = chain_recorder();
         lichen_kernel_ir::install_parallel_backend(stub.clone());
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let count = 8;
 
         let first = run_parallel_kernel(
@@ -6123,7 +6116,7 @@ mod parallel_launch_tests {
         let _serialized = BACKEND_SLOT.lock().unwrap();
         let stub = chain_recorder();
         lichen_kernel_ir::install_parallel_backend(stub.clone());
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let count = 8;
         run_parallel_kernel(
             id,
@@ -6152,7 +6145,7 @@ mod parallel_launch_tests {
     fn a_gpu_run_without_an_installed_backend_is_refused_by_name() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
         lichen_kernel_ir::clear_parallel_backend();
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let refusal = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
             .expect_err("there is nothing to dispatch to");
         assert!(
@@ -6188,7 +6181,7 @@ mod parallel_launch_tests {
             }
         }
         lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub));
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let refusal = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
             .expect_err("the backend declined");
         lichen_kernel_ir::clear_parallel_backend();
@@ -6313,7 +6306,7 @@ mod parallel_launch_tests {
     /// The fan-out itself: the worker count is what a test can see.
     #[test]
     fn a_run_over_the_threshold_fans_out_and_covers_every_index() {
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let count = SEQUENTIAL_PARALLEL_ELEMENTS;
         let outputs = host_outputs(id, count);
         assert_eq!(outputs.len(), 2, "one buffer per declared output");
@@ -6337,7 +6330,7 @@ mod parallel_launch_tests {
     /// sequential result the fan-out has to reproduce.
     #[test]
     fn a_run_below_the_threshold_is_sequential_and_writes_every_index() {
-        let id = intern_kernel(two_outputs());
+        let id = intern_kernel(two_outputs(), None);
         let count = SEQUENTIAL_PARALLEL_ELEMENTS - 1;
         let outputs = host_outputs(id, count);
         assert_eq!(parallel_launch_workers(), 1, "no spawn below the threshold");
@@ -6433,9 +6426,11 @@ where
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
+        // The operand is `[function]`, the shape every kernel operator reads.
         let f = &args[0];
+        let operands = ctx.array_node(&[f.value]);
         // The bare native artifact, opaque: its type is the call's fresh cell.
-        let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(f.value));
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(operands));
         NativeApply {
             value: op,
             decided: false,

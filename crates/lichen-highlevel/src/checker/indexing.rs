@@ -305,14 +305,14 @@ where
         pair
     }
 
-    /// A shallow array `[v1, ~ v2, ~2 v3]`: per-element type slots, as a
-    /// tuple's.
+    /// A shallow array `[v1, @shallow v2, @shallow(2) v3]`: per-element type
+    /// slots, as a tuple's.
     ///
     /// # Invariant
-    /// The value array carries a per-position mask: a bare `~` position's whole
-    /// subtree stays lazy in the deep pass, and a `~n` position is wrapped so
-    /// the value slot at each of the first `n` levels of its type spine stays
-    /// shallow.
+    /// The value array carries a per-position mask: a bare `@shallow` position's
+    /// whole subtree stays lazy in the deep pass, and a `@shallow(n)` position is
+    /// wrapped so the value slot at each of the first `n` levels of its type spine
+    /// stays shallow.
     pub(super) fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let depths = self.range_depths(e);

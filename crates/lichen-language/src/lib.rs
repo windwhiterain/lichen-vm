@@ -314,6 +314,18 @@ where
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
     let build =
         Checker::<P>::build_in_attr_native(ir, registry.clone(), lang_attr_ext::<P>(), native_ops);
+    // The IR-time assembly refuses a claim it cannot complete, at the
+    // expression that carried it (graph-fusion.md §3).
+    diagnostics.extend(build.ir.claim_refusals.iter().map(|(expr, refusal)| {
+        let message = refusal.message();
+        match span_index
+            .as_ref()
+            .and_then(|index| index.get(expr.0 as usize).copied().flatten())
+        {
+            Some(span) => Diag::new(Stage::Check, span, message),
+            None => Diag::unattributed(Stage::Check, message),
+        }
+    }));
     // Freeze now: the build is solved, so a frozen artifact is complete.
     if let Some(cells) = cells {
         freeze_cells(&build, cells, &registry, compiled_cells, source_id);

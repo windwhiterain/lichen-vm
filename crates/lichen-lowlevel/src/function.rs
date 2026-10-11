@@ -366,11 +366,8 @@ impl<P: Program> Module<P> {
         if let Some(low_shape) = low_shape {
             self.nodes[clone].low_shape = Some(low_shape);
         }
-        // A label travels with the value it is stamped on: the clone carries the same
-        // slot, which is only ever read.
-        if let Some(slot) = self.label_of(node) {
-            self.stamp_label(clone, slot);
-        }
+        // A mark is **not** copied onto the clone: the anchor handoff is
+        // `Module::marks_of`, which reads the clone's origin.
         clone
     }
 

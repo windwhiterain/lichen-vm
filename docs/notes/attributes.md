@@ -270,6 +270,13 @@ leaves the check on the unify arm, where a free cell is a wildcard. Whether a
 requirement may bind a runtime-dependent provider is a separate question, and it
 is the one this design leaves standing.
 
+Adding an attribute to the tail widens the pair, and that is the right trade for
+metadata a *value* carries. Metadata that must stay **pinned to one expression** is not
+an attribute: a slot is padded, propagated and meet-combined, and the pair that holds
+it is unreachable from the value it annotates, so graph fusion's interface claim rides a
+**mark** (`~`) in a side table beside the expression tree instead — see
+[graph-fusion](graph-fusion.md) §3.
+
 ## Syntax
 
 `expr [: expr] [# expr] [? expr]` — `:` fills the type slot, `#` fills the

@@ -8,3 +8,6 @@ slotmap.workspace = true
 stacksafe.workspace = true
 lichen-utils.workspace = true
 lichen-lowlevel.workspace = true
+# The mark and claim vocabulary the IR-time assembly shares with the kernel
+# artifact: `lichen-kernel-ir` is a dependency-free leaf, so this costs no layer.
+lichen-kernel-ir.workspace = true

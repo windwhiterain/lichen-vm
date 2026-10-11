@@ -49,6 +49,9 @@
 ":" @operator
 "#" @operator
 "?" @operator
+; the mark sigil: `e ~ "payload"`.  The array-literal shallow marker used to
+; be `~` and is now the `@shallow` keyword.
+"~" @operator
 "!" @operator
 "$" @operator
 "<=" @operator
