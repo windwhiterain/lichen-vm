@@ -165,6 +165,32 @@ is now the same slot list, with three consequences worth recording:
   is the instantiation's, and a non-struct actual is refused per call either way
   (`docs/language-spec.md` §Structs).
 
+## The read path
+
+A field read's type has exactly one source: the element **slot's type position**
+of the container's type. A compound *value* holds bare element values, so the
+element's own type is not stored beside them — and it need not be, because the
+slot's type is the element's type: the instantiation unified them. Two measured
+consequences of taking that seriously:
+
+- **The read goes through the container's own type cell**, not through the
+  pattern an open container was pinned to. A cell's class carries the actual type
+  once it resolves, so the elements resolve with it: `lazy_infinite` reads
+  `(1, 2, 3): <Int, Int, Int>` where a read through the pattern gave
+  `(raw 1, raw 2, raw 3): <?a, ?b, ?c>`.
+- **The kind requirement is load-bearing.** Consistency is about the *slots*, not
+  about the kind: an open container's positions are readable whatever it turns
+  out to be, so dropping the requirement accepts `l(0)` on an array and `s(0)` on
+  a struct instance (both measured, both must be refused). *Recording* the
+  requirement instead of unifying it is not a substitute either: the guard's
+  structural pattern then re-checks per unrolling step and `gcd` fails with
+  `expected <?a, …>, found <Int, Int>`. A kind-shaped requirement — as the named
+  read's `AssertSpelling::StructKind` already is — would state it without binding
+  the container, and that is the shape a follow-up should take.
+
+The pattern is therefore built only where the requirement must be stated, so a
+read of a decided tuple type allocates nothing.
+
 ## What is open
 
 - **An element's attribute is not rendered.** A pinned element now reads

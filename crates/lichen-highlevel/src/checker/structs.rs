@@ -29,9 +29,6 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let shape_cell = self.fresh_cell();
-        let tuple_ty = self.array_node(self.current_block, &[shape_cell, kind]);
         // `kind_of` answers only for a decided term; a cell has none, which is
         // the case the pin exists for.
         let read_ty = match shape::kind_of(&self.module, AnyNodeId::Dynamic(container_ty)) {
@@ -44,6 +41,7 @@ where
                 ) {
                     // Recorded, not unified: stating the requirement beside it keeps
                     // the found side the container's own type.
+                    let tuple_ty = self.tuple_type_pattern();
                     self.record_guard(
                         container_ty,
                         tuple_ty,
@@ -55,6 +53,9 @@ where
                 container_ty
             }
             None => {
+                // A unify, not a recorded guard: an open container's positions
+                // read whatever its kind is.
+                let tuple_ty = self.tuple_type_pattern();
                 self.check_unify(
                     container_ty,
                     tuple_ty,
@@ -70,12 +71,26 @@ where
         // The field's position, when the key is a literal: `slot_read` reads
         // the field's type out of the field list.
         let position = self.constant_position(key);
-        let (value_node, ty_node) = self.slot_read(read_ty, container_value, key_value, position);
+        let (value_node, ty_node) =
+            self.slot_read(container_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
         pair
+    }
+
+    /// The **tuple-type pattern** a pinned read unifies its container against: a
+    /// fresh shape cell and the tuple kind.
+    ///
+    /// # Invariant
+    /// Only the undecided path and the refused decided path build it, so a read
+    /// of a decided tuple type allocates nothing to state a requirement its
+    /// container already satisfies.
+    fn tuple_type_pattern(&mut self) -> NodeId {
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
+        let shape_cell = self.fresh_cell();
+        self.array_node(self.current_block, &[shape_cell, kind])
     }
 
     /// The structural slot read shared by `a(k)` and `a.name`.
