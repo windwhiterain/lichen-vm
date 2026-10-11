@@ -50,6 +50,7 @@ authority, and this table only names the state.
 | [Floating point](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-render`, `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current — both classes run kernels on both backends |
 | ["Contains the universe" is not "is the universe"](notes/universe-containment.md) | `lichen-render`, `lichen-lowlevel` (`equality`) | current — the lowlevel frozen-kind half is open |
 | [Evaluation runs before unification, and nothing wakes what it read](notes/eval-before-unify.md) | `lichen-lowlevel` (`evaluation`/`equality`), `lichen-highlevel` (`checker`) | current — the named reads' wakeup is open |
+| [A stalled operator re-runs only when a value changed](notes/stalled-rerun-epoch.md) | `lichen-lowlevel` (`evaluation`/`equality`/`module`) | current — the epoch gate; the phase-ordering question is closed |
 | [Unify without forcing](notes/unify-without-forcing.md) | `lichen-lowlevel` (`equality`) | historical — the machinery removal it proposed has landed |
 | [Incremental evaluation](notes/incremental-evaluation.md) | `lichen-lowlevel`, `lichen-highlevel` (`checker`), `lichen-language` (`run`) | proposed |
 | [Function types, and a struct type's nominal identity](notes/function-type-merge.md) | `lichen-highlevel` (`checker`/`lambda`/`shape`), `lichen-lowlevel` (`equality`/`static_module`), `lichen-render`, `lichen-language` | current |

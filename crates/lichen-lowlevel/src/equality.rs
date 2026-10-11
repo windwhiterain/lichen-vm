@@ -247,7 +247,7 @@ impl<P: Program> Module<P> {
     /// propagate. This is the single value-write choke-point and one of the class's
     /// two low-type observation sites. See docs/notes/lowlevel-vm.md.
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
-        self.nodes[node].value = value;
+        self.set_node_value(node, value);
         if let Some(value) = value {
             // A lone representative has nobody to distribute to; the slot write is all.
             if self.nodes[node].equality.parent().is_none()
@@ -258,6 +258,26 @@ impl<P: Program> Module<P> {
             let representative = self.equality_representative(node);
             self.propagate_class_value(representative, value);
             self.observe_class_low_type(representative, value);
+        }
+    }
+
+    /// The one value-slot assignment, with the run stamps' clock.
+    ///
+    /// # Invariant
+    /// Every change to a [`Node::value`] slot goes through here, so the module's epoch
+    /// moves exactly when some node's value changes — see [`Module::value_epoch`]. The
+    /// epoch is bumped before the slot is written, so an epoch observed during a
+    /// subsequent read is one that saw the write.
+    fn set_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
+        self.bump_value_epoch();
+        self.nodes[node].value = value;
+    }
+
+    /// [`Self::set_node_value`] for a member that holds nothing; a member that holds
+    /// something keeps it.
+    fn set_node_value_if_absent(&mut self, node: NodeId, value: P::Value) {
+        if self.nodes[node].value.is_none() {
+            self.set_node_value(node, Some(value));
         }
     }
 
@@ -282,8 +302,8 @@ impl<P: Program> Module<P> {
             (node, node),
         );
         self.write_node_value(node, Some(value));
-        self.nodes[node].value = Some(value);
-        self.nodes[node].runned = true;
+        self.set_node_value(node, Some(value));
+        self.stamp_node_ran(node);
     }
 
     /// Distribute a concrete `value` over the whole class of `representative`.
@@ -291,13 +311,13 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// Undecided is not a fact to propagate, so only a decided value reaches here. An
     /// operation-bearing member keeps its computation: its slot holds the class's value
-    /// while `runned` stays false, which [`Module::has_no_result_yet`] reads as the
+    /// while its run stamp stays zero, which [`Module::has_no_result_yet`] reads as the
     /// operator still owing its own answer. A merge does not use this path — it fills
     /// only the holes. See docs/notes/lowlevel-vm.md.
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
-            self.nodes[member].value = Some(value);
+            self.set_node_value(member, Some(value));
         }
     }
 
@@ -305,9 +325,7 @@ impl<P: Program> Module<P> {
     fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
-            if self.nodes[member].value.is_none() {
-                self.nodes[member].value = Some(value);
-            }
+            self.set_node_value_if_absent(member, value);
         }
     }
 

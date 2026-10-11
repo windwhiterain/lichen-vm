@@ -6,7 +6,10 @@
 > requirement in both tiers (the decided one as a kind unify, the undecided one as
 > a registered `IsStructType` condition re-checked per apply clone, which also
 > closed `X::a`'s panic). The class-attached blocked list remains a sketch, and
-> the rest of §5 stays a sketch.
+> the rest of §5 stays a sketch. The **ordering** half of the question is settled
+> and measured: reordering evaluation against unification cannot be the fix, and
+> the runtime's own answer is a memoization on the stalled node
+> ([stalled-rerun-epoch](stalled-rerun-epoch.md)).
 >
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (`unify`/`unify_inner`,
 > `add_equality`, `write_node_value`), `crates/lichen-lowlevel/src/evaluation.rs`
@@ -20,7 +23,8 @@
 > decided once and stated on the class; this note is about the *read* side being
 > taken too early), [lowlevel-vm](lowlevel-vm.md) (the unification and write
 > rules), [unify-without-forcing](unify-without-forcing.md) (the wider question
-> the open residue belongs to).
+> the open residue belongs to), [stalled-rerun-epoch](stalled-rerun-epoch.md)
+> (what the runtime *can* do about a read it must retake).
 
 ## 1. The problem
 
@@ -507,6 +511,17 @@ and is corrected to describe the Guard-style refusal.
 - Should a woken re-check be able to **retract** a diagnostic, if some future
   wakeup needs it? Answered *no* for now (§6.1), on the order-independence
   argument alone.
+
+### 6.5 Closed: the phase order is not a lever
+
+The other reading of this note's problem — "evaluation runs too early, so unify
+should go first" — was measured and closed. A node that stalls on an undecided
+class is not re-asked too soon: it is re-asked **without knowing whether anything
+changed**, and a schedule (a second pass, a later phase) does not give it that
+fact. What does is one number per node — the value epoch it ran at
+([stalled-rerun-epoch](stalled-rerun-epoch.md)). Deferring the checker's
+decisions to run time would also cost the tier that expresses them (§3.2), so the
+order stays as it is.
 
 ## Recovered measurements
 

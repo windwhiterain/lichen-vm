@@ -26,7 +26,9 @@
 > `crates/lichen-highlevel/src/checker.rs` + `checker/lambda.rs`,
 > `crates/lichen-language/src/run.rs`,
 > and the notes [lowlevel-vm](lowlevel-vm.md), [static-modules](static-modules.md),
-> [code-audit](code-audit.md).
+> [code-audit](code-audit.md), and [stalled-rerun-epoch](stalled-rerun-epoch.md)
+> (the orthogonal half: a *stalled* operation whose reads would decide the same is
+> skipped by a value epoch, while this note's cut is the decided subtree).
 
 ## 1. What is being asked, and what it costs today
 

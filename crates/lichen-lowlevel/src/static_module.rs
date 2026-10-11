@@ -183,11 +183,12 @@ impl<P: Program> Module<P> {
     /// Both axes of [`Node::value`] meet here: an operation is present, and either the
     /// slot holds no value — the operator never ran, or ran and could not decide — or
     /// the value is **not this operator's**, because a unification wrote it and the
-    /// operator still owes its own reconciliation with it (`write_node_answer`).
+    /// operator still owes its own reconciliation with it (`write_node_answer`). A run
+    /// stamp of zero is the never-ran half of the second term.
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
-        self.nodes
-            .get(node)
-            .is_some_and(|node| node.operation.is_some() && (node.value.is_none() || !node.runned))
+        self.nodes.get(node).is_some_and(|node| {
+            node.operation.is_some() && (node.value.is_none() || node.runned == 0)
+        })
     }
 
     /// The optional [`LowShape`] a layer above computed for `node`, kept with

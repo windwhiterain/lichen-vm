@@ -120,6 +120,11 @@ impl<P: Program> Module<P> {
         if !self.has_no_result_yet(node) {
             return None;
         }
+
+        // The stamp matching the epoch is proof that nothing the operator read has changed.
+        if self.run_stamp_is_current(node) {
+            return None;
+        }
         let guard = self.retain_node(node);
         guard.run(|module, node| module.evaluate_node_operation(node))
     }
@@ -323,7 +328,8 @@ impl<P: Program> Module<P> {
                                 // An undecided key is not a miss: the lookup has not happened, so the read stays lazy.
                                 match self.key_state(key) {
                                     KeyState::Undecided => {
-                                        // The lookup never happened: the slot stays empty and `runned` stays false.
+                                        // The lookup never happened: the slot stays empty and the
+                                        // node stays unstamped, so the next read tries again.
                                         return None;
                                     }
                                     KeyState::Unhashable => {
@@ -363,10 +369,9 @@ impl<P: Program> Module<P> {
                 }
             }
         };
-        // An undecided answer is not cached: the slot stays empty so the next read re-runs the
-        // operator.
+        // An undecided answer is not cached: the run stamp records the epoch it stalled at.
         let Some(value) = value else {
-            self.nodes[node].runned = true;
+            self.stamp_node_ran(node);
             return None;
         };
         // Commit through the one value-write path: the class's value reaches the representative
@@ -375,9 +380,9 @@ impl<P: Program> Module<P> {
         Some(value)
     }
 
-    /// An operation that **ran** but could not decide: the slot stays empty, `runned` is set.
+    /// An operation that **ran** but could not decide: the slot stays empty, the run stamp is set.
     fn ran_undecided(&mut self, node: NodeId) -> Option<P::Value> {
-        self.nodes[node].runned = true;
+        self.stamp_node_ran(node);
         None
     }
 
