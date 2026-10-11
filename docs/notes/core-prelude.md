@@ -19,7 +19,7 @@
 ```lichen
 Num = set{Int, Float}
 in_num = t => t @in Num
-add = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 -- …and one binding per remaining polymorphic operator
 ```
 
@@ -105,7 +105,7 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   error: assertion failed: expected 1, found 0
     --> ~/.lichen/compilers/<key>/builtin/core.lichen:3:39
      |
-   3 | add = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+   3 | add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
      |                                       ^
   ```
 

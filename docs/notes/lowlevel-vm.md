@@ -228,7 +228,7 @@ The arms, in order:
   nothing is written, because a class that already holds a value is not a hole and
   overwriting it would mask the conflict the comparison exists to find. Every fact a
   static ref brings into a unification rides on that write: an imported
-  `struct<.x Int, .y Int>`'s field types reach the importer's cells as `Int`, so a
+  `struct{.x Int, .y Int}`'s field types reach the importer's cells as `Int`, so a
   placeholder instantiation across the boundary never learns its field types.
 
 Two rules decide what a class's members then hold:

@@ -27,8 +27,8 @@ A buffer is not a bare extension value the type system special-cases. It is a
 **struct wrapper**, the same shape a kernel has:
 
 ```lichen
-K   = _x => struct<.native _, .I _, .O _>       # a kernel: the artifact + its signature
-Buf = T => struct<.native _, .element T>        # a buffer: the payload + its element type
+K   = _x => struct{.native _, .I _, .O _}       # a kernel: the artifact + its signature
+Buf = T => struct{.native _, .element T}        # a buffer: the payload + its element type
 ```
 
 The type level **allows anything under `I` and `O`, at any depth**: a buffer is
@@ -50,9 +50,9 @@ nothing has to declare a kind beside it.
 ## The prelude algebra
 
 ```lichen
-Buf     = T => struct<.native _, .element T>
-Read    = T => struct<.from (Buf T), .at Int>
-Write   = T => struct<.to (Buf T), .at Int, .value T>
+Buf     = T => struct{.native _, .element T}
+Read    = T => struct{.from (Buf T), .at Int}
+Write   = T => struct{.to (Buf T), .at Int, .value T}
 read    = (x : (Read _))  => $read(x.from, x.at): x.from.element
 write   = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _))   => $collect(b)
@@ -82,7 +82,7 @@ collect = (b : (Buf _))   => $collect(b)
   the body states its element class *and* its count. The `DP` is the type's other argument,
   and it is what distinguishes the paper's cases — `grid[1]` for a host-bound buffer
   (`ptr(T, N)`), `block[1]` for a slice (`shared(T, N)`), `view(T, N, DP)` with the argument
-  written — so `Shared = T => struct<.native _, .element T, .n Int>` is not a second
+  written — so `Shared = T => struct{.native _, .element T, .n Int}` is not a second
   nominal: it is this one type at `block[1]`. Where a slice *lives* — registers or shared
   within that scope — is a **placement** and not part of its identity, which is why the
   name of one space was the wrong name for the thing
@@ -91,7 +91,7 @@ collect = (b : (Buf _))   => $collect(b)
 ## The parameter is a named struct, and its `.out` group is the result
 
 A parallel kernel's parameter **is** the named struct
-`struct<.n Int, .in …, .out …>`, built by `compute.P (compute.KT _)(.I In, .O
+`struct{.n Int, .in …, .out …}`, built by `compute.P (compute.KT _)(.I In, .O
 Out)`. A body reads the extent at `k.n`, each input as a field under `k.in`, and
 names its outputs under `k.out`. The retired tuple form's `cfg(0)` is `k.n` and
 its `cfg(1)(k)` is a field under `.in`.
@@ -183,8 +183,8 @@ into an output `Buf`.
 ## How to use it
 
 ```lichen
-In  = struct<.a Int>
-Out = struct<.z (compute.Buf _)>
+In  = struct{.a Int}
+Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 g = (k : Par) => {
   i = compute.range k.n
@@ -199,7 +199,7 @@ inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
   it, because a struct type's identity is the occurrence it is written at
   ([function-type-merge](function-type-merge.md)).
 - The launch's argument is the parameter's scalar leaves in field order, then the
-  input group. The shipped `compute.A I = struct<.n Int, .I I>` builds the
+  input group. The shipped `compute.A I = struct{.n Int, .I I}` builds the
   one-scalar shape; a parameter with more scalars is spelled by the author (see
   [compute-runtime-scalars](compute-runtime-scalars.md)).
 - **Annotate a parallel run's result once, at its binding, with the codomain type
@@ -494,33 +494,33 @@ annotates the run's result accordingly
   `graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`
   pins.
 
-**An empty group is spellable now, and a group may also be absent.** `struct<>`
+**An empty group is spellable now, and a group may also be absent.** `struct{}`
 is valid source (its names slot is a present, empty table), so a shape with no
 members has a spelling — and `parallel_roles` treats a *missing* reserved name as
 "no leaves of that role", so both routes exist. The filler leaf a producer kernel
 used to declare is not a lie on either path: the device refuses only a leaf a
 body **reads**, so a leaf nothing reads is not a missing one. The filler and the
 empty group give **byte-identical** answers on **cpu and on the device**: `In1 =
-struct<>` with `(compute.A In1)(.n 3, .I In1())` runs, reads `10, 11, 12` and
-collects `[10, 11, 12]`, exactly as `In1 = struct<.a Int>` with `.I In1(.a 0)`
+struct{}` with `(compute.A In1)(.n 3, .I In1())` runs, reads `10, 11, 12` and
+collects `[10, 11, 12]`, exactly as `In1 = struct{.a Int}` with `.I In1(.a 0)`
 does, including through `compute.graph`/`compute.graphrun`.
 
 Two things the author still writes, and one defect the empty group exposed:
 
 - **The empty struct is nominal, so its occurrence cannot be inlined.** One
   occurrence has to be bound and reused: `Par1 = compute.P (compute.KT _)(.I In1,
-  .O Out1)` with `.I In1()` checks, while the same program inlined (`.I struct<>`
-  and `struct<>()`) is refused with
-  `expected raw[Int, struct<>#0], found raw[Int, struct<>#2]` — three
+  .O Out1)` with `.I In1()` checks, while the same program inlined (`.I struct{}`
+  and `struct{}()`) is refused with
+  `expected raw[Int, struct{}#0], found raw[Int, struct{}#2]` — three
   occurrences, three nominal types.
-- **The empty instance is still an argument**, because `A = I => struct<.n Int,
-  .I I>` keeps the field.
+- **The empty instance is still an argument**, because `A = I => struct{.n Int,
+  .I I}` keeps the field.
 - **A graph step's parameter with an empty group before a later role path loses
-  the whole value, silently.** With `GArg = struct<.n Int, .in In1, .out Out1>`
-  and `In1 = struct<>` the graph answers `raw none: ?a` with **no diagnostic**, on
+  the whole value, silently.** With `GArg = struct{.n Int, .in In1, .out Out1}`
+  and `In1 = struct{}` the graph answers `raw none: ?a` with **no diagnostic**, on
   cpu and on the device; the same program with a filler under `.in` answers
   `[20, 22, 24, 26]`, and the same program with the fields **reordered**
-  (`struct<.n Int, .out Out1, .in In1>`) answers `[20, 22, 24, 26]` as well — so
+  (`struct{.n Int, .out Out1, .in In1}`) answers `[20, 22, 24, 26]` as well — so
   the failure is positional, not the empty group as such. `assemble_result`
   derives a group's arity from the paths that exist (`max(index)+1`) and a prefix
   with no path under it makes the `?` return `None`, which `build_graph`
@@ -581,7 +581,7 @@ the regimes, which is the point.
 **There is no way to make a buffer out of a program value.** A plain array in a
 buffer position used to be accepted and to produce nothing: the read stayed a lazy
 cell nothing forced, the launch answered `parameterized`, and the program still
-printed a type (`array<?a, ?b>`), so it read like a program that computed
+printed a type (`array{?a, ?b}`), so it read like a program that computed
 something. The `Parameterized` fallback is not wrong in general — it is what makes
 a kernel's own read deferrable — but a program array is **decided**, so it is not
 the case the fallback exists for, and a diagnostic is the honest answer. **The

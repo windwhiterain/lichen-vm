@@ -198,10 +198,10 @@ The predicate's domain is **data**: a **set** of type values, written
 
 - A set's *value* is its members — an ordinary array node, **no tag**.
 - A set's *type* is `set<T>`, a kinded type whose shape is the element type
-  **alone** (`TypeSet`), so a set has no length and is not an `array<T, n>`.
+  **alone** (`TypeSet`), so a set has no length and is not an `array{T, n}`.
 
 The separate kind is a soundness requirement rather than a convenience: an
-array-typed set passed into an `array<T, n>` parameter and indexed inside the
+array-typed set passed into an `array{T, n}` parameter and indexed inside the
 callee would read its element 0, and a value-level tag is invisible there.
 `set{Int, Float}[0]` is refused by the ordinary container unify, at the caller. A
 set's members are homogeneous, like an array literal: `set{1, "a"}` is refused.
@@ -259,7 +259,7 @@ expressible with no type read:
 
 ```lichen
 in_num = t => t @in Num          -- t is a *type value*
-add    = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+add    = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 ```
 
 The prelude's contract takes **one argument — the operand group, a 2-wide
@@ -271,9 +271,9 @@ goes. Measured with exactly that `add`:
 |---|---|
 | `(add [1, 2], add [1.5, 2.5])` | `(3, 4.0)` — one argument, polymorphic across calls |
 | `add [1, 1.5]` | refused, `expected Int, found Float` — the **tie**, from the array's element type |
-| `add [1, 2, 3]` | refused, `expected array<…, 2>, found array<Int, 3>` — the **arity**, from the length |
+| `add [1, 2, 3]` | refused, `expected array{…, 2}, found array{Int, 3}` — the **arity**, from the length |
 | `add ["a", "b"]` | refused inside `core.lichen` — the **class** |
-| `add` alone | `array<raw[?a, ?b], 2> -> raw[?a, ?b]` — the result's class is the operands' |
+| `add` alone | `array{raw[?a, ?b], 2} -> raw[?a, ?b]` — the result's class is the operands' |
 
 Three mechanism points are load-bearing:
 
@@ -376,7 +376,7 @@ The contract's end state, as the prelude writes it:
 ```lichen
 Num     = set{Int, Float}
 in_num  = t => t @in Num
-add     = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+add     = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
 ```
 
 | program | with the contract |
@@ -385,7 +385,7 @@ add     = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operand
 | `add [1.5, 2.5]` | `4.0: Float` — **this is the feature**; the pin refused it |
 | `add [1, 1.5]` | refused, `expected Int, found Float` — the operand tie |
 | `add ["a", "b"]` | refused, `does not satisfy {Int, Float}` — the class |
-| `add` | `array<raw[?a, ?b], 2> -> raw[?a, ?b]` |
+| `add` | `array{raw[?a, ?b], 2} -> raw[?a, ?b]` |
 
 The refinement binds nothing and each application instantiates the parameter cell
 independently — that *is* let-polymorphism — so `add [1, 1.5]` is refused by the
@@ -440,7 +440,7 @@ cell. `==`/`!=` stay unconstrained (the generalized equality).
 `+`, `-`, `*`, `/` and the four order comparisons **route** onto the `core`
 prelude's bindings. The compiler records the prelude's binders by name, and a
 surface operator lowers to `Apply(<the prelude's binding>, <the operand group>)`
-— one `array<_, 2>`:
+— one `array{_, 2}`:
 
 ```lichen
 1 + 2        -- lowers to add [1, 2], the binding's contract and body
@@ -510,7 +510,7 @@ was always about.
    been hiding — a pinned class renders its committed value, so both members of a
    class printed `Int` and the difference was invisible. The one *real* printer
    defect this surfaced is fixed: a universe read out of a frozen module fell back
-   to `raw[Int, Type]` where `<Int, Int>` was meant. The open class behind the
+   to `raw[Int, Type]` where `tuple{Int, Int}` was meant. The open class behind the
    mark is [type-of-in-std](type-of-in-std.md)'s defect.
 3. **A routed statement's concrete value is not in the snapshot** —
    `Doc::statement_values` reports `None` for `y = x + 4` because the builtin
@@ -580,10 +580,10 @@ workstream's, for cost 1).
    desugar — but the operator's end state plus a perspective on one parameter
    would. Generalising the slot to a per-marker set is the fix.
 7. *(Closed — landed.)* **A class domain's surface form**: **`set{a, b, …}`** — a
-   set of ordinary values, led by a word exactly like `table{…}`, because angle
-   brackets are the spelling of an expression in *type* position and a set is not
-   one. `Num = set{Int, Float}` is a plain binding, so the contract can leave Rust.
-   The three options weighed: `domain<Int, Float>` (rejected: `<>` is the
+   set of ordinary values, led by a word exactly like `table{…}`, because a class
+   domain is a *value*, not an expression in *type* position.
+   `Num = set{Int, Float}` is a plain binding, so the contract can leave Rust.
+   The three options weighed: `domain<Int, Float>` (rejected: `<…>` was the
    type-position spelling, and a set is a *value*); `$domain(Int, Float)` (no new
    syntax, but `$` is the *plugin-private* sigil, so it works only for a source
    the host embeds); and reusing `{…}` (a bare glued `{` is a table lookup). Two

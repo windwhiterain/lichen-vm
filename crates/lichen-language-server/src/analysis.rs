@@ -1271,7 +1271,7 @@ impl DocIndex {
             let ty_kind = classify_token_kind(&t.kind);
             let (token_type, modifiers) = match &t.kind {
                 TokenKind::Name(_) if prev_was_dot => {
-                    // `a.name`, `struct<.name T>`, `C(.name v)` — a named field.
+                    // `a.name`, `struct{.name T}`, `C(.name v)` — a named field.
                     (SemanticTokenType::PROPERTY, Vec::new())
                 }
                 TokenKind::Name(_) => name_class
@@ -1368,14 +1368,14 @@ fn source_name(source: &PackageSource) -> String {
         .unwrap_or_else(|| source.path.display().to_string())
 }
 
-/// The type of the named field `field` inside a rendered `struct<...>` type.
+/// The type of the named field `field` inside a rendered `struct{...}` type.
 ///
 /// # Invariant
 /// A field-access IR node's own type slot is a lazy cell, so an access on an
 /// imported module resolves its type from the module's rendered type instead.
 fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
-    let inner = struct_ty.strip_prefix("struct<")?;
-    // Find the matching `>` for the opening `<` (ignoring the `>` of `->`),
+    let inner = struct_ty.strip_prefix("struct{")?;
+    // Find the matching `}` for the opening `{` (ignoring the `>` of `->`),
     // then split the interior on top-level commas.
     let body = match_close(inner)?;
     for seg in split_top_level(body, ',') {
@@ -1394,7 +1394,7 @@ fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
     None
 }
 
-/// The substring up to the `>` that closes an already-stripped `struct<...>`.
+/// The substring up to the `}` that closes an already-stripped `struct{...}`.
 /// The `>` of an arrow `->` is not a close.
 fn match_close(inner: &str) -> Option<&str> {
     let bytes = inner.as_bytes();
@@ -1402,21 +1402,20 @@ fn match_close(inner: &str) -> Option<&str> {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'<' => depth += 1,
-            b'>' if !(i > 0 && bytes[i - 1] == b'-') => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&inner[..i]);
-                }
-            }
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
             _ => {}
+        }
+        if depth == 0 {
+            return Some(&inner[..i]);
         }
         i += 1;
     }
     None
 }
 
-/// Split `s` on `sep` at bracket depth 0 (over `()[]<>`, with the `>` of `->`
+/// Split `s` on `sep` at bracket depth 0 (over `()[]{}<>`, with the `>` of `->`
 /// ignored), returning the segments.
 fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
@@ -1427,8 +1426,8 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     while i < s.len() {
         let c = bytes[i] as char;
         match c {
-            '(' | '[' | '<' => depth += 1,
-            ')' | ']' => depth -= 1,
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
             '>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
             _ if c == sep && depth == 0 => {
                 out.push(&s[start..i]);
@@ -2868,17 +2867,17 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "---output = \"(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>\"---\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "---output = \"(Function, Function): struct{.succ Int -> Int, .add Int -> Int -> Int}\"---\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "---math = import \"math.lichen\"\noutput = \"(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>\"---\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
+            "---math = import \"math.lichen\"\noutput = \"(Function, Function): struct{.double Int -> Int, .inc_twice Int -> Int}\"---\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
         );
         let main_path = write(
             &dir,
             "_.lichen",
-            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
+            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): tuple{Int, Int, Int}\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(

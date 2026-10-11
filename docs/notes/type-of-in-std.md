@@ -34,8 +34,8 @@ Every observation the builtin produced is reproduced:
 |---|---|
 | `type_of (1)` | `Int: Type` |
 | `type_of Int`, `type_of Type` | `Type: Type` |
-| `type_of [1, 2]` | `array<Int, 2>: TypeArray` |
-| `type_of (1, Int)` | `<Int, Type>: TypeTuple` |
+| `type_of [1, 2]` | `array{Int, 2}: TypeArray` |
+| `type_of (1, Int)` | `tuple{Int, Type}: TypeTuple` |
 | `type_of (x => x)` | `?a -> ?a: TypeFunction` |
 | `type_of (type_of (1))` | `Type: Type` |
 | `5 : type_of (5)`, `type_of (1) : Type` | `5: Int`, `Int: Type` |
@@ -105,8 +105,8 @@ k
 
 | build | output |
 |---|---|
-| with the builtin (before the removal) | `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` |
-| with the library `type_of` | `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig TypeStruct>` |
+| with the builtin (before the removal) | `(Kernel, parameterized): struct{.native raw[?a, ?b], .sig Int -> Int}` |
+| with the library `type_of` | `(Kernel, parameterized): struct{.native raw[?a, ?b], .sig TypeStruct}` |
 
 The kernel's `.sig` field **was** *declared* as the read of the argument's type;
 the read's **value** was right (`compute.launch k 5` returned `10`, and `k.sig`
@@ -114,7 +114,7 @@ gated as a function type), and — as it turns out — so was its **declared typ
 class dump of the `.sig` field-type node showed the committed value *was* the
 arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** was wrong.  That
 read is what the removal exposed: it rides in the successors of that field, the
-`.I`/`.O` of `struct<.native _, .I _, .O _>`.  Three assertions measured it (the
+`.I`/`.O` of `struct{.native _, .I _, .O _}`.  Three assertions measured it (the
 middle row above is what they pinned, and they were `#[ignore]`d until the
 printer fix landed):
 
@@ -134,7 +134,7 @@ the wrapper carries the signature in `.I`/`.O` now:
 let type_of = x => {t = _; x: t; t}
 jit = f => {
   f : _ -> _
-  (struct<.native _, .sig (type_of f)>)(.native 0, .sig _)
+  (struct{.native _, .sig (type_of f)})(.native 0, .sig _)
 }
 jit (y => y + 1)
 ```
@@ -192,7 +192,7 @@ returns it**:
 
 | program | result |
 |---|---|
-| `(type_of 1, type_of 1.5)` | `(Int, Float): <Type, Type>` |
+| `(type_of 1, type_of 1.5)` | `(Int, Float): tuple{Type, Type}` |
 | `f = v => type_of v; (f 1, f 1.5)` | **refused**: `expected Int, found Float` |
 | `f = v => type_of v; f 1` | `Int: Type` |
 | `f = v => type_of v; f 1.5` | `Float: Type` |

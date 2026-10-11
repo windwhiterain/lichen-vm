@@ -222,7 +222,7 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         element_type,
         length,
         ..
-    } = parse_ok("array<Int,\n2>")
+    } = parse_ok("array{Int,\n2}")
     else {
         panic!("expected an array type")
     };
@@ -234,11 +234,11 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         Expr::Array(elements, _) if elements.len() == 2
     ));
     assert!(matches!(
-        parse_ok("<Int,\nstring>"),
+        parse_ok("tuple{Int,\nstring}"),
         Expr::TypeTuple(elements, _) if elements.len() == 2
     ));
     assert!(matches!(
-        parse_ok("struct<Int,\nstring>"),
+        parse_ok("struct{Int,\nstring}"),
         Expr::StructType(fields, _) if fields.len() == 2
     ));
     assert!(matches!(
@@ -371,7 +371,7 @@ fn an_annotated_parameter_is_a_lambda() {
 }
 
 #[test]
-fn parens_are_always_tuple_values_and_angles_are_always_type_tuples() {
+fn parens_are_always_tuple_values() {
     // `(a, b)` is a tuple *value* in every position — there is no type/value
     // mode.
     let Expr::Annotation { r#type, .. } = parse_ok("x : (Int, Int)") else {
@@ -385,25 +385,25 @@ fn parens_are_always_tuple_values_and_angles_are_always_type_tuples() {
 }
 
 #[test]
-fn angle_brackets_are_exclusively_type_level() {
-    let Expr::Annotation { r#type, .. } = parse_ok("x : <Int, Type>") else {
+fn the_tuple_type_is_keyword_led() {
+    let Expr::Annotation { r#type, .. } = parse_ok("x : tuple{Int, Type}") else {
         panic!("expected an annotation")
     };
     assert!(matches!(*r#type.as_deref().unwrap(), Expr::TypeTuple(..)));
-    let Expr::TypeTuple(elements, _) = parse_ok("<Int, Type>") else {
+    let Expr::TypeTuple(elements, _) = parse_ok("tuple{Int, Type}") else {
         panic!("expected a type tuple")
     };
     assert_eq!(elements.len(), 2);
-    // a type tuple in argument position needs parens.
-    let Expr::Apply { argument, .. } = parse_ok("f (<Int, Type>)") else {
+    // A type tuple is an atom, so it applies as an argument directly.
+    let Expr::Apply { argument, .. } = parse_ok("f (tuple{Int, Type})") else {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::TypeTuple(..)));
 }
 
 #[test]
-fn struct_types_are_positional_fields_in_angle_brackets() {
-    let Expr::StructType(fields, _) = parse_ok("struct<Int, Int -> Int>") else {
+fn struct_types_are_positional_fields_in_braces() {
+    let Expr::StructType(fields, _) = parse_ok("struct{Int, Int -> Int}") else {
         panic!("expected a struct type")
     };
     assert_eq!(fields.len(), 2);
@@ -413,21 +413,21 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
     assert!(fields.iter().all(|f| f.name.is_none()));
     // a single field is the newtype form.
     assert!(matches!(
-        parse_ok("struct<Int>"),
+        parse_ok("struct{Int}"),
         Expr::StructType(f, _) if f.len() == 1
     ));
     // struct types are first-class values: an apply argument, a binding.
-    let Expr::Apply { argument, .. } = parse_ok("f (struct<Int>)") else {
+    let Expr::Apply { argument, .. } = parse_ok("f (struct{Int})") else {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::StructType(..)));
-    // A tuple-type field uses angle brackets (`<<Int, Type>>`); a paren tuple
+    // A tuple-type field uses the keyword-led tuple form; a paren tuple
     // is a value.
-    let Expr::StructType(fields, _) = parse_ok("struct<<Int, Type>>") else {
+    let Expr::StructType(fields, _) = parse_ok("struct{tuple{Int, Type}}") else {
         panic!("expected a struct type")
     };
     assert!(matches!(fields[0].ty, Expr::TypeTuple(..)));
-    let Expr::StructType(fields, _) = parse_ok("struct<(Int, Type)>") else {
+    let Expr::StructType(fields, _) = parse_ok("struct{(Int, Type)}") else {
         panic!("expected a struct type")
     };
     assert!(matches!(fields[0].ty, Expr::Tuple(..)));
@@ -435,8 +435,8 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
 
 #[test]
 fn struct_types_carry_optional_field_names() {
-    // `struct<.a Int, .b Type>` — named fields.
-    let Expr::StructType(fields, _) = parse_ok("struct<.a Int, .b Type>") else {
+    // `struct{.a Int, .b Type}` — named fields.
+    let Expr::StructType(fields, _) = parse_ok("struct{.a Int, .b Type}") else {
         panic!("expected a struct type")
     };
     assert_eq!(fields.len(), 2);
@@ -445,7 +445,7 @@ fn struct_types_carry_optional_field_names() {
     assert_eq!(fields[1].name.as_deref(), Some("b"));
     assert!(matches!(fields[1].ty, Expr::TypeConst(TypeConst::Type, _)));
     // a name is optional per field — a mixed struct parses.
-    let Expr::StructType(fields, _) = parse_ok("struct<.a Int, Type>") else {
+    let Expr::StructType(fields, _) = parse_ok("struct{.a Int, Type}") else {
         panic!("expected a struct type")
     };
     assert_eq!(fields.len(), 2);
@@ -498,7 +498,7 @@ fn raw_named_read_is_glued_double_colon_postfix() {
     // The glued `::` reads through a struct type value too.
     let Expr::RawNamedField {
         container, name, ..
-    } = parse_ok("struct<.a Int, .b string>::a")
+    } = parse_ok("struct{.a Int, .b string}::a")
     else {
         panic!("expected a raw named field read")
     };
@@ -545,7 +545,7 @@ fn struct_instantiation_is_adjacent_parens() {
     assert!(matches!(*container, Expr::Name(n, _, _) if n == "A"));
     assert!(matches!(*key, Expr::Int(1, _)));
     // the callee may be an inline struct type.
-    let Expr::StructInst { callee, .. } = parse_ok("struct<Int, Int>(1, 2)") else {
+    let Expr::StructInst { callee, .. } = parse_ok("struct{Int, Int}(1, 2)") else {
         panic!("expected a struct instance")
     };
     assert!(matches!(*callee, Expr::StructType(..)));
@@ -599,34 +599,34 @@ fn spaced_parens_are_apply_not_struct_instantiation() {
 fn struct_type_errors_carry_spans() {
     let err = parse_err("struct");
     assert_eq!(err.span, Some((1, 7)));
-    let err = parse_err("struct<");
+    let err = parse_err("struct{");
     assert_eq!(err.span, Some((1, 8)));
-    // `struct<>` — an empty field list — is a struct type, not an error.
-    let Expr::StructType(fields, span) = parse_ok("struct<>") else {
+    // `struct{}` — an empty field list — is a struct type, not an error.
+    let Expr::StructType(fields, span) = parse_ok("struct{}") else {
         panic!("expected a struct type")
     };
     assert!(fields.is_empty());
     assert_eq!(span, (1, 1));
-    let err = parse_err("struct<Int");
+    let err = parse_err("struct{Int");
     assert_eq!(err.span, Some((1, 11)));
 }
 
 #[test]
 fn the_array_type_keyword() {
-    // `array<T, n>` — the keyword-led array type, replacing the old glued
-    // `T<e>` postfix, which is now the raw read `X<e>`.
+    // `array{T, n}` — the keyword-led array type, distinct from the glued
+    // `X<e>` raw read.
     let Expr::TypeArray {
         element_type,
         length,
         ..
-    } = parse_ok("array<Int, 3>")
+    } = parse_ok("array{Int, 3}")
     else {
         panic!("expected an array type")
     };
     assert!(matches!(*element_type, Expr::TypeConst(TypeConst::Int, _)));
     assert!(matches!(*length, Expr::Int(3, _)));
-    // The element type is itself recursive: `array<array<Int, 2>, 3>`.
-    let Expr::TypeArray { element_type, .. } = parse_ok("array<array<Int, 2>, 3>") else {
+    // The element type is itself recursive: `array{array{Int, 2}, 3}`.
+    let Expr::TypeArray { element_type, .. } = parse_ok("array{array{Int, 2}, 3}") else {
         panic!("expected an array type")
     };
     assert!(matches!(*element_type, Expr::TypeArray { .. }));
@@ -643,13 +643,13 @@ fn the_raw_index_postfix() {
     // `X<e>` — the glued `<` reads element `e` of `X`'s value, unvalidated.
     let Expr::RawIndex {
         container, index, ..
-    } = parse_ok("<Int, string><0>")
+    } = parse_ok("tuple{Int, string}<0>")
     else {
         panic!("expected a raw index")
     };
     assert!(matches!(*container, Expr::TypeTuple(..)));
     assert!(matches!(*index, Expr::Int(0, _)));
-    let Expr::RawIndex { container, .. } = parse_ok("struct<Int, string><1>") else {
+    let Expr::RawIndex { container, .. } = parse_ok("struct{Int, string}<1>") else {
         panic!("expected a raw index")
     };
     assert!(matches!(*container, Expr::StructType(..)));
@@ -700,9 +700,9 @@ fn index_errors_carry_spans() {
 }
 
 #[test]
-fn a_single_element_angle_bracket_is_a_parse_error() {
+fn the_retired_angle_type_prefix_is_a_parse_error() {
     let err = parse_err("<Int>");
-    assert_eq!(err.span, Some((1, 5)));
+    assert_eq!(err.span, Some((1, 1)));
 }
 
 #[test]

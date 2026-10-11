@@ -255,8 +255,8 @@ fn chain(
 ---
   compute = import "compute.lichen"
 ---
-In   = struct<.d (compute.Buf Float)>
-OutR = struct<.r (compute.Buf Float)>
+In   = struct{{.d (compute.Buf Float)}}
+OutR = struct{{.r (compute.Buf Float)}}
 Par  = compute.P (compute.KT _)(.I In, .O OutR)
 producer_raw = (k : Par) => {{
   i = compute.range k.n
@@ -264,8 +264,8 @@ producer_raw = (k : Par) => {{
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, {producer_identity} ~ "identity")))
 }}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu"
-In2  = struct<.d (compute.Buf Float), .p (compute.Buf Float)>
-OutZ = struct<.z (compute.Buf Float)>
+In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
+OutZ = struct{{.z (compute.Buf Float)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
@@ -274,7 +274,7 @@ consumer_raw = (k : Par2) => {{
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, {consumer_identity} ~ "identity")))
 }}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
-GArg = struct<.n Int, .in In>
+GArg = struct{{.n Int, .in In}}
 step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
@@ -290,8 +290,8 @@ const RESPELT: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct<.d (compute.Buf Float)>
-OutR = struct<.r (compute.Buf Float)>
+In   = struct{.d (compute.Buf Float)}
+OutR = struct{.r (compute.Buf Float)}
 Par  = compute.P (compute.KT _)(.I In, .O OutR)
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
@@ -299,8 +299,8 @@ producer_raw = (lane : Par) => {
   compute.write ((compute.Write _)(.to lane.out.r, .at at, .value acc (lane.n, 0.0 ~ "identity")))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu"
-In2  = struct<.d (compute.Buf Float), .p (compute.Buf Float)>
-OutZ = struct<.z (compute.Buf Float)>
+In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
+OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer_raw = (lane : Par2) => {
   running = compute.read ((compute.Read _)(.from lane.in.p, .at 0))
@@ -309,7 +309,7 @@ consumer_raw = (lane : Par2) => {
   compute.write ((compute.Write _)(.to lane.out.z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity")))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
-GArg = struct<.n Int, .in In>
+GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))

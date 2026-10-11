@@ -45,7 +45,7 @@ fn a_deferred_field_read_binds_the_type_value() {
         usize_of(&evaluate(&format!(
             "{TYPE_OF}{}",
             r#"
-P = ins => struct<.I ins.x>
+P = ins => struct{.I ins.x}
 y = (P _)(.I Int)
 T = type_of y
 T::I == Type
@@ -62,7 +62,7 @@ fn two_deferred_field_reads_both_bind() {
     let source = |field: &str| {
         format!(
             "{TYPE_OF}
-P = ins => struct<.I ins.x, .O ins.y>
+P = ins => struct{{.I ins.x, .O ins.y}}
 y = (P _)(.I Int, .O Int)
 T = type_of y
 T::{field} == Type
@@ -81,8 +81,8 @@ fn a_deferred_field_read_binds_a_struct_type_value() {
         usize_of(&evaluate(&format!(
             "{TYPE_OF}{}",
             r#"
-S1 = struct<.a Int>
-P = ins => struct<.I ins.x>
+S1 = struct{.a Int}
+P = ins => struct{.I ins.x}
 y = (P _)(.I S1)
 T = type_of y
 T::I == type_of S1
@@ -100,8 +100,8 @@ fn a_deferred_type_of_call_binds_the_type_value() {
         usize_of(&evaluate(&format!(
             "{TYPE_OF}{}",
             r#"
-S1 = struct<.a Int>
-P = ins => struct<.I type_of ins.x>
+S1 = struct{.a Int}
+P = ins => struct{.I type_of ins.x}
 y = (P _)(.I S1)
 T = type_of y
 T::I == type_of S1

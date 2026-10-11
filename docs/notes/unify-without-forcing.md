@@ -83,7 +83,7 @@ authority.
   argument's type still undecided, the unify binds rather than compares, so the
   parameter check loses its subject.  All three suites stay green — the
   behaviour this pins has no test.
-- Disabling the deferral policy entirely breaks `P = ins => struct<.I ins.x>`
+- Disabling the deferral policy entirely breaks `P = ins => struct{.I ins.x}`
   applied to a placeholder (`expected raw[raw[?a, ?b], raw[?c, ?d]], found Type`)
   and 58 of 62 `lichen-language` compute tests: the deferral is what commits a
   type value onto an undecided type read that the compute boundary forces

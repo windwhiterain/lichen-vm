@@ -109,8 +109,8 @@ fn source() -> &'static str {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct<.b (compute.Buf Float)>
-Out = struct<.z (compute.Buf Float)>
+In  = struct{.b (compute.Buf Float)}
+Out = struct{.z (compute.Buf Float)}
 Par = compute.P (compute.KT Float)(.I In, .O Out)
 reduction = (k : Par) => {
   i = compute.range k.n

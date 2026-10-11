@@ -12,7 +12,7 @@ The glued `::` postfix reads a *named* component of a TypeStruct value with a
 check-time struct requirement: `X::a` reads field `a` from the value `X`, whose **type**
 must itself be a TypeStruct **kind** — `[[TypeId, names, names_in_order],
 TypeStruct]` under the kind's `[marker, K]` pair, the shape a
-`struct<.a T, …>` value's `ty` is (the name→index table lies directly there, in
+`struct{.a T, …}` value's `ty` is (the name→index table lies directly there, in
 the marker payload, at
 `container_ty[0][0][1]`).
 
@@ -28,7 +28,7 @@ over a struct *instance*.  `X::a` is the **named** sibling of the raw positional
   It reads the field *value*.
 - `X::a` (`::`): requires the container's **type** to be a TypeStruct kind — the value is
   a struct *type*, and the name table sits at `container_ty[0][0][1]`.  It reads the field
-  *type* as a value, so `struct<.a Int, .b string>::a` is `Int : Type`.
+  *type* as a value, so `struct{.a Int, .b string}::a` is `Int : Type`.
 
 ## Check-time, not raw
 
@@ -49,14 +49,14 @@ resolving at the apply that binds it.
 
 The read compiles to `Index(Index(value_of(X), TableGet(names, a)), …)`: its value is
 element 0 of the field at the name table's index, and its **type is element 1 of that same
-read** — the *kind* of the field's type value, not a constant `Type`.  `struct<.a Int, .b
-string>::a` is `Int : Type`; `struct<.a struct<.b Int>>::a` is
-`struct<.b Int>: TypeStruct`, and `(S::a : Type)` over it is refused exactly as `(S :
+read** — the *kind* of the field's type value, not a constant `Type`.  `struct{.a Int, .b
+string}::a` is `Int : Type`; `struct{.a struct{.b Int}}::a` is
+`struct{.b Int}: TypeStruct`, and `(S::a : Type)` over it is refused exactly as `(S :
 Type)` is (`expected Type, found TypeStruct`).
 
 That slot is **computed when the read is checked**, which is what makes the read's type a
 fact a later check can compare instead of a cell that check writes into.  Measured on
-`S = struct<.a Int, .b string>`, with the slot left uncomputed:
+`S = struct{.a Int, .b string}`, with the slot left uncomputed:
 
 | statement | slot uncomputed | slot computed |
 |---|---|---|
@@ -66,7 +66,7 @@ fact a later check can compare instead of a cell that check writes into.  Measur
 | `(5 : Type)` — the decided control | `error: expected Type, found Int` | same |
 
 The forced read stays lazy where nothing can be computed yet (an undecided container), which
-is what the per-apply re-check of the pin relies on: `f = s => s::a; f (struct<.a Int>) ==
+is what the per-apply re-check of the pin relies on: `f = s => s::a; f (struct{.a Int}) ==
 5` is refused by that re-check, at the argument, with the same wording the direct case now
 gives.
 

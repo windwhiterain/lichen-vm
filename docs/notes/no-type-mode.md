@@ -1,4 +1,4 @@
-# No type mode: `(a, b)` is always a tuple value, `<a, b>` always a type
+# No type mode: `(a, b)` is always a tuple value, `tuple{a, b}` always a type
 
 > Status: current
 > Points at: `crates/lichen-language-parser/src/parse.rs` (the grammar, the tuple
@@ -14,15 +14,16 @@ type. The parser has no type-mode pass and never needs to know whether it is
 parsing a type or a value. `expr : expr` parses both sides identically:
 
 - `(a, b)` — always a `Tuple` *value*.
-- `<a, b>` — always a `TypeTuple` *type*, in every position.
+- `tuple{a, b}` — always a `TypeTuple` *type*, in every position.
 - `_` — always a placeholder (its own token; see
   [`placeholder-anywhere.md`](placeholder-anywhere.md)).
 
-This makes the spelling of a tuple type explicit. `x : <Int, Int>` is a tuple of
+This makes the spelling of a tuple type explicit. `x : tuple{Int, Int}` is a tuple of
 two `Int`s, while `x : (Int, Int)` is a *value* tuple whose elements are the
-type-values `Int` and `Int` (so `x : <Type, Type>`). Angle brackets are
-type-level throughout: `struct<T1, T2>` is a struct type and the array type is
-the keyword-led `array<T, n>`.
+type-values `Int` and `Int` (so `x : tuple{Type, Type}`). Every type form is
+keyword-led: `struct{T1, T2}` is a struct type and the array type is
+`array{T, n}`. `<` is no longer a type delimiter at all — its only postfix job is
+the raw index `X<e>` ([raw-index](raw-index.md)).
 
 ## Why
 
@@ -40,13 +41,13 @@ of `:`, a struct field, and the like). Removing it:
 
 ## Writing it today
 
-Paren tuple *types* are written with angle brackets. The `.lichen` examples
-already spell tuple types with `<…>` and value tuples with `(…)`; a program
-written against the old grammar changes only those spellings, e.g.
+Tuple *types* are written with the `tuple` keyword and value tuples with `(…)`,
+so the two never depend on position, e.g.
 
 ```lichen
-compute.jit (p : (Int, Int) => …)   // no longer a tuple type
-compute.jit (p : <Int, Int> => …)   // a tuple of two Ints
+compute.jit (p : (Int, Int) => …)       // a tuple *value* of type-values
+compute.jit (p : tuple{Int, Int} => …)  // a tuple of two Ints
 ```
 
-The parse tests for the paren/angle tuple spellings are the behavioural record.
+The parse tests for the paren and `tuple{…}` spellings are the behavioural
+record.

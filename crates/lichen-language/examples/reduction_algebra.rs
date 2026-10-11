@@ -67,8 +67,8 @@ fn source(class: &str, bound: &str, seed: &str) -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct<.b (compute.Buf {class})>
-Out = struct<.z (compute.Buf {class})>
+In  = struct{{.b (compute.Buf {class})}}
+Out = struct{{.z (compute.Buf {class})}}
 Par = compute.P (compute.KT {class})(.I In, .O Out)
 reduction = (k : Par) => {{
   i = compute.range k.n

@@ -84,7 +84,7 @@ suite is green, and the minimal repro flips from
 let type_of = x => {t = _; x: t; t}
 jit = f => {
   f : _ -> _
-  (struct<.native _, .sig (type_of f)>)(.native 0, .sig _)
+  (struct{.native _, .sig (type_of f)})(.native 0, .sig _)
 }
 
 # main
@@ -106,7 +106,7 @@ silently:
 # a.lichen (frozen)
 arrow_t = Int -> Int
 # b.lichen (frozen)
-tuple_t = <Int, Int>
+tuple_t = tuple{Int, Int}
 
 # main
 ---

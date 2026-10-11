@@ -33,7 +33,7 @@ to `ExprKind::Placeholder`.
 Because `_` is a distinct token, the discard/binder uses are gone rather than
 semantically repurposed: there is no scope-dependent rule of the form "an
 unbound `_` is a hole, a bound `_` is a name". There is also no type-mode
-post-pass that rewrites `_` — `(a, b)` is always a tuple *value* and `<a, b>`
+post-pass that rewrites `_` — `(a, b)` is always a tuple *value* and `tuple{a, b}`
 always a tuple *type*, so a placeholder is a placeholder in both positions with
 no position-dependent treatment (see [`no-type-mode.md`](no-type-mode.md)).
 

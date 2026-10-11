@@ -10,8 +10,9 @@ use lichen_lowlevel::LowValue;
 /// has to carry it to the member the join adds.
 #[test]
 fn a_merge_carries_the_decided_type_to_a_member_added_after_the_commit() {
-    let (module, value, root_ty) =
-        common::evaluate("f = x => {\n  a = x(0) + x(0)\n  p = x: <Int, Int>\n  a\n}\nf (10, 20)");
+    let (module, value, root_ty) = common::evaluate(
+        "f = x => {\n  a = x(0) + x(0)\n  p = x: tuple{Int, Int}\n  a\n}\nf (10, 20)",
+    );
     assert_eq!(
         value,
         LangValue::LowValue(LowValue::USize(20)),

@@ -110,7 +110,7 @@ pub struct NativeApply { pub value: NodeId, pub decided: bool }
   fresh cell, an op node, an array shape; those are the *shape* of the grammar, not a bypass.
 - `Ctx::arrow` builds `[[domain, codomain], [FunctionType, Type]]` — the single spelling of
   the arrow encoding — but does **not** register it in the checker's `arrows` set. That set
-  drives the type *printer* (it is what renders a pair as `T -> U` instead of `<T, T>`), so
+  drives the type *printer* (it is what renders a pair as `T -> U` instead of `tuple{T, T}`), so
   only a genuinely source-level arrow belongs in it: an arrow built as a unification *pattern*,
   such as the function-ness guard's `[[?d, ?c], [FunctionType, K]]`, must stay out, and the
   caller that prints inserts it.
@@ -119,8 +119,8 @@ pub struct NativeApply { pub value: NodeId, pub decided: bool }
   second source of truth for the encoding.
 - `NativeOp::build` need not state a type at all: `SortOp` emits a bare `Sort` operator node
   over the argument's value and answers `decided: true`. The user-facing types come from the
-  embedded wrapper's annotations — `a : array<Int, _>` gates the argument, and the result
-  annotation states a length-unknown `array<Int, _>` rather than an opaque native
+  embedded wrapper's annotations — `a : array{Int, _}` gates the argument, and the result
+  annotation states a length-unknown `array{Int, _}` rather than an opaque native
   application; a sort preserves the length, so the length is only observed where it is read.
 - **Privacy**: the registry is per-module and only the plugin's own file is compiled against
   it, so `$jit` resolves privately — a second plugin's `$jit` never collides. Every other

@@ -73,10 +73,9 @@ primary  := int_literal
           | 'table' '{' pair (sep pair)* '}'        -- constant table literal
           | 'set' '{' expr (sep expr)* '}'          -- set value (members are values; the instance is a Set, not an array)
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
-          | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
-          | 'tuple' '{' expr (sep expr)* sep? '}'   -- tuple type, spelled out: a *slot* per element
-          | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
-          | 'array' '<' expr sep expr '>'          -- array type  (element type, then length)
+          | 'tuple' '{' expr (sep expr)* sep? '}'   -- tuple type: a *slot* per element
+          | 'struct' '{' sfield (sep sfield)* '}'   -- struct type  (nominal, optional field names)
+          | 'array' '{' expr sep expr '}'           -- array type  (element type, then length)
           | 'if' expr 'then' expr 'else' expr       -- conditional
 block    := (bstmt sep)* ['return' expr]            -- statements + an explicit tail (`return` anywhere)
           | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
@@ -96,7 +95,7 @@ farg     := '.' name expr                         -- named instantiation argumen
            | expr                                 -- positional argument
 ```
 
-- **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
+- **Keywords:** `Int`, `Float`, `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `=>`, `->`, `:`.  The
   `@`-led keywords — `@loop`, `@assert`, `@shallow`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
@@ -129,14 +128,14 @@ farg     := '.' name expr                         -- named instantiation argumen
   as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  The keywords
-  (`Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
+  (`Int`, `Float`, `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`) are reserved — they cannot be bound or used
   as names.
 - **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
   position — type and value alike.  In type position (the right side of `:`,
   and the components of the type forms under it) it infers the type from
-  context — `x : _`, `x : Int -> _`, `x : array<Int, _>`, `x : <Int, _>`,
-  `struct<.f Int, .g _>` — and in value position it is a typed hole: `_ : Int`
+  context — `x : _`, `x : Int -> _`, `x : array{Int, _}`, `x : tuple{Int, _}`,
+  `struct{.f Int, .g _}` — and in value position it is a typed hole: `_ : Int`
   checks as an underdetermined value of type `Int`, and `f _` / `(1, _)`
   leave a hole the context unifies.  `_` is **never a name**: it cannot be
   bound (`_ = 5`) or used as a lambda parameter (`_ => e`) — both are parse
@@ -151,7 +150,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   `<=` / `==` / `!=` / `<` / `>` / `>=` → `|` → `^` → `&` → `+` / `-` →
   `*` / `/` / `%` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
-  array lengths: `array<Int, x : T>` is the array type whose length is the annotated
+  array lengths: `array{Int, x : T}` is the array type whose length is the annotated
   expression.  `#` and `?` bind at the same precedence as `:`, so
   `e : T # p ? d` annotates the type, perspective, and doc slots, and
   `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.  `?` is the **label** (doc) slot:
@@ -192,7 +191,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   receiving the type value and no type read of the value needed.  A refinement
   written on a type survives **anywhere a type expression is consumed** — the
   annotation chain, an annotated parameter, and a compound type's element, field,
-  or function-type side — so `x : <(_ ! in_num), (_ ! in_num)>` refines both
+  or function-type side — so `x : tuple{(_ ! in_num), (_ ! in_num)}` refines both
   components of a 2-tuple, and each is enforced (`f ("a", 2)` is refused).  That is
   where a *class* contract belongs (`Num = set{Int, Float}; in_num = t => t @in
   Num`), and the type it names is the type expression's **denotation** — the
@@ -225,19 +224,19 @@ farg     := '.' name expr                         -- named instantiation argumen
 - **One grammar, no type mode.**  Types are expressions, so term and type forms
   share one grammar, and there is no *type-mode* flag: `expr : expr` parses both
   sides the same way.  `(a, b)` is always a `Tuple` *value*; the tuple *type* is
-  spelled `<a, b>` or, spelled out, `tuple{a, b}` — both are a `TypeTuple` in
-  every position — so a tuple type is written `x : <Int, Int>`, never
+  the keyword-led `tuple{a, b}`, a `TypeTuple` in every position — so a tuple type
+  is written `x : tuple{Int, Int}`, never
   `x : (Int, Int)` (the latter is a tuple value whose elements are the type-values
   `Int`).
 - **A tuple type's elements are *slots*.**  The type is a list of `[value, type,
-  attributes…]` terms, and the two spellings write the same list: `<Int # 2>` is
+  attributes…]` terms, and the braced form writes the list directly: `tuple{Int # 2}` is
   `tuple{@any : (Int # 2)}` — an element with no top-level `:` is a *type
   expression*, and its value position is the wildcard `@any`, which unifies with
   anything and constrains nothing.  An element with a top-level `:` spells the
   value position too, which is a **pin**: `tuple{5 : Int}` accepts `(5, 2)` and
   refuses `(6, 2)`, and because the pin rides in the type value it keeps holding
   through a binding (`t = tuple{5 : Int, Int}; (6, 2) : t` is refused).  An
-  attribute written on an element (`<Int # 2, Int>`) is a *requirement*: the
+  attribute written on an element (`tuple{Int # 2, Int}`) is a *requirement*: the
   value's own attribute at that position must be authorized by it, exactly as a
   whole annotation's must (`(1 # 4) : (Int # 2)` holds, `(1 # 2) : (Int # 4)`
   does not).  See `docs/notes/compound-element-slots.md`.
@@ -254,15 +253,15 @@ farg     := '.' name expr                         -- named instantiation argumen
   `table {}` is the empty table.  `t{k}` (a glued `{`) is a table lookup
   returning the entry whose stored key is deep-content-equal to `k`.
 - **Sets.**  `set{a, b, …}` is a set of ordinary values — a *value* form led by a
-  word, exactly like the table literal, because angle brackets are the spelling
-  of an expression in *type* position and a set is not one.  The members are full
+  word, exactly like the table literal, because a set's members are values.  The
+  members are full
   expressions and share one element type (a set is homogeneous, like an array
   literal); `set{}` is the empty set.  A set's **value is its members**, and what
-  makes it a set is its **type** — `set<T>`, whose shape is the element type
-  *alone*: a set has no length, so `set{a}` and `set{a, b}` are one type.  That is
-  what separates it from `array<T, n>`: a set is not indexable (`s[i]` is a
+  makes it a set is its **type**, whose shape is the element type
+  *alone* (the printer spells it `set<T>`): a set has no length, so `set{a}` and `set{a, b}` are one type.  That is
+  what separates it from `array{T, n}`: a set is not indexable (`s[i]` is a
   diagnostic — the container unify refuses it exactly as it refuses `t{k}` on an
-  array) and can never flow into an `array<T, n>` parameter.  A set of *type
+  array) and can never flow into an `array{T, n}` parameter.  A set of *type
   values* is how a contract names the classes it admits:
   `Num = set{Int, Float}` ([operator-polymorphism](notes/operator-polymorphism.md)
   §3).
@@ -300,10 +299,11 @@ farg     := '.' name expr                         -- named instantiation argumen
 
 ### 2.1 Delimiters, postfix forms, and adjacency (Glue)
 
-Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
-types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `array<Int, 3>`
-is the array type of length 3, `<Int, Type>` the tuple type, and
-`struct<.f Int, .g Type>` a nominal struct type.
+Brackets `[ ]` and parens `( )` build values; the keyword-led `tuple{…}`,
+`struct{…}` and `array{…}` build types.  `[1, 2]` is an array value and
+`(1, 2)` a tuple value; `array{Int, 3}` is the array type of length 3,
+`tuple{Int, Type}` the tuple type, and `struct{.f Int, .g Type}` a nominal
+struct type.
 
 All five postfix delimiters — `(` `{` `<` `[` `::` — are **postfix-only when
 glued** to the preceding token.  The lexer emits a zero-width `Glue` token immediately
@@ -319,48 +319,36 @@ delimiter is a fresh atom — an argument of an application:
   `f ([1, 2])` applies `f` to the array.
 - `X<e>` (glued `<`) is a **raw index**: component `e` of `X`'s *value*, read
   from a **tuple type value** (see §3).  It reads a component of a type-as-value
-  (`<Int, string><0>`), and the container's *type* must be the tuple kind.  A
+  (`tuple{Int, string}<0>`), and the container's *type* must be the tuple kind.  A
   struct type value's kind is `TypeStruct` (its components read by name,
-  `X::a`), a tuple *value*'s type is the tuple shape `<Int, Int>` rather than
+  `X::a`), a tuple *value*'s type is the tuple shape `tuple{Int, Int}` rather than
   the kind, and an atomic type's kind is `Type` — none of the three is accepted,
   and the requirement is stated as a unify, so an undecided container is refused by
-  the apply that binds it.  A spaced `<` is a fresh tuple-type
-  atom — an application argument (`f <3>` is a parse error, a single-element
-  tuple type; a two-element one, `f <Int, Type>`, applies `f` to it).  A type
-  tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
-  type is now **keyword-led** — `array<T, n>` (an `array` form in §2), never the
-  postfix `<` form.
-- **`<` and `>` are also comparisons**, and what tells the two jobs apart is the
-  token's *shape*, not a mode or a spacing convention beyond the `Glue` rule
-  above: a **glued** `<` is the raw index; otherwise an *expression before* the
-  token makes it a comparison and an *expression after* it is that comparison's
-  right operand.  `a < b` and `2 > 1` compare; `struct<.f Int, .g Type>` and `X<a>` are
-  brackets.  Two consequences, both deliberate:
+  the apply that binds it.  A **spaced** `<` is never a delimiter: the raw index is
+  the only form that opens with it.
+- **`<` and `>` keep their comparison job**, and the `Glue` rule above is the whole
+  of the distinction: a **glued** `<` is the raw index, a spaced one the less-than
+  comparison.  `a < b` and `2 > 1` compare; `X<a>` is the raw index.  One
+  consequence is deliberate:
   - **`>` compares only when an expression follows it unglued.**  A `>` followed
     by something that cannot begin an expression (a separator, a closer, the end
-    of the program) closes the bracket it is in, and so does a `>` followed by a
-    *glued* delimiter — a glued `(` or `<` belongs to the angle form
-    (`struct<.f Int, .g Int>(1, 2)` instantiates, `<Int, string><0>` reads a
-    component of the tuple type as a value).
-  - **Application wins over comparison for `<`.**  `f <Int, Type>` is still `f`
-    applied to the tuple type; `a < b` is the comparison only because `<b>` is
-    not a tuple type (one element), so the application is tried, fails, and the
-    comparison takes its place.  A comparison's `<` is therefore written with a
-    space before it, and `a<b>` (glued) stays the raw index.
+    of the program) closes the raw index it is in, and so does a `>` followed by a
+    *glued* delimiter, which is a postfix form rather than the start of an operand
+    (`tuple{Int, string}<0>` reads a component of the tuple type as a value).
 - `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
   whose type must itself be a TypeStruct kind (the name table lies there, in the
   marker payload at
-  `container_ty[0][0][1]`).  It reads the field's *type* as a value — `struct<.a
-  Int, .b string>::a` is `Int : Type`.  The requirement is a unify for **both**
+  `container_ty[0][0][1]`).  It reads the field's *type* as a value — `struct{.a
+  Int, .b string}::a` is `Int : Type`.  The requirement is a unify for **both**
   tiers: a decided non-struct container is refused where it stands
-  (`expected TypeStruct, found array<Int, 2>`), and an undecided one is pinned
+  (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the
   named sibling of `X<e>`; `.` (`.a`) is the named field read over a struct
   *instance*, whose kind (not type) must be TypeStruct — a unify on the kind slot
   where the container's type is decided, and a **condition on the assert
   channel** where it is not: an undecided container (a parameter, a call result)
   is re-checked per application, so `f = x => x.a; f [10, 20]` is refused with
-  `expected a struct type, found array<Int, 2>` (the refused body still records
+  `expected a struct type, found array{Int, 2}` (the refused body still records
   the runtime table read it fails).  A spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
@@ -370,10 +358,10 @@ delimiter is a fresh atom — an argument of an application:
   one-field instantiation is spelled `a(e,)`, mirroring the tuple grammar's
   comma discipline (`a()` / `a(,)` carry no fields).  A fresh atom may itself open with a glued delimiter,
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
-  `Int` and `Type` (a tuple type is `x : <Int, Type>`).
+  `Int` and `Type` (a tuple type is `x : tuple{Int, Type}`).
 - `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
   `{k}`.  A table literal (`table{…}`), a set value (`set{…}`), a struct type
-  (`struct<…>`) and an array type (`array<…>`) are *keyword-led*, so their
+  (`struct{…}`) and an array type (`array{…}`) are *keyword-led*, so their
   delimiter sits directly after the keyword.
 
 ### 2.2 The `---...---` preprocessor block
@@ -428,11 +416,11 @@ maps every span back to the original file.
   `less_or_equal`, `greater_or_equal`.  Each takes **one argument — the operand
   group, a 2-wide array** — and its element type carries the **class** refinement,
   so the contract is the whole of it: the elements' shared class is the operand
-  *tie* (an `array<T, n>`'s elements are one type), the length is the operator's
+  *tie* (an `array{T, n}`'s elements are one type), the length is the operator's
   *arity*, and the class is the refinement:
 
   ```lichen
-  add = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+  add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }
   ```
 
   `add [1, 2]` is `3`, `add [1.5, 2.5]` is `4.0`, `add [1, 1.5]` is refused by the
@@ -513,7 +501,7 @@ maps every span back to the original file.
   instead parses as a **struct-returning block**: its value is an anonymous
   struct instance whose fields are the **bindings** — a `name = value`
   binding is a field (its name is the binding's), and every field is therefore
-  named, as in a `struct<…>` declaration (see *Nominal struct types*).  A bare
+  named, as in a `struct{…}` declaration (see *Nominal struct types*).  A bare
   expression is an ordinary statement: it is checked, its value is discarded,
   and it is never a field, so `{ 1; x = 2 }` returns a record with the single
   field `.x`.  A `let`
@@ -530,7 +518,7 @@ maps every span back to the original file.
   (`(id => ((id 5 : Int), (id Type : Type))) (x => x)`) checks as well.  No
   generalize/instantiate special form exists or is needed.
 - **Types are first-class values.**  `Int`, `string`, `Type`, function types
-  (`T -> U`), tuple types, and array types (`array<T, n>`) are ordinary values that
+  (`T -> U`), tuple types, and array types (`array{T, n}`) are ordinary values that
   can be passed around, bound, and used in type position.  `Type : Type`
   holds: the type chain `value → type → kind → …` closes **in a cycle at
   `Type`** — the universe is the self-referential node `K = [Type, K]`.
@@ -544,7 +532,7 @@ maps every span back to the original file.
   `f`), so the arrow has no term of its own left to denote and the type of a
   function is one thing rather than two (see
   [function-type-merge](notes/function-type-merge.md)); and
-  `array<Int, 3> : Type` *fails*
+  `array{Int, 3} : Type` *fails*
   (the array type's type is the kind `[ArrayType, Type]`).  There is no
   subtyping relation at all (`Int` is not `<: Type`); kinding is an ordinary
   type check, so a literal in type position is a kinding error, not a separate
@@ -552,7 +540,7 @@ maps every span back to the original file.
 - **Unification is equi-recursive — by design.**  There is deliberately **no
   occurs check**: cyclic types unify, and the universe *requires* a cycle
   (`K = [Type, K]` above).  A recursive struct type is an ordinary cyclic
-  type — `A = struct<.f Int, .g B>; B = struct<.f Type, .g A>` checks and runs (see
+  type — `A = struct{.f Int, .g B}; B = struct{.f Type, .g A}` checks and runs (see
   `examples/struct_recursion.lichen`).  This is the approved semantics
   ([function-type-merge](notes/function-type-merge.md) records why), not a
   caveat: the flip side of `Type : Type`'s flexibility is that decidability
@@ -628,8 +616,8 @@ maps every span back to the original file.
   state it as a **pin** — the container's type is unified with a fresh array /
   tuple type — so a container that is not decided yet is refused by the
   *application* that supplies it, per call, rather than skipped: `x(0)` over an array is
-  `expected <?a, …>, found array<Int, 2>`, and `x[0]` over a tuple is
-  `expected array<…>, found <Int, Int>`.  The named reads state the same
+  `expected tuple{?a, …}, found array{Int, 2}`, and `x[0]` over a tuple is
+  `expected array{…}, found tuple{Int, Int}`.  The named reads state the same
   requirement as a unify on the corresponding slot: `.a` needs the container's
   *kind* to be a struct kind, `X::a` needs its *type* to be one (§3, *the raw
   named read*).  A
@@ -646,19 +634,19 @@ maps every span back to the original file.
 - **The raw index `X<e>`.**  The glued `<` postfix reads component `e` of `X`'s
   **value**, and the container's *type* must be the **tuple kind** — a tuple *type
   value* is what the form is for, and its components are read structurally.  It
-  is the way to read a component of a *type-as-value* directly: `<Int, string><0>`
+  is the way to read a component of a *type-as-value* directly: `tuple{Int, string}<0>`
   is the `Int` type (the tuple type's first component), and the container may be
   a bound name, a parameter or a call result.  The requirement is stated once, as
   a **unify**: a decided container is refused where it stands
-  (`expected TypeTuple, found <Int, Int>` for the tuple *value* `(1, 2)`, whose
+  (`expected TypeTuple, found tuple{Int, Int}` for the tuple *value* `(1, 2)`, whose
   type is the tuple shape rather than the kind; `expected TypeTuple, found
   TypeStruct` for a struct type value, whose components are read by name —
-  `X::a`; `expected TypeTuple, found array<Int, 2>` for an array), and an
+  `X::a`; `expected TypeTuple, found array{Int, 2}` for an array), and an
   undecided one is pinned, refused by the apply that binds it.  Nothing else is
   a container.
   The read's result is **the component's own pair**: its value from the pair's
   value slot, and its type from the type slot — the component type value's *kind*
-  (`Type` for `<Int, string><0>`, and a `TypeStruct` kind for a component that is
+  (`Type` for `tuple{Int, string}<0>`, and a `TypeStruct` kind for a component that is
   itself a struct type).  The value slot is read lazily; the type slot is computed
   when the read is checked, so a later check on the read's own type compares it
   rather than binding it, and a read the kind requirement above refused is not
@@ -668,7 +656,7 @@ maps every span back to the original file.
   recorded during the definition pass, so the build is refused.  `e[i]` is how a
   runtime array's element is read.  This is the syntax the
   array type used to occupy — the array type is now the keyword-led
-  `array<T, n>`.
+  `array{T, n}`.
 - **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
   **TypeStruct value** — the container's *type* must itself be a TypeStruct
   kind (`[[TypeId, names, names_in_order], TypeStruct]` under the kind's
@@ -678,7 +666,7 @@ maps every span back to the original file.
   it stands, an undecided one is pinned and refused by the apply that binds it
   (this is what removed the `TableGet` panic a deferred non-struct used to hit).
   It yields the field's *type* as a value, so
-  `struct<.a Int, .b string>::a` is `Int : Type` — the type being that field type
+  `struct{.a Int, .b string}::a` is `Int : Type` — the type being that field type
   value's *kind*, `Type` for a scalar field and a `TypeStruct` kind for a
   struct-typed one, computed when the read is checked exactly as `X<e>`'s is, so
   a later check on the read's type compares it.  A container the requirement
@@ -691,15 +679,15 @@ maps every span back to the original file.
   compare any two same-typed values (an `Int` or a type value): `S::a == Int`
   is `1`, `S::a == string` is `0`, while a cross-type comparison is a check-time
   `BinOp` error.
-- **Nominal struct types.**  `struct<.x T1, ..., .z Tn>` is a *new type*; **every
+- **Nominal struct types.**  `struct{.x T1, ..., .z Tn}` is a *new type*; **every
   field carries a name**, given by the `.name` prefix.  The leading `.`
   unambiguously marks a named field — the language-server-friendly
   discriminator, since a field name and a field-type expression (both
   identifiers) can never be confused while the user is typing — and a field
-  *without* one (`struct<Int, Type>`) is a `StructFieldName` check error: a
+  *without* one (`struct{Int, Type}`) is a `StructFieldName` check error: a
   struct instance reads by name, so an unnamed field would have no read at all
   (the positional form `a(k)` is the *tuple* read, see *Indexing*).  The field
-  list may be **empty**: `struct<>` is a struct type with no fields, and its
+  list may be **empty**: `struct{}` is a struct type with no fields, and its
   name→index table is *present and empty* — an empty table, not the
   name-table-less marker an anonymous positional struct gets — so a shape with no
   members has a spelling, and a zero-field type is as nominal as any other.  The names
@@ -715,8 +703,8 @@ maps every span back to the original file.
   occurrences never unify and a struct never unifies with a same-shape tuple
   type (nominal identity).  Bind one occurrence and it is reusable: the
   checker compiles each expression once, so a bound or parameter-passed
-  struct type used many times is the *same* type — `s = struct<.f Int>; [s, s]`
-  is a homogeneous array, while `[struct<.f Int>, struct<.f Int>]` (two
+  struct type used many times is the *same* type — `s = struct{.f Int}; [s, s]`
+  is a homogeneous array, while `[struct{.f Int}, struct{.f Int}]` (two
   source occurrences) is a nominal conflict.
 - **Struct instantiation.**  `s(1, 2)` — an application whose callee is a
   struct type — wraps the positional tuple in the nominal type: it compiles
@@ -747,8 +735,8 @@ maps every span back to the original file.
   array read.  Values of struct type beyond the wrapped
   tuple are future work.
 - **Named instantiation arguments.**  An argument of an instantiation may be
-  prefixed with the same `.name` discriminator a `struct<…>` definition
-  uses: `S = struct<.x Int, .y Type>; S(.y Int, .x 1)`.  The names ride the
+  prefixed with the same `.name` discriminator a `struct{…}` definition
+  uses: `S = struct{.x Int, .y Type}; S(.y Int, .x 1)`.  The names ride the
   `Instantiate` expression to the checker, which validates them against the
   struct type's name table and **reorders** the argument values into the
   definition's positional order — a later `.b` read sees the
@@ -768,7 +756,7 @@ maps every span back to the original file.
   unresolved too, and the reorder is a **lazy read** that resolves at the
   unification binding the callee's type.  `f = s => s(.y Int, .x 1); f (S)`
   and `f (_(.x 1, .y 2))` reorder at the apply (with `f = x: S => x` and
-  `S = struct<.x Int, .y Int>`), the same order the positional form already
+  `S = struct{.x Int, .y Int}`), the same order the positional form already
   defers in.  The supplying argument is found by a lookup keyed by the
   field's own name — or, for a positional argument, by its rank among the
   positional ones — and, when every argument's type is decided, by that type
@@ -777,20 +765,20 @@ maps every span back to the original file.
   the field-list unify's, as for a positional instantiation.  A **duplicate**
   name is refused at check time: one name supplying two positions is a
   structural mismatch whatever the field list is.
-- **Dependent array types (pinning).**  The length of `array<T, n>` is an arbitrary
-  expression, so `array<Int, n>` where `n` is bound is a legal dependent type.  When
+- **Dependent array types (pinning).**  The length of `array{T, n}` is an arbitrary
+  expression, so `array{Int, n}` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an
   unevaluated `Index` over `n`'s value cell — resolves as a pure reference
   and is pinned to the value it must equal: the checker binds `n` to the
   literal's length, so the parameter is monomorphized.
-  `((n => ([1, 2, 3] : array<Int, n>)) 3)` checks and runs, and applying any other
+  `((n => ([1, 2, 3] : array{Int, n})) 3)` checks and runs, and applying any other
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
 - **The `_` placeholder.**  A `_` in any position compiles to an undecided
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow
-  `?a → ?a`, and `[1, 2, 3] : array<Int, _>` the length `3`.  Partial types infer
+  `?a → ?a`, and `[1, 2, 3] : array{Int, _}` the length `3`.  Partial types infer
   the rest: `((x => x) : (Int -> _)) 5` fixes the input to `Int` and infers
   the output.  In value position the same hole is a *typed* hole: `_ : Int`
   checks as an underdetermined `Int` value (its value cell stays undecided,
@@ -807,7 +795,7 @@ maps every span back to the original file.
   is its shape and the type its kind.  Everything a builtin read would give
   follows from that unification, with nothing forced (a read of an undecided
   parameter resolves at the apply): `type_of (1)` is `Int : Type`,
-  `type_of [1, 2]` is `array<Int, 2>`, `type_of Type` is `Type`, and in a type
+  `type_of [1, 2]` is `array{Int, 2}`, `type_of Type` is `Type`, and in a type
   position it is exactly the operand's type, so `5 : type_of (1)` checks.  The
   standard library ships it (`std.type_of`, `lichen-std/_.lichen`) and
   `examples/type_of.lichen` uses it.
@@ -844,15 +832,15 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `_` (any position — type or value) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
-| `<T1, …, Tn>` | `TypeTuple(range)` |
-| `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct<T1, …>`) is a `StructFieldName` check error |
+| `tuple{T1, …, Tn}` | `TypeTuple(range)` |
+| `struct{.a T1, .b T2}` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct{T1, …}`) is a `StructFieldName` check error |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
 | `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
 | `[e1, @shallow e2, @shallow(2) e3]` | `ShallowArray { range, depths }` — any `@shallow`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `@shallow`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `e ~ "text"` | **no kind at all** — a mark is an entry in `IR::marks` keyed by `e`'s `ExprId`, and the expression lowers to what it would lower to without it.  An annotation node is allocated only when the chain also spells a type, a perspective, a refinement or a doc |
-| `array<T, n>` | `TypeArray { element_type, length }` |
+| `array{T, n}` | `TypeArray { element_type, length }` |
 | `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
 | `X<e>` | `RawIndex { container, index }` — a raw read of a **tuple type value**'s component: the container's type is unified against the tuple kind, so a non-tuple container is refused at check time, or at the apply that binds it when the container is not decided yet |
@@ -941,7 +929,7 @@ diagnostics.
 
 Checker messages are rendered by the same printer as the CLI output, so
 types appear in the language's own syntax: `Int`, `Type`, `T1 -> T2`,
-`<T1, T2>`, `array<T, len>`, `struct<...>`, and undecided cells as stable `?a`,
+`tuple{T1, T2}`, `array{T, len}`, `struct{...}`, and undecided cells as stable `?a`,
 `?b`, … names (cells in one unification class share a name).  The boxed
 highlevel `Diag` in `check` stays raw — it carries the structured facts
 (`kind`, the classes `a`/`b` and their values, the `error_index` into

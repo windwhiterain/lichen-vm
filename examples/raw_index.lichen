@@ -1,5 +1,5 @@
 ---
   order = "11"
-  output = "(Int, string, Int, string): <Type, Type, Type, Type>"
+  output = "(Int, string, Int, string): tuple{Type, Type, Type, Type}"
 ---
-(<Int, string><0>, <Int, string><1>, struct<.a Int, .b string>::a, struct<.a Int, .b string>::b)
+(tuple{Int, string}<0>, tuple{Int, string}<1>, struct{.a Int, .b string}::a, struct{.a Int, .b string}::b)

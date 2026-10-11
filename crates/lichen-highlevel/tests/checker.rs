@@ -133,7 +133,7 @@ fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_type_tuple(elements)
 }
-/// A struct type expression with named fields: `struct<.a T1, .b T2>`.
+/// A struct type expression with named fields: `struct{.a T1, .b T2}`.
 fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> =
         fields.iter().map(|&(e, name)| (e, Some(name))).collect();
@@ -143,7 +143,7 @@ fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
 fn array(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_array(elements)
 }
-/// The real array type: `array<Int, 3>`.
+/// The real array type: `array{Int, 3}`.
 fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
     ir.alloc(ExprKind::TypeArray {
         element_type,
@@ -943,7 +943,7 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 
 #[test]
 fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
-    // (\x. x) : <Type, Int> — a function's type is not a tuple type.
+    // (\x. x) : tuple{Type, Int} — a function's type is not a tuple type.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -1021,7 +1021,7 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     let b = build(whole, ir);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
-    // The resolved root type is the tuple type `<Int, Type>`; each element's
+    // The resolved root type is the tuple type `tuple{Int, Type}`; each element's
     // type is its slot's type position.
     let pair = array_ids(&b, b.root_ty);
     assert_eq!(pair.len(), 2);
@@ -1345,14 +1345,14 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct<.f Int, .t Type> — the pair [[int, Type], [[TypeId(0), names,
+    // struct{.f Int, .t Type} — the pair [[int, Type], [[TypeId(0), names,
     // names_in_order], TypeStruct]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
     let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
     let mut b = build(s, ir);
-    assert!(b.ok, "struct<.f Int, .t Type> should kind");
+    assert!(b.ok, "struct{{.f Int, .t Type}} should kind");
     assert!(b.module.unify_errors.is_empty());
     // the shape is the positional field-**slot** list [slot(Int), slot(Type)] —
     // the nominal id does not ride in the shape
@@ -1450,7 +1450,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct<.a Int, .b Type> — the names slot maps each name to its index.
+    // struct{.a Int, .b Type} — the names slot maps each name to its index.
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1611,14 +1611,14 @@ fn a_struct_type_unifies_with_itself() {
 
 #[test]
 fn an_annotation_against_a_struct_type_reports_the_conflict() {
-    // 5 : struct<.f Int> — the literal's int type conflicts with the struct type.
+    // 5 : struct{.f Int} — the literal's int type conflicts with the struct type.
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
     let f = int_t(&mut ir);
     let s = named_type_struct(&mut ir, &[(f, "f")]);
     let a = ann(&mut ir, five, s);
     let b = build(a, ir);
-    assert!(!b.ok, "5 : struct<.f Int> must fail");
+    assert!(!b.ok, "5 : struct{{.f Int}} must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
@@ -1657,7 +1657,7 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
 
 #[test]
 fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
-    // (\x. (x : struct<.f Int>)) 5 — the apply-time unify checks the argument.
+    // (\x. (x : struct{.f Int})) 5 — the apply-time unify checks the argument.
     let mut ir = IR::new();
     let f = int_t(&mut ir);
     let s = named_type_struct(&mut ir, &[(f, "f")]);
@@ -1758,7 +1758,7 @@ fn a_struct_instantiation_checks_its_fields() {
     let b = build(inst, ir);
     assert!(
         !b.ok,
-        "s(1, 2) against struct<.f Type, .t Type> must fail (fields)"
+        "s(1, 2) against struct{{.f Type, .t Type}} must fail (fields)"
     );
     // a literal is not a positional value
     let mut ir = IR::new();
@@ -1809,7 +1809,7 @@ fn instances_of_different_struct_occurrences_conflict() {
 
 #[test]
 fn an_instantiation_through_a_call_result_callee_checks() {
-    // `(mk (Int))(1, 2)` with `mk = u => struct<...>` — the callee is an
+    // `(mk (Int))(1, 2)` with `mk = u => struct{...}` — the callee is an
     // unevaluated apply the checker forces first.
     let mut ir = IR::new();
     let p = param(&mut ir);
@@ -1872,7 +1872,7 @@ fn an_instantiation_requires_a_struct_type_callee() {
     let t = type_tuple(&mut ir, &[f1, f2]);
     let inst = instantiate(&mut ir, t, v);
     let b = build(inst, ir);
-    assert!(!b.ok, "<Int, Int>(1, 2) must be rejected");
+    assert!(!b.ok, "tuple{{Int, Int}}(1, 2) must be rejected");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
@@ -2071,7 +2071,7 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : array<Int, _> — the placeholder length binds to the
+    // [1, 2, 3] : array{Int, _} — the placeholder length binds to the
     // element count.
     let mut ir = IR::new();
     let e1 = int(&mut ir, 1);
@@ -2083,7 +2083,7 @@ fn an_underscore_in_the_array_length_position() {
     let t = type_array(&mut ir, it, h);
     let a = ann(&mut ir, arr, t);
     let mut b = build(a, ir);
-    assert!(b.ok, "[1, 2, 3] : array<Int, _> should check");
+    assert!(b.ok, "[1, 2, 3] : array{{Int, _}} should check");
     // The annotated type's length slot unifies with the literal's length 3.
     let ann_shape = array_ids(&b, b.state[a].ty.unwrap())[0];
     let length_slot = array_ids(&b, ann_shape)[1];
@@ -2472,7 +2472,7 @@ fn a_body_index_fails_at_the_violating_argument() {
 
 #[test]
 fn an_annotated_struct_parameter_function_reads_a_named_field() {
-    // `f = (p : struct<.x Int, .y Int> => p.x)`; `f (struct<.x 1, .y 2>)`.
+    // `f = (p : struct{.x Int, .y Int} => p.x)`; `f (struct{.x 1, .y 2})`.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let int_x = int_t(&mut ir);
@@ -2486,10 +2486,10 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
     let arg = instantiate(&mut ir, struct_ty, fields);
     let call = app(&mut ir, f, arg);
     let b = build(call, ir);
-    assert!(b.ok, "f (struct<.x 1, .y 2>) must check");
+    assert!(b.ok, "f (struct{{.x 1, .y 2}}) must check");
 }
 
-/// Two **separately written** occurrences of `struct<.x Int>` are two distinct
+/// Two **separately written** occurrences of `struct{.x Int}` are two distinct
 /// nominal types.
 ///
 /// # Invariant
@@ -2522,7 +2522,7 @@ fn two_written_struct_types_are_distinct_nominal_types() {
 
 #[test]
 fn an_open_struct_annotation_lets_its_field_be_read() {
-    // `F = T: KT T => T.I` with `KT = _x => struct<.I _, .O _>` — the
+    // `F = T: KT T => T.I` with `KT = _x => struct{.I _, .O _}` — the
     // annotation names the fields, leaving their types open.
 
     // The annotated parameter's type is compiled and unified into its slot
@@ -2534,7 +2534,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
     let t = param(&mut ir);
     let open_i = hole(&mut ir);
     let open_o = hole(&mut ir);
-    // **One** named struct type for both sides: two written `struct<…>` are
+    // **One** named struct type for both sides: two written `struct{…}` are
     // distinct.
     let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
     let read = named_field(&mut ir, t, "I");
@@ -2577,7 +2577,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 
 #[test]
 fn an_annotated_tuple_parameter_function_reads_an_element() {
-    // The regression `f = p : <Int, Int> => p(0)`; `f (1, 2)` failed with
+    // The regression `f = p : tuple{Int, Int} => p(0)`; `f (1, 2)` failed with
     // `expected raw[?a, Int], found raw[?a, Int]`.
     let mut ir = IR::new();
     let p = param(&mut ir);
@@ -2629,7 +2629,7 @@ fn common_value(value: &HighProgramValue) -> u64 {
 
 #[test]
 fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
-    // `f = (p : struct<.x Int, .y Int> => p)`; `g = (a => f a)`.
+    // `f = (p : struct{.x Int, .y Int} => p)`; `g = (a => f a)`.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let int_x = int_t(&mut ir);

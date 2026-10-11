@@ -220,17 +220,15 @@ fn operators_and_keywords_lex() {
 #[test]
 fn angle_brackets_lex_as_their_own_tokens() {
     assert_eq!(
-        kinds("array<Int, 3> <Int, Type>"),
+        kinds("X<0> a > b"),
         vec![
-            TokenKind::KwArray,
+            TokenKind::Name("X".to_string()),
             TokenKind::LAngle,
-            TokenKind::KwInt,
-            TokenKind::Int(3),
+            TokenKind::Int(0),
             TokenKind::RAngle,
-            TokenKind::LAngle,
-            TokenKind::KwInt,
-            TokenKind::KwType,
+            TokenKind::Name("a".to_string()),
             TokenKind::RAngle,
+            TokenKind::Name("b".to_string()),
             TokenKind::Eof,
         ]
     );

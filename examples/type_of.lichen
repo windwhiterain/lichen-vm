@@ -1,7 +1,7 @@
 ---
   order = "5"
   std = import "../lichen-std/_.lichen"
-  output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
+  output = "(Int, Type, Int, array{Int, 2}, Type, 5): tuple{Type, Type, Type, TypeArray, Type, Int}"
 ---
 f = std.type_of
 g = x => std.type_of x

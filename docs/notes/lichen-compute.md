@@ -18,7 +18,7 @@ k = compute.jit (x : Int => x + 1)  -- jit: compile the lambda to a kernel (via 
 compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 
-A **kernel is a plain struct** `K = _x => struct<.native _, .I _, .O _>` — the
+A **kernel is a plain struct** `K = _x => struct{.native _, .I _, .O _}` — the
 `.native` field holds the opaque compiled wasm artifact (a `Kernel`/`ParKernel`
 value), and `.I` (the domain) and `.O` (the codomain) carry the function
 signature. There is **no** `TypeKernel`/`TypeParKernel` kind marker in the
@@ -26,10 +26,10 @@ vocabulary; a kernel's "type" is just the struct, and the checker transfers
 the whole function-apply machinery to it by reading `.native`/`.I`/`.O` through
 the struct's field accessors. Because the vocabulary no longer special-cases a
 kernel type, a `jit` result renders as the raw struct
-(`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) rather than the
+(`struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}`) rather than the
 old `Kernel : Int -> Int` — the concrete signature lives in `.I`/`.O`, where the
 language's shared struct printer spells it. A **buffer** is the same kind of
-wrapper, `Buf = T => struct<.native _, .element T>` (no `TypeBuffer`/`TypeWrite`
+wrapper, `Buf = T => struct{.native _, .element T}` (no `TypeBuffer`/`TypeWrite`
 marker, and no `BufferId`): the packed payload rides in `.native` and the element
 type in `.element`.
 
@@ -81,24 +81,24 @@ not callee-type dispatch:
 
 ```
 let type_of = x => {t = _; x: t; t}
-KT = _x => struct<.I _, .O _>
-K = _x => struct<.native _, .I _, .O _>
-A = I => struct<.n Int, .I I>
-P = T: KT _ => struct<.n Int, .in T.I, .out T.O>
+KT = _x => struct{.I _, .O _}
+K = _x => struct{.native _, .I _, .O _}
+A = I => struct{.n Int, .I I}
+P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
 S = T: KT _ => A T.I -> T.O
-Buf = T => struct<.native _, .element T>
+Buf = T => struct{.native _, .element T}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I => {r = $call(k.native, a); r: k.O; r}
 parallel = f => b: string => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O I::out)}
 plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => $range(x): Int
-Read = T => struct<.from (Buf T), .at Int>
-Write = T => struct<.to (Buf T), .at Int, .value T>
+Read = T => struct{.from (Buf T), .at Int}
+Write = T => struct{.to (Buf T), .at Int, .value T}
 read = (x : (Read _)) => $read(x.from, x.at): x.from.element
 write = (x : (Write _)) => $write(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
-buffer = (xs : array<_, _>) => ($buffer(xs) : (Buf _))
+buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)
 ```
@@ -183,7 +183,7 @@ arm:
   fresh cell — so an argument a checker rejects reaches `call` but not `launch`, and the
   arity check is the only one a `call` ever gets.
 - **`Parallel`** — `compile_parallel_fragment` lowers the index function's body
-  over the named parameter `struct<.n Int, .in …, .out …>` (the loop index from
+  over the named parameter `struct{.n Int, .in …, .out …}` (the loop index from
   `compute.range`) to a wasm function whose leaves are the parameter's scalars
   followed by the index, one `BufferWriteCall` per output, and records the output
   count and the role paths on the fragment → `ParKernel(id, backend)`.
@@ -366,7 +366,7 @@ snapshotting of a bound argument and no class-rep routing, so the launch-argumen
 typechecker" guarantee holds because the checker's gates run first; the JIT only lowers a
 graph the checker has already accepted.
 
-A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : <Int, Int> =>
+A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : tuple{Int, Int} =>
 p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
 **low type** — seeded from the parameter's type cell by the encoding authority, then read
 back off the parameter's class (see [compute-jit-low-types](compute-jit-low-types.md)) — which
@@ -376,7 +376,7 @@ drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element
 `flatten_offset`. On the launch side the tuple argument is unwrapped by `collect_args` and
 the now multi-arity `main` is called through the dynamic `wasmi::Func::call` API.
 
-A **tuple codomain** is the mirror: `compute.jit (p : <Int, Int> => (p(0), p(1)))`
+A **tuple codomain** is the mirror: `compute.jit (p : tuple{Int, Int} => (p(0), p(1)))`
 compiles to wasm `(i64, i64) -> (i64, i64)`. `codomain_leaves` resolves the body's
 return value into the leaves to emit — a bare value is the one-leaf form, a
 materialized tuple value one leaf per element, in source order — and each leaf is
@@ -583,7 +583,7 @@ tuple-domain reads nowhere.
 
 The slot is the path **flattened**, not summed. A flat tuple's positions sum,
 because every element before the one named holds exactly one leaf. A nested tuple's
-do not: in `<<Int, Int>, Int>`, `p(1)` names the outer element at position 1, which
+do not: in `tuple{tuple{Int, Int}, Int}`, `p(1)` names the outer element at position 1, which
 starts after the inner tuple's **two** leaves — offset **2**, not 1. Summing read
 the wrong parameter and the fragment answered `2 + 3 + 3`. The steps come out
 innermost-first — the walk descends from the read — so they are reversed before
@@ -751,11 +751,11 @@ family — as `value: type` end-to-end runs. The cross-kernel group pins the mul
 mechanisms separately: a concrete tuple argument, a whole-parameter pass-through, a
 sub-tuple pass-through against a nested callee domain, and the same tuple argument through
 the wrapper `launch` (whose argument arrives as a `Parameterized` cell). The assertions pin
-the struct rendering (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) and
+the struct rendering (`struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}`) and
 the lazily-read codomain resolution (`6 : Int`, `12 : Int`).
 
 The **multi-value** group pins a **tuple codomain** end to end — the mirror of the
-multi-arity domain: two leaves returning `(5, 3): <Int, Int>`, a per-leaf body
+multi-arity domain: two leaves returning `(5, 3): tuple{Int, Int}`, a per-leaf body
 (pin `5, 8`) so a leaf emitted from the wrong stack slot would show, a returned
 tuple indexed back with `r(0)`/`r(1)`, a three-leaf codomain `(7, 8, 9)` (the
 distinct wasm signature that forces `assemble_module` to key its type index on the
@@ -825,7 +825,7 @@ assembler's per-arity type section already matches. Two argument shapes cover it
 
 - **A whole-parameter read passes through** as the parameter's own locals. A domain's leaves
   are contiguous in the flattened layout (what `flatten_offset` counts), so `r(1)` under a
-  `<Int, <<Int,Int>, Int>>` domain starts at local 1 and supplies the callee's three leaves
+  `tuple{Int, tuple{tuple{Int,Int}, Int}}` domain starts at local 1 and supplies the callee's three leaves
   from locals 1, 2, 3. The read's own sub-shape must flatten to the callee's arity — a
   shorter read would push the *next* parameter's local as the callee's last argument, so a
   mismatch is refused by arity rather than trusted.

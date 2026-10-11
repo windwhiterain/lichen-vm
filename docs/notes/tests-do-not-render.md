@@ -15,7 +15,7 @@ the printer produced. Three reasons, each already paid for:
   because a fallback reading was ambiguous with a form the printer understood; a
   test that pinned the old spelling failed for a *better* rendering.  Measured:
   fixing the cross-module universe reading turned
-  `(43, 44): <raw[Int, Type], raw[Int, Type]>` back into `<Int, Int>`, and a test
+  `(43, 44): tuple{raw[Int, Type], raw[Int, Type]}` back into `tuple{Int, Int}`, and a test
   asserting the string would have had to be edited for a printer bug fix.
 - **It couples a test to a layer it is not testing.**  A kernel test that reads a
   type through the printer starts failing when a *lowering* decision changes how

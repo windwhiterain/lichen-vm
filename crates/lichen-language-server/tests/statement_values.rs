@@ -103,7 +103,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         // The type is read where it is decided: the input and output fields hold
         // types, so their own type is the universe.
         assert_eq!(
-            sv.ty, "struct<.native raw[?a, ?b], .I Type, .O Type>",
+            sv.ty, "struct{.native raw[?a, ?b], .I Type, .O Type}",
             "type = {:?}",
             sv.ty
         );
@@ -119,7 +119,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     assert_eq!(
         hover,
         "`k_double` — `(raw Kernel, Int, Int) : \
-         struct<.native raw[?a, ?b], .I Type, .O Type>`"
+         struct{.native raw[?a, ?b], .I Type, .O Type}`"
     );
 }
 

@@ -647,7 +647,7 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 ## Recovered measurements
 
 **The named-parameter spelling is part of the refusal, not a transcription of it.**
-Under `struct<.n Int, .in In1>` a dispatch returns the parameter's `.out` group, so
+Under `struct{.n Int, .in In1}` a dispatch returns the parameter's `.out` group, so
 the offending operator has to name the **buffer inside** it (`first.z`); handing it
 the dispatch's result says "this is an array", which is the `compute.parallel`
 refusal rather than the graph-recording one. Reaching the rule also needed the
