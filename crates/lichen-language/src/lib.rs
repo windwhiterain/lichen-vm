@@ -14,6 +14,7 @@ pub use lichen_language_parser::ast;
 pub use lichen_language_parser::path;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
+pub mod automatic_tiling;
 pub mod cells;
 pub mod compile;
 pub mod diag;

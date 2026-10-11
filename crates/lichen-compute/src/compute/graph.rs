@@ -83,6 +83,18 @@ pub fn lookup(id: GraphId) -> Result<Graph, String> {
         .ok_or_else(|| format!("graph {id} is not registered, so another process built it"))
 }
 
+/// Put a rewritten graph in the store under **its own** digest, and answer the id that names it.
+///
+/// # Invariant
+/// A digest names the bytes it stores. A rewritten graph's bodies differ, so its digest does and
+/// it takes an entry of its own: the recording's entry is left as the program wrote it.
+///
+/// Interning rather than writing over that entry is what keeps repeated runs from growing the
+/// store — a rewrite that is the same bytes is the same id.
+pub fn store(graph: &Graph) -> GraphId {
+    intern(graph.clone())
+}
+
 // --- the recording -----------------------------------------------------------
 
 /// A recording in progress, reached by a dispatch with no argument to give it.
@@ -455,10 +467,12 @@ pub enum RunArgument {
 ///
 /// # Invariant
 /// The result is left where it is: a value the device wrote stays a resident id and the caller
-/// downloads it when it asks. Everything happens in here and the value table never leaves, because
-/// a `Value` can be a submission and a wait consumes it.
+/// downloads it when it asks, because a `Value` can be a submission and a wait consumes it.
+///
+/// **The graph is the caller's**, looked up and possibly rewritten before this point: a graph a
+/// pass handed back is the one that has to run.
 pub fn run(
-    id: GraphId,
+    graph: &Graph,
     backend_name: Backend,
     arguments: Vec<RunArgument>,
     policy: Policy,
@@ -470,7 +484,6 @@ pub fn run(
                 .into(),
         );
     };
-    let graph = lookup(id)?;
     if let Backend::Cpu = backend_name {
         return Err(
             "this graph was compiled for the \"cpu\" backend, and a graph runs through the \
@@ -490,7 +503,7 @@ pub fn run(
         })
         .collect();
     let table = Runner::new(&*backend, policy)
-        .run(&graph, inputs)
+        .run(graph, inputs)
         .map_err(|refusal| format!("this graph could not be run: {refusal}"))?;
     let returned: Vec<ValueId> = graph
         .returns()

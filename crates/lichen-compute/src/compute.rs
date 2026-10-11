@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use lichen_graph_ir::Policy;
+use lichen_graph_ir::{Count, Node, Policy};
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{
@@ -33,6 +33,7 @@ mod body;
 use body::Lower;
 pub mod fused;
 pub mod graph;
+pub mod graph_pass;
 pub(crate) mod wasm;
 
 use graph::{Extent, Placed, RunArgument, RunResult};
@@ -43,6 +44,10 @@ pub use fused::{
     write_fused_kernel,
 };
 pub use graph::GraphId;
+pub use graph_pass::{
+    GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, set_graph_pass,
+    take_graph_pass_lines,
+};
 
 /// The diagnostic a graph's own refusals are recorded under.
 ///
@@ -50,6 +55,14 @@ pub use graph::GraphId;
 /// Every graph refusal is about the recording, never about a run, so filing one
 /// under `compute.parallel` would blame the launch the author did not write.
 pub const GRAPH_DIAGNOSTIC: &str = "compute.graph";
+
+/// The diagnostic a graph pass's own lines are recorded under.
+///
+/// # Invariant
+/// A pass is guidance rather than a launch, so a line it reports — a tiling it applied, or a
+/// node it declined to tile and why — is filed under the pass and never under a kernel the
+/// author wrote.
+pub const LANDING_DIAGNOSTIC: &str = "compute.graph.pass";
 
 /// The schedule a graph run uses.
 ///
@@ -2216,6 +2229,27 @@ pub fn kernel_fragment(id: KernelId) -> Option<KernelFragment> {
 /// value: the claim was read once, when the kernel was compiled.
 pub fn kernel_claim(id: KernelId) -> Option<KernelClaim> {
     kernels().lock().unwrap().get(&id)?.claim.clone()
+}
+
+/// Every registered kernel that claims an interface, as its id, claim and fragment.
+///
+/// # Invariant
+/// The registry is append-only — an entry is interned once and never removed — so this answers
+/// the same set on every call, and a host that reads it needs no kernel *value* to reach a
+/// kernel's claim. A kernel no claim named is absent, because a claim is what the join names.
+pub fn claimed_kernels() -> Vec<(KernelId, KernelClaim, KernelFragment)> {
+    let registry = kernels().lock().unwrap();
+    let mut claimed: Vec<(KernelId, KernelClaim, KernelFragment)> = registry
+        .iter()
+        .filter_map(|(id, entry)| {
+            let claim = entry.claim.clone()?;
+            Some((*id, claim, entry.fragment.clone()))
+        })
+        .collect();
+    // In id order, because the map iterates in no order and a report read twice must read
+    // the same.
+    claimed.sort_by_key(|(id, _, _)| *id);
+    claimed
 }
 
 /// The claim the kernel `function` declares, read at kernel-compile time.
@@ -5096,9 +5130,10 @@ where
 /// Run a graph over the values its source function took.
 ///
 /// # Invariant
-/// The arguments are sorted into roles here, not by the operator's caller: a buffer
-/// becomes the slot a dispatch records against, a number the extent it runs over,
-/// and anything else is refused by name.
+/// The arguments are sorted into roles here, not by the operator's caller: a buffer becomes
+/// the slot a dispatch records against and a number the extent it runs over. The installed
+/// graph pass runs immediately before the dispatcher and its answer is written back to the
+/// store it came from, so a pass rewrites what runs and not a copy.
 fn run_graph<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -5197,8 +5232,34 @@ where
             }
         });
     }
+    // The pass runs before the dispatch, and what it answers is stored and run.
+    let mut graph = match graph::lookup(id) {
+        Ok(graph) => graph,
+        Err(reason) => {
+            refuse(module, reason);
+            return None;
+        }
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let extent = |node: usize| -> Option<usize> {
+        match &graph.nodes().get(node)? {
+            Node::Kernel(kernel) => match kernel.count {
+                Count::Constant(count) => Some(count),
+                Count::Value(value) => argument_extent(&run_arguments, value),
+            },
+        }
+    };
+    if let Some(rewritten) = consult_graph_pass(&graph, &extent) {
+        // The rewrite takes an entry of its own, so the recording stays what it was.
+        graph::store(&rewritten);
+        graph = rewritten;
+    }
+    lines.extend(take_graph_pass_lines());
+    for line in lines {
+        module.record_extension_diagnostic(LANDING_DIAGNOSTIC, None, line);
+    }
     let values = match graph::run(
-        id,
+        &graph,
         backend,
         run_arguments,
         GRAPH_POLICY.with(|policy| policy.get()),
@@ -5245,6 +5306,21 @@ where
         <P::Value as From<LowValue>>::from(LowValue::Array(handle))
     };
     Some(value)
+}
+
+/// The element count the argument at `value` names, when one does.
+///
+/// # Invariant
+/// A dispatch's extent is the count role, not a buffer's length: the byte count a
+/// [`RunArgument::Buffer`] carries is divided at the class's own width, and a resident
+/// buffer's count is the count it was issued for. A value that is neither is `None`, so a
+/// count that reads a buffer is unanswered rather than answered with something else.
+fn argument_extent(arguments: &[RunArgument], value: GraphValueId) -> Option<usize> {
+    match arguments.get(value)? {
+        RunArgument::Count(count) => usize::try_from(*count).ok(),
+        RunArgument::Buffer { class, data } => Some(data.len() / class.byte_width()),
+        RunArgument::Resident(resident) => Some(resident.count),
+    }
 }
 
 fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
