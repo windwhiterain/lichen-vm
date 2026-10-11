@@ -989,6 +989,20 @@ the bridge's manifest already stated. Two properties are the seam's own:
   staging cannot serve keeps the body the program wrote rather than a half-built one — and the land
   itself goes through the artifact reader, which runs both IR gates and `check_plan` before anything
   is replaced.
+- **A node the pass may not read is left alone.** The automatic floor derives a node's algebra from its
+  own marks (`ReadRoles::DATUM_ONLY`), and that is only *the node's* algebra when the node reads
+  nothing another node produced. So the tiling pass refuses on two rules, both named, neither a guess:
+  a claim declaring a role outside `combine`/`identity` is refused from the **claim shape** alone,
+  before any graph exists (`BeyondANode`), and a node any of whose `kernel.inputs` is a value another
+  node produced is refused against the **graph edge** (`beyond_a_node` — a graph numbers its arguments
+  from zero and its node outputs after them, so that comparison is what separates its own datum from a
+  producer's). Both were measured as live wrong answers before they were refused: an `element`-role
+  consumer landed a body whose reads were `[0]` where the recording read `[0, 1]`, and a
+  `combine`-only consumer answered `[12.0, …]` where the program's own answer is `[24.0, …]`.
+  **The rules are narrower than the region's own notion of an edge in one direction worth naming**: a
+  node whose **extent** is another node's output is a consumer to the region derivation
+  (`feeds`/`extent_of`) and is not examined here, because a count is not a buffer the algebra's datum
+  read maps to `Element::Buffer`.
 
 Five properties, each chosen to cost the existing design nothing:
 
