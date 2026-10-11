@@ -179,14 +179,17 @@ consequences of taking that seriously:
   `(1, 2, 3): <Int, Int, Int>` where a read through the pattern gave
   `(raw 1, raw 2, raw 3): <?a, ?b, ?c>`.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
-  (`checker::tuple_kind_requirement` for a decided container, a registered
-  `TypeOperator::IsTupleType` assert for an open one, spelled
-  `AssertSpelling::TupleKind`) leaves the container's own type cell free, so the
-  read's elements resolve with the container; the named read's `StructKind` is the
-  same shape. Consistency is about the *slots*, not the kind, so the requirement
-  is load-bearing: without it `l(0)` on an array and `s(0)` on a struct instance
-  are accepted (measured), because an open container's positions are readable
-  whatever it turns out to be.
+  (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
+  container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an
+  open one, spelled `AssertSpelling::TupleKind` / `ArrayKind`) leaves the
+  container's own type cell free, so the read's elements resolve with the
+  container; the named read's `StructKind` is the same shape. The element type is
+  then read out of the container's own shape (`shape::field_type` at
+  `ARRAY_TYPE_ELEMENT_SLOT` for an array, `shape::array_length` for its length),
+  with a lazy `Index` chain when the shape is still open. Consistency is about the
+  *slots*, not the kind, so the requirement is load-bearing: without it `l(0)` on
+  an array and `s(0)` on a struct instance are accepted (measured), because an
+  open container's positions are readable whatever it turns out to be.
 
 The pattern is therefore built only where the requirement must be stated, so a
 read of a decided tuple type allocates nothing.
@@ -230,10 +233,6 @@ arm) rather than a new one.
   the value itself is the table handle the checker built, which no arm decodes:
   `t = table{1 ==> "a"}; t` reads `raw Table: table<Int, string>` where a
   `table{1 ==> "a"}` would need the handle's entries.
-- **The array *read*'s requirement is still a structural pattern.** `check_index`
-  pins its container against `[slot cell, length cell]` rather than naming the
-  array kind, so the same resolution question the tuple read answered could be
-  asked of it; nothing measured so far needs it.
 - **Releasing `<>`.** `tuple{…}` is the spelled-out form; `<…>`, `struct<…>`, and
   `array<…, …>` are the angle spellings that would go with it, and the raw index
   `X<e>` is the token's other user.

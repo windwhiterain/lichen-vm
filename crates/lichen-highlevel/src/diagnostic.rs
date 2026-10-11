@@ -231,6 +231,9 @@ pub enum AssertSpelling {
     /// A positional read's container-kind requirement: `a(k)`'s container must be
     /// a tuple type. See [`Self::StructKind`].
     TupleKind { container: NodeId },
+    /// An index read's container-kind requirement: `a[i]`'s container must be an
+    /// array type. See [`Self::StructKind`].
+    ArrayKind { container: NodeId },
 }
 
 impl AssertSpelling {
@@ -246,6 +249,7 @@ impl AssertSpelling {
         match self {
             AssertSpelling::StructKind { .. } => AssertSpelling::StructKind { container },
             AssertSpelling::TupleKind { .. } => AssertSpelling::TupleKind { container },
+            AssertSpelling::ArrayKind { .. } => AssertSpelling::ArrayKind { container },
             other => other,
         }
     }

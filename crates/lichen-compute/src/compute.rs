@@ -3472,6 +3472,8 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::IsStructType => return None,
         // The positional read's container kind is the same reading.
         TypeOperator::IsTupleType => return None,
+        // The array read's container kind is the same reading.
+        TypeOperator::IsArrayType => return None,
         TypeOperator::Fresh => return None,
     })
 }

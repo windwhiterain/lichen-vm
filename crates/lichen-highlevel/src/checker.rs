@@ -888,6 +888,11 @@ where
         self.kind_expr(self.current_block, self.markers.tuple_type_marker)
     }
 
+    /// The **array kind** an index read requires of its container.
+    fn array_kind_requirement(&mut self) -> NodeId {
+        self.kind_expr(self.current_block, self.markers.array_type_marker)
+    }
+
     /// A struct type's nominal id node: the [`TypeOperator::Fresh`] call one
     /// written struct type occurrence makes.
     ///

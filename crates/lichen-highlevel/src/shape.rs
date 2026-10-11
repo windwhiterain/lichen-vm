@@ -404,6 +404,46 @@ where
         )
 }
 
+/// Whether `ty` is an **array type** `[shape, [marker, K]]`, its kind carrying
+/// the array marker.
+pub fn is_array_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
+        return false;
+    };
+    items.len() == 2
+        && kind_marker_is_any(
+            module,
+            universe,
+            items[TYPE_KIND_SLOT].node,
+            P::Value::array_type_marker(),
+        )
+}
+
+/// An array type's **length**: its shape's second position, which is a count and
+/// not an element slot.
+pub fn array_length<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let shape = field_list(module, ty)?;
+    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    Some(
+        unsafe { array_items(module, shape) }?
+            .get(ARRAY_TYPE_LENGTH_SLOT)?
+            .node,
+    )
+}
+
 /// Whether a value is a struct marker: the pair `[payload, TypeStruct]`.
 ///
 /// # Invariant
