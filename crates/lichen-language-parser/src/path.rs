@@ -146,14 +146,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 0, array);
             push_index(&mut out, 1, i);
         }
-        Expr::RawIndex {
-            container,
-            index: i,
-            ..
-        } => {
-            push_index(&mut out, 0, container);
-            push_index(&mut out, 1, i);
-        }
         Expr::FieldRead { container, key, .. } => {
             push_index(&mut out, 0, container);
             push_index(&mut out, 1, key);

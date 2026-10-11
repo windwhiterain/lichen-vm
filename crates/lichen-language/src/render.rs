@@ -195,8 +195,8 @@ where
         }
         DiagKind::RuntimeRawElement => {
             "this raw read found an element that is not a value/type pair — \
-             `X<e>` reads the element's own pair, so the container holds pairs \
-             (a type value); a runtime array's element is read with `e[i]`"
+             `X::a` reads the element's own pair, so the container holds pairs \
+             (a struct type value)"
                 .to_string()
         }
         DiagKind::RuntimeIndexSubscript => {

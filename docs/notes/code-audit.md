@@ -1025,15 +1025,6 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   `(1, 2)[0]` to be `1` files that as a new item, and it starts by answering the
   struct question.
 
-  One adjacent fact belongs with the decision rather than the item: the raw form
-  `X<e>` *looks* like it could have spelled the spec's meaning without touching
-  `check_index`, and it cannot — over a runtime container it reads components of
-  something that is not a tuple type value, which is refused at check time (the
-  container's type must be the tuple kind; `P1-35`), and on the tree this was
-  written on was a **reported** runtime error where it used to print `none`
-  silently (`P1-35`). So the choice really was between the
-  two sides above; there is no third spelling available today.
-
 - **D17 — Is a `compute.write` the codomain does not reach a silently dropped
   effect, or a dead expression? — DECIDED: a dead expression; `P1-42` is
   `wontfix`.** The index function's type settles it. `S = T: KT _ => A T.I -> T.O`

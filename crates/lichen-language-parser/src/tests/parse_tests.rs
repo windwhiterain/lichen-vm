@@ -613,8 +613,7 @@ fn struct_type_errors_carry_spans() {
 
 #[test]
 fn the_array_type_keyword() {
-    // `array{T, n}` — the keyword-led array type, distinct from the glued
-    // `X<e>` raw read.
+    // `array{T, n}` — the keyword-led array type.
     let Expr::TypeArray {
         element_type,
         length,
@@ -636,34 +635,6 @@ fn the_array_type_keyword() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Array(..)));
-}
-
-#[test]
-fn the_raw_index_postfix() {
-    // `X<e>` — the glued `<` reads element `e` of `X`'s value, unvalidated.
-    let Expr::RawIndex {
-        container, index, ..
-    } = parse_ok("tuple{Int, string}<0>")
-    else {
-        panic!("expected a raw index")
-    };
-    assert!(matches!(*container, Expr::TypeTuple(..)));
-    assert!(matches!(*index, Expr::Int(0, _)));
-    let Expr::RawIndex { container, .. } = parse_ok("struct{Int, string}<1>") else {
-        panic!("expected a raw index")
-    };
-    assert!(matches!(*container, Expr::StructType(..)));
-    // chained postfix: Int<2><3> = (Int<2>)<3> — the outer raw read's
-    // container is the inner raw read.
-    let Expr::RawIndex { container, .. } = parse_ok("Int<2><3>") else {
-        panic!("expected a raw index")
-    };
-    assert!(matches!(*container, Expr::RawIndex { .. }));
-    // A glued `<` after an expression is the raw read (never an application).
-    let Expr::RawIndex { container, .. } = parse_ok("f<3>") else {
-        panic!("expected a raw index")
-    };
-    assert!(matches!(*container, Expr::Name(..)));
 }
 
 #[test]

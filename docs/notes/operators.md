@@ -136,32 +136,16 @@ prefix keyword takes its operands as atoms instead, so `max a + 1 b` is not a
 spelling and `max (a + 1) b` is — the operator's own arity decides the level, and
 `PrefixOp::arity` is the one list both the parser and the checker read.
 
-## 4. Two tokens, two jobs: `<` and `>`
+## 4. `<` and `>` are comparisons
 
-`<` and `>` are the delimiters of the raw index `X<e>`, and they are comparisons
-as well. There is no mode flag and no whitespace rule
-beyond the **Glue** marker that was already there (a delimiter glued to the
-previous token is a postfix form); the two jobs are told apart by the shape
-around the token:
+`<` and `>` are the less-than and greater-than comparisons, at §3's comparison
+rung and left-associative like the rest of it: `1 < 2 == 1` is `(1 < 2) == 1`.
+Neither token has another job — the `Glue` rule exists for the `(`, `{`, `[`
+and `::` postfixes alone ([no-type-mode](no-type-mode.md)).
 
-- **`>`** — a `>` followed by an expression is the comparison; a `>` followed by
-  anything else closes the raw index it is in. An infix operator needs a right
-  operand, so this is not a heuristic: it is the grammar reading its own rule.
-  Two implementation points, and the second is the one that is easy to get wrong:
-  - The test is a **zero-width lookahead *at* the `>`**, not a peek at the token
-    after it. A `filter` on the following token records its error one token
-    further on, which wins chumsky's furthest-error rule — and then every
-    malformed raw index reports "at the end of the program" instead of at the
-    token it is in. The parser's own unit test for that span is what caught it.
-  - The check has to include **`Glue`**. A glued delimiter after the `>` is a
-    postfix form, never the start of an operand, so the `>` closes the raw index
-    (`X<0>(1)` reads a component and then applies the result) instead of
-    comparing with the group that follows.
-- **`<`** — a **glued** `<` is the raw index `X<e>`, a spaced one the comparison:
-  `a<b>` reads a component and `a < b` compares. No form is displaced — what used
-  to be an atom at a spaced `<` is now a comparison.
-
-Pinned by `comparisons_share_their_tokens_with_the_raw_index`.
+Pinned by `operator_precedence_and_associativity` (`1 < 2 == 1` is
+`(1 < 2) == 1`) and `an_int_is_unsigned_where_the_two_readings_differ`
+(`0 - 1 > 1` is `1`).
 
 ## 5. An `Int` is unsigned
 
@@ -292,11 +276,11 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   workstream's specialize pass, an open class's honest `raw[?a, ?b]` rendering, and
   a routed statement's missing value snapshot — are measured in
   [operator-polymorphism](operator-polymorphism.md) §7.1.
-- **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
-  angle forms — the raw index `X<Y<0>>` ends `>>` — and a `logos` lexer cannot
-  split it back; the fix is parser-level token splitting, which is a change to
-  the frontend's token model rather than one more operator. Named rather than
-  half-done.
+- **Shifts (`<<`, `>>`).** The blocker was the retired raw index: a `>>` token
+  would have swallowed the adjacent closers of nested angle forms
+  (`X<Y<0>>`), which a `logos` lexer cannot split back. Those forms no longer
+  exist, so the blocker is gone; neither operator is implemented. Named rather
+  than half-done.
 - **Unary minus and unary bitwise-not.** `-x` would collide with the existing
   `-` (binary only), and `~x` with the array literal's shallow marker.  Both are
   spellable (`0 - x`, `x ^ (0 - 1)`) and neither is worth a grammar ambiguity.
@@ -367,9 +351,10 @@ two changes, and the second is the interesting one.
   `1 + 2 * 3` nests as `binary_addition(1, binary_product(2, 3))` in an editor
   too, and `queries/highlights.scm` (mirrored in the Zed extension) colours
   every operator in §1's table.
-- **`<` and `>` are two tokens, not one.** The real parser re-reads the
-  expression it just parsed to decide whether a `<` opens a raw index or
-  compares (§4). A tree-sitter table is LR: it must decide at the token, and
+- **`<` and `>` are two tokens, not one.** The grammar kept this for the removed
+  raw index `X<e>`: the real parser used to re-read the expression it just parsed
+  to decide whether a `<` opens a raw index or compares. A tree-sitter table is
+  LR: it must decide at the token, and
   the decision needs more lookahead than one token — `a < b` and `f<A, B>`
   are both decided *at* the `<`. Whitelisting the conflict in `conflicts` and
   letting the GLR fork pick was tried and is unsound here: the two stacks
@@ -405,12 +390,14 @@ in this section is the *grammar's*, not the language's, and an editor reads a
 braced tuple type as a block until the grammar follows. The compiler's parser,
 the language server and the printer know only the braced forms.
 
-The one thing this grammar still cannot do is model the raw index `X<e>` as its
-own node: the fresh-atom reading of a glued `<` is the lenient one-or-more angle
-form the grammar has always had, so `X<0>` is an application of an atom to an
-`angle_tuple`. That is the tree it produced before the comparison operators
-existed, so nothing regresses; the node is only a coarser reading, and an editor
-grammar's job is colouring.
+**The grammar still models the removed raw index `X<e>`.** The language has since
+retired the form — `<` and `>` are the comparisons alone (§4) — but `grammar.js`
+is unchanged, because regenerating and validating it needs the tree-sitter CLI
+([tree-sitter-generated-files](tree-sitter-generated-files.md)). Its glued `<`
+still opens a lenient one-or-more `angle_tuple`, so `X<0>` reads there as an
+application of an atom to an angle form — a removed spelling. The compiler's own
+lexer, parser, checker, language server and printer know only the comparison, so
+nothing in the language waits on it; an editor grammar's job is colouring.
 
 **And the one thing it does not yet know is §7's and §11's five keywords.**
 `int2float`, `float2int`, `max`, `min` and `exp` colour as identifiers there,

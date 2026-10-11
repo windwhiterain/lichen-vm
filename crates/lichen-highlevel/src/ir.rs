@@ -369,13 +369,6 @@ pub enum ExprKind<L> {
     /// # Invariant
     /// The read registers an `i < length` bounds assert and never kind-dispatches.
     Index { array: ExprId, index: ExprId },
-    /// `{ container, index }` — a *raw* positional read `X<e>`, read without type
-    /// validation.
-    ///
-    /// # Invariant
-    /// No array-type pinning, no guard and no bounds assert: the container is read
-    /// by value whatever its type, and the result is the element's own pair.
-    RawIndex { container: ExprId, index: ExprId },
     /// `{ container, key }` — a positional slot read `a(k)` over a tuple element
     /// or struct field.
     ///
@@ -399,8 +392,7 @@ pub enum ExprKind<L> {
     /// # Invariant
     /// Unlike [`Self::NamedField`], this reads the name table straight from the
     /// container's **type**, which must be a TypeStruct (the walk is
-    /// `shape::STRUCT_TYPE_NAMES_PATH`) —
-    /// a check-time unify, so it is not raw in the sense of [`Self::RawIndex`].
+    /// `shape::STRUCT_TYPE_NAMES_PATH`) — a check-time unify.
     RawNamedField {
         container: ExprId,
         name: &'static str,
@@ -560,10 +552,6 @@ impl<L> ExprKind<L> {
                 push(*array);
                 push(*index);
             }
-            ExprKind::RawIndex { container, index } => {
-                push(*container);
-                push(*index);
-            }
             ExprKind::Field { container, key } => {
                 push(*container);
                 push(*key);
@@ -671,10 +659,6 @@ impl<L> ExprKind<L> {
             ExprKind::Assert { condition } => fix(condition),
             ExprKind::Index { array, index } => {
                 fix(array);
-                fix(index);
-            }
-            ExprKind::RawIndex { container, index } => {
-                fix(container);
                 fix(index);
             }
             ExprKind::Field { container, key } => {

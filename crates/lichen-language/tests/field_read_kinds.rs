@@ -115,24 +115,6 @@ fn a_named_struct_and_a_named_block_read_by_name() {
     );
 }
 
-// --- the raw reads state their kind too -----------------------------------
-
-/// `X<e>` reads a tuple type value, so a `TypeStruct` container is refused.
-#[test]
-fn a_raw_index_of_a_struct_type_value_is_refused() {
-    let (message, kind) = refused("struct{.a Int, .b string}<0>");
-    assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeTuple, found TypeStruct");
-}
-
-/// A tuple *value*'s type is the tuple shape, not the kind `TypeTuple`.
-#[test]
-fn a_raw_index_of_a_tuple_value_is_refused() {
-    let (message, kind) = refused("(1, 2)<0>");
-    assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeTuple, found tuple{Int, Int}");
-}
-
 /// `.a` states the container's kind, `::a` its whole type; an array is
 /// neither.
 #[test]

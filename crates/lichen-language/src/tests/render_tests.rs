@@ -156,14 +156,6 @@ fn a_written_arrow_is_a_function() {
 }
 
 #[test]
-fn a_raw_index_reads_a_type_component() {
-    // `X<e>` reads component `e` of a tuple type value, refused for another kind.
-    assert_eq!(output("tuple{Int, string}<0>"), "Int: Type");
-    assert_eq!(output("tuple{Int, string}<1>"), "string: Type");
-    assert_eq!(output("tuple{Int, string, Type}<0>"), "Int: Type");
-}
-
-#[test]
 fn a_raw_named_read_yields_the_field_type() {
     // `X::a` reads the named field's type; `.a` reads the instance's field value.
     assert_eq!(output("S = struct{.a Int, .b string}\nS::a"), "Int: Type");

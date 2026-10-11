@@ -690,10 +690,10 @@ and has no `@in`.
     spaced paren is function application.  (The two zero-field spellings are the
     one part no note recorded.)
   - `a.name` is the named field read, `a[i]` the array read, `t{k}` the table lookup
-    (the *adjacent* brace is the distinction), `X<e>` the raw positional component
-    read and `X::a` the raw named one.
-  - A struct *instance* reads a field **value** with `.a`; a positional component of
-    a type-as-value reads with `X<e>`; a named one with `X::a`.
+    (the *adjacent* brace is the distinction), and `X::a` the raw named read of a
+    type value's field.
+  - A struct *instance* reads a field **value** with `.a`; a struct *type* value
+    reads a field **type** with `X::a`.
   - The refusals follow from the same principle: a struct type reaching `a(k)` is
     refused like any other non-tuple, and a set reaching `s[i]` is refused because
     the read pins its container to an array type.

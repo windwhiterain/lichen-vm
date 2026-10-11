@@ -94,11 +94,6 @@ pub(crate) fn shift_expr(
             }
         }
         Expr::Index { array, index, span }
-        | Expr::RawIndex {
-            container: array,
-            index,
-            span,
-        }
         | Expr::FieldRead {
             container: array,
             key: index,

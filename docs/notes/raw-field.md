@@ -19,8 +19,7 @@ the marker payload, at
 ## `:` vs `.` vs `::`
 
 `a(k)` is the guarded **positional** slot read, `a.name` the guarded **named** field read
-over a struct *instance*.  `X::a` is the **named** sibling of the raw positional index
-`X<e>`:
+over a struct *instance*.  `X::a` is the raw read of a named component of a type value:
 
 - `a.name` (`.`): requires the container's **kind** to be TypeStruct — the value's type
   is a full struct type `[shape, kind]`, and the name table sits at
@@ -32,7 +31,7 @@ over a struct *instance*.  `X::a` is the **named** sibling of the raw positional
 
 ## Check-time, not raw
 
- Unlike `X<e>` (no validation at all), `X::a` requires a TypeStruct container.  A
+ Unlike a read with no validation at all, `X::a` requires a TypeStruct container.  A
 *concretely* non-struct container (an atomic type, a tuple value, an array) is a
 check-time `Guard` diagnostic — `expected TypeStruct, found …` — and the read is **not
 built** behind that refusal: the name table below is reached by walking this container's
@@ -82,3 +81,14 @@ equalities (`S::a == Int` is `1`, `S::a == string` is `0`).  A comparison across
 The table literal used to separate key/value with `::`.  Now that `::` is the raw named
 read's glued postfix, the table separator is spelled `==>`
 (`table { k ==> v }`), so the two are never ambiguous.
+
+## Recovered measurements
+
+- **A type value's components are pairs.** Every component of a type-as-value is a
+  `[value, type]` pair, which is why the element read above reads a pair and takes
+  the *kind* out of its type slot. A runtime array's element is not such a pair and
+  is read with `e[i]`.
+- **The shallow array is typed as a tuple for a measured reason:** a homogeneous
+  `Array` type would reject `[x, @shallow f(x+1)]` with an `Int` head and a `Stream`
+  tail. A bare `@shallow` position's whole subtree stays lazy in the deep pass, and
+  a read forces the single element on demand.

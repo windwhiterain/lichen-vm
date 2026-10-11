@@ -978,7 +978,6 @@ where
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
             | ExprKind::Index { .. }
-            | ExprKind::RawIndex { .. }
             | ExprKind::Field { .. }
             | ExprKind::NamedField { .. }
             | ExprKind::RawNamedField { .. }
@@ -1130,7 +1129,6 @@ where
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
-            ExprKind::RawIndex { container, index } => self.check_raw_index(e, container, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::RawNamedField { container, name } => {

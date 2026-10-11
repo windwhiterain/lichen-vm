@@ -149,13 +149,6 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
-    /// `X<e>` — a raw positional read of `X`'s value; the container must be a
-    /// tuple type (`docs/notes/raw-index.md`).
-    RawIndex {
-        container: Box<Expr>,
-        index: Box<Expr>,
-        span: Span,
-    },
     /// `a(k)` — a positional slot read; the `(` is adjacent and holds one
     /// expression (`a(1,)` is an instantiation).
     FieldRead {
@@ -368,7 +361,6 @@ impl Expr {
             Expr::Prefix { span, .. } => *span,
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
-            Expr::RawIndex { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::NamedFieldRead { span, .. } => *span,
             Expr::RawNamedField { span, .. } => *span,

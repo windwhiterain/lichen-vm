@@ -180,12 +180,6 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(array, deps);
             walk(index, deps);
         }
-        Expr::RawIndex {
-            container, index, ..
-        } => {
-            walk(container, deps);
-            walk(index, deps);
-        }
         Expr::FieldRead { container, key, .. } => {
             walk(container, deps);
             walk(key, deps);

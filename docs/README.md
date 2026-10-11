@@ -68,7 +68,6 @@ authority, and this table only names the state.
 | [No type mode](notes/no-type-mode.md) | `lichen-language-parser` | current |
 | [Placeholder `_` anywhere](notes/placeholder-anywhere.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language-server` | current |
 | [Record programs (modules)](notes/record-program.md) | `lichen-language-parser`, `lichen-language`, `lichen-language-server` | current |
-| [Raw index `X<e>`](notes/raw-index.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel`, `lichen-render` | current |
 | [Raw named read `X::a`](notes/raw-field.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel` | current |
 | [`type_of` is a standard-library function](notes/type-of-in-std.md) | `lichen-language`, `lichen-highlevel`, `lichen-compute`, `lichen-std` | current |
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel` | current — T3/T4 proposed |

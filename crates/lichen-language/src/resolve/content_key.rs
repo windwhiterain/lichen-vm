@@ -246,13 +246,6 @@ impl KeyWriter {
                 self.expr(array);
                 self.expr(index);
             }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                self.u(27);
-                self.expr(container);
-                self.expr(index);
-            }
             Expr::FieldRead { container, key, .. } => {
                 self.u(14);
                 self.expr(container);

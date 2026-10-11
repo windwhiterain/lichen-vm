@@ -72,12 +72,6 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(array, out);
                 walk_expr(index, out);
             }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                walk_expr(container, out);
-                walk_expr(index, out);
-            }
             Expr::FieldRead { container, key, .. } => {
                 walk_expr(container, out);
                 walk_expr(key, out);

@@ -90,7 +90,7 @@ pub enum DiagKind {
     /// self-contained.  Distinct from [`Self::IndexTarget`], which reports a
     /// *type* the checker refused to index and therefore names that type.
     RuntimeIndexTarget,
-    /// A raw read (`X<e>`, `X::a`) whose **element** is not a pair at runtime.
+    /// A raw named read whose **element** is not a pair at runtime.
     ///
     /// # Invariant
     /// The element's own type slot — the read's type — does not exist then.  It
@@ -593,19 +593,16 @@ where
         })
     }
 
-    /// Whether `loc` was registered by one of the raw reads for its **element**.
+    /// Whether `loc` was registered by the raw named read for its **element**.
     ///
     /// # Invariant
     /// A non-container there is a non-pair element, not a non-container
-    /// container.  Each raw read registers the element at the read's own type
+    /// container.  The raw read registers the element at the read's own type
     /// slot (`loc(e, 1)`), which tells it apart from the edges every other read
     /// registers; the IR kind keeps a typed read's own edges out of it.
     fn is_raw_read_element(&self, loc: &Loc) -> bool {
         loc.path == [LocStep::Type]
-            && matches!(
-                self.ir[loc.expr].kind,
-                ExprKind::RawIndex { .. } | ExprKind::RawNamedField { .. }
-            )
+            && matches!(self.ir[loc.expr].kind, ExprKind::RawNamedField { .. })
     }
 
     /// One unification-failure diagnostic: the `unify_errors` entry at `i`.

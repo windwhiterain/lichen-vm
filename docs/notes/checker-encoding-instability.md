@@ -346,12 +346,9 @@ from the container's **type**, which must be a TypeStruct (`container_ty[0][1]`)
 and yields the field's *type* as a value — `S::a` on
 `struct{.a Int, .b string}` is `Int : Type`. The raw form's requirement is a
 check-time unify (a concretely non-TypeStruct container is a diagnostic), so it
-is *not* raw in the no-validation sense of `RawIndex`. `RawIndex` (`X<e>`) is
-the genuinely unvalidated read — no array-type pinning, no guard, no bounds
-assert — reading a component of a type-as-value or of any expression's value,
-both lazily, so an undecided container resolves at the apply; this is the form
-the `T<e>` array-type postfix used to be, and the array type is now `TypeArray`,
-spelled `array{T, n}`. `Field` (`a(k)`) works over a tuple element or a struct
+is *not* raw in the no-validation sense the retired `T<e>` array-type postfix
+had. The array type is `TypeArray`, spelled `array{T, n}`. `Field` (`a(k)`)
+works over a tuple element or a struct
 field because both shapes are positional type lists and the nominal struct id
 lives in the kind. The read *forms* are distinguished syntactically and the
 source spelling is the whole rule: the adjacent single-expression paren

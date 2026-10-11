@@ -447,7 +447,8 @@ encoding**, not measured — only §2.4's two rows are measurements):
 
 **The parked experiment that tried the direct pin.** Pinning the undecided tier's
 container to the skeleton, and stating each read form's accepted kind as a unify
-on the container's own cell, was tried in three parts: `X<e>` requiring the tuple
+on the container's own cell, was tried in three parts: the positional raw read
+`X<e>` (since removed) requiring the tuple
 kind, `X::a` requiring a struct kind, and `.a` stating its requirement on the
 container's kind slot; then keeping `X::a`'s requirement for both tiers while
 `.a` keeps the lazy name-table read when undecided; then stating the accepted kind
@@ -663,10 +664,9 @@ order stays as it is.
   conflicting expectation later fails against the pinned value. The read's
   subscript is only known by evaluating the read, so the alias is established by
   the evaluation (`alias_read`), not at unify time.
-- The raw reads state their container kind: `X<e>` reads a component of a **tuple
-  type value** (the container's kind is unified against `TypeTuple`), `X::a` a
+- The raw named read states its container kind: `X::a` reads a
   struct type value's named field, and `.a` / `::a` over an array are the two named
   sides of one refusal — `.a` states the container's *kind*, `::a` its whole type.
-  A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the shape
-  `tuple{Int, Int}`, not `TypeTuple`. A deferred container is refused at the argument,
+  A tuple *value* is not a struct *type* value: `(1, 2)`'s type is the shape
+  `tuple{Int, Int}`, not `TypeStruct`. A deferred container is refused at the argument,
   where this used to be an internal panic at the apply.

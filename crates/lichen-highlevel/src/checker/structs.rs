@@ -171,10 +171,11 @@ where
             Some(key_ops),
         );
         self.node_edges.insert(key, self.loc(e, 0));
-        // The element's own pair, as the positional raw read builds it.
+        // The element's own pair: its value slot and its type slot.
         let container_value = self.value_of(container);
         let (pair, element, ty_node) = self.element_read(container_value, key);
-        // As there: the element is the target of both slot reads.
+        // The element is the target of both slot reads, so a failure there is
+        // located at the read's own type slot.
         self.node_edges.insert(element, self.loc(e, 1));
         self.state[e].term = Some(pair);
         self.state[e].val = None;

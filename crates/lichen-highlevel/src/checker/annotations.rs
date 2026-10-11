@@ -70,7 +70,6 @@ where
             } => vec![type_expr, value],
             ExprKind::Record { value, .. } => vec![value],
             ExprKind::Index { array, index } => vec![array, index],
-            ExprKind::RawIndex { container, index } => vec![container, index],
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
             ExprKind::RawNamedField { container, .. } => vec![container],

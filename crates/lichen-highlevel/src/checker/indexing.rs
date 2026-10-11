@@ -24,7 +24,7 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// An array-element read `a[i]`. See `docs/notes/raw-index.md`.
+    /// An array-element read `a[i]`.
     ///
     /// # Invariant
     /// The container's type is pinned to a fresh array type, so a non-array
@@ -118,47 +118,8 @@ where
         pair
     }
 
-    /// A **raw** positional read `X<e>` — element `index` of the container's
-    /// value. See `docs/notes/raw-index.md`.
-    ///
-    /// # Invariant
-    /// The container must be a tuple type value, stated once as a unify against
-    /// the tuple kind: pinned when undecided, refused where it is decided and
-    /// different. Beyond that the read validates nothing. Its term is the
-    /// element's own `[value, type]` pair, never the bare element.
-    pub(super) fn check_raw_index(
-        &mut self,
-        e: ExprId,
-        container: ExprId,
-        index: ExprId,
-    ) -> NodeId {
-        self.check_expr(container);
-        self.check_expr(index);
-        // The tuple-kind requirement, a unify on the container's kind: decided
-        // here, deferred to the apply otherwise.
-        let container_ty = self.state[container].ty.unwrap();
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        // A decided container of another kind is refused and not read:
-        // its element's type slot would be the container's type.
-        if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
-            return self.refused_pair(e);
-        }
-        let container_value = self.value_of(container);
-        let index_value = self.value_of(index);
-        self.node_edges.insert(index_value, self.loc(index, 0));
-        let (pair, element, ty_node) = self.element_read(container_value, index_value);
-        // Both slot reads target the element, so this edge gives a failed one
-        // a span and names it the element.
-        self.node_edges.insert(element, self.loc(e, 1));
-        self.state[e].term = Some(pair);
-        // Left to `value_of`: it reads the same node `element_read` built.
-        self.state[e].val = None;
-        self.state[e].ty = Some(ty_node);
-        pair
-    }
-
-    /// The element read shared by `X<e>` and `X::a`; see
-    /// `docs/notes/raw-index.md`. Returns `(pair, element, type)`.
+    /// The element read behind the raw named read `X::a`; see
+    /// `docs/notes/raw-field.md`. Returns `(pair, element, type)`.
     ///
     /// # Invariant
     /// A **type value** container's component is `[type value, kind]`, so the

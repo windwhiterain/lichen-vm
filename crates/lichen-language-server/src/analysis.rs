@@ -1501,6 +1501,8 @@ fn classify_token_kind(
         | TokenKind::Equals
         | TokenKind::Eq
         | TokenKind::Neq
+        | TokenKind::LAngle
+        | TokenKind::RAngle
         | TokenKind::Leq
         | TokenKind::Geq
         | TokenKind::Plus
@@ -1520,8 +1522,6 @@ fn classify_token_kind(
         | TokenKind::RBracket
         | TokenKind::LBrace
         | TokenKind::RBrace
-        | TokenKind::LAngle
-        | TokenKind::RAngle
         | TokenKind::Separator
         | TokenKind::Glue
         | TokenKind::Eof => None,
@@ -1714,12 +1714,6 @@ impl<'a> NameClass<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -2017,12 +2011,6 @@ impl Walk {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -2349,12 +2337,6 @@ impl<'a> ScopeCapture<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..

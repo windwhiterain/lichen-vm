@@ -155,16 +155,15 @@ pub enum TokenKind {
     LBrace,
     /// '}'.
     RBrace,
-    /// '<' — the less-than comparison, or the glued raw-index delimiter
-    /// (`docs/language-spec.md` §2.1).
+    /// '<' — the less-than comparison.
     LAngle,
-    /// '>' — the greater-than comparison, or the raw index's closer.
+    /// '>' — the greater-than comparison.
     RAngle,
     /// '~' — the mark sigil: `e ~ "payload"`.
     Tilde,
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
-    /// A zero-width marker: the next '(' '{' '<' '[' or '::' is glued to the
+    /// A zero-width marker: the next '(' '{' '[' or '::' is glued to the
     /// previous token, so it is a postfix form.
     Glue,
     Eof,
@@ -408,11 +407,7 @@ impl RawToken {
     fn is_postfix_delim(&self) -> bool {
         matches!(
             &self,
-            RawToken::LParen
-                | RawToken::LBracket
-                | RawToken::LBrace
-                | RawToken::LAngle
-                | RawToken::DoubleColon
+            RawToken::LParen | RawToken::LBracket | RawToken::LBrace | RawToken::DoubleColon
         )
     }
 }

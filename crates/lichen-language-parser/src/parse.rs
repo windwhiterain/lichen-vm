@@ -588,29 +588,20 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
 
         // The comparisons, left-associative, and the loosest binary level; `@in`
         // sits here too (it yields the same `0`/`1`).
-
-        // `>` is both the comparison and a delimiter: it compares only when an
-        // expression follows it **unglued**.
-
-        // Otherwise it closes the raw index it is in
-        // (`docs/notes/operators.md` §4).
-        let comparison_loose = choice((
-            token(TokenKind::LAngle).to(BinOp::Lt),
-            token(TokenKind::Leq).to(BinOp::Leq),
-            token(TokenKind::Geq).to(BinOp::Geq),
-            token(TokenKind::Eq).to(BinOp::Eq),
-            token(TokenKind::Neq).to(BinOp::Neq),
-            token(TokenKind::KwIn).to(BinOp::In),
-        ))
-        .then(operand(tokens, bitor.clone()));
-        let comparison_gt = a_comparison_follows(tokens)
-            .ignore_then(token(TokenKind::RAngle))
-            .to(BinOp::Gt)
-            .then(operand(tokens, bitor.clone()));
         let comparison = bitor
             .clone()
             .foldl(
-                choice((comparison_loose, comparison_gt)).repeated(),
+                choice((
+                    token(TokenKind::LAngle).to(BinOp::Lt),
+                    token(TokenKind::RAngle).to(BinOp::Gt),
+                    token(TokenKind::Leq).to(BinOp::Leq),
+                    token(TokenKind::Geq).to(BinOp::Geq),
+                    token(TokenKind::Eq).to(BinOp::Eq),
+                    token(TokenKind::Neq).to(BinOp::Neq),
+                    token(TokenKind::KwIn).to(BinOp::In),
+                ))
+                .then(operand(tokens, bitor.clone()))
+                .repeated(),
                 |lhs, (op, rhs)| bin_op(lhs, op, rhs),
             )
             .boxed();
@@ -843,67 +834,7 @@ enum Pre {
     FatArrow(Box<Expr>, Box<Expr>),
 }
 
-/// Whether a token can begin an expression — the `>` comparison lookahead.
-///
-/// # Invariant
-/// It mirrors [`atom_parser`]'s primaries, minus `Glue`: a glued delimiter is a
-/// postfix marker, never the start of a new operand.  Drift is loud rather than
-/// silent — either direction is a parse error at the token, never a misparse.
-fn starts_an_expression(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Int(_)
-            | TokenKind::Float(_)
-            | TokenKind::Str(_)
-            | TokenKind::Name(_)
-            | TokenKind::Placeholder
-            | TokenKind::KwInt
-            | TokenKind::KwFloat
-            | TokenKind::KwString
-            | TokenKind::KwType
-            | TokenKind::KwStruct
-            | TokenKind::KwTable
-            | TokenKind::KwSet
-            | TokenKind::KwIf
-            | TokenKind::KwArray
-            | TokenKind::KwTuple
-            | TokenKind::Any
-            | TokenKind::KwAssert
-            // The prefix keyword operators begin an expression without
-            // being atoms, so `a > max b c` compares.
-            | TokenKind::KwInt2Float
-            | TokenKind::KwFloat2Int
-            | TokenKind::KwMax
-            | TokenKind::KwMin
-            | TokenKind::KwExp
-            | TokenKind::KwSqrt
-            | TokenKind::KwFloor
-            | TokenKind::Dollar
-            | TokenKind::LParen
-            | TokenKind::LBracket
-            | TokenKind::LBrace
-    )
-}
-
-/// The zero-width lookahead deciding whether the `>` at the cursor compares.
-///
-/// # Invariant
-/// It consumes nothing and matches **at** the `>` — see the comparison level in
-/// [`expression`] for why the position matters.
-fn a_comparison_follows<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, (), E<'a>> + Clone {
-    // The span of a zero-width match is the cursor's own token index, so the
-    // token after the `>` is `at + 1`.
-    empty::<In<'a>, E<'a>>()
-        .map_with(move |_, me| {
-            tokens
-                .get(me.span().start + 1)
-                .is_some_and(|token| starts_an_expression(&token.kind))
-        })
-        .filter(|follows: &bool| *follows)
-        .ignored()
-}
-
-/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `t{k}`, `X<e>`, `X::a`,
+/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `t{k}`, `X::a`,
 /// and `C(...)`.
 fn atom_parser<'a>(
     tokens: &'a [Token],
@@ -955,8 +886,8 @@ fn atom_parser<'a>(
         )))
         .labelled("an expression");
 
-    // The postfix forms, chained left: `[` is an index, a glued `<` is `X<e>`,
-    // and a glued `::name` is `X::a`.
+    // The postfix forms, chained left: `[` is an index and a glued `::name`
+    // is `X::a`.
     let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
         token(TokenKind::Dot)
@@ -967,11 +898,6 @@ fn atom_parser<'a>(
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RBracket))
             .map(Postfix::Index),
-        glue.clone()
-            .ignore_then(token(TokenKind::LAngle))
-            .ignore_then(expr.clone())
-            .then_ignore(token(TokenKind::RAngle))
-            .map(Postfix::RawIndex),
         glue.clone()
             .ignore_then(token(TokenKind::DoubleColon))
             .ignore_then(name())
@@ -1007,11 +933,6 @@ fn atom_parser<'a>(
                     Postfix::TableFind(key) => Expr::TableFind {
                         container: Box::new(acc),
                         key: Box::new(key),
-                        span,
-                    },
-                    Postfix::RawIndex(index) => Expr::RawIndex {
-                        container: Box::new(acc),
-                        index: Box::new(index),
                         span,
                     },
                     Postfix::RawFieldName(name) => Expr::RawNamedField {
@@ -1050,7 +971,6 @@ enum Postfix {
     DotName(String),
     Index(Expr),
     TableFind(Expr),
-    RawIndex(Expr),
     RawFieldName(String),
     Paren((Vec<StructInstArg>, bool)),
 }

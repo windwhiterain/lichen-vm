@@ -398,16 +398,6 @@ five = 5 # 8 ? Doc(.tag 7)
 five # 4
 ```
 
-### `raw_index.lichen`
-
-```text
----
-  order = "11"
-  output = "(Int, string, Int, string): tuple{Type, Type, Type, Type}"
----
-(tuple{Int, string}<0>, tuple{Int, string}<1>, struct{.a Int, .b string}::a, struct{.a Int, .b string}::b)
-```
-
 ### `raw_field.lichen`
 
 ```text
