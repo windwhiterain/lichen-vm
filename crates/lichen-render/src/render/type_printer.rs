@@ -43,13 +43,11 @@ where
         }
     }
 
-    /// Spell each element slot's attributes through `attrs`, the registry
-    /// [`render_attributes`](super::render_attributes) reads. Without it a slot
-    /// spells its type alone.
+    /// Spell each element slot's attributes through the registry `attrs`;
+    /// without it a slot spells its type alone.
     ///
     /// # Invariant
-    /// An attribute spells itself, so a position the source left unspelled
-    /// answers `None` and contributes nothing.
+    /// An attribute spells itself, so an unspelled position answers `None`.
     pub fn show_attributes(&mut self, attrs: Attrs<'a, P>) {
         self.attrs = Some(attrs);
     }

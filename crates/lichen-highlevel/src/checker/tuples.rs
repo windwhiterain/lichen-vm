@@ -65,7 +65,9 @@ where
             _ => (None, el),
         };
         let denotation = self.type_denotation(type_expr, None);
-        let attrs = self.element_attr_slots(type_expr);
+        // A slot's attributes are the **element's**: `5 : Int # 2` is one
+        // annotation, so the type child holds none of them.
+        let attrs = self.element_attr_slots(el);
         let value = value.map(|value| self.value_of(value));
         self.element_slot(value, Some(denotation), Some(attrs))
     }

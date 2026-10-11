@@ -27,7 +27,11 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// struct its field tuple.  An opaque chain — an undecided cell, an extension
 /// type — falls back to the raw layout, and every reading of it is marked:
 /// `raw[…]`, `raw 6` / `raw Int`.  A dump never spells itself like a read.
-pub fn print_value<P: HighProgram + 'static>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
+pub fn print_value<P: HighProgram + 'static>(
+    module: &Module<P>,
+    value: P::Value,
+    ty: NodeId,
+) -> String
 where
     P::Value: ValueType,
 {
@@ -171,8 +175,7 @@ where
     show_struct_id: bool,
 }
 
-/// The **attribute registry** a printer spells element attributes through: one
-/// extension per marker, exactly what [`render_attributes`] takes.
+/// The **attribute registry** a printer spells element attributes through.
 pub type Attrs<'a, P> = &'a dyn Fn(&<P as HighProgram>::Attr) -> &'static dyn AttrExt<P>;
 
 /// The pretty value printer: renders a runtime value against its type chain.

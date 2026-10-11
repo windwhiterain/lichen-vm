@@ -140,6 +140,14 @@ own class accepts everything. Both printers read a slot back as source, so a pin
 is visible: `(5, 2) : tuple{5 : Int, Int}` renders `(5, 2): tuple{5 : Int, Int}`,
 while `@any`'s own position renders as no pin at all.
 
+A slot's *attributes* are the **element's own**: `5 : Int # 2` folds into one
+annotation whose tail holds the requirement, and a bare `Int # 2` element is that
+same annotation with no type — so the slot reads its attributes from the element
+the source wrote, not from the type child. The printers spell them back through
+the attribute registry `render_attributes` reads (an unspelled position, the
+wildcard included, answers `None`), so a requirement stays visible:
+`(1 # 4, 2) : tuple{Int # 2, Int}` renders `(1, 2): tuple{Int # 2, Int}`.
+
 ## A value-less annotation
 
 An annotation chain may omit its value: `: T # a` lowers to exactly the
@@ -227,16 +235,6 @@ arm) rather than a new one.
 
 ## What is open
 
-- **An element's attribute is not rendered.** A pinned element now reads
-  `5 : Int`, but a *requirement* — `tuple{Int # 2, Int}`, whose attribute sits in
-  the slot's dense position — still renders as `tuple{Int, Int}`. The printer
-  would need each attribute extension's source sigil (`#`, `?`, `!`), which
-  `AttrSpec` does not state today, so the spelling is a wider change than the
-  pin's was.
-- **A table *value* still renders raw.** Its *type* reads `table<K, V>` now, but
-  the value itself is the table handle the checker built, which no arm decodes:
-  `t = table{1 ==> "a"}; t` reads `raw Table: table<Int, string>` where a
-  `table{1 ==> "a"}` would need the handle's entries.
 - **`set<…>` and `table<…>` are renderer notation, not source.** Neither kind has
   a *type* syntax, and their braced form would collide with the set/table
   *literal*: the language spec says the printer spells them this way.
