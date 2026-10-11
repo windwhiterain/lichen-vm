@@ -1,10 +1,11 @@
 # Compound element slots
 
-> Status: **in progress.** `LowValue::Any` has landed (the lowlevel crate's
-> wildcard, its codec tag, and the two printers). The element-slot layout of
-> §*The element slot is a full term* is what the first step — the **tuple** —
-> implements; §*What is open* holds the two questions that layout does not
-> answer by itself. The step order is tuple, struct, array, then table/set.
+> Status: **in progress.** `LowValue::Any` has landed and is merged
+> (`8b2fa7a`); the **tuple** step has landed on `feature/compound-element-pairs`
+> — the element slot is a full term, both construction sites, the readers, and
+> both printers. The step order is tuple, struct, array, then table/set; the
+> element-attribute *comparison* and the surface syntax (`@any`, `tuple{…}`,
+> `struct{…}`) are the tuple step's remaining work.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -28,85 +29,91 @@ constant that removes that burden:
   merges the classes nor writes a value* (`Module::unify_inner`, checked before
   the undecided/decided write arms). The wildcard node therefore stays reusable,
   and nothing is ever bound by it.
-- **Every other reader** treats it as **undecided**: evaluation answers no value
+- **A value reader** treats it as **undecided**: evaluation answers no value
   (`evaluate_node_body`), it states no low type, a table key that is `Any` is not
   key content (`table.rs`), and both printers spell it `@any`.
+- **The concreteness verdict alone** takes it as **decided**
+  (`evaluate_node_deep_inner`). That is what lets a structure a wildcard sits in
+  be proven concrete: a written compound type is content-complete, so an apply
+  clone references it **in place** instead of copying an array whose own value no
+  deep pass ever wrote. Without the rule every wildcard-bearing type is unproven,
+  and both a printer reading it and an assert condition over it answer nothing.
 - **Codec.** Tag 9, additive; tag 4 stays reserved for the deleted marker.
 
 ## The element slot is a full term
 
-A compound type's element slot holds the element's *type value* alone today, so
-an element's own value and attribute have nowhere to sit: `type_denotation`
-strips the annotation, and a perspective written on a type's element is dropped.
-Measured on the tree before this change:
+A compound type's element slot used to hold the element's *type value* alone, so
+an element's own value and attribute had nowhere to sit: `type_denotation`
+stripped the annotation, and a perspective written on a type's element was
+dropped. Measured on the tree before this change:
 
 ```text
 (1 # 2, 2) : <Int # 2, Int>   =>  (1, 2): <Int, Int>
 (1 # 4, 2) : <Int # 2, Int>   =>  (1, 2): <Int, Int>
 ```
 
-Both check, and neither carries the `# 2` anywhere. The refactor makes every
-element slot an expression's term — `[value, type, attrs…]` — and keeps the
-kinded wrapper `[ [slot…], [marker, K] ]`, with one construction site per kind.
+Both checked, and neither carried the `# 2` anywhere. Every element is now an
+expression's term — `[value, type, attrs…]` — inside the kinded wrapper
+`[ [slot…], [marker, K] ]`, with one construction site per kind.
 
-The **sugar** puts the whole annotated type expression into the *type* slot and
-`@any` in the *value* slot; the full syntax writes the slots out:
-
-```text
-<Int # 2, string>   ≡   tuple{ @any : (Int # 2), @any : string }
-  element 0 = [ @any, [int_marker, Type, <perspective 2>] ]
-  element 1 = [ @any, [string_marker, Type] ]
-```
-
-A **tuple literal**'s own type takes the literal's values ("unify the literal's
-values directly"), so its type is the tuple itself, annotated with each element's
-type and attributes:
+The slot's **width is dense over the attribute order**: `2 + |P::Attr::ORDER|`
+positions, `shape::slot_width`. The syntax stays sparse; the width does not,
+because a value's slot list and a written type's are unified position by
+position, and no value can know how many attributes a written type will spell.
 
 ```text
-(1 # 4, "a")
-  element 0 = [ 1,   [int_marker, Type, <perspective 4>] ]
-  element 1 = [ "a", [string_marker, Type] ]
+<Int # 2, string>   ≡   tuple{ @any : (Int # 2), @any : string }   # full syntax
+  element 0 = [ @any, int_type,    <perspective 2>, @any, @any ]
+  element 1 = [ @any, string_type, @any,            @any, @any ]
+
+(1, "a")   # a literal's type is the compound's shape: every value slot `@any`
+  element 0 = [ @any, int_type,    @any, @any, @any ]
+  element 1 = [ @any, string_type, @any, @any, @any ]
 ```
 
-An **array literal**'s element slot is one slot shared by every element, so it is
-built with `@any` in the value slot first, and each element's value and type are
-unified onto it.
+Decisions that shape this layout:
 
-Two consequences follow from the layout, and both are deliberate:
+- **A value's element value slot is `@any`.** The type is the compound's
+  *shape*, so `[(1, 2), (3, 4)]` and `f = x => (x, 1); [f 1, f 2]` stay legal
+  (measured before the change as `array<<Int, Int>, 2>`), and one written type
+  stays shareable across values that differ. The function precedent answers the
+  same question the same way: a function's type carries its return's *type*, never
+  its value. A written **pin** therefore rides in a written type's slot and is
+  enforced by a checker walk over the value's own element terms, not by the
+  lowlevel structural compare.
+- **An element's attributes are carried, not yet compared.** The dense attribute
+  positions of a written type's slot hold the element expression's own attribute
+  slots (`checker::element_attr_slots`), so a written perspective is no longer
+  dropped. The value's side holds `@any`, so the lowlevel compare is vacuous by
+  construction; the requirement is compared by marker through `unify_slots`, the
+  same way the function kind's declared parameter attribute is — that walk is the
+  tuple step's next piece.
 
-- **A pin is enforced by the lowlevel unify.** `tuple{5 : Int}` against a value
-  whose element is `1` is `5` against `1`: the ordinary conflict, no checker
-  machinery.
-- **An element attribute compares structurally**, because the sugar nests the
-  annotated type term whole (see §*What is open*).
+The readers follow the slot, and the layout is transitional until the struct step
+lands:
 
-The readers follow the slot: a field's type is the slot's element 1
-(`shape::field_type`), the low-type decode descends the slot's element 1
-(`shape::low_type_of`), and a raw read of a type value (`X<0>`, `X::a`) yields
-the slot's element 1 with its own kind as the read's type. The interim is visible
-in `shape`/`checker::indexing`: the tuple slots are terms while the struct slots
-are still bare type values, so the shared raw-read helper states which layout its
-container has until the struct step lands.
+- `shape::slot_type` reads an element's type position; `shape::field_type` takes
+  a `ShapeElements` its caller states — `Slots` for a tuple type's shape,
+  `Types` for a struct's — so no reader infers a layout from a node that may not
+  be evaluated yet.
+- `shape::low_type_of`'s tuple arm decodes each element through its slot;
+  `checker::indexing::element_read` reads a slot container's component one level
+  in; `checker::structs::slot_read`'s **lazy** fallback does the same, which is
+  what a resolved read and an apply-time one must agree about.
+- Both printers render a tuple's elements through their slots, and an unreadable
+  slot falls back to the raw mark rather than printing an element pair whole.
 
 ## What is open
 
-- **A value's element value slot.** The literal rule above makes a tuple's type
-  carry its values, so two tuples with different values have different types:
-  `[(1, 2), (3, 4)]` (legal today, `array<<Int, Int>, 2>`) would unify
-  `[1, Int], [2, Int]` against `[3, Int], [4, Int]` through the array's element
-  cell and conflict, and so would `f = x => (x, 1); [f 1, f 2]`. The function
-  precedent answers the same question the other way: a function's type carries
-  its return's *type* and never its value, which is exactly why `[f1, f2]`
-  unifies. Either accept the restriction, or keep an element's value slot `@any`
-  in a value's type — the type is then the compound's shape — and enforce a pin
-  by a checker walk over the value's own element terms, the analogue of the
-  apply's argument-pair unify.
-- **The element attribute comparison.** The sugar's nesting makes it structural:
-  `# 4` against a written `# 2` is refused, where the perspective lattice says
-  `4 ⊑ 2` (a value uniform over 4 threads satisfies 2). The function precedent,
-  and every other attribute check in the checker, goes the other way: the
-  declared value is kept out of the pair, the pair's slot is a binding target,
-  and `AttrExt::unify_slots` compares the two by marker with the lattice's
-  subtype relaxation. Matching it here means the sugar writes `@any` into the
-  slots it does not constrain and the requirement lives on the element
-  expression, compared by `unify_type_attributes` descending the elements.
+- **The element-attribute comparison.** See the second decision above: the
+  requirement is carried, the comparison is a checker walk
+  (`AttrExt::unify_slots` per marker) that is not written yet. Until it is, a
+  written `<Int # 2>` accepts `# 4` silently — as it did before the refactor,
+  when the attribute was dropped outright.
+- **The surface syntax.** `@any` is not a token, and `tuple{…}` is not a
+  production, so a slot cannot be written out yet; both construction sites build
+  the layout internally. `@any` must be a *fresh* node per spelling whose type
+  cell is the annotation's, so `@any : Int` binds through the ordinary annotation
+  path.
+- **The struct, array, and table/set steps.** Each repeats the tuple's shape: a
+  construction site, the readers, the printers, and its own wide tests.

@@ -93,14 +93,18 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
     for sv in vals {
+        // The two field values are type constants, so their own types name them;
+        // only the native kernel value has no name to read.
         assert_eq!(
             sv.value.as_deref(),
-            Some("(raw Kernel, raw Int, raw Int)"),
+            Some("(raw Kernel, Int, Int)"),
             "value = {:?}",
             sv.value
         );
+        // The type is read where it is decided: the input and output fields hold
+        // types, so their own type is the universe.
         assert_eq!(
-            sv.ty, "struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
+            sv.ty, "struct<.native raw[?a, ?b], .I Type, .O Type>",
             "type = {:?}",
             sv.ty
         );
@@ -115,8 +119,8 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(raw Kernel, raw Int, raw Int) : \
-         struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`"
+        "`k_double` — `(raw Kernel, Int, Int) : \
+         struct<.native raw[?a, ?b], .I Type, .O Type>`"
     );
 }
 

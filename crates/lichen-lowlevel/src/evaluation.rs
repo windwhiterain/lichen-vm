@@ -477,7 +477,16 @@ impl<P: Program> Module<P> {
             self.deep_depth -= 1;
             return Some(P::Value::from(LowValue::Error));
         }
-        let value = self.evaluate_node(Dyn(node), current);
+        let value = match self.class_committed_value(node) {
+            // A wildcard is decided content for the verdict: it must never make
+            // a structure unprovable.
+            Some(value) if matches!(value.as_enum(), Some(LowValue::Any)) => {
+                self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided: false });
+                self.deep_depth -= 1;
+                return Some(value);
+            }
+            _ => self.evaluate_node(Dyn(node), current),
+        };
         if let Some(LowValue::Array(array)) = value.and_then(|value| value.as_enum()) {
             // The descent may reach `node` again through the array's own items, so mark it for the
             // duration.

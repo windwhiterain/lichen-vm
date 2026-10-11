@@ -3,8 +3,7 @@
 
 use std::ops::Range;
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
-use lichen_utils::extend::AsEnum;
+use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{ExprId, Loc, LocStep};
