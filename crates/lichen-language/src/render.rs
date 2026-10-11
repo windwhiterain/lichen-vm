@@ -193,10 +193,11 @@ where
         DiagKind::RuntimeIndexTarget => {
             "this value is not a container — it has no element to read".to_string()
         }
-        DiagKind::RuntimeRawElement => {
-            "this raw read found an element that is not a value/type pair — \
-             `X::a` reads the element's own pair, so the container holds pairs \
-             (a struct type value)"
+        DiagKind::RuntimeTypeAccessElement => {
+            "this type access found an element that is not a value/type pair — \
+             `X{n}` and `X::a` read the element's own pair, so the container \
+             holds pairs (a type value); a runtime array's element is read with \
+             `e[i]`"
                 .to_string()
         }
         DiagKind::RuntimeIndexSubscript => {

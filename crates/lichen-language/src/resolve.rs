@@ -288,12 +288,18 @@ impl Resolver {
                 self.resolve_expr(array);
                 self.resolve_expr(index);
             }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                self.resolve_expr(container);
+                self.resolve_expr(index);
+            }
             Expr::FieldRead { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.resolve_expr(container),
-            Expr::RawNamedField { container, .. } => self.resolve_expr(container),
+            Expr::NamedTypeAccess { container, .. } => self.resolve_expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);

@@ -138,14 +138,14 @@ where
         (value_node, ty_node)
     }
 
-    /// A **raw** named component read `X::a` — see `docs/notes/raw-field.md`.
+    /// A **named** type access `X::a` — see `docs/notes/type-access.md`.
     ///
     /// # Invariant
     /// The container's **type** must be a TypeStruct kind, stated as a unify:
     /// a decided container is refused where it stands, an undecided one is
     /// pinned. The read is the element's own pair, so its type is the field's
     /// type *value* — `struct{.a Int, .b string}::a` is `Int : Type`.
-    pub(super) fn check_raw_named_field(
+    pub(super) fn check_named_type_access(
         &mut self,
         e: ExprId,
         container: ExprId,
@@ -171,11 +171,10 @@ where
             Some(key_ops),
         );
         self.node_edges.insert(key, self.loc(e, 0));
-        // The element's own pair: its value slot and its type slot.
+        // The element's own pair, as the positional type access builds it.
         let container_value = self.value_of(container);
         let (pair, element, ty_node) = self.element_read(container_value, key);
-        // The element is the target of both slot reads, so a failure there is
-        // located at the read's own type slot.
+        // As there: the element is the target of both slot reads.
         self.node_edges.insert(element, self.loc(e, 1));
         self.state[e].term = Some(pair);
         self.state[e].val = None;

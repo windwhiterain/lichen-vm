@@ -1492,6 +1492,7 @@ fn classify_token_kind(
         TokenKind::Arrow
         | TokenKind::FatArrow
         | TokenKind::TableArrow
+        | TokenKind::TableFindArrow
         | TokenKind::Colon
         | TokenKind::DoubleColon
         | TokenKind::Hash
@@ -1501,8 +1502,6 @@ fn classify_token_kind(
         | TokenKind::Equals
         | TokenKind::Eq
         | TokenKind::Neq
-        | TokenKind::LAngle
-        | TokenKind::RAngle
         | TokenKind::Leq
         | TokenKind::Geq
         | TokenKind::Plus
@@ -1522,6 +1521,8 @@ fn classify_token_kind(
         | TokenKind::RBracket
         | TokenKind::LBrace
         | TokenKind::RBrace
+        | TokenKind::LAngle
+        | TokenKind::RAngle
         | TokenKind::Separator
         | TokenKind::Glue
         | TokenKind::Eof => None,
@@ -1654,7 +1655,7 @@ impl<'a> NameClass<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::RawNamedField { container, .. } => self.expr(container),
+            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -1714,6 +1715,12 @@ impl<'a> NameClass<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -1951,7 +1958,7 @@ impl Walk {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::RawNamedField { container, .. } => self.expr(container),
+            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -2011,6 +2018,12 @@ impl Walk {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -2277,7 +2290,7 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::RawNamedField { container, .. } => self.expr(container),
+            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -2337,6 +2350,12 @@ impl<'a> ScopeCapture<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::TypeAccess {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..

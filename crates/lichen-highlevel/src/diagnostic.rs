@@ -90,7 +90,7 @@ pub enum DiagKind {
     /// self-contained.  Distinct from [`Self::IndexTarget`], which reports a
     /// *type* the checker refused to index and therefore names that type.
     RuntimeIndexTarget,
-    /// A raw named read whose **element** is not a pair at runtime.
+    /// A type access (`X{n}`, `X::a`) whose **element** is not a pair at runtime.
     ///
     /// # Invariant
     /// The element's own type slot — the read's type — does not exist then.  It
@@ -99,7 +99,7 @@ pub enum DiagKind {
     /// read produced, not the container the user wrote.  Only the read itself
     /// can see this; the wording is distinct because the generic "not a
     /// container" blames the wrong side.
-    RuntimeRawElement,
+    RuntimeTypeAccessElement,
     /// An imported package whose export is not the `[value, type]` pair the
     /// importer reads.
     ImportExport,
@@ -443,7 +443,9 @@ where
                 EvalError::IndexTarget { target } => {
                     let loc = self.node_loc(*target);
                     let kind = match loc.as_ref() {
-                        Some(loc) if self.is_raw_read_element(loc) => DiagKind::RuntimeRawElement,
+                        Some(loc) if self.is_type_access_element(loc) => {
+                            DiagKind::RuntimeTypeAccessElement
+                        }
                         _ => DiagKind::RuntimeIndexTarget,
                     };
                     out.push(Diag::factual(kind, loc))
@@ -593,16 +595,20 @@ where
         })
     }
 
-    /// Whether `loc` was registered by the raw named read for its **element**.
+    /// Whether `loc` was registered by one of the type accesses for its
+    /// **element**.
     ///
     /// # Invariant
     /// A non-container there is a non-pair element, not a non-container
-    /// container.  The raw read registers the element at the read's own type
+    /// container.  Each type access registers the element at the read's own type
     /// slot (`loc(e, 1)`), which tells it apart from the edges every other read
     /// registers; the IR kind keeps a typed read's own edges out of it.
-    fn is_raw_read_element(&self, loc: &Loc) -> bool {
+    fn is_type_access_element(&self, loc: &Loc) -> bool {
         loc.path == [LocStep::Type]
-            && matches!(self.ir[loc.expr].kind, ExprKind::RawNamedField { .. })
+            && matches!(
+                self.ir[loc.expr].kind,
+                ExprKind::TypeAccess { .. } | ExprKind::NamedTypeAccess { .. }
+            )
     }
 
     /// One unification-failure diagnostic: the `unify_errors` entry at `i`.

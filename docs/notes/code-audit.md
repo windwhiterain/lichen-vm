@@ -1011,7 +1011,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   tuple{Int, Int}` today and would be `1` under the spec. **Chosen — the doc fix:**
   the code's intent is explicit, its doc argues *why* (syntax picks the
   operator, never a runtime kind dispatch — the same rule that keeps `e[i]`,
-  `a(k)` and `t{k}` three different things), every example agrees, and a
+  `a(k)` and `t <== k` three different things), every example agrees, and a
   language that *should* index tuples is a feature rather than a
   reconciliation. `P1-34` corrected §3's two sentences; nothing in the checker,
   the parser or the examples moved, so both reproductions still answer with the
@@ -1024,6 +1024,16 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   own resolution through the struct's name table (`s.x`). A user who wants
   `(1, 2)[0]` to be `1` files that as a new item, and it starts by answering the
   struct question.
+
+  One adjacent fact belongs with the decision rather than the item: the type
+  access `X{n}` *looks* like it could have spelled the spec's meaning without
+  touching `check_index`, and it cannot — over a runtime container it reads
+  components of
+  something that is not a tuple type value, which is refused at check time (the
+  container's type must be the tuple kind; `P1-35`), and on the tree this was
+  written on was a **reported** runtime error where it used to print `none`
+  silently (`P1-35`). So the choice really was between the
+  two sides above; there is no third spelling available today.
 
 - **D17 — Is a `compute.write` the codomain does not reach a silently dropped
   effect, or a dead expression? — DECIDED: a dead expression; `P1-42` is

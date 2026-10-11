@@ -406,11 +406,11 @@ than a second scan, so the text and the `(line, col)` name the same line.
   **pathless**: the argument expression itself is the caret target the apply's
   edge was recorded for.
 - **The three runtime kinds spell themselves.** `RuntimeIndexTarget`,
-  `RuntimeIndexSubscript`, `RuntimeApplyTarget` and `RuntimeRawElement` all
+  `RuntimeIndexSubscript`, `RuntimeApplyTarget` and `RuntimeTypeAccessElement` all
   arrive as the same lowlevel `EvalError` family — a fact about a *value*, with
   no type to print — so their wording is self-contained, and each stays distinct
   from its static counterpart (`IndexTarget`, `Guard`), which reports a *type*
-  the checker refused and therefore names that type. `RuntimeRawElement` is
+  the checker refused and therefore names that type. `RuntimeTypeAccessElement` is
   separate again because the non-container is the element the read produced rather
   than the container the user wrote: `[1, 2]` was fine and the element `1` is a
   scalar, so the generic "this value is not a container" blames the wrong side.

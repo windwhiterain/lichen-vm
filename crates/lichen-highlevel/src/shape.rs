@@ -466,7 +466,7 @@ where
 }
 
 /// Whether `ty` is a TypeStruct **kind** rather than a struct *type* — the
-/// form a raw named read `X::a` requires.
+/// form a named type access `X::a` requires.
 pub fn is_type_struct_kind_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,

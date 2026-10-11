@@ -369,6 +369,13 @@ pub enum ExprKind<L> {
     /// # Invariant
     /// The read registers an `i < length` bounds assert and never kind-dispatches.
     Index { array: ExprId, index: ExprId },
+    /// `{ container, index }` — a positional type access `X{n}`, read without
+    /// index validation.
+    ///
+    /// # Invariant
+    /// No array-type pinning and no bounds assert: the container is read by value
+    /// whatever its type, and the result is the element's own pair.
+    TypeAccess { container: ExprId, index: ExprId },
     /// `{ container, key }` — a positional slot read `a(k)` over a tuple element
     /// or struct field.
     ///
@@ -386,18 +393,19 @@ pub enum ExprKind<L> {
         container: ExprId,
         name: &'static str,
     },
-    /// `{ container, name }` — a *raw* named component read `X::a`, yielding the
+    /// `{ container, name }` — a *named* type access `X::a`, yielding the
     /// field's *type* as a value.
     ///
     /// # Invariant
     /// Unlike [`Self::NamedField`], this reads the name table straight from the
     /// container's **type**, which must be a TypeStruct (the walk is
-    /// `shape::STRUCT_TYPE_NAMES_PATH`) — a check-time unify.
-    RawNamedField {
+    /// `shape::STRUCT_TYPE_NAMES_PATH`) — a check-time unify, where
+    /// [`Self::TypeAccess`] reads the container's value.
+    NamedTypeAccess {
         container: ExprId,
         name: &'static str,
     },
-    /// `{ container, key }` — a table lookup `t{k}`.
+    /// `{ container, key }` — a table read `t <== k`.
     ///
     /// # Invariant
     /// The checker compiles the read to the dedicated lowlevel `TableGet`, never a
@@ -552,11 +560,16 @@ impl<L> ExprKind<L> {
                 push(*array);
                 push(*index);
             }
+            ExprKind::TypeAccess { container, index } => {
+                push(*container);
+                push(*index);
+            }
             ExprKind::Field { container, key } => {
                 push(*container);
                 push(*key);
             }
-            ExprKind::NamedField { container, .. } | ExprKind::RawNamedField { container, .. } => {
+            ExprKind::NamedField { container, .. }
+            | ExprKind::NamedTypeAccess { container, .. } => {
                 push(*container);
             }
             ExprKind::Find { container, key } => {
@@ -661,11 +674,16 @@ impl<L> ExprKind<L> {
                 fix(array);
                 fix(index);
             }
+            ExprKind::TypeAccess { container, index } => {
+                fix(container);
+                fix(index);
+            }
             ExprKind::Field { container, key } => {
                 fix(container);
                 fix(key);
             }
-            ExprKind::NamedField { container, .. } | ExprKind::RawNamedField { container, .. } => {
+            ExprKind::NamedField { container, .. }
+            | ExprKind::NamedTypeAccess { container, .. } => {
                 fix(container);
             }
             ExprKind::Find { container, key } => {

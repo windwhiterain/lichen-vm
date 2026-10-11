@@ -102,10 +102,12 @@ pub enum TokenKind {
     FatArrow,
     /// ':' -- an annotation.
     Colon,
-    /// '::' -- the raw named field read on a TypeStruct value (`X::a`).
+    /// '::' -- the named type access on a TypeStruct value (`X::a`).
     DoubleColon,
     /// '==>' -- the table literal's key/value separator (`table { k ==> v }`).
     TableArrow,
+    /// '<==' -- the table read's container/key separator (`t <== k`).
+    TableFindArrow,
     /// '#' -- the perspective annotation.
     Hash,
     /// '?' -- the label (doc) annotation: `e ? expr`.
@@ -211,6 +213,7 @@ impl TokenKind {
             TokenKind::Colon => "':'".to_string(),
             TokenKind::DoubleColon => "'::'".to_string(),
             TokenKind::TableArrow => "'==>'".to_string(),
+            TokenKind::TableFindArrow => "'<=='".to_string(),
             TokenKind::Hash => "'#'".to_string(),
             TokenKind::Question => "'?'".to_string(),
             TokenKind::Bang => "'!'".to_string(),
@@ -343,6 +346,8 @@ enum RawToken {
     DoubleColon,
     #[token("==>")]
     TableArrow,
+    #[token("<==")]
+    TableFindArrow,
     #[token(":")]
     Colon,
     #[token("#")]
@@ -781,6 +786,7 @@ fn raw_to_kind(
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),
         RawToken::TableArrow => Some(TokenKind::TableArrow),
+        RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::Hash => Some(TokenKind::Hash),
         RawToken::Question => Some(TokenKind::Question),

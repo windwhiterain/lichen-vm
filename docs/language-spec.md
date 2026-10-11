@@ -46,7 +46,8 @@ sep      := newline | ';' | ','                      -- one uniform Separator to
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
 annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow) | ('~' str_literal))*   -- type (':'), perspective ('#'), refinement ('!'), doc ('?') and/or mark ('~') annotation, right-assoc; each wraps the whole expression to its left
-arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
+arrow    := find ('->' find)*                        -- function type; right-assoc
+find     := cmp ('<==' cmp)*                         -- table read; left-assoc, the loosest binary level
 cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=' | '@in') bits)*   -- comparison and set membership, left-assoc; yield 0/1
 bits     := bitxor ('|' bitxor)*                    -- bitwise or
 bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
@@ -81,8 +82,8 @@ block    := (bstmt sep)* ['return' expr]            -- statements + an explicit 
           | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
 bstmt    := ['pub'] stmt                            -- a block statement (`pub` marks one as a struct field)
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
-                 | '::' name                        -- raw named read  X::a  (a struct type value's field)
-                 | '{' expr '}'                     -- table lookup  t{k}
+                 | '{' expr '}'                     -- type access  X{n}  (a tuple type value's component)
+                 | '::' name                        -- named type access  X::a  (a struct type value's field)
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
 element  := '@shallow' glued '(' n ')' expr           -- shallow marker, bare or with a depth (inside array literals only)
@@ -101,7 +102,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   The
   seven prefix keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
-  `$`, `::`, `==>`, `~`, `!`, and the
+  `$`, `::`, `==>`, `<==`, `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
   it may reference and recurse with the block's other bindings) and gets the
@@ -249,7 +250,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 - **Tables.**  `table { k1 ==> v1, k2 ==> v2, … }` is a constant table literal;
   each entry is a deep-equal `key ==> value` pair (the table arrow is not part
   of the expression grammar, so it unambiguously separates the pair).
-  `table {}` is the empty table.  `t{k}` (a glued `{`) is a table lookup
+  `table {}` is the empty table.  `t <== k` is the table read
   returning the entry whose stored key is deep-content-equal to `k`.
 - **Sets.**  `set{a, b, …}` is a set of ordinary values — a *value* form led by a
   word, exactly like the table literal, because a set's members are values.  The
@@ -259,7 +260,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   makes it a set is its **type**, whose shape is the element type
   *alone* (the printer spells it `set<T>`): a set has no length, so `set{a}` and `set{a, b}` are one type.  That is
   what separates it from `array{T, n}`: a set is not indexable (`s[i]` is a
-  diagnostic — the container unify refuses it exactly as it refuses `t{k}` on an
+  diagnostic — the container unify refuses it exactly as it refuses `t <== k` on an
   array) and can never flow into an `array{T, n}` parameter.  A set of *type
   values* is how a contract names the classes it admits:
   `Num = set{Int, Float}` ([operator-polymorphism](notes/operator-polymorphism.md)
@@ -316,14 +317,27 @@ delimiter is a fresh atom — an argument of an application:
   branch.  An array
   literal in argument position needs no parens when glued, but a spaced
   `f ([1, 2])` applies `f` to the array.
-- `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
-  whose type must itself be a TypeStruct kind (the name table lies there, in the
-  marker payload at
+- `X{n}` (glued `{`) is a **type access**: component `n` of `X`'s *value*, read
+  from a **tuple type value** (see §3).  It reads a component of a type-as-value
+  (`tuple{Int, string}{0}`), and the container's *type* must be the tuple kind.  A
+  struct type value's kind is `TypeStruct` (its components read by name,
+  `X::a`), a tuple *value*'s type is the tuple shape `tuple{Int, Int}` rather than
+  the kind, and an atomic type's kind is `Type` — none of the three is accepted,
+  and the requirement is stated as a unify, so an undecided container is refused by
+  the apply that binds it.  The index is a full expression (`X{n + 1}`).  A
+  **spaced** `{` is never a delimiter: `X {0}` applies `X` to the block `{0}`.
+- **`<` and `>` are comparisons alone.**  No postfix form opens with `<`, so
+  adjacency no longer changes the token's job: `a < b`, `a<b`, and `2 > 1` all
+  compare, and every `>` closes nothing.
+- `X::a` (glued `::`) is a **named type access**: field `a` of a **TypeStruct
+  value**, whose type must itself be a TypeStruct kind (the name table lies there,
+  in the marker payload at
   `container_ty[0][0][1]`).  It reads the field's *type* as a value — `struct{.a
   Int, .b string}::a` is `Int : Type`.  The requirement is a unify for **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
-  and refused by the apply that binds it.  `.` (`.a`) is the named field read over a struct
+  and refused by the apply that binds it.  It is the
+  named sibling of `X{n}`; `.` (`.a`) is the named field read over a struct
   *instance*, whose kind (not type) must be TypeStruct — a unify on the kind slot
   where the container's type is decided, and a **condition on the assert
   channel** where it is not: an undecided container (a parameter, a call result)
@@ -339,8 +353,11 @@ delimiter is a fresh atom — an argument of an application:
   comma discipline (`a()` / `a(,)` carry no fields).  A fresh atom may itself open with a glued delimiter,
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
   `Int` and `Type` (a tuple type is `x : tuple{Int, Type}`).
-- `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
-  `{k}`.  A table literal (`table{…}`), a set value (`set{…}`), a struct type
+- `t <== k` is a **table read**: the entry whose stored key is deep-content-equal
+  to `k`.  It is an **infix operator**, not a postfix form: it is the loosest
+  binary level and left-associative, so its key is a whole comparison expression
+  (`t <== k + 1` reads the key `k + 1`) and `t <== a <== b` reads `(t <== a) <== b`.
+  A table literal (`table{…}`), a set value (`set{…}`), a struct type
   (`struct{…}`) and an array type (`array{…}`) are *keyword-led*, so their
   delimiter sits directly after the keyword.
 
@@ -407,7 +424,8 @@ maps every span back to the original file.
   tie, `add [1, 2, 3]` by the length, `add ["a", "b"]` by the class.  The group is
   one argument rather than a curried pair because lichen has no multi-parameter
   lambda (`(a, b) => e` does not parse — `(a, b)` is always a tuple *value*), and
-  the group's elements are read with the ordinary index `operands[i]`.  The prelude is
+  the group's elements are read with the ordinary index (`operands[i]`; `X{n}` reads
+  a *type value*'s pair, not a runtime array's element).  The prelude is
   **shadowable, not reserved**: it is seeded *before* a program's own imports and
   bindings, so a program that binds `add` gets its own.  The module is also
   reachable as a value (`core = import "core"`, then `core.add`), and it is a
@@ -598,8 +616,8 @@ maps every span back to the original file.
   `expected tuple{?a, …}, found array{Int, 2}`, and `x[0]` over a tuple is
   `expected array{…}, found tuple{Int, Int}`.  The named reads state the same
   requirement as a unify on the corresponding slot: `.a` needs the container's
-  *kind* to be a struct kind, `X::a` needs its *type* to be one (§3, *the raw
-  named read*).  A
+  *kind* to be a struct kind, `X::a` needs its *type* to be one (§3, *the named
+  type access*).  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
@@ -610,17 +628,44 @@ maps every span back to the original file.
   `[then, else][i]` is the mechanism under the conditional form
   (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
-- **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
+- **The type access `X{n}`.**  The glued `{` postfix reads component `n` of `X`'s
+  **value**, and the container's *type* must be the **tuple kind** — a tuple *type
+  value* is what the form is for, and its components are read structurally.  It
+  is the way to read a component of a *type-as-value* directly: `tuple{Int, string}{0}`
+  is the `Int` type (the tuple type's first component), and the container may be
+  a bound name, a parameter or a call result.  The requirement is stated once, as
+  a **unify**: a decided container is refused where it stands
+  (`expected TypeTuple, found tuple{Int, Int}` for the tuple *value* `(1, 2)`, whose
+  type is the tuple shape rather than the kind; `expected TypeTuple, found
+  TypeStruct` for a struct type value, whose components are read by name —
+  `X::a`; `expected TypeTuple, found array{Int, 2}` for an array), and an
+  undecided one is pinned, refused by the apply that binds it.  Nothing else is
+  a container.
+  The read's result is **the component's own pair**: its value from the pair's
+  value slot, and its type from the type slot — the component type value's *kind*
+  (`Type` for `tuple{Int, string}{0}`, and a `TypeStruct` kind for a component that is
+  itself a struct type).  The value slot is read lazily; the type slot is computed
+  when the read is checked, so a later check on the read's own type compares it
+  rather than binding it, and a read the kind requirement above refused is not
+  built at all.  The read is *untyped* only in that it does not pin an array type,
+  guard an index target
+  or assert bounds: an out-of-bounds subscript is still an evaluation error,
+  recorded during the definition pass, so the build is refused.  `e[i]` is how a
+  runtime array's element is read.  This is the syntax the
+  array type used to occupy — the array type is now the keyword-led
+  `array{T, n}`.
+- **The named type access `X::a`.**  The glued `::` postfix reads field `a` from a
   **TypeStruct value** — the container's *type* must itself be a TypeStruct
   kind (`[[TypeId, names, names_in_order], TypeStruct]` under the kind's
   `[marker, K]` pair, the name→index table centred right there
-  at `container_ty[0][0][1]`) — stated as a **unify**: a decided container is refused where
+  at `container_ty[0][0][1]`) — the named sibling of the tuple-kind requirement
+  `X{n}` states, and likewise a **unify**: a decided container is refused where
   it stands, an undecided one is pinned and refused by the apply that binds it
   (this is what removed the `TableGet` panic a deferred non-struct used to hit).
   It yields the field's *type* as a value, so
   `struct{.a Int, .b string}::a` is `Int : Type` — the type being that field type
   value's *kind*, `Type` for a scalar field and a `TypeStruct` kind for a
-  struct-typed one, computed when the read is checked, so
+  struct-typed one, computed when the read is checked exactly as `X{n}`'s is, so
   a later check on the read's type compares it.  A container the requirement
   refused leaves the read unbuilt: the name table it needs is a walk into that
   container's own type, and the read is defined for a struct type value and
@@ -787,14 +832,15 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `tuple{T1, …, Tn}` | `TypeTuple(range)` |
 | `struct{.a T1, .b T2}` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct{T1, …}`) is a `StructFieldName` check error |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
-| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
+| `X::a` | `NamedTypeAccess { container, name }` — a named type access over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
 | `[e1, @shallow e2, @shallow(2) e3]` | `ShallowArray { range, depths }` — any `@shallow`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `@shallow`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `e ~ "text"` | **no kind at all** — a mark is an entry in `IR::marks` keyed by `e`'s `ExprId`, and the expression lowers to what it would lower to without it.  An annotation node is allocated only when the chain also spells a type, a perspective, a refinement or a doc |
 | `array{T, n}` | `TypeArray { element_type, length }` |
 | `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
-| `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
+| `t <== k` | `Find { container, key }` — the infix table read; the entry whose stored key is deep-content-equal to `k` |
+| `X{n}` | `TypeAccess { container, index }` — a type access of a **tuple type value**'s component: the container's type is unified against the tuple kind, so a non-tuple container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
 | a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
