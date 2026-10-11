@@ -587,6 +587,25 @@ plan, and what the engine does with it.
   conflated them would serve one kernel's shader for another's. The first rule keeps
   a cost decision from becoming a semantic one; the second keeps a cache from lying.
 
+- **The artifact is text, and it carries the plan — which is what gives a placement a route to
+  the emit.** A fused kernel crosses as an **artifact** whose format `lichen-compute` defines and
+  reads back (`crates/lichen-compute/src/compute/fused/`, **landed** at `fb0574c`): pretty JSON
+  through `facet`, holding the fragment, the claim it is interned with, and the plan it was
+  checked against. `read_fused_kernel` parses, converts, runs **both** IR gates —
+  `KernelBody::validate` and `KernelFragment::validate`, each of which sees a fact the other
+  cannot — and then `check_plan`; it is **pure**, interning nothing and consulting no global, so
+  the same text reads back as the same kernel in any process. Carrying the plan is the point
+  rather than bookkeeping: `KernelFragment` has no plan field, `LaunchSet` has none, and
+  `ParallelBackend::run` takes none, so before this artifact a placement had **no route to the
+  emit at all**. The text is spelled for a person — `ValueId` is a bare number, every enum is a
+  lower-case string, and a value-table entry's position *is* its identity — because a fused
+  kernel is something a human tunes by hand, and a refusal names the field's path and the byte
+  range rather than only that the text failed. Three things are recorded rather than hidden: a
+  stray key inside an enum **variant** is ignored (`deny_unknown_fields` does not reach variant
+  structs in `facet` 0.45); each value-table entry is wrapped in `{"at": …}`, which restates the
+  position and is a cheap follow-up to flatten; and the dependency brings
+  `facet-reflect`'s `smallvec` **alpha** with it.
+
 **What a pack author writes, schematically.** The spelling is the implementing
 session's to settle; these seams are the interface:
 
@@ -880,7 +899,7 @@ about shrinks exactly where fusion fires.
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
-| the **memory plan** interface | **the placement half landed; matching and the fact checks remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. What remains: the plan **matched by schema**, checked against the three facts (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), carried from match to emit, and its `sync`. The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
+| the **memory plan** interface | **the carrier and the check landed; matching and the fact checks remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c` (`crates/lichen-compute/src/compute/fused/`, §5's artifact bullet), so a placement can now reach the emit at all. What remains: the plan **matched by schema**, checked against the three facts (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), **landed into the recorded graph node that runs** (the artifact exists; nothing lands it yet), and its `sync`. The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
