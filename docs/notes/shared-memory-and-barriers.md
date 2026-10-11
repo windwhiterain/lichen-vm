@@ -408,14 +408,26 @@ and the crate is forbidden from learning it.
 The refusal stays above the backends because it is a **program** property, not a target
 limitation: on a host that runs invocations in order a contended write has a defined
 meaning, so refusing it in one backend only would leave a differential test comparing a
-race against an order. It needs no barrier instruction to compute, which matters because
-making `Barrier` a `KernelInstr` variant was measured to force **11 edits across 7 files
-in 4 crates** — the IR's own `produces`/`arity`/`own_class`, a new `BridgeRefusal`
-variant plus its `Display` and match arms, the wasm emitter's `instruction_type` *and*
-`lower_instr` (which its own invariant requires to agree), the wasm mixed-class check,
-the differential test's second CPU interpreter, and `spirv.rs` — of which exactly one,
-`spirv.rs`, is a place a barrier means anything. The other six each had to invent an
-answer for an instruction undefined in their target.
+race against an order. It needs no barrier instruction to compute — that was measured
+separately and is §9 step 3's business, not this paragraph's.
+
+**It is the same answer for the instruction: a barrier does not belong in the vocabulary
+every backend shares.** This paragraph first recorded the cost as **11 edits across 7
+files in 4 crates**, and a second measurement corrected it in both directions to **13**:
+`produces` is a wildcard and needed no edit at all, so its row was double-counted, while
+the SPIR-V side is four edits rather than one — the `OpControlBarrier` opcode, the
+`ScopeWorkgroup` and `MemorySemanticsWorkgroupMemory` constants a greenfield backend does
+not have either, and the emission arm.
+
+**The count is not the finding; the classification is.** Eight of the thirteen sites are
+*mechanical* — a target with no barriers answering "no type", "no class", "nothing" — and
+five are *semantic*, and all five sit in targets that will never have a barrier: the
+fusion bridge must add a `BridgeRefusal` variant and refuse, the wasm emitter must refuse
+because the host calls once per *index* and not per workgroup, and the differential test's
+own CPU interpreter has to say what a barrier means to a sequential run. That last site is
+the sharpest: the answer it invites is a no-op, which **silently compiles a barrier into a
+per-index interpreter** — the exact thing §7 says must be refused. Nothing in the compiler
+makes that site refuse; a person does, or nobody does.
 
 **That is a cost argument about the instruction, not a location argument about the
 width, and this note first drew the wrong conclusion from it.** The crate's invariant
@@ -425,9 +437,28 @@ IntWidth` is "declared rather than assumed", is hashed in `fragment_digest`, and
 whose target cannot represent it "refuses the fragment **by name** rather than narrowing
 silently" (`lichen-kernel-ir/src/lib.rs`; `SpirvRefusal::UnsupportedIntWidth`). The
 lane-group width is the same kind of fact and wants the same treatment — declared by the
-fragment, chosen by the host compiler, in the digest, refused by name when a plan or a
-certificate asks for a width the target does not have. With the width as data the whole
-scan is the IR's, which is §9's staging and not the backend's.
+fragment, in the digest, and refused by name by a target that cannot schedule it. With the
+width as data the whole scan is the IR's, which is §9's staging and not the backend's. It
+landed at `c7223fc`; §9 step 2 records what did *not* land with it.
+
+**The pattern to copy from `int_width` is *declared → hashed → refused by name*, and its
+shape is the one part that cannot be copied.** `IntWidth` is a one-variant enum, so its own
+refusal is unreachable and `fragment_identity.rs` records that the case cannot be
+constructed. A fact modelled on it should therefore be a newtype carrying a number rather
+than an enum carrying a choice, and it should be grouped with its siblings so a later fact
+joins the digest by construction rather than by someone remembering a line — which is what
+`TargetFacts` is, and why `fragment_digest` hashes the struct and not each field.
+
+**And "declared by the fragment" is not "chosen by one side".** The two sides that must
+agree on a width cannot see each other: `lichen-compute` is the lowering and deliberately
+does not depend on `lichen-compute-gpu`, where `LOCAL_SIZE_X` lives — the wasm backend must
+not need the GPU crate — while the one crate both may depend on is `lichen-kernel-ir`,
+whose invariant forbids it from *choosing* a width. So each side states its own: the
+lowering declares 64 as the policy it lowered for, the emitter keeps 64 as the capability
+it schedules. **The named refusal is the only link between them**: a divergence makes the
+emitter refuse the fragment rather than emit a `LocalSize` the body was not lowered for.
+That is the honest resolution rather than a gap, but it does mean the agreement is enforced
+at the one place that can still refuse, and not by the type.
 
 The refusal is the interesting row, because it is the one this note originally
 assigned to `DP`. "Excludes the lane parameter" is a **sound** test for
@@ -827,14 +858,28 @@ mergeable and leaves the tree green.
 | | step | crate(s) | note |
 |---|---|---|---|
 | **1** | **revert the token**: `ScalarClass::State`, `ComputeValue::State`, `Lower.state` and the loop-nest carry, `StateWhereAValueBelongs`, `BridgeRefusal::StateClass`, the ~20 `Const(State, 0)` seeds, `State = struct<>`; `BufferWriteCall` back to `produces() == 0`, `arity() == 3`, and `Write`'s `run` arm back to lazy | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-graph-ir`, `lichen-fusion-bridge`, `lichen-language` (tests) | §6.2 is the inventory. Coordinates with `356fc4a`, which adapted the fusion bridge to the variant — and fixes a latent defect there while it does (`read_position` reads `args.first()`, which the token made the state). **Nothing replaces it on global buffers**: §3's ABI wall |
-| **2** | **the lane-group width as a fragment fact**, on `int_width`'s template: a field the fragment *declares*, chosen by the host compiler, hashed in `fragment_digest`, and refused **by name** by a target that cannot honour it | `lichen-kernel-ir`, `lichen-compute-gpu` | Independent of 3–5 and **landable on its own today**. It is what moves fact 1's *exact* judgement and the uniformity check out of a backend and into the IR without the crate depending on any backend's constant (§4). This step is what §5's `StagingWidthNotAWidth` and `StagingNotOnThisBackend` are |
-| **3** | IR vocabulary for staging: `SharedReadCall` and `SharedWriteCall` as *additive* variants, the shared-slot set as a fragment field hashed in `fragment_digest`, and the barrier instruction | `lichen-kernel-ir` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move. Whether a distinct `Barrier` variant earns its cost is measured in §4: 11 edits across 7 files, one of them in a place a barrier means anything |
-| **4** | **the scan and the selection**: `insert_barriers`, *and* §5's three-step walk that decides each cross-lane value's space, plus the contended-write refusal | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language — which step 2 is what makes possible. Conservative first, then §4's interval refinement. The selection is not a second pass: it is the same walk with a second output |
+| **2** | **the lane-group width as a fragment fact** — **landed** at `c7223fc` as `KernelFragment::target.lane_width`, declared by the lowering, hashed whole as `TargetFacts`, and refused by name by a target that cannot schedule it (`SpirvRefusal::UnsupportedLaneWidth`) | `lichen-kernel-ir`, `lichen-compute-gpu`, `lichen-compute` | Independent of 3–5, and it is what moves fact 1's *exact* judgement and the uniformity check out of a backend without the crate depending on any backend's constant (§4). It landed **one** refusal, not the two this cell first claimed: `StagingWidthNotAWidth` is a plan-level refusal that needs step 7, and `StagingNotOnThisBackend` is step 6's. What landed is a *target*'s refusal of the fragment's own declared width, which is `UnsupportedIntWidth`'s mirror |
+| **3** | staging vocabulary: `SharedReadCall` and `SharedWriteCall` as *additive* variants, the shared-slot set as a fragment field hashed in `fragment_digest`, and **the barrier as data** — the separated `(write, read)` pairs recorded as `ValueId`s and never as positions | `lichen-kernel-ir` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move. A `Barrier` *instruction* is rejected by measurement, §4: thirteen sites against five, and the five semantic ones all sit in targets that will never have a barrier. Values and not positions because the one restructuring in the tree shifts positions silently, and because a pair is already the shape a plan's `sync` has |
+| **4** | **the scan and the selection**: the walk that records the pairs needing separation, §5's three-step walk that decides each cross-lane value's space, and the contended-write refusal | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language — which step 2 is what makes possible. Conservative first, then §4's interval refinement. The selection is not a second pass: it is the same walk with a second output. The divergent-placement refusal is computable here and was measured to be: it needs dominance over the CFG, not a look at one terminator |
 | **5** | **one landing**: the surface (`Shared`, `swrite` returning a new version, `sread` consuming it through `.from`), its lowering, and the GPU backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slot layout) | `lichen-compute`, `lichen-compute-gpu` | **This surface is a pack's, not the logic's.** The logic DSL never names a space, so `Shared` here is what a hand-written fused body and a plan are written in; what a logic package gets instead is step 8. §3's conclusion holds: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0`. The descriptor set and binding layout do not change — shared memory is not bound |
 | **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses `Shared` and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
 | **7** | **the plan interface**: a pack's plan matched by schema, **checked against the three facts rather than believed**, carried from match to emit, with the refusals the interface owes | `lichen-language` (match), `lichen-kernel-ir` (check) | [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5 is the interface; this step is where it becomes checkable. The plan never enters the *schema* hash and its **effect** enters `fragment_digest` through the fragment — which is why step 3's slot field and step 2's width are the same kind of fact and land in the same place |
 | **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | §5's walk's step 3, and what makes the selection's domain non-empty. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so the selection has nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better |
 | **9** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
+
+**Where a recorded pair becomes a barrier, and the one place it cannot go.** The pair is
+data; the barrier is a position in the emitted code, and that position is *immediately
+before the read's definition* — the earliest point at which the reader could observe the
+writer, and so the only point one barrier can serve. That is well defined and needs no
+search. **What is not well defined is a read under divergent control flow**: SPIR-V
+requires `OpControlBarrier` in uniform control flow, so a barrier placed with the read
+inside a branch that not every lane takes is not imprecise, it is invalid. The honest
+answers are to place it in the divergent region's immediate post-dominator, where every
+lane passes, or to refuse — and which of those is right is **not settled here**. Note the
+asymmetry this puts on the refusal: a block-local terminator check finds a barrier in a
+block that branches and **misses one in the branch's target**, which was measured while
+proving the refusal computable, and is why it needs dominance rather than a look at one
+terminator.
 
 **Where the mechanism lives, and who owes what.**
 [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5

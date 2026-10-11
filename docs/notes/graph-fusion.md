@@ -506,7 +506,10 @@ plan, and what the engine does with it.
   synchronisation; a pack that **omits** one the facts require is
   `PlanContradicted` and refused by name. A plan is a proposal the engine
   validates, which is what keeps §5's *faster, never wrong* true of a
-  hand-written body too.
+  hand-written body too. **And the check is a comparison rather than a second
+  derivation**, because the automatic scan and a declared `sync` produce the *same
+  artifact*: both are a set of `(write, read)` pairs, named by mark in a plan and by
+  `ValueId` in a fragment, and the fragment resolves one to the other (below).
 - **The automatic plan is the fallback, and it must be derivable with no pack at
   all.** For a region no pack covers, the emitter places a value in the cheapest
   space its own analysis proves: registers where the definition cone shows every
@@ -531,8 +534,16 @@ plan, and what the engine does with it.
   canonical form excludes "a run's value numbering: reported, never hashed", so a
   plan cannot name a value by number and stay valid across sessions. It names the
   **mark** the body published — §3's channel, and alpha-equivalence free — while a
-  plan naming a value no mark published is refused by name. The mark channel was
-  built for declaring what code cannot carry; this is the second thing it carries.
+  plan naming a value no mark published is refused by name, **and so is a mark text
+  that two values carry**, because that names an ambiguity rather than a value. The
+  mark channel was built for declaring what code cannot carry; this is the second
+  thing it carries.
+- **The resolution runs one way, and the IR already has both halves.** A plan holds
+  the text, and the fragment holds the value: `KernelMark` is "the body value it was
+  attached to, and the payload it carried", so the fragment resolves a payload text to
+  its own `ValueId` at compile time while the text is what survives to be installed and
+  re-matched. That is the same split §4 makes for the hash, and it is why a plan needs
+  no value numbering to be durable.
 - **The plan is checked where the width is, so it has to be carried there.**
   Matching is schema-level — hash plus constraints — and says nothing about
   placement; the check needs the fragment's lane-group width and the three facts, so

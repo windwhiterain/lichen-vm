@@ -89,3 +89,12 @@ for the omitted violations is the distribution by file, so the next step is to
 name a file from that list and check it on its own — the target is positional,
 so `comments-check crates/lichen-compute/src/compute.rs`.
 
+**A caller that counts the printed violations is reading a truncated report.** The
+default is a *rendering* limit, so a script that filters the report for its location
+lines and counts them answers "ten" on a tree with more — and the summary that says how
+many were folded is precisely what such a filter discards. Anything that needs the real
+number passes `--max-violations 0`. That mistake was made here: a verification compared
+two reports by their location lines, read "10 on each side, identical sets", and drew a
+conclusion from two truncated views. The sets did match; the *count* was never the
+tree's.
+

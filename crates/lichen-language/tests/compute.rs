@@ -2127,8 +2127,8 @@ compute.collect out.z
         "the two backends answered one pushed scalar leaf differently"
     );
 
-    // A second, widely separated value: a leaf read at the wrong offset, or one
-    // pinned to the launch extent, would answer the same both times.
+    // A far-separated value: one read at the wrong offset, or pinned to the launch
+    // extent, would answer the same both times.
     let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source(1000))
     else {
         return;
