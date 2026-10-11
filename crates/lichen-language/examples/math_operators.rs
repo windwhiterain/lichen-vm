@@ -43,7 +43,7 @@ fn main() {
     );
     let measurements = [
         measure("sqrt", lichen_kernel_ir::sqrt_value, f32::sqrt),
-        measure("floor", f32::floor, f32::floor),
+        measure("floor", lichen_kernel_ir::floor_value, f32::floor),
     ];
     for measurement in &measurements {
         println!(

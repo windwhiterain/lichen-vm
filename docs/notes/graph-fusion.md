@@ -369,8 +369,11 @@ fragments between instances**, and of nothing else:
   make ambiguous); each `between`'s producer, consumer and input ordinal with its
   canonical element; and each port's kind, region-local node and ordinal, and
   element class. Out of it: kernel ids, graph value numbers, a constant extent's
-  number, the backend, the raw fragments and their digests, and the marks' body
-  positions. The exclusions are what make two spellings one schema — the
+  number, the backend, the raw fragments and their digests, the marks' body
+  positions, and the **memory plan** (§5) — where a value is kept and when the
+  lanes synchronise is *how* the region is implemented, so two packs with one
+  hash and different plans are two implementations of it rather than two
+  schemas. The exclusions are what make two spellings one schema — the
   re-spelled chain in `examples/fusion_schema.rs` changes both kernels' fragment
   digests and derives the same hash.
 - **Canonicalisation is `lichen_fusion::normalize`**, applied to every projection
@@ -465,6 +468,98 @@ The rules, each a decision:
 - **Pack beats engine.** When both cover a region, the pack applies and the
   report says so — a derived fusion is the floor, not the ceiling, and a
   human who wrote a pack knew something the engine did not.
+
+### The memory plan: the second thing a pack hands over
+
+A fused body is a DAG, not a chain. Once a kernel's read and write are a value —
+[code-audit D17](code-audit.md)'s "a `compute.write` is not an effect, it is the
+value of an output position" — a body that carries a value from one lane to
+another needs somewhere to keep it between the write and the read. There are
+three spaces, and the choice is not free:
+
+| space | who sees it | what it costs |
+|---|---|---|
+| **registers** | the lane that wrote it | nothing |
+| **shared** | the workgroup | a barrier between a cross-lane write and its read |
+| **global** | every workgroup | a second graph node — the graph's business, not a kernel's |
+
+Which one a value *may* use is decided by who reads it and how uniform it is over
+the lanes; the second half is what `# p` ([attributes](attributes.md)) certifies.
+The mechanism — the nominal wrapper, the three facts that decide a barrier, the
+scan that inserts them — is
+[shared-memory-and-barriers](shared-memory-and-barriers.md)'s and is not restated
+here. What this note owes is the **interface**: what a pack may say about the
+plan, and what the engine does with it.
+
+**The interface is four seams, and they are the whole of this subsection:**
+
+- **The plan is pack-side data, never schema data.** §4's exclusions say it: the
+  region's hash covers what it *computes*, and a placement or a synchronisation
+  point is *how*. A plan that could move the hash would turn a cost decision into
+  a semantic one, and would make two packs that compute the same thing at
+  different speeds mutually inert.
+- **A declared plan is checked against the same facts the automatic one is.** The
+  three facts of [shared-memory-and-barriers](shared-memory-and-barriers.md) §4 —
+  whether the addresses may overlap, whether writer and reader are provably the
+  same lane, and whether a barrier already separates them — are the only
+  authority. A pack that declares a barrier where none is needed wastes a
+  synchronisation; a pack that **omits** one the facts require is
+  `PlanContradicted` and refused by name. A plan is a proposal the engine
+  validates, which is what keeps §5's *faster, never wrong* true of a
+  hand-written body too.
+- **The automatic plan is the fallback, and it must be derivable with no pack at
+  all.** For a region no pack covers, the emitter places a value in the cheapest
+  space its own analysis proves: registers where the definition cone shows every
+  reader is the writing lane, shared plus the scan's barriers where a reader is
+  another lane of the group, global otherwise — which is a graph edge rather than
+  a kernel's staging. A pack **replaces** the placement and the barrier
+  positions; it never replaces the obligation to have them.
+- **The uniformity certificate decides which placements are legal, and it is the
+  perspective slot.** A value certified uniform over the group's width needs no
+  cross-lane staging at all — every lane computes the same value; a value
+  certified uniform over `n < group` and read across the group needs shared
+  memory with a barrier, because the lanes that read it are not the lanes that
+  wrote it; an uncertified value that crosses lanes is either staged with the
+  scan's barrier or refused. Where the lattice admits a width no device has (`6`
+  against a 64-lane group), a placement must refuse or state its rounding and
+  never round silently — that open question stays
+  [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2's.
+
+**What a pack author writes, schematically.** The spelling is the implementing
+session's to settle; these seams are the interface:
+
+```lichen
+implements = schema "sha256:9f2c…"
+requires   = { class = f32 }
+reference  = <the region's derivation>
+kernel     = cfg => { …the hand-written fused body, with Shared slots… } "gpu"
+plan       = {
+  staging = [ { value = "tile", space = Shared(.n 64) } ]  -- Register | Shared | Global
+  sync    = auto        -- or explicit barrier positions between named writes and reads
+}
+```
+
+The refusals this interface owes, each naming its cause: `PlanContradicted` (a
+declared plan the three facts refute), `UncertifiedCrossLaneRead` (a cross-lane
+value with neither a barrier nor a uniformity certificate),
+`StagingNotOnThisBackend` (the host path refuses `Shared` and barriers — the
+memory note's §7 decision — so a plan that needs them is GPU-only and says so),
+and `StagingWidthNotAWidth` (the divisibility lattice against a device's
+lane-group width).
+
+**And this is where the non-chain region finally bites.** §4 refuses a region
+that is not a producer→code→consumer chain, so a fan-out body — the shape whose
+staging this subsection is about — is not fusable today at all
+([compute-graph-jit](compute-graph-jit.md)'s missing general builder). The
+interface is written now, ahead of that, because a pack that hands over a body
+must hand over a *plan* with it, and the engine owes a stated contract to check
+the plan against rather than a silent acceptance.
+
+**The mechanism is not this note's to build**, and the implementation is
+delegated: the wrapper, the spine, the scan, the barrier instruction and the
+staging table are [shared-memory-and-barriers](shared-memory-and-barriers.md)'s
+staging (§9), and the perspective work they ride on is
+[attributes](attributes.md)'s.
 
 ## 6. The engine: reduction fusion by repair function
 
@@ -616,10 +711,13 @@ o      = <second contraction>        ~ "claim:Reduction(combine,identity)"
 What the engine deliberately does not derive is the rest of the paper — SRAM
 budgeting, register blocking, the `exp2` trick. That remainder is a pack's
 job, installed per machine, matched on the schema of the *canonical* region.
-The division of labour this design predicts, stated as the test it is judged
-by: **the correctness of fused attention comes from the engine, through
-whatever custom logic the program carries; the last factor of speed comes
-from a pack; neither is written into the logic, and neither ships with it.**
+Two of those three are a **memory plan** (§5): the rolling state `(m, s, acc)` is
+register residency and the tiling is what goes to shared memory, so a pack
+replaces the engine's conservative placement with the paper's. The division of
+labour this design predicts, stated as the test it is judged by: **the
+correctness of fused attention comes from the engine, through whatever custom
+logic the program carries; the last factor of speed comes from a pack; neither
+is written into the logic, and neither ships with it.**
 
 The win is also a different quantity from the one the graph JIT measured.
 There, fusion removed *dispatch overhead* (65–81% of a 16-link chain at
@@ -698,6 +796,7 @@ about shrinks exactly where fusion fires.
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
+| the **memory plan** interface | **interface stated, implementation delegated** (§5) | the four seams a pack hands a plan over through — pack-side data, checked against the three facts, an automatic fallback, and `# p` as the certificate — with the mechanism owned by [shared-memory-and-barriers](shared-memory-and-barriers.md)'s staging and the implementation assigned to the local-storage session |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 
 Staging, each stage independently useful:
@@ -732,6 +831,14 @@ Settled by the superior's review of the first draft:
   slot's pair is unreachable from the value it annotates. `~` is a side table beside
   the expression tree, and the one thing that crosses into the lowlevel is its
   position — the anchor, written once.
+- **The memory plan is a pack's, and the engine validates it** (§5). A body that is
+  not a chain needs staging — registers, shared, or global — and while the
+  conservative plan is derivable, the last factor of performance in a real operator
+  is hand-orchestrated, so the plan rides the pack. It is checked against
+  [shared-memory-and-barriers](shared-memory-and-barriers.md) §4's three facts, never
+  believed, and it does not enter the schema hash. **The mechanism is another
+  session's to implement**; this design fixes only the interface it implements
+  against.
 
 Still open, cheapest to settle before the interface syntax is written:
 
