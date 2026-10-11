@@ -269,6 +269,19 @@ naming a buffer version lets the scan tell a read of `A` after a write to `B` fr
 read of `A` after a write to `A`, which an opaque token
 cannot.
 
+**Two things the encoding settled, and both belong where the encoding is stated.** The
+version is **appended**, not prepended: a shared read's operands are
+`[slot, index, version]`, so §6.2's illustration of the retracted token —
+`sread (t1, ws, (i + 1) % 64)`, version first — is the *token's* spelling and not this
+one, and a reader implementing from that example would build the wrong list. And **the
+version carries an element class it does not deserve**: `produces() == 1` obliges an
+instruction to state one, the IR has exactly one class vocabulary, so `own_class` answers
+the written element's class. The label is inert — the version is only ever read as operand
+2 of a `SharedReadCall`, and no class types that position — but it is a lie the type
+system tolerates. It is recorded rather than fixed because the alternative is a token
+class, which is the design §6.2 reverted; what matters is that nothing later come to
+depend on the label.
+
 **And behind that is a wall, which is the real reason to restage.** Reading back
 what a body wrote has **no data path in today's ABI**: the host `read` import reads
 `state.inputs` only (`compute.rs:5779`, `.unwrap_or(0)`), outputs are write-only, and
@@ -860,11 +873,11 @@ mergeable and leaves the tree green.
 | **1** | **revert the token**: `ScalarClass::State`, `ComputeValue::State`, `Lower.state` and the loop-nest carry, `StateWhereAValueBelongs`, `BridgeRefusal::StateClass`, the ~20 `Const(State, 0)` seeds, `State = struct<>`; `BufferWriteCall` back to `produces() == 0`, `arity() == 3`, and `Write`'s `run` arm back to lazy | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-graph-ir`, `lichen-fusion-bridge`, `lichen-language` (tests) | §6.2 is the inventory. Coordinates with `356fc4a`, which adapted the fusion bridge to the variant — and fixes a latent defect there while it does (`read_position` reads `args.first()`, which the token made the state). **Nothing replaces it on global buffers**: §3's ABI wall |
 | **2** | **the lane-group width as a fragment fact** — **landed** at `c7223fc` as `KernelFragment::target.lane_width`, declared by the lowering, hashed whole as `TargetFacts`, and refused by name by a target that cannot schedule it (`SpirvRefusal::UnsupportedLaneWidth`) | `lichen-kernel-ir`, `lichen-compute-gpu`, `lichen-compute` | Independent of 3–5, and it is what moves fact 1's *exact* judgement and the uniformity check out of a backend without the crate depending on any backend's constant (§4). It landed **one** refusal, not the two this cell first claimed: `StagingWidthNotAWidth` is a plan-level refusal that needs step 7, and `StagingNotOnThisBackend` is step 6's. What landed is a *target*'s refusal of the fragment's own declared width, which is `UnsupportedIntWidth`'s mirror |
 | **3** | staging vocabulary: `SharedReadCall` and `SharedWriteCall` as *additive* variants — `[slot, index, value]` and `[slot, index, version]`, each arity 3 and each producing one value — the shared-slot set (`KernelFragment::shared_slots`) hashed in `fragment_digest`, and **the barrier as data** — the separated `(write, read)` pairs on `KernelBody::barriers`, recorded as `ValueId`s and never as positions — **landed** | `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu`, `lichen-fusion-bridge` | **`SharedReadCall` carries the version operand here** — §3's "the read grows an operand" is paid once, at the point where a consumer exists. Additive variants, so the ~50 existing `BufferWriteCall` sites do not move — but they are **not answerless**: every exhaustive `match` on `KernelInstr` must now say something, so the four paths that cannot stage refuse by name *here* rather than at steps 5–6. The fusion bridge refuses a projection that reaches a slot (`BridgeRefusal::SharedAccess`), the wasm emitter refuses the whole shape because the host calls once per index (§7), the differential test's own interpreter refuses rather than no-op, and `spirv.rs` refuses because it still has no `Workgroup` storage and no `OpControlBarrier` (`SpirvRefusal::StagingNotEmitted`, which is step 5's, not §5's plan-level `StagingNotOnThisBackend`). The divergent-placement refusal is `validate`'s and is dominance, below. A `Barrier` *instruction* is rejected by measurement, §4: thirteen sites against five, and the five semantic ones all sit in targets that will never have a barrier. Values and not positions because the one restructuring in the tree shifts positions silently, and because a pair is already the shape a plan's `sync` has |
-| **4** | **the scan and the selection**: the walk that records the pairs needing separation, §5's three-step walk that decides each cross-lane value's space, and the contended-write refusal | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language — which step 2 is what makes possible. Conservative first, then §4's interval refinement. The selection is not a second pass: it is the same walk with a second output. The divergent-placement refusal landed in step 3, where `validate` lives: it needs dominance over the CFG rather than a look at one terminator |
+| **4** | **the scan and the selection**: the walk that records the pairs needing separation, §5's three-step walk that decides each cross-lane value's space, and the contended-write refusal | `lichen-kernel-ir` | In the IR crate so `from_flat` bodies get it and it is testable without the language — which step 2 is what makes possible. Conservative first, then §4's interval refinement. The selection is not a second pass: it is the same walk with a second output. The divergent-placement refusal landed in step 3, where `validate` lives: it needs dominance over the CFG rather than a look at one terminator. **And this step owes an obligation it cannot inherit**: step 3's `validate` checks a pair that is *recorded*, and cannot require that a bare `SharedReadCall` names a real write — so today a hand-built body may carry a read whose operand 2 is a constant and pass the gate. Producing that obligation is the scan's, and a consumer of step 3's vocabulary must treat it as produced rather than assumed |
 | **5** | **one landing**: the surface (`Shared`, `swrite` returning a new version, `sread` consuming it through `.from`), its lowering, and the GPU backend (`OpVariable` in `Workgroup`, `OpControlBarrier`, the slot layout) | `lichen-compute`, `lichen-compute-gpu` | **This surface is a pack's, not the logic's.** The logic DSL never names a space, so `Shared` here is what a hand-written fused body and a plan are written in; what a logic package gets instead is step 8. §3's conclusion holds: the edge, its operand and its **data path** must arrive together, because a read-back with no data path compiles and silently answers `0`. The descriptor set and binding layout do not change — shared memory is not bound |
 | **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses `Shared` and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
 | **7** | **the plan interface**: a pack's plan matched by schema, **checked against the three facts rather than believed**, carried from match to emit, with the refusals the interface owes | `lichen-language` (match), `lichen-kernel-ir` (check) | [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5 is the interface; this step is where it becomes checkable. The plan never enters the *schema* hash and its **effect** enters `fragment_digest` through the fragment — which is why step 3's slot field and step 2's width are the same kind of fact and land in the same place |
-| **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | §5's walk's step 3, and what makes the selection's domain non-empty. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so the selection has nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better |
+| **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | §5's walk's step 3, and what makes the selection's domain non-empty. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so the selection has nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better. What shows it works is the acceptance case below: the same triangle-number reduction, judged against its closed form **and** against the per-lane implementation this row replaces |
 | **9** | `UP`'s level component, then `DP` | `lichen-perspective` | **deferred until §6.1's trigger fires** |
 
 **Where a recorded pair becomes a barrier, and the one place it cannot go.** The pair is
@@ -919,6 +932,39 @@ Two facts about the starting point that the staging assumes, both verified:
   reversion. The spine was originally step 1 precisely so that it could be validated
   before anything consumed it; §3 records why that turned out to be backwards, and
   why the version that does land lands with its first consumer.
+
+**What would show the staging works, and the number it is judged by.** This note owed an
+acceptance case and did not have one: [loop-conversion](loop-conversion.md) §8.5 has its
+own — a dynamic reduction against the hand-derived `length(length + 1)/2` —
+[graph-fusion](graph-fusion.md) §7 has its own in Flash Attention v1, and the placement
+work had only step 8's mechanism. **The case is that same triangle-number reduction, tiled
+across the workgroup**: the algorithm the loop line already runs per lane, now computed by
+lanes exchanging through a slot and a barrier. Three properties say why it and not
+something else:
+
+- **It already has a hand-derived closed form**, so it needs no new oracle, and this
+  project's stated method — "hand-derived closed forms rather than a second run of the
+  same code" ([graph-fusion](graph-fusion.md) §5) — is what it is checked against.
+- **It already has a per-lane implementation, running on both backends**
+  (`a_kernel_loop_reduces_a_runtime_buffer_length`), so the tiled version has a
+  **reference to differ against**, which is §5's equivalence obligation and the floor
+  "faster, never wrong" rests on.
+- **Its declared algebra is the licence for the placement**, so it tests the design's
+  load-bearing sentence and not only the code: `combine` associative with an identity is
+  exactly what makes a re-associated fold the same answer. A reduction whose `combine` is
+  **not** associative must not be tiled, and that case is worth pinning beside this one.
+
+One consequence for how it can be verified, from §7: a barrier makes the body a function of
+a workgroup rather than of an index, so the host path refuses `Shared` and
+`gpu_matches_cpu` cannot carry this class. Its verification is the closed form **plus** the
+per-lane reference, and not CPU against device.
+
+**A scan is the second case and the harder one**, because it needs *several* barriers whose
+positions are not the read's own definition — which is where §9's unsettled
+post-dominator question bites. It has no per-lane reference today:
+[gpu-algorithms-ladder](gpu-algorithms-ladder.md) records it as "`i + 1` reads at index
+`i` — quadratic in the source text, and unreachable in practice", so one has to be written
+before it can be differenced against, and that is why the reduction goes first.
 
 ## 10. What is open
 
