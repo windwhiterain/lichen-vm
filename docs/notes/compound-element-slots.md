@@ -142,7 +142,17 @@ while `@any`'s own position renders as no pin at all.
   need each attribute extension's source sigil (`#`, `?`, `!`), which
   `AttrSpec` does not state today, so the spelling is a wider change than the
   pin's was.
-- **The struct, array, and table/set steps.** Each repeats the tuple's shape: a
-  construction site, the readers, the printers, and its own wide tests. The
-  struct's spelled-out form (`struct{.f …}`) and its own pin/attribute walk ride
-  with it.
+- **The struct step.** The layout repeats the tuple's, and the pieces that change
+  with it are one list: `check_type_struct` builds dense slots;
+  `check_instantiate` compares the argument list against the slots' *types* (the
+  shape is no longer a bare type list), and `check_record`'s anonymous struct with
+  it; every `ShapeElements::Types` site becomes `Slots` — the named read, the raw
+  named read, the compute role walk, the render crate — and then the parameter
+  itself goes; `low_type_of`'s struct arm and both printers read the slot's type
+  position. The nominal marker, the name table, and the field-order machinery do
+  **not** change.
+- **The array and table/set steps.** Each repeats the tuple's shape: a
+  construction site, the readers, the printers, and its own wide tests. An array's
+  element slot is one slot for every element, so its `@any` value position is
+  already the only spelling that can work there; a struct's spelled-out form
+  (`struct{.f …}`) and its own pin/attribute walk ride with the struct step.
