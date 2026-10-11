@@ -47,7 +47,9 @@ where
             // set's element cell (operator-polymorphism.md §2-§3).
             BinOp::In => {
                 let element_cell = self.fresh_cell();
-                let shape = self.array_node(self.current_block, &[element_cell]);
+                // A set's element position is a slot, as an array's is.
+                let element = self.element_slot(None, Some(element_cell), None);
+                let shape = self.array_node(self.current_block, &[element]);
                 let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
                 let set_ty = self.array_node(self.current_block, &[shape, kind]);
                 self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);

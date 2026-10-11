@@ -270,7 +270,23 @@ where
                         && let s = unsafe { shape.items() }
                         && s.len() == 1
                     {
-                        return format!("set<{}>", self.any_node(s[0].node));
+                        return format!("set<{}>", self.slot_any(s[0].node));
+                    }
+                }
+                Some(m) if m == P::Value::table_type_marker() => {
+                    // shape = [key slot, value slot] — render `table<K, V>`.
+                    if let Some(shape) = self.module.node_value(elements[0].node)
+                        && let Some(LowValue::Array(shape)) = shape.as_enum()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
+                        && s.len() == 2
+                    {
+                        return format!(
+                            "table<{}, {}>",
+                            self.slot_any(s[0].node),
+                            self.slot_any(s[1].node)
+                        );
                     }
                 }
                 _ => {}

@@ -1,12 +1,12 @@
 # Compound element slots
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
-> (`8b2fa7a`); the **tuple**, **struct**, and **array** steps are complete — every
-> compound's element is a full `[value, type, attrs…]` slot, both construction
-> sites, the readers, the printers, the element-attribute and value-pin
-> reconciliation, the wildcard literal `@any`, a value-less annotation `: T # a`,
-> the spelled-out `tuple{…}` form, and `ShapeElements` gone. What remains is
-> table/set, and releasing `<>` for the keyword-led forms.
+> (`8b2fa7a`); every compound's element is now a full `[value, type, attrs…]` slot
+> — tuple, struct, array, table, and set — with both construction sites, the
+> readers, the printers, the element-attribute and value-pin reconciliation, the
+> wildcard literal `@any`, a value-less annotation `: T # a`, the spelled-out
+> `tuple{…}` form, and `ShapeElements` gone. What remains is releasing `<>` for
+> the keyword-led forms.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -205,6 +205,19 @@ rules that need a count are stated once each:
   `[1 # 4, 2] : array<Int # 2, 2>` holds while `[1 # 2, 2] : array<Int # 4, 2>` is
   refused. A one-element tuple pairs the same way, so the rule needs no kind test.
 
+## The table and set steps
+
+A set's shape is its element **slot** alone and a table's is `[key slot, value
+slot]`, built by `check_set_term`, `check_table_term`, `check_table_find`'s pin,
+and the `@in` pin; `low_type_of`'s table arm and both printers read the slots'
+type positions, and a table type value now renders `table<K, V>` where it used to
+render `raw[…]`/`?`.
+
+Neither has a *type* spelling, so an element requirement cannot be written for
+them yet and the element walk has no type expression to pair with — nothing is
+lost, and adding one later is the array's rule (`element_pairs`' single-element
+arm) rather than a new one.
+
 ## What is open
 
 - **An element's attribute is not rendered.** A pinned element now reads
@@ -213,11 +226,14 @@ rules that need a count are stated once each:
   need each attribute extension's source sigil (`#`, `?`, `!`), which
   `AttrSpec` does not state today, so the spelling is a wider change than the
   pin's was.
-- **The table and set steps.** Both are bare layouts: a set's shape is the element
-  type alone and a table's is `[key, value]`. Each repeats the tuple's shape —
-  construction site, readers, printers, wide tests — and a set's single element
-  slot is the array's rule again.
+- **A table *value* still renders raw.** Its *type* reads `table<K, V>` now, but
+  the value itself is the table handle the checker built, which no arm decodes:
+  `t = table{1 ==> "a"}; t` reads `raw Table: table<Int, string>` where a
+  `table{1 ==> "a"}` would need the handle's entries.
 - **The array *read*'s requirement is still a structural pattern.** `check_index`
   pins its container against `[slot cell, length cell]` rather than naming the
   array kind, so the same resolution question the tuple read answered could be
   asked of it; nothing measured so far needs it.
+- **Releasing `<>`.** `tuple{…}` is the spelled-out form; `<…>`, `struct<…>`, and
+  `array<…, …>` are the angle spellings that would go with it, and the raw index
+  `X<e>` is the token's other user.

@@ -164,7 +164,10 @@ where
         self.check_expr(key);
         let key_cell = self.fresh_cell();
         let value_cell = self.fresh_cell();
-        let shape = self.array_node(self.current_block, &[key_cell, value_cell]);
+        // The two positions are slots, so the pin's shape is `[key, value]`.
+        let key_slot = self.element_slot(None, Some(key_cell), None);
+        let value_slot = self.element_slot(None, Some(value_cell), None);
+        let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let table_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
@@ -253,7 +256,9 @@ where
             );
         }
         let value = self.array_node(self.current_block, &vals);
-        let shape = self.array_node(self.current_block, &[element_ty]);
+        // A set's element position is a **slot**, as an array's is.
+        let element = self.element_slot(None, Some(element_ty), None);
+        let shape = self.array_node(self.current_block, &[element]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
@@ -305,7 +310,10 @@ where
             None,
             Some(P::Value::from(LowValue::Table(table))),
         );
-        let shape = self.array_node(self.current_block, &[key_ty, value_ty]);
+        // A table's two positions are **slots**, as a tuple's elements are.
+        let key = self.element_slot(None, Some(key_ty), None);
+        let value_ty = self.element_slot(None, Some(value_ty), None);
+        let shape = self.array_node(self.current_block, &[key, value_ty]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);

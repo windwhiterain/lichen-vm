@@ -753,16 +753,20 @@ where
         };
     }
     if marker == P::Value::table_type_marker() {
-        // A table type's shape is `[key type, value type]`.
+        // A table type's shape is `[key slot, value slot]`.
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
         let Some(halves) = (unsafe { array_items(module, shape) }) else {
             return LowShape::Unknown;
         };
+        let half = |node: AnyNodeId| match slot_type(module, node) {
+            Some(ty) => low_type_of(module, ty),
+            None => LowShape::Unknown,
+        };
         return LowShape::Table(
-            Box::new(low_type_of(module, halves[TABLE_TYPE_KEY_SLOT].node)),
-            Box::new(low_type_of(module, halves[TABLE_TYPE_VALUE_SLOT].node)),
+            Box::new(half(halves[TABLE_TYPE_KEY_SLOT].node)),
+            Box::new(half(halves[TABLE_TYPE_VALUE_SLOT].node)),
         );
     }
     if marker == P::Value::function_type_marker() {

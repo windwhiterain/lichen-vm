@@ -185,8 +185,15 @@ where
                 self.printer.any_node(shape[1].node)
             ));
         } else if marker == P::Value::set_type_marker() && shape.len() == 1 {
-            // A set type value: the shape is the element type alone.
-            return Some(format!("set<{}>", self.printer.any_node(shape[0].node)));
+            // A set type value: the shape is the element **slot** alone.
+            return Some(format!("set<{}>", self.printer.slot_any(shape[0].node)));
+        } else if marker == P::Value::table_type_marker() && shape.len() == 2 {
+            // A table type value: the shape is the key and value **slots**.
+            return Some(format!(
+                "table<{}, {}>",
+                self.printer.slot_any(shape[0].node),
+                self.printer.slot_any(shape[1].node)
+            ));
         }
         // A struct type never reaches here: its kind is the struct marker pair,
         // handled earlier.
@@ -251,14 +258,18 @@ where
             return Some(format!("[{}]", out.join(", ")));
         }
         if marker == P::Value::set_type_marker() {
-            // The shape is the element type *alone* (a set has no length), so
-            // every member reads against `shape[0]`.
+            // The shape is the element **slot** alone (a set has no length), so
+            // every member reads against its type position.
             if shape.len() != 1 {
                 return None;
             }
+            let element_ty = self
+                .printer
+                .slot_type_any(shape[0].node)
+                .unwrap_or(shape[0].node);
             let mut out = Vec::with_capacity(values.len());
             for v in values {
-                out.push(self.element_any(v.node, shape[0].node));
+                out.push(self.element_any(v.node, element_ty));
             }
             return Some(format!("set{{{}}}", out.join(", ")));
         }
