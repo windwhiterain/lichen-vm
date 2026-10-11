@@ -527,22 +527,6 @@ where
         .map(|item| item.node)
 }
 
-/// Which layout a compound type's shape elements have. See
-/// `docs/notes/compound-element-slots.md`.
-///
-/// # Invariant
-/// The layout is the **kind's** decision, so the reader that already knows which
-/// kind it holds states it rather than re-deriving it from a node that may not be
-/// evaluated yet; the struct step makes every compound's element a slot and this
-/// enum goes with it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ShapeElements {
-    /// Each element is a bare type value — a struct type, today.
-    Types,
-    /// Each element is a `[value, type, attrs…]` slot — a tuple type, today.
-    Slots,
-}
-
 /// The **field-type list** of a value type — its term's shape: a struct's
 /// fields and a tuple's elements share the slot.
 pub fn field_list<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>
@@ -554,12 +538,12 @@ where
 
 /// The type at field position `k` of a value type. See
 /// `docs/notes/checker-encoding-instability.md`.
-pub fn field_type<P: Program>(
-    module: &Module<P>,
-    ty: TypeRef,
-    k: usize,
-    elements: ShapeElements,
-) -> Option<AnyNodeId>
+///
+/// # Invariant
+/// A compound type's shape element is an element **slot**, so a field's type is
+/// its type position for every kind. See
+/// `docs/notes/compound-element-slots.md`.
+pub fn field_type<P: Program>(module: &Module<P>, ty: TypeRef, k: usize) -> Option<AnyNodeId>
 where
     P::Value: AsEnum<LowValue>,
 {
@@ -567,10 +551,7 @@ where
     // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let element = unsafe { array_items(module, shape) }?.get(k)?.node;
-    match elements {
-        ShapeElements::Types => Some(element),
-        ShapeElements::Slots => slot_type(module, element),
-    }
+    slot_type(module, element)
 }
 
 /// The **named fields** of a struct type, in field order, or `None`.

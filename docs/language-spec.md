@@ -732,7 +732,10 @@ maps every span back to the original file.
   fails at check time (the `InstantiateCallee` diagnostic — structs are
   nominal, so a tuple or function type cannot instantiate).  An undecided
   callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
-  non-struct actual callee fails the apply's argument check per call; a
+  non-struct actual callee is refused per call: the field list is read lazily as
+  each element's **slot type**, and that deferred read is the one that reports —
+  at the instantiation, with the check's own kind — rather than through the
+  apply's argument unify; a
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
   so the static checks see the concrete struct type.  An instance's fields are
   read **by name**: `a.x` resolves `x` through the struct's name→index table to

@@ -192,7 +192,7 @@ where
             // this arm's other `items()` calls share the note.
             && self.kind_is_struct_any(unsafe { kind.items() })
         {
-            let fields = self.fields_any(elements[0].node);
+            let fields = self.slot_fields_any(elements[0].node);
             let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
             let id = struct_kind_id(self.module, unsafe { kind.items() });
@@ -394,22 +394,6 @@ where
         }
     }
 
-    /// Read-only variant of [`Self::fields`] for a static or dynamic shape.
-    fn fields_any(&mut self, shape: AnyNodeId) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            // SAFETY: `array` is the payload of the value read from the live
-            // node `shape`.
-            unsafe { array.items() }
-                .iter()
-                .map(|item| self.any_node(item.node))
-                .collect()
-        } else {
-            vec![self.any_node(shape)]
-        }
-    }
-
     /// Render any node — dynamic or static — as a type.
     pub fn any_node(&mut self, id: AnyNodeId) -> String {
         match id {
@@ -554,7 +538,7 @@ where
             // this arm's other `items()` calls share the note.
             && self.kind_is_struct_any(unsafe { kind.items() })
         {
-            let fields = self.static_fields(elements[0].node, visiting);
+            let fields = self.static_slot_fields(elements[0].node, visiting);
             let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
             let id = struct_kind_id(self.module, unsafe { kind.items() });
@@ -642,6 +626,33 @@ where
             unsafe { array.items() }
                 .iter()
                 .map(|item| self.static_any(item.node, visiting))
+                .collect()
+        } else {
+            vec![self.static_any(shape, visiting)]
+        }
+    }
+
+    /// [`Self::static_fields`] over an element-**slot** list, each read as source.
+    ///
+    /// # Invariant
+    /// Its own spelling, because a static read threads the visiting set a cycle
+    /// needs.
+    fn static_slot_fields(
+        &mut self,
+        shape: AnyNodeId,
+        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
+    ) -> Vec<String> {
+        if let Some(LowValue::Array(array)) =
+            self.module.node_value(shape).and_then(|v| v.as_enum())
+        {
+            // SAFETY: `array` is the payload of the value read from the live
+            // node `shape`.
+            unsafe { array.items() }
+                .iter()
+                .map(|item| match self.slot_type_any(item.node) {
+                    Some(ty) => self.static_any(ty, visiting),
+                    None => self.static_any(item.node, visiting),
+                })
                 .collect()
         } else {
             vec![self.static_any(shape, visiting)]

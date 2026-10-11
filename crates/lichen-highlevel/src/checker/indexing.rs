@@ -95,7 +95,7 @@ where
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let (pair, element, ty_node) = self.element_read(container_value, index_value, true);
+        let (pair, element, ty_node) = self.element_read(container_value, index_value);
         // Both slot reads target the element, so this edge gives a failed one
         // a span and names it the element.
         self.node_edges.insert(element, self.loc(e, 1));
@@ -111,14 +111,13 @@ where
     ///
     /// # Invariant
     /// A **type value** container's component is `[type value, kind]`, so the
-    /// read's type is the component's kind; a **slot** container's component is
-    /// its slot's type position instead. The read is computed here, so an
+    /// read's type is the component's kind; an **element** is a slot, so its
+    /// component is the slot's type position. The read is computed here, so an
     /// undecided container stays lazy, which the per-apply re-check relies on.
     pub(super) fn element_read(
         &mut self,
         container_value: NodeId,
         subscript: NodeId,
-        slots: bool,
     ) -> (NodeId, NodeId, NodeId) {
         let element_ops = self.array_node(self.current_block, &[container_value, subscript]);
         let element = self.op_node(
@@ -126,17 +125,13 @@ where
             P::Operator::from(LowOperator::Index),
             Some(element_ops),
         );
-        // A slot container's component is the slot's own type position.
-        let component = if slots {
-            let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
-            self.op_node(
-                self.current_block,
-                P::Operator::from(LowOperator::Index),
-                Some(slot_ops),
-            )
-        } else {
-            element
-        };
+        // The component is the slot's own type position.
+        let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
+        let component = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(slot_ops),
+        );
         let value_ops = self.array_node(self.current_block, &[component, self.zero()]);
         let value_node = self.op_node(
             self.current_block,

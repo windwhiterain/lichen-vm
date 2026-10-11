@@ -1,10 +1,12 @@
 # Compound element slots
 
 > Status: **in progress.** `LowValue::Any` has landed and is merged
-> (`8b2fa7a`); the **tuple** step is complete — the element slot is a full term,
-> both construction sites, the readers, the printers, the element-attribute
-> reconciliation, the wildcard literal `@any`, the spelled-out `tuple{…}` form,
-> and value pins. The step order is tuple, struct, array, then table/set.
+> (`8b2fa7a`); the **tuple** and **struct** steps are complete — every compound's
+> element is a full `[value, type, attrs…]` slot, both construction sites, the
+> readers, the printers, the element-attribute and value-pin reconciliation, the
+> wildcard literal `@any`, a value-less annotation `: T # a`, the spelled-out
+> `tuple{…}` form, and `ShapeElements` gone. The step order is tuple, struct,
+> array, then table/set.
 >
 > Companion: [function-type-merge](function-type-merge.md) is the same refactor
 > for the function kind, and it is the precedent every choice below is read
@@ -134,6 +136,35 @@ own class accepts everything. Both printers read a slot back as source, so a pin
 is visible: `(5, 2) : tuple{5 : Int, Int}` renders `(5, 2): <5 : Int, Int>`,
 while `@any`'s own position renders as no pin at all.
 
+## A value-less annotation
+
+An annotation chain may omit its value: `: T # a` lowers to exactly the
+annotation `@any : T # a`, so the *slot* rule needs no second spelling — a
+compound element or field is an expression, and one that spells no value is the
+wildcard's own position. `struct{.a :Int}` is then the struct form's field,
+spelled with braces, and no parallel parser path is needed for it.
+
+## The struct step
+
+The struct's shape was the last bare type list, so a struct field could not state
+a value or an attribute and the two compound kinds could not share a reader. It
+is now the same slot list, with three consequences worth recording:
+
+- **A field-type list is the slots' type positions.** Every reader that walks a
+  struct's shape goes through one of two spellings: `shape::field_type`, or
+  `checker::slot_types_of` when the list is compared positionally. A struct
+  instantiation unifies the argument types against that list, so its field check
+  is the same one a tuple's is.
+- **A deferred callee's field list is read lazily**, one
+  `Index(Index(shape, i), 1)` per position, which is what makes a *correct*
+  deferred positional instantiation check at all
+  (`f = s => s(1, 2); f S` reads `(1, 2)`). The lazy named reorder's lookup key
+  reads the same position, or its keys never match the supply table's.
+- **The deferred refusal is reported at the instantiation**, with the check's own
+  kind, instead of through the apply's argument unify — the requirement it states
+  is the instantiation's, and a non-struct actual is refused per call either way
+  (`docs/language-spec.md` §Structs).
+
 ## What is open
 
 - **An element's attribute is not rendered.** A pinned element now reads
@@ -142,15 +173,6 @@ while `@any`'s own position renders as no pin at all.
   need each attribute extension's source sigil (`#`, `?`, `!`), which
   `AttrSpec` does not state today, so the spelling is a wider change than the
   pin's was.
-- **The struct step.** The layout repeats the tuple's, and the pieces that change
-  with it are one list: `check_type_struct` builds dense slots;
-  `check_instantiate` compares the argument list against the slots' *types* (the
-  shape is no longer a bare type list), and `check_record`'s anonymous struct with
-  it; every `ShapeElements::Types` site becomes `Slots` — the named read, the raw
-  named read, the compute role walk, the render crate — and then the parameter
-  itself goes; `low_type_of`'s struct arm and both printers read the slot's type
-  position. The nominal marker, the name table, and the field-order machinery do
-  **not** change.
 - **The array and table/set steps.** Each repeats the tuple's shape: a
   construction site, the readers, the printers, and its own wide tests. An array's
   element slot is one slot for every element, so its `@any` value position is

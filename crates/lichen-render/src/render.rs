@@ -549,19 +549,23 @@ where
     if !kind_is_struct(module, unsafe { kind_items.items() }) {
         return None;
     }
-    // The shape is the positional field-type list.
+    // The shape is the positional field-**slot** list: a field's type is its
+    // slot's type position.
     let shape = module.node_value(tys[0].node)?.as_enum()?;
     let LowValue::Array(shape_items) = shape else {
         return None;
     };
-    let field_types = unsafe { shape_items.items() };
+    let field_slots = unsafe { shape_items.items() };
     let names = struct_field_names(module, unsafe { kind_items.items() }, field_values.len());
 
     let mut vp = ValuePrinter::new(module);
     let mut fields = Vec::with_capacity(field_values.len());
     for (i, value_item) in field_values.iter().enumerate() {
-        let rendered = match field_types.get(i) {
-            Some(ty) => vp.element_any(value_item.node, ty.node),
+        let rendered = match field_slots.get(i) {
+            Some(slot) => {
+                let ty = shape::slot_type(module, slot.node).unwrap_or(slot.node);
+                vp.element_any(value_item.node, ty)
+            }
             None => "?".to_string(),
         };
         match names.get(i).copied().flatten() {
