@@ -886,6 +886,23 @@ record (today)  →  collect interface instances, cut fusible regions  →  per 
                 →  rewrite the node list  →  run under the chosen policy
 ```
 
+**The seam landed** (`d3f984f`): the rewrite is a **graph pass** a host installs
+(`crates/lichen-compute/src/compute/graph_pass.rs`), consulted **once per run, immediately before the
+dispatcher**, on the graph that will run, with its lines going to the run report's own channel so a
+refusal is visible rather than swallowed. `lichen-compute` names no fusion crate: the host that reads
+a claim installs the pass (`crates/lichen-language/src/automatic_tiling.rs`), which is the direction
+the bridge's manifest already stated. Two properties are the seam's own:
+
+- **A rewrite takes an entry of its own.** The graph store is keyed by a digest of its nodes' bodies,
+  so writing the pass's answer over the recorded entry would leave the index naming bytes that are no
+  longer there — and a later run with no pass installed would execute the rewrite. The rewritten
+  graph is interned under **its own** digest instead: the recording stays what the program wrote, and
+  clearing the pass makes the program's own body answer again.
+- **A declined rewrite changes nothing.** A pass decides before it lands — a node whose launch the
+  staging cannot serve keeps the body the program wrote rather than a half-built one — and the land
+  itself goes through the artifact reader, which runs both IR gates and `check_plan` before anything
+  is replaced.
+
 Five properties, each chosen to cost the existing design nothing:
 
 - **The graph IR does not change.** A fused region is one node — still "a
