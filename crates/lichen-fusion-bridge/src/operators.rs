@@ -27,6 +27,29 @@ pub fn binary(operator: KernelBin) -> Option<BinaryOp> {
     }
 }
 
+/// The lowered binary instruction a symbolic operator means, or `None` when it has none.
+///
+/// # Invariant
+/// [`binary`]'s inverse over the six arithmetic operators, which is the set a fold can be
+/// written in: the comparisons are excluded because a comparison is not a fold — combining two
+/// of its answers compares two `0`/`1` values rather than the values the fold is over.
+pub fn lowered(operator: BinaryOp) -> Option<KernelBin> {
+    match operator {
+        BinaryOp::Add => Some(KernelBin::Add),
+        BinaryOp::Sub => Some(KernelBin::Sub),
+        BinaryOp::Mul => Some(KernelBin::Mul),
+        BinaryOp::Div => Some(KernelBin::Div),
+        BinaryOp::Max => Some(KernelBin::Max),
+        BinaryOp::Min => Some(KernelBin::Min),
+        BinaryOp::LessThan
+        | BinaryOp::GreaterThan
+        | BinaryOp::LessEqual
+        | BinaryOp::GreaterEqual
+        | BinaryOp::Equal
+        | BinaryOp::NotEqual => None,
+    }
+}
+
 /// The operator as it is written in a refusal.
 ///
 /// # Invariant

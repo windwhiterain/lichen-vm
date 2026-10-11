@@ -11,7 +11,9 @@ mod lower;
 mod operators;
 mod refusal;
 mod roles;
+mod tiled;
 
 pub use lower::projection;
 pub use refusal::BridgeRefusal;
 pub use roles::ReadRoles;
+pub use tiled::{Element, Folding, Identity, TileRefusal, Tiled, fold};
