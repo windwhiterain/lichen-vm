@@ -273,6 +273,7 @@ fn walk(expr: &Expr, deps: &mut Deps) {
         | Expr::Str(..)
         | Expr::TypeConst(..)
         | Expr::Placeholder(..)
+        | Expr::Any(..)
         | Expr::Err { .. } => {}
     }
 }

@@ -64,6 +64,9 @@ pub enum TokenKind {
     /// `@shallow` — the shallow marker of an array-literal position,
     /// `@shallow e` or `@shallow(n) e`.
     KwShallow,
+    /// `@any` — the wildcard literal: it unifies with everything and constrains
+    /// nothing (`compound-element-slots.md`).
+    Any,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The `cache` keyword — a binding whose value is a retained cell
@@ -190,6 +193,7 @@ impl TokenKind {
             TokenKind::KwAssert => "'@assert'".to_string(),
             TokenKind::KwIn => "'@in'".to_string(),
             TokenKind::KwShallow => "'@shallow'".to_string(),
+            TokenKind::Any => "'@any'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
@@ -710,12 +714,13 @@ fn raw_to_kind(
             "assert" => Some(TokenKind::KwAssert),
             "in" => Some(TokenKind::KwIn),
             "shallow" => Some(TokenKind::KwShallow),
+            "any" => Some(TokenKind::Any),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert`, `@in` and `@shallow` are the ones that exist"
+                         `@assert`, `@in`, `@shallow` and `@any` are the ones that exist"
                     ),
                 });
                 None

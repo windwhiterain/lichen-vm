@@ -387,6 +387,7 @@ impl Resolver {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
+            | Expr::Any(..)
             | Expr::Err { .. } => {}
         }
     }

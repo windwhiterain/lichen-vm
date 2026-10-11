@@ -146,6 +146,7 @@ impl KeyWriter {
                 self.opt_binder(binder);
             }
             Expr::Placeholder(_) => self.u(3),
+            Expr::Any(_) => self.u(36),
             // The recovered-error region / an unresolved name: content-free,
             // position-only.
             Expr::Err { .. } => self.u(4),

@@ -1483,6 +1483,8 @@ fn classify_token_kind(
         | TokenKind::KwShallow
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        // `@any` is the wildcard literal — a reserved form like `_`.
+        | TokenKind::Any => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
         // Operators: arrows, annotations, separators-of-fields, and math.
@@ -1615,6 +1617,7 @@ impl<'a> NameClass<'a> {
             | Expr::TypeConst(..)
             | Expr::Name(..)
             | Expr::Placeholder(..)
+            | Expr::Any(..)
             | Expr::Err { .. } => {}
             Expr::BinOp { left, right, .. } => {
                 self.expr(left);
@@ -1886,6 +1889,7 @@ impl Walk {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
+            | Expr::Any(..)
             | Expr::Err { .. } => {}
             Expr::Name(name, span, _) => {
                 if let Some(idx) = self.lookup(name) {
@@ -2221,6 +2225,7 @@ impl<'a> ScopeCapture<'a> {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
+            | Expr::Any(..)
             | Expr::Err { .. }
             | Expr::Name(..) => {}
             Expr::Lambda {

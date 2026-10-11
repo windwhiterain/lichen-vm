@@ -92,6 +92,9 @@ pub enum Expr {
     Name(String, Span, Option<BinderId>),
     /// `_` — an inference placeholder hole in any position; never a name.
     Placeholder(Span),
+    /// `@any` — the wildcard literal: it unifies with everything and constrains
+    /// nothing (`compound-element-slots.md`).
+    Any(Span),
     /// `x => e`, optionally annotated (`x : T => e`, `x # n => e`).
     Lambda {
         parameter: String,
@@ -356,6 +359,7 @@ impl Expr {
             Expr::TypeConst(_, s) => *s,
             Expr::Name(_, s, _) => *s,
             Expr::Placeholder(s) => *s,
+            Expr::Any(s) => *s,
             Expr::Lambda { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
             Expr::BinOp { span, .. } => *span,

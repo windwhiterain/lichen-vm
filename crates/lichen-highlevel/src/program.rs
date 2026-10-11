@@ -372,6 +372,28 @@ where
     }
 }
 
+/// The wildcard literal `@any` — a value that unifies with everything and
+/// constrains nothing.
+///
+/// # Invariant
+/// The value node is **fresh per occurrence**: the spelling's own type cell is
+/// what `@any : T` binds, and a shared cell would make the first annotation bind
+/// every later one. See `docs/notes/compound-element-slots.md`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AnyLit;
+
+impl<P> LiteralExt<P> for AnyLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value = ctx.value_node(P::Value::from(LowValue::Any));
+        let ty = ctx.fresh();
+        let pair = ctx.pair(value, ty);
+        LiteralBuild { pair, value, ty }
+    }
+}
+
 // The highlevel program's literal vocabulary: the built-in literals as sibling
 // carry variants.
 lichen_utils::enum_ext! {
@@ -385,6 +407,7 @@ lichen_utils::enum_ext! {
     + FloatTypeLit as FloatType;
     + StringTypeLit as StringType;
     + TypeTypeLit as TypeType;
+    + AnyLit as Any;
 }
 
 impl<P> LiteralExt<P> for HighProgramLiteral
@@ -400,6 +423,7 @@ where
             HighProgramLiteral::FloatType(lit) => lit.build(ctx),
             HighProgramLiteral::StringType(lit) => lit.build(ctx),
             HighProgramLiteral::TypeType(lit) => lit.build(ctx),
+            HighProgramLiteral::Any(lit) => lit.build(ctx),
         }
     }
 }

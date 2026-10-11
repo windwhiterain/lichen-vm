@@ -929,6 +929,9 @@ fn atom_parser<'a>(
             // `_` is its own token, never a name: it can appear as a value but
             // cannot be bound.
             token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),
+            // `@any` is a literal, not a keyword: it is a value, so it parses
+            // wherever an atom can.
+            token(TokenKind::Any).map(|t| Expr::Any(t.span)),
             name().map(|(n, span)| Expr::Name(n, span, None)),
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),

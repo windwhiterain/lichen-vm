@@ -14,7 +14,7 @@ use stacksafe::stacksafe;
 use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, PrefixOp, Schema};
 use lichen_highlevel::program::{
-    FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
+    AnyLit, FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
     TypeTypeLit,
 };
 use lichen_language_lex::Span;
@@ -466,6 +466,9 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
+            Expr::Any(span) => {
+                self.alloc(ExprKind::Literal(HighProgramLiteral::from(AnyLit)), span)
+            }
             Expr::Name(name, span, binder) => match binder {
                 Some(id) => self.binder(*id),
                 None => {
@@ -813,6 +816,7 @@ impl Compiler {
                         | Expr::TypeConst(..)
                         | Expr::Name(..)
                         | Expr::Placeholder(..)
+                        | Expr::Any(..)
                         | Expr::Lambda { .. }
                         | Expr::Apply { .. }
                         | Expr::BinOp { .. }

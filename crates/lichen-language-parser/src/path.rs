@@ -93,6 +93,7 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
         | Expr::TypeConst(..)
         | Expr::Name(..)
         | Expr::Placeholder(..)
+        | Expr::Any(..)
         | Expr::Err { .. } => {}
         Expr::Lambda {
             parameter_type,

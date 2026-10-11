@@ -24,7 +24,8 @@ pub(crate) fn shift_expr(
         | Expr::Str(_, span)
         | Expr::TypeConst(_, span)
         | Expr::Name(_, span, _)
-        | Expr::Placeholder(span) => shift(span, old_starts, new_starts, delta),
+        | Expr::Placeholder(span)
+        | Expr::Any(span) => shift(span, old_starts, new_starts, delta),
         // A recovered-error region: the mask is a **byte** range (what a diff
         // excludes) and the start is a span, so both move.
         Expr::Err { range, start } => {
