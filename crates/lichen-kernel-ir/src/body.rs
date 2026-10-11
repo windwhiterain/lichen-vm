@@ -5,7 +5,7 @@
 //! parameters and for a loop's carried state — and a `Br`'s `args` are exactly its
 //! target's `params`. What this replaced is `docs/notes/lichen-compute.md` §4.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{KernelInstr, ScalarClass};
 
@@ -722,6 +722,60 @@ impl KernelBody {
             reachable,
             dominators,
         }
+    }
+
+    /// Every value each block receives, one list per incoming branch.
+    ///
+    /// # Invariant
+    /// A block parameter is defined by all its incoming branches and not by one, so a cone walk
+    /// following a single edge would call a carried value invariant.
+    pub(crate) fn incoming_arguments(&self) -> Vec<Vec<Vec<ValueId>>> {
+        let mut incoming: Vec<Vec<Vec<ValueId>>> = vec![Vec::new(); self.blocks.len()];
+        for block in &self.blocks {
+            for branch in block.branches() {
+                if let Some(arguments) = incoming.get_mut(branch.target) {
+                    arguments.push(branch.args.clone());
+                }
+            }
+        }
+        incoming
+    }
+
+    /// Whether `value`'s definition cone reaches `lane`.
+    ///
+    /// # Invariant
+    /// A block parameter is defined by the values **every** incoming branch hands it, so a carried
+    /// lane is seen through a loop's parameter rather than read as invariant; an operand a branch
+    /// does not hand over counts as a dependence.
+    pub(crate) fn depends_on(
+        &self,
+        value: ValueId,
+        lane: ValueId,
+        incoming: &[Vec<Vec<ValueId>>],
+    ) -> bool {
+        let mut stack = vec![value];
+        let mut seen: HashSet<ValueId> = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if current == lane {
+                return true;
+            }
+            if !seen.insert(current) {
+                continue;
+            }
+            match self.values.get(current.0 as usize) {
+                Some(ValueDef::Instr { args, .. }) => stack.extend(args.iter().copied()),
+                Some(ValueDef::BlockParam { block, index }) => {
+                    for arguments in incoming.get(*block).into_iter().flatten() {
+                        match arguments.get(*index as usize) {
+                            Some(argument) => stack.push(*argument),
+                            None => return true,
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        false
     }
 
     /// Which blocks every lane reaches, as a flag per block.

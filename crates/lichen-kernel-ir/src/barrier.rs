@@ -1,7 +1,7 @@
 //! The barrier scan: the pairs a body's slice accesses separate.
 //! See `docs/notes/shared-memory-and-barriers.md` §4.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     Barrier, KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, Slice, ValueDef,
@@ -250,55 +250,6 @@ impl KernelBody {
              array — a fault no barrier orders and `spirv-val` cannot see \
              (`docs/notes/shared-memory-and-barriers.md` §9)"
         ))
-    }
-
-    /// Whether `value`'s definition cone reaches `lane`.
-    ///
-    /// # Invariant
-    /// A block parameter is defined by the values **all** its incoming branches hand it, so a
-    /// carried lane is seen through a loop's parameter rather than read as invariant. An
-    /// operand a branch does not hand over counts as a dependence; `validate` refuses that body.
-    fn depends_on(&self, value: ValueId, lane: ValueId, incoming: &[Vec<Vec<ValueId>>]) -> bool {
-        let mut stack = vec![value];
-        let mut seen: HashSet<ValueId> = HashSet::new();
-        while let Some(current) = stack.pop() {
-            if current == lane {
-                return true;
-            }
-            if !seen.insert(current) {
-                continue;
-            }
-            match self.values.get(current.0 as usize) {
-                Some(ValueDef::Instr { args, .. }) => stack.extend(args.iter().copied()),
-                Some(ValueDef::BlockParam { block, index }) => {
-                    for arguments in incoming.get(*block).into_iter().flatten() {
-                        match arguments.get(*index as usize) {
-                            Some(argument) => stack.push(*argument),
-                            None => return true,
-                        }
-                    }
-                }
-                None => {}
-            }
-        }
-        false
-    }
-
-    /// Every value each block receives, one list per incoming branch.
-    ///
-    /// # Invariant
-    /// A block parameter is defined by all its incoming branches and not by one, so a cone
-    /// walk following a single edge would call a carried lane invariant.
-    fn incoming_arguments(&self) -> Vec<Vec<Vec<ValueId>>> {
-        let mut incoming: Vec<Vec<Vec<ValueId>>> = vec![Vec::new(); self.blocks.len()];
-        for block in &self.blocks {
-            for branch in block.branches() {
-                if let Some(arguments) = incoming.get_mut(branch.target) {
-                    arguments.push(branch.args.clone());
-                }
-            }
-        }
-        incoming
     }
 
     /// Every instruction this body lists, in the walk's program order.

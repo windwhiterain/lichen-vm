@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 mod barrier;
 mod body;
+mod compose;
 mod marks;
 mod plan;
 mod unary;
@@ -19,6 +20,7 @@ mod unary;
 pub use body::{
     Barrier, BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat,
 };
+pub use compose::{ComposeRefusal, compose};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{
