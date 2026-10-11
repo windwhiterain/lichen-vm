@@ -34,6 +34,24 @@ impl Interval {
 }
 
 impl KernelFragment {
+    /// The fragment-scope facts a body's own gate cannot see, refused by name.
+    ///
+    /// # Invariant
+    /// A slot declares at least one element: a zero-length `OpTypeArray` has no type to declare and
+    /// no index it could bound, so nothing can stage through it
+    /// (`docs/notes/shared-memory-and-barriers.md` §9).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ordinal) = self.shared_slots.iter().position(|slot| slot.count == 0) {
+            return Err(format!(
+                "the shared slot {ordinal} declares no element(s): a slot's count is the length of \
+                 the `Workgroup` array the emitter declares and the bound every access is refused \
+                 against, so a zero-length array has no type to declare and no index it could \
+                 bound (`docs/notes/shared-memory-and-barriers.md` §9)"
+            ));
+        }
+        Ok(())
+    }
+
     /// The pairs this fragment's shared accesses need a barrier between.
     ///
     /// # Invariant
@@ -41,6 +59,7 @@ impl KernelFragment {
     /// [`Self::shared_slots`], so an index that may leave its slot is refused against the length
     /// the emitter declares rather than one a caller supplied.
     pub fn barrier_scan(&self, lane: ValueId) -> Result<Vec<Barrier>, String> {
+        self.validate()?;
         self.body.barrier_scan(lane, &self.shared_slots)
     }
 }

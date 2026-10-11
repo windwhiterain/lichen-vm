@@ -1,5 +1,5 @@
-//! The crate's stated invariants — the digest, the body's gate, and the barrier scan — through
-//! its public surface.
+//! The crate's stated invariants — the digest, both gates, and the barrier scan — through its public
+//! surface.
 
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
@@ -417,6 +417,19 @@ fn staging(count: u32, body: KernelBody) -> KernelFragment {
         }],
         marks: Vec::new(),
     }
+}
+
+/// A slot of zero elements has no type to declare, refused at the fragment's own gate.
+#[test]
+fn a_fragment_staging_a_zero_length_slot_is_refused() {
+    let refusal = staging(0, body(1, true))
+        .validate()
+        .expect_err("a slot with no elements cannot stage anything");
+    assert!(
+        refusal.contains("no element(s)"),
+        "names the cause: {refusal}"
+    );
+    assert!(refusal.contains('0'), "names the slot: {refusal}");
 }
 
 /// An index the interval machinery cannot bound inside the slot is a GPU fault, refused by name.

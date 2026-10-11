@@ -948,15 +948,25 @@ on whether the staged value depends on an input: `i + 1` hides it, `in[i] + 1` d
 not. `graph_on_device` sits on the safe side of this deliberately — `count = 128`,
 "a workgroup multiple, so no surplus lane writes a slot a real lane reads".
 
-So the padding discharges convergence and nothing else. The surviving obligation is
-about the slot's **content**: a staged body is tail-safe only if no real lane's read
-reaches an element a surplus lane writes. Nothing in the tree states that today. The
-extent refusal (§9) is indifferent to which lane computed the index — it bounds one
-by `[0, count)` — and a slot's declared count is not the dispatch's `count`: the
-first is the array's length, the second is how many indices the launch covers. Until
-something states the obligation, the safe dispatch for a staged body is a whole
-number of workgroups, and a body whose read wraps the lane width is wrong at the
-tail in a way no barrier and no `spirv-val` run can see.
+So the padding discharges convergence and nothing else, and **the launch now refuses
+the count that would make the surplus lane observable**: a launch set with any
+`shared_slots` non-empty is dispatched over a whole number of the root's
+`target.lane_width` workgroups only, refused by name with the count and the width
+otherwise (`RunError::StagedLaunchNotAWholeWorkgroup`). With a whole workgroup count
+there is no surplus lane at all, so the counterexample above is unspellable rather
+than diagnosed after the fact — the obligation it left is closed.
+
+**What that does not close is the slot's content**, a different question of the same
+shape. A whole-workgroup launch makes every writing lane a declared lane; it says
+nothing about *which* of them wrote the element a reader takes. The extent refusal
+(§9) is indifferent to which lane computed the index — it bounds one by
+`[0, count)` — and a slot's declared count is not the dispatch's `count`: the first
+is the array's length, the second is how many indices the launch covers. So a write
+no lane makes — a predicated `swrite`, a loop body whose trip count skipped it, an
+element no lane addresses — still leaves a reader with a value nobody wrote, and a
+slot is workgroup-private, so a reader that expects a *neighbouring* workgroup's
+element takes its own group's instead. Boundary elements of that kind are the
+author's to state: no barrier and no `spirv-val` run can see them.
 
 ## 9. The staging
 
@@ -1003,7 +1013,12 @@ while the surface that names one (`Shared(.n)`, [graph-fusion](graph-fusion.md#t
 §5's plan field) is unbuilt — and states it in the field rather than leaving the emitter to read
 the width, so a declared length is checkable, two lengths are two digests, and the bound and the
 declared array cannot drift. `i % 64` against a count of 64 stays accepted; the global invocation
-id against it does not.
+id against it does not. **A length of zero is refused by the fragment's own gate now** —
+`KernelFragment::validate`, the answer to §10 item 4 — because a zero-length `OpTypeArray` has no
+type to declare and no index it could bound; `barrier_scan` runs that gate before it reads the
+count as a bound. And the launch carries the other half of §8: a launch set that stages, at a count
+that is not a whole multiple of `target.lane_width`, is refused by name at the dispatch rather than
+run with a surplus lane in it.
 
 **Where a recorded pair becomes a barrier, and the one place it cannot go.** The pair is
 data; the barrier is a position in the emitted code, and that position is *immediately
@@ -1168,13 +1183,17 @@ Still open:
    `KernelBody::validate` cannot host that check — it cannot tell an input buffer from
    an output — so it belongs where the roles are known. The token never provided it
    either, because `read` did not consume it.
-4. **Whether `KernelFragment` needs a `validate` at all.** The token made this
-   concrete and then went away: `KernelFragment` has no validate, so a fragment
-   declaring `result_classes: [State]` reached `type_of`'s `unreachable!` and panicked
-   instead of being refused. The revert removes that instance, but item 3's check
-   needs the same thing — fragment-level facts (`roles`, `inputs`, `outputs`) that
-   `KernelBody::validate` cannot see. Step 2 adds a fragment field of its own, so the
-   question should be settled there rather than after.
+4. **Whether `KernelFragment` needs a `validate` at all — answered, and it does.** The
+   token made this concrete and then went away: `KernelFragment` has no validate, so a
+   fragment declaring `result_classes: [State]` reached `type_of`'s `unreachable!` and
+   panicked instead of being refused. The revert removed that instance, and the
+   question came back with a fact no body can see: a `SharedSlot` of zero elements is
+   a zero-length `OpTypeArray`, which has no type to declare and no index it could
+   bound, so `KernelFragment::validate` refuses one and is kept to exactly that kind
+   of fact. `barrier_scan` runs it, because the count it bounds an access by is the
+   length that gate establishes. Item 3's check needs the same thing — fragment-level
+   facts (`roles`, `inputs`, `outputs`) that `KernelBody::validate` cannot see — and
+   joins this gate when it lands rather than starting a second one.
 5. **The residual false edge.** Versioning makes the order partial and matches the
    program text, which cures the token's total order across unrelated buffers. It does
    not cure everything: a scatter writing *one* buffer at distinct indices still gets

@@ -12,8 +12,8 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
-    KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, SharedSlot, TargetFacts,
-    Terminator,
+    KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, SharedSlot,
+    TargetFacts, Terminator,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -482,4 +482,26 @@ fn a_staged_exchange_answers_the_value_derived_by_hand() {
         );
         release_all(&context, &out);
     }
+}
+
+/// A staged launch at a count that is not a whole workgroup is refused by name.
+///
+/// # Invariant
+/// The dispatch rounds up and runs the surplus lanes with zero-padded input, so on a staged body a
+/// surplus lane's fabricated value reaches a real lane's answer with no diagnostic. The refusal
+/// names the count and the width it is off (`docs/notes/shared-memory-and-barriers.md` §8).
+#[test]
+fn a_staged_launch_off_a_workgroup_multiple_is_refused_by_name() {
+    let Some(context) =
+        common::context("a_staged_launch_off_a_workgroup_multiple_is_refused_by_name")
+    else {
+        return;
+    };
+    let count = 100usize;
+    let refusal = context
+        .run(&LaunchSet::single(&stages_between_lanes()), &[], count)
+        .expect_err("a staged launch off a whole workgroup is refused");
+    let message = refusal.to_string();
+    assert!(message.contains("100"), "names the count: {message}");
+    assert!(message.contains("64"), "names the lane width: {message}");
 }

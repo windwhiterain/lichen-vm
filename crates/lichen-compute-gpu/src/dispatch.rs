@@ -8,6 +8,10 @@
 //! The Vulkan dispatch backend: device-local buffers, explicit ordering, host pools.
 //!
 //! # Invariant
+//! A launch set that stages a shared slot is dispatched over a whole number of workgroups
+//! only, so no surplus lane writes a slot a real lane of its workgroup reads.
+//!
+//! # Invariant
 //! Buffers are device-local and data reaches them through a host-cached staging buffer: an
 //! uncached host-visible allocation is a correct but appallingly slow buffer, so a device with no
 //! cached host memory is refused by name. Coherent memory is not ordering, so each point carries
@@ -23,7 +27,7 @@ use lichen_kernel_ir::{
     BufferSlot, LaunchSet, ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
-use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
+use crate::spirv::{self, Binding, SpirvRefusal};
 
 /// Why a run could not happen.  Every variant names its own cause.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +46,14 @@ pub enum RunError {
     },
     /// A run over no indices: Vulkan has no zero-sized allocation to give it.
     EmptyRun,
+    /// A launch that stages a shared slot at a count that is not a whole number of workgroups.
+    ///
+    /// # Invariant
+    /// A dispatch rounds up to whole workgroups and runs the surplus lanes with zero-padded input,
+    /// so a surplus lane of a staged body writes a value a real lane of its workgroup reads and no
+    /// diagnostic sees it. Both numbers are named because the pair is what is wrong
+    /// (`docs/notes/shared-memory-and-barriers.md` §8).
+    StagedLaunchNotAWholeWorkgroup { count: usize, lane_width: u32 },
     /// More storage buffers than the pool has room for; the pool is allocated once.
     TooManyBindings { total: usize, max: usize },
     /// A chain asked for a dispatch count one submission cannot record.
@@ -107,6 +119,14 @@ impl fmt::Display for RunError {
                 f,
                 "the run covers no indices, so there is no buffer for it to write: an empty \
                  dispatch is a program with nothing to do, not a smaller run."
+            ),
+            RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width } => write!(
+                f,
+                "the launch covers {count} indices, which is not a whole number of workgroups of \
+                 {lane_width} lanes, and this launch stages a shared slot: a dispatch rounds up \
+                 and runs the surplus lanes with zero-padded input, so a surplus lane's fabricated \
+                 value would reach a real lane's answer with no diagnostic. Launch a multiple of \
+                 {lane_width}, or stage nothing (`docs/notes/shared-memory-and-barriers.md` §8)."
             ),
             RunError::TooManyBindings { total, max } => write!(
                 f,
@@ -199,6 +219,26 @@ fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, Run
         stage,
         detail: format!("{code:?}"),
     })
+}
+
+/// How many workgroups a launch of `count` indices over `launch` is, or why it cannot be one.
+///
+/// # Invariant
+/// A launch set that stages declares `Workgroup` storage for the module, so a surplus lane —
+/// which the rounding runs with zero-padded input — can write a slot a real lane of its workgroup
+/// reads, and no diagnostic sees it. A staged launch is therefore a whole number of workgroups; the
+/// width is the root fragment's own declared fact
+/// (`docs/notes/shared-memory-and-barriers.md` §8).
+fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunError> {
+    let lane_width = launch.root().target.lane_width.lanes();
+    let stages = launch
+        .ordered()
+        .iter()
+        .any(|fragment| !fragment.shared_slots.is_empty());
+    if stages && count % lane_width as usize != 0 {
+        return Err(RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width });
+    }
+    Ok(count.div_ceil(lane_width as usize))
 }
 
 /// A device, its compute queue, and the pipelines built on it.
@@ -623,7 +663,8 @@ impl GpuContext {
 
         // Round up so the last workgroup's surplus lanes address padding rather
         // than memory past the end; see the module docs.
-        let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
+        let workgroups = launch_workgroups(launch, count)?;
+        let padded = workgroups * launch.root().target.lane_width.lanes() as usize;
         if padded == 0 {
             // A zero-element run would ask Vulkan for a zero-sized buffer.
             return Err(RunError::EmptyRun);
@@ -700,7 +741,13 @@ impl GpuContext {
         }
 
         segment.begin()?;
-        segment.record(pipeline, &descriptors, &uploads, count, &scalars)?;
+        segment.record(
+            pipeline,
+            &descriptors,
+            &uploads,
+            workgroups as u32,
+            &scalars,
+        )?;
         // Nothing below can fail, so the bookkeeping comes after the submit: a failed
         // submit means nothing reached the queue.
         let token = segment.submit()?;
@@ -798,7 +845,8 @@ impl GpuContext {
             },
             scalars.len() as u32,
         )?;
-        let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
+        let workgroups = launch_workgroups(launch, count)?;
+        let padded = workgroups * launch.root().target.lane_width.lanes() as usize;
         if padded == 0 {
             return Err(RunError::EmptyRun);
         }
@@ -855,7 +903,7 @@ impl GpuContext {
             } else {
                 &[]
             };
-            segment.record(pipeline, &descriptors, uploads, count, &scalars)?;
+            segment.record(pipeline, &descriptors, uploads, workgroups as u32, &scalars)?;
             current = into;
             std::mem::swap(&mut into, &mut onto);
         }
@@ -1153,7 +1201,7 @@ impl GpuContext {
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
-        count: usize,
+        workgroups: u32,
         scalars: &[u8],
     ) -> Result<(), RunError> {
         let total = descriptors.len();
@@ -1276,7 +1324,7 @@ impl GpuContext {
                     scalars,
                 );
             }
-            device.cmd_dispatch(command, count.div_ceil(LOCAL_SIZE_X as usize) as u32, 1, 1);
+            device.cmd_dispatch(command, workgroups, 1, 1);
             // The trailing barrier names every reader of these results, including a later
             // dispatch in the same command buffer.
             device.cmd_pipeline_barrier(
@@ -1884,11 +1932,17 @@ impl Segment<'_> {
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
-        count: usize,
+        workgroups: u32,
         scalars: &[u8],
     ) -> Result<(), RunError> {
-        self.context
-            .record_dispatch(self.slot(), pipeline, descriptors, uploads, count, scalars)
+        self.context.record_dispatch(
+            self.slot(),
+            pipeline,
+            descriptors,
+            uploads,
+            workgroups,
+            scalars,
+        )
     }
 
     /// Close the recording and hand it to the queue, without waiting.
