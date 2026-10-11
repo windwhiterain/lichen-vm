@@ -19,6 +19,8 @@ use lichen_lowlevel::{
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
+use lichen_kernel_ir::exp_value;
+
 use crate::attr::{AttrSet, NoAttr};
 use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
@@ -559,6 +561,23 @@ pub enum TypeOperator {
     BitAnd,
     BitOr,
     BitXor,
+    /// The two **prefix scalar operators** over `[left, right]` — `max a b` and
+    /// `min a b` (`docs/notes/operators.md` §11).
+    ///
+    /// # Invariant
+    /// They compute over one scalar class as the arithmetic does and leave that class, so a
+    /// `Float` buffer is written by a `Float` maximum rather than by an `Int` select. The
+    /// reading of a `NaN` operand is the language's — the larger of `a > b`'s two arms —
+    /// because the two targets' native maximum instructions answer a `NaN` differently.
+    Max,
+    Min,
+    /// The exponential of one `Float`, over `[value]`
+    /// (`docs/notes/floating-point.md` §6).
+    ///
+    /// # Invariant
+    /// `Float`-only and total: the interpreter and every kernel compute the sequence in
+    /// [`lichen_kernel_ir::exp_body`], so the answer does not depend on which ran it.
+    Exp,
     /// The two **class conversions** — unary, over `[value]`. See
     /// `docs/notes/floating-point.md` §4.2.
     ///
@@ -715,6 +734,9 @@ define_type_operator_codec! {
     Float2Int = 16;
     InDomain = 17;
     IsStructType = 18;
+    Max = 19;
+    Min = 20;
+    Exp = 21;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -822,11 +844,30 @@ where
                     _ => None,
                 }
             }
+            // The exponential: one `Float`, and the one definition every execution model
+            // reads (`docs/notes/floating-point.md` §6).
+            TypeOperator::Exp => {
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                    unreachable!("a prefix scalar operator expects a one-element operand array")
+                };
+                // SAFETY: `operands` is the array the VM just evaluated for this
+                // node; its home block is alive here.
+                let items = unsafe { operands.items() };
+                let Some(value) = module.node_value(items[0].node) else {
+                    return None;
+                };
+                match value.as_enum() {
+                    Some(LowValue::Float(x)) => Some(P::Value::from(LowValue::Float(exp_value(x)))),
+                    _ => None,
+                }
+            }
             TypeOperator::Add
             | TypeOperator::Sub
             | TypeOperator::Mul
             | TypeOperator::Div
             | TypeOperator::Rem
+            | TypeOperator::Max
+            | TypeOperator::Min
             | TypeOperator::Lt
             | TypeOperator::Gt
             | TypeOperator::Leq
@@ -885,6 +926,8 @@ where
                     | TypeOperator::Sub
                     | TypeOperator::Mul
                     | TypeOperator::Div
+                    | TypeOperator::Max
+                    | TypeOperator::Min
                     | TypeOperator::Lt
                     | TypeOperator::Gt
                     | TypeOperator::Leq
@@ -904,6 +947,8 @@ where
                                 TypeOperator::Gt => (left > right) as usize,
                                 TypeOperator::Leq => (left <= right) as usize,
                                 TypeOperator::Geq => (left >= right) as usize,
+                                TypeOperator::Max => left.max(right),
+                                TypeOperator::Min => left.min(right),
                                 _ => {
                                     unreachable!("the float operators are handled beside this arm")
                                 }
@@ -937,6 +982,12 @@ where
                             TypeOperator::Geq => {
                                 Some(P::Value::from(LowValue::USize((left >= right) as usize)))
                             }
+                            TypeOperator::Max => {
+                                Some(P::Value::from(LowValue::Float(left.max(right))))
+                            }
+                            TypeOperator::Min => {
+                                Some(P::Value::from(LowValue::Float(left.min(right))))
+                            }
                             _ => unreachable!("the Int operators are handled beside this arm"),
                         },
                         _ => None,
@@ -950,8 +1001,8 @@ where
                         (!left.value_eq(&right)) as usize,
                     ))),
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
-                    TypeOperator::Int2Float | TypeOperator::Float2Int => {
-                        unreachable!("the conversions are unary, and handled above")
+                    TypeOperator::Int2Float | TypeOperator::Float2Int | TypeOperator::Exp => {
+                        unreachable!("the prefix scalar operators are unary, and handled above")
                     }
                     // The refinement's membership test; the outer arm already
                     // gated on an undecided side.
@@ -988,7 +1039,12 @@ where
     /// vocabulary has no shape for, so it declines.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
-            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Mul | TypeOperator::Div => {
+            TypeOperator::Add
+            | TypeOperator::Sub
+            | TypeOperator::Mul
+            | TypeOperator::Div
+            | TypeOperator::Max
+            | TypeOperator::Min => {
                 if arguments
                     .iter()
                     .any(|argument| matches!(argument, Some(LowShape::Float)))
@@ -1010,6 +1066,7 @@ where
             | TypeOperator::BitXor => Some(LowShape::USize),
             TypeOperator::Int2Float => Some(LowShape::Float),
             TypeOperator::Float2Int => Some(LowShape::USize),
+            TypeOperator::Exp => Some(LowShape::Float),
             // A membership test answers `0`/`1`, so its own class is the machine
             // scalar whatever its operands are.
             TypeOperator::InDomain => Some(LowShape::USize),

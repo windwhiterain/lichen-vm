@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use stacksafe::stacksafe;
 
 use lichen_highlevel::attr::AttrSet;
-use lichen_highlevel::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Schema};
+use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, PrefixOp, Schema};
 use lichen_highlevel::program::{
     FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
     TypeTypeLit,
@@ -624,18 +624,37 @@ impl Compiler {
                 let condition = self.compile_expr(value);
                 self.alloc(ExprKind::Assert { condition }, span)
             }
-            Expr::Convert {
+            Expr::Prefix {
                 operator,
-                value,
+                operands,
                 span,
             } => {
-                // `int2float e` / `float2int e`: the direction rides along for the checker.
+                // A prefix keyword operator: the operator rides along for the checker, and
+                // its operands go into the children arena in the order they are written.
                 let operator = match operator {
-                    crate::ast::ConvOp::Int2Float => ConvOp::Int2Float,
-                    crate::ast::ConvOp::Float2Int => ConvOp::Float2Int,
+                    crate::ast::PrefixOp::Int2Float => PrefixOp::Int2Float,
+                    crate::ast::PrefixOp::Float2Int => PrefixOp::Float2Int,
+                    crate::ast::PrefixOp::Max => PrefixOp::Max,
+                    crate::ast::PrefixOp::Min => PrefixOp::Min,
+                    crate::ast::PrefixOp::Exp => PrefixOp::Exp,
                 };
-                let value = self.compile_expr(value);
-                self.alloc(ExprKind::Convert { operator, value }, span)
+                let operand_ids: Vec<ExprId> = operands
+                    .iter()
+                    .map(|operand| self.compile_expr(operand))
+                    .collect();
+                let start = self.ir.children.len() as u32;
+                self.ir.children.extend_from_slice(&operand_ids);
+                let range = ChildRange {
+                    start,
+                    end: self.ir.children.len() as u32,
+                };
+                self.alloc(
+                    ExprKind::Prefix {
+                        operator,
+                        operands: range,
+                    },
+                    span,
+                )
             }
             Expr::NativeCall { op, args, span } => {
                 // `$name(args…)`: args go into the children arena, the op name is interned.
@@ -797,7 +816,7 @@ impl Compiler {
                         | Expr::BinOp { .. }
                         | Expr::If { .. }
                         | Expr::Assert { .. }
-                        | Expr::Convert { .. }
+                        | Expr::Prefix { .. }
                         | Expr::NativeCall { .. }
                         | Expr::Index { .. }
                         | Expr::RawIndex { .. }

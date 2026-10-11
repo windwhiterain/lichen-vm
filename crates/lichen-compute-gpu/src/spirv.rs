@@ -189,6 +189,14 @@ pub enum SpirvRefusal {
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
     MixedClasses { at: usize },
+    /// The body computes a transcendental, which this target has no instruction for.
+    ///
+    /// # Invariant
+    /// The exponential is defined by its expansion into the primitive instructions, which
+    /// `Lower` applies before a fragment is registered, so a body that still holds one was
+    /// not built by it (`docs/notes/floating-point.md` §6). This target's GLSL `Exp` is
+    /// implementation-defined per vendor and could not answer the CPU path's numbers.
+    UnexpandedTranscendental { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
     /// A buffer write inside a loop body: the trip count is per lane and may be zero.
@@ -265,6 +273,13 @@ impl fmt::Display for SpirvRefusal {
                 "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
                  do not convert in either direction, so nothing here can make the two operands \
                  meet: this is a malformed fragment rather than an unsupported shape."
+            ),
+            SpirvRefusal::UnexpandedTranscendental { at } => write!(
+                f,
+                "instruction {at} computes a transcendental, which this target has no instruction \
+                 for: the exponential is defined by its expansion into the primitive operators, and \
+                 the lowering applies it before a fragment is registered, so this body was not built \
+                 by it (`docs/notes/floating-point.md` §6)."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -1020,6 +1035,57 @@ fn emit_function(
                             let id = literals.get(class, value, &ids, &mut next);
                             slots.insert(definition, literal(id, value));
                         }
+                        KernelInstr::Bin(class, operator @ (KernelBin::Max | KernelBin::Min)) => {
+                            // **A comparison and a select, as the CPU path emits**: the
+                            // targets' native maxima answer a NaN operand differently.
+                            let rhs = operand(1)?;
+                            let lhs = operand(0)?;
+                            let operand_class = bin_class(lhs.kind, rhs.kind, class);
+                            let lhs = as_class(
+                                lhs,
+                                operand_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let rhs = as_class(
+                                rhs,
+                                operand_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let comparison = match (operand_class, operator) {
+                                (ScalarClass::Int, KernelBin::Max) => op::U_GREATER_THAN,
+                                (ScalarClass::Int, KernelBin::Min) => op::U_LESS_THAN,
+                                (ScalarClass::Float, KernelBin::Max) => op::F_GREATER_THAN,
+                                (ScalarClass::Float, KernelBin::Min) => op::F_LESS_THAN,
+                                _ => unreachable!("`Max` and `Min` are the only operators here"),
+                            };
+                            let condition = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                comparison,
+                                vec![ids.boolean, condition, lhs.id, rhs.id],
+                            ));
+                            let result = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::SELECT,
+                                vec![
+                                    ids.type_of(operand_class),
+                                    result,
+                                    condition,
+                                    lhs.id,
+                                    rhs.id,
+                                ],
+                            ));
+                            slots.insert(definition, scalar(result, operand_class));
+                        }
                         KernelInstr::Bin(class, operator) => {
                             let rhs = operand(1)?;
                             let lhs = operand(0)?;
@@ -1160,6 +1226,11 @@ fn emit_function(
                                             at,
                                         });
                                     }
+                                    (_, KernelBin::Max) | (_, KernelBin::Min) => {
+                                        unreachable!(
+                                            "`Max`/`Min` is emitted before this table is read"
+                                        )
+                                    }
                                 };
                             if as_bits {
                                 let left_bits = next;
@@ -1200,6 +1271,9 @@ fn emit_function(
                                 definition,
                                 as_condition(popped, &ids, &mut literals, &mut code, &mut next),
                             );
+                        }
+                        KernelInstr::Exp => {
+                            return Err(SpirvRefusal::UnexpandedTranscendental { at });
                         }
                         KernelInstr::Select => {
                             let selector = operand(2)?;

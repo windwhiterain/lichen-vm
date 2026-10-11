@@ -53,8 +53,11 @@ bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
 bitand   := sum ('&' sum)*                          -- bitwise and
 sum      := product (('+' | '-') product)*          -- arithmetic, left-assoc
 product  := prefix (('*' | '/' | '%') prefix)*      -- product, left-assoc; tighter than '+'/'-'
-prefix   := '@assert' apply | ('int2float' | 'float2int') apply | apply
-                                                  -- prefix assert `@assert e`, and the two class crossings; tighter than every binary operator, looser than application
+prefix   := '@assert' apply
+          | ('int2float' | 'float2int' | 'exp') apply       -- one operand, by juxtaposition
+          | ('max' | 'min') atom atom                       -- two operands, by juxtaposition
+          | apply
+                                                  -- the prefix assert, the two class crossings and the three scalar keywords max/min/exp; tighter than every binary operator, looser than application
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
@@ -92,11 +95,11 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `=>`, `->`, `:`.  The
+  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `=>`, `->`, `:`.  The
   `@`-led keywords — `@loop`, `@assert`, `@shallow`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
   The
-  two conversion keywords open a prefix expression and so cannot be used as
+  five prefix keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`, `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
@@ -561,6 +564,15 @@ maps every span back to the original file.
    is **partial** — a `NaN`, an infinity, or a value the unsigned `Int` cannot
    hold records `operator.out_of_range` and answers the lazy marker.  See
    [operators](notes/operators.md) §7.
+   Three more prefix keywords are **scalar operators** rather than crossings:
+   `max a b` and `min a b` yield the operands' own class (so `max 1 1.5` does not
+   check, by the same tie `1 + 1.5` fails), and `exp x` is `Float`'s alone.  A
+   two-operand keyword takes **atoms**, so `max a b` is the maximum of `a` and `b`
+   and `max (a + 1) b` needs its parentheses; `exp x` takes an application, like
+   the crossings.  `exp` is the one transcendental, and it is defined by a shared
+   polynomial rather than by a target's instruction, so every backend answers the
+   same bits; see [notes/floating-point](notes/floating-point.md) §6.  See
+   [operators](notes/operators.md) §11.
    `==` / `!=` over two `Float`s are the generalized equality — which is
    the same relation the rest of the language uses for "these are one value" —
    so they compare a float by its bits: `0.0 == -0.0` is `0` and
@@ -801,7 +813,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
 | `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker deep-evaluates to `USize(1)` |
-| `int2float e` / `float2int e` | `Convert { operator, value }` — the only form whose type is not its operand's: the operand checks against the direction's source class, the result's type is its target |
+| `int2float e` / `float2int e` / `max a b` / `min a b` / `exp x` | `Prefix { operator, operands }` — `int2float`/`float2int` are the only forms whose type is not their operand's: the operand checks against the direction's source class, the result's type is its target.  `max`/`min` tie their operands to one class and leave it; `exp` checks its operand as `Float` and is `Float` |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a **tuple** element (a struct reads `a.name`) |

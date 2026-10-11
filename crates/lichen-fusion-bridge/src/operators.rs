@@ -9,13 +9,14 @@ use lichen_kernel_ir::KernelBin;
 /// The two comparisons keep their direction: the IR's operands are the source's, so a
 /// translation that reordered them would invert every mask a program wrote. `Rem` and the
 /// three bitwise operators have no counterpart: the symbolic language is over real numbers.
-/// The symbolic `Max`/`Min` are unreachable, because the IR carries no such instruction.
 pub fn binary(operator: KernelBin) -> Option<BinaryOp> {
     match operator {
         KernelBin::Add => Some(BinaryOp::Add),
         KernelBin::Sub => Some(BinaryOp::Sub),
         KernelBin::Mul => Some(BinaryOp::Mul),
         KernelBin::Div => Some(BinaryOp::Div),
+        KernelBin::Max => Some(BinaryOp::Max),
+        KernelBin::Min => Some(BinaryOp::Min),
         KernelBin::Lt => Some(BinaryOp::LessThan),
         KernelBin::Gt => Some(BinaryOp::GreaterThan),
         KernelBin::Leq => Some(BinaryOp::LessEqual),
@@ -38,6 +39,8 @@ pub fn operator_spelling(operator: KernelBin) -> &'static str {
         KernelBin::Mul => "*",
         KernelBin::Div => "/",
         KernelBin::Rem => "%",
+        KernelBin::Max => "max",
+        KernelBin::Min => "min",
         KernelBin::Lt => "<",
         KernelBin::Gt => ">",
         KernelBin::Leq => "<=",

@@ -211,7 +211,7 @@ answers permanently:
 | `check_binop` | "has either operand stated a class" / "is one a float" | taking the polymorphic path — correct for the value, and the result type is fixed by the merge carry |
 | `check_field` / `check_named_field` / `check_raw_named_field` | "is the container concrete" | skipping the guard; the named halves re-ask through a registered condition (§5.2) |
 | `slot_read` | "is the position constant", "what is the field type" | keeping the lazy `Index` — sound, but any *reader* of that type cell before it resolves snapshots "unknown" |
-| `check_convert` | "is the operand's low type known" | skipping the source-class unify entirely |
+| `check_convert` (`unify_stated_class`) | "is the operand's low type known" | skipping the source-class unify entirely |
 | `check_instantiate` | a one-time force of the callee | deferring the nominality check to the apply's argument unify |
 | the kernel boundary (`lichen-compute`) | the parameter domain | refusing — the documented hard boundary, the honest version of the same snapshot |
 

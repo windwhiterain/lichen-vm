@@ -213,17 +213,22 @@ impl KeyWriter {
                 self.u(11);
                 self.expr(value);
             }
-            // The direction is content: `int2float x` and `float2int x` are
-            // different computations of the same operand.
-            Expr::Convert {
-                operator, value, ..
+            // The operator is content: `int2float x` and `float2int x` are different
+            // computations of the same operand, and so are `max a b` and `min a b`.
+            Expr::Prefix {
+                operator, operands, ..
             } => {
                 self.u(34);
                 self.u(match operator {
-                    crate::ast::ConvOp::Int2Float => 0,
-                    crate::ast::ConvOp::Float2Int => 1,
+                    crate::ast::PrefixOp::Int2Float => 0,
+                    crate::ast::PrefixOp::Float2Int => 1,
+                    crate::ast::PrefixOp::Max => 2,
+                    crate::ast::PrefixOp::Min => 3,
+                    crate::ast::PrefixOp::Exp => 4,
                 });
-                self.expr(value);
+                for operand in operands {
+                    self.expr(operand);
+                }
             }
             Expr::NativeCall { op, args, .. } => {
                 self.u(12);

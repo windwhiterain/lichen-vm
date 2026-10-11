@@ -80,9 +80,11 @@ pub(crate) fn shift_expr(
             shift(span, old_starts, new_starts, delta);
             shift_expr(value, old_starts, new_starts, delta);
         }
-        Expr::Convert { value, span, .. } => {
+        Expr::Prefix { operands, span, .. } => {
             shift(span, old_starts, new_starts, delta);
-            shift_expr(value, old_starts, new_starts, delta);
+            for operand in operands {
+                shift_expr(operand, old_starts, new_starts, delta);
+            }
         }
         Expr::NativeCall { args, span, .. } => {
             shift(span, old_starts, new_starts, delta);

@@ -129,7 +129,11 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             push_index(&mut out, 2, else_branch);
         }
         Expr::Assert { value, .. } => push_index(&mut out, 0, value),
-        Expr::Convert { value, .. } => push_index(&mut out, 0, value),
+        Expr::Prefix { operands, .. } => {
+            for (i, operand) in operands.iter().enumerate() {
+                push_index(&mut out, i as u32, operand);
+            }
+        }
         Expr::NativeCall { args, .. } => {
             for (i, arg) in args.iter().enumerate() {
                 push_index(&mut out, i as u32, arg);

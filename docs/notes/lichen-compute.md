@@ -292,7 +292,8 @@ change to the digest is a cold start and has no on-disk consequence.
 // **gone** — a value is read by naming it, not by naming a slot index.
 enum KernelInstr {
   Const(ScalarClass, i64),      // a literal, in the class it is declared
-  Bin(ScalarClass, KernelBin),  // an arithmetic/comparison/bitwise op over two values
+  Bin(ScalarClass, KernelBin),  // an arithmetic/comparison/bitwise/scalar op over two values
+  Exp,                          // the exponential, `Float`'s own; expanded before a backend
   Conv { from, to },            // `int2float` / `float2int`
   I32WrapI64,                   // the `select` condition
   Select,                       // if c then a else b
@@ -331,11 +332,21 @@ later. `KernelBody::validate` uses the first two to check a definition against i
 declaration.
 
 `Lower` walks the simple kernel-safe subset — integer constants, every
-`KernelBin` operator (the arithmetic, comparison and bitwise sets the language
+`KernelBin` operator (the arithmetic, comparison, bitwise and scalar sets the language
 has: `kernel_bin` is the one conversion from `TypeOperator`, and `None` for the
-one operator no body can contain), the parameter read (`Index(param_pair, 0)`), a
-`value_of` extraction (`Index(pair, 0)`), and a 2-element conditional, plus a
-cross-kernel `Launch`/`Call` (lowered to `CallKernel`).
+one operator no body can contain), the prefix scalar operators (`unary_class`
+answers `exp`, which lowers to `KernelInstr::Exp`; the two conversions are answered
+before it, because a literal converts in the language's own classes), the parameter
+read (`Index(param_pair, 0)`), a `value_of` extraction (`Index(pair, 0)`), and a
+2-element conditional, plus a cross-kernel `Launch`/`Call` (lowered to
+`CallKernel`).
+
+**`Exp` is expanded before a backend reads the body.** `KernelBody::expand_transcendentals`
+inlines the IR's own definition of the operator (one halving constant, a polynomial,
+seven squarings) into the body `compute` registers, so a backend never has to know a
+transcendental and the two targets run the identical primitive sequence. Why that is
+the honest reading, and what it costs, is
+[floating-point §6](floating-point.md#6-the-exponential).
 
 The arithmetic is **unsigned** in both backends — `I64DivU`/`I64RemU` and the
 `U` comparisons, never the `S` siblings — because an `Int` is a machine-sized
@@ -777,7 +788,8 @@ the same sites, not three more.
 ## 8. v1 scope
 
 The kernel-safe subset is the language's **unsigned** scalar arithmetic —
-`+ - * / %`, the six comparisons and the bitwise trio, plus the conditional — over
+`+ - * / %`, the six comparisons, the bitwise trio, `max`/`min` and `exp`, plus the
+conditional — over
 a scalar or tuple-of-scalars domain ([operators](operators.md) is the set and the
 rules that come with it); the
 codomain is a scalar `i64` or a **tuple** of them — a tuple codomain's body is flattened to

@@ -449,6 +449,13 @@ surface operator lowers to `Apply(<the prelude's binding>, <the operand group>)`
 The built-in module's own source has no prelude (the prelude is what it is), so
 its body keeps the machine operators and the routing terminates; `==`/`!=` are
 unconstrained and `%`/the bitwise trio are `Int`-only, so none of them is routed.
+**The five prefix keywords are not routed either** — `int2float`, `float2int`,
+`max`, `min` and `exp` are the operator itself rather than a spelling of a
+binding, so the checker emits their `TypeOperator` in the author's own body and the
+kernel emitter lowers it there without a frozen callee to read
+([operators](operators.md) §11). `max`/`min` take `+`'s class tie through the same
+`arithmetic_class`, so the contract is shared even though the spelling is not a
+binding.
 The refinement and the domain value are routing-agnostic: the semantics landed
 first under the checker's special case, and the routing then made the operator
 *the binding*.
@@ -674,7 +681,7 @@ and has no `@in`.
   paid for by the conversion being usable where the classes are not yet decided.
 - `float2int`'s partiality is not a check-time fact: in range is a fact about the
   *value*, not about its type, so the interpreter records `OUT_OF_RANGE` and answers
-  the lazy marker while `check_convert` does not check it.
+  the lazy marker while `check_prefix` does not check it.
 - Operator routing is syntactic, never a runtime kind dispatch: the frontend picks
   the operator from the spelling.
   - `a(k)` (adjacent single-expression paren) is the positional slot read; `a(1,)`,

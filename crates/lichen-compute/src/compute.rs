@@ -1906,15 +1906,26 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
+            // **The element class the parameter states is the authority**, read from the
+            // `Buf`'s `.element` slot: the host binds the buffer, so no node of the body
+            // states it. An open element cell states nothing, and the write's own class is
+            // the answer then.
+            let element = parameter_type_ref(module, field)
+                .and_then(|ty| field_type(module, ty, 1))
+                .map(|element| low_type_of_slot(module, element))
+                .filter(|shape| shape.is_known())
+                .map(|shape| scalar_class_of(&shape));
             // The path is the `Buf` field, as the checker resolves it for the
             // source's read; the payload is one step in.
             return match role {
                 LeafRole::Input => {
                     roles.inputs.push(path.to_vec());
+                    roles.input_classes.push(element);
                     Ok(())
                 }
                 LeafRole::Output => {
                     roles.outputs.push(path.to_vec());
+                    roles.output_classes.push(element);
                     Ok(())
                 }
                 LeafRole::Scalar => Err(role_refusal(path, "a buffer outside `.in`/`.out`")),
@@ -2130,7 +2141,10 @@ where
     tally.element_class = Some(class);
     // **One walk of the graph into one SSA body**, so a shared subexpression is emitted
     // once.
-    let body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
+    let mut body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
+    // **The language's instructions become a target's before anything reads the body**: a
+    // transcendental is defined by its expansion, so no backend has to know one.
+    body.expand_transcendentals()?;
 
     Ok(KernelFragment {
         param_shape: kernel_shape(&param_shape),
@@ -2338,8 +2352,9 @@ where
             ));
         }
     }
-    let body_instr =
+    let mut body_instr =
         Lower::lower_index_function(module, &params, cfg_value, fid, &outputs, class, &mut tally)?;
+    body_instr.expand_transcendentals()?;
     if tally.writes != outputs.len() {
         return Err(format!(
             "a parallel index function emitted {} write(s) but its codomain names {} \
@@ -3182,14 +3197,10 @@ where
             (ScalarClass::Float, _) | (_, ScalarClass::Float) => ScalarClass::Float,
             _ => ScalarClass::Int,
         };
-        return match bin {
-            KernelBin::Lt
-            | KernelBin::Gt
-            | KernelBin::Leq
-            | KernelBin::Geq
-            | KernelBin::Eq
-            | KernelBin::Neq => ScalarClass::Int,
-            _ => operands,
+        return if bin.is_comparison() {
+            ScalarClass::Int
+        } else {
+            operands
         };
     }
     node_class(module, node)
@@ -3341,9 +3352,12 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitAnd => KernelBin::BitAnd,
         TypeOperator::BitOr => KernelBin::BitOr,
         TypeOperator::BitXor => KernelBin::BitXor,
-        // The class conversions are unary: they lower to [`KernelInstr::Conv`],
-        // answered before this mapping is reached.
-        TypeOperator::Int2Float | TypeOperator::Float2Int => return None,
+        TypeOperator::Max => KernelBin::Max,
+        TypeOperator::Min => KernelBin::Min,
+        // The class conversions and the exponential are unary: they lower to
+        // [`KernelInstr::Conv`] and [`KernelInstr::Exp`], answered before this mapping is
+        // reached.
+        TypeOperator::Int2Float | TypeOperator::Float2Int | TypeOperator::Exp => return None,
         // A membership test is a refinement's check, not a computation: the
         // checker registers it as an assert beside the body.
         TypeOperator::InDomain => return None,
@@ -3364,6 +3378,18 @@ fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static
     match operator {
         TypeOperator::Int2Float => Some((ScalarClass::Int, ScalarClass::Float, "int2float")),
         TypeOperator::Float2Int => Some((ScalarClass::Float, ScalarClass::Int, "float2int")),
+        _ => None,
+    }
+}
+
+/// The class a unary prefix operator computes in, if the kernel emitter lowers one directly.
+///
+/// # Invariant
+/// `exp` is `Float`'s alone; the two conversions are not here because their own lowering
+/// answers a literal in the language's classes before any instruction is emitted.
+fn unary_class(operator: TypeOperator) -> Option<ScalarClass> {
+    match operator {
+        TypeOperator::Exp => Some(ScalarClass::Float),
         _ => None,
     }
 }

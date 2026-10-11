@@ -3,16 +3,17 @@
 > Status: current — the operator vocabulary a lichen program computes with, the
 > five layers one operator lives in, the three decisions behind it (precedence,
 > the two tokens that are both a bracket and a comparison, and
-> the unsigned reading of `Int`), the two prefix keywords that cross the
-> language's scalar classes, and the editor grammar's own reading of the same
-> set.
-> Points at: `crates/lichen-highlevel/src/ir.rs` (`BinOp`),
+> the unsigned reading of `Int`), the five prefix keywords (the two class
+> crossings and the three scalar operators `max`, `min` and `exp`), and the editor
+> grammar's own reading of the same set.
+> Points at: `crates/lichen-highlevel/src/ir.rs` (`BinOp`, `PrefixOp`),
 > `crates/lichen-highlevel/src/program.rs` (`TypeOperator`: the vocabulary, its
 > codec tags, and its `run`),
-> `crates/lichen-highlevel/src/checker/operators.rs` (the check, and
-> `check_convert`),
-> `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`, `KernelInstr::Conv`),
-> `crates/lichen-compute/src/compute.rs` (`kernel_bin`, `conv_of`,
+> `crates/lichen-highlevel/src/checker/operators.rs` (the checks,
+> `arithmetic_class` and `check_prefix`),
+> `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`, `KernelInstr`),
+> `crates/lichen-kernel-ir/src/unary.rs` (`exp`'s one definition),
+> `crates/lichen-compute/src/compute.rs` (`kernel_bin`, `conv_of`, `unary_class`,
 > `emit_convert`, and the wasm emitter), `crates/lichen-compute-gpu/src/spirv.rs`
 > (the SPIR-V emitter),
 > `tree-sitter-lichen/grammar.js` (the editor grammar, §10), and
@@ -30,6 +31,8 @@ direction of the order comparisons. The set is now:
 | arithmetic | `+` `-` `*` `/` `%` | the operands' class |
 | comparison | `<` `>` `<=` `>=` `==` `!=` | `Int` (`0`/`1`) |
 | bitwise | `&` `\|` `^` | `Int` |
+| scalar | `max a b`, `min a b` (prefix keywords) | the operands' class |
+| transcendental | `exp x` (a prefix keyword) | `Float` |
 | class crossing | `int2float e`, `float2int e` (prefix keywords) | the direction's own class |
 
 There is no `Bool` value in the language, so a comparison yields the `0`/`1`
@@ -43,6 +46,9 @@ conversions — see §5 of
 crosses. See
 [language-spec §3](../language-spec.md#3-semantics) for the semantics as a user
 reads them; this note is about what it took to have them.
+
+The three scalar operators are **prefix keywords**, not punctuation: `max a b`,
+`min a b`, `exp x`. §11 is why, and what they cost.
 
 ## 2. One operator, five layers
 
@@ -64,12 +70,17 @@ classification (`lichen-language-server/src/analysis.rs`) and the
 `TypeOperator::ALL` round-trip the persist codec iterates.
 
 **A prefix keyword operator is the same five layers with a different shape in
-each of the first two.**  `int2float`/`float2int` are not an `ast::BinOp` variant
-at a new rung but an `ast::Expr::Convert` with a `ConvOp`, parsed inside the
-existing unary level (§3), and not a `KernelBin` variant but the
-target-neutral `KernelInstr::Conv { from, to }` — a stack machine cannot tell the
-two directions apart from its operand, so the IR carries the pair and each
-backend answers it alone (§7).
+each of the first two.**  `int2float`/`float2int`, `max`/`min` and `exp` are not an
+`ast::BinOp` variant at a new rung but an `ast::Expr::Prefix` with a `PrefixOp`,
+parsed inside the existing unary level (§3), and each carries its class to a
+`TypeOperator` — a `KernelBin` variant for `max`/`min`, the target-neutral
+`KernelInstr::Exp` for the transcendental, and the target-neutral
+`KernelInstr::Conv { from, to }` for a crossing, because a stack machine cannot
+tell the two directions apart from its operand, so the IR carries the pair and
+each backend answers it alone (§7). One AST form carries all five because the
+arity is the operator's own: a one-operand keyword takes an application
+(`int2float f x` converts `f x`), a two-operand one takes atoms (`max a b` is the
+maximum of `a` and `b`).
 
 The compiler's own error messages carry the vocabulary too: a `KernelBin` outside
 what a target can express is refused **by name** rather than approximated (see
@@ -91,8 +102,11 @@ Loosest to tightest, which is the ladder `parse.rs` builds bottom-up:
 + -               sum
 * / %             product
 @assert e         prefix assert
-int2float e       prefix crossing   (the same unary level)
+int2float e       prefix keywords  (the same unary level)
 float2int e
+exp x
+max a b
+min a b
 application       juxtaposition
 postfix, atoms
 ```
@@ -117,7 +131,10 @@ The two conversions take the assert's level rather than a new rung: a prefix
 keyword takes its operand by juxtaposition and no infix token, so
 `int2float a + 1` converts `a` (tighter than every binary operator) and
 `int2float f x` converts `f x` (looser than application), which is the one
-reading that makes `a + int2float b` need no parentheses.
+reading that makes `a + int2float b` need no parentheses. A **two-operand**
+prefix keyword takes its operands as atoms instead, so `max a + 1 b` is not a
+spelling and `max (a + 1) b` is — the operator's own arity decides the level, and
+`PrefixOp::arity` is the one list both the parser and the checker read.
 
 ## 4. Two tokens, two jobs: `<` and `>`
 
@@ -213,7 +230,8 @@ oversight:
 `int2float e` and `float2int e` are the only place the language's two scalar
 classes meet, and the only expression form whose result type is not its operand's:
 the operand is unified against the direction's **source** and the result is its
-**target** (`check_convert`). A wrong-class operand gets the refusal every other
+**target** (`check_prefix`'s `unify_stated_class`). A wrong-class operand gets the
+refusal every other
 operator issues — the diagnostic names the class it expected, and nothing here
 converts silently. [floating-point §4](floating-point.md) owns why the rest of the
 language does not cross; this section is about what the crossing cost.
@@ -295,13 +313,15 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - **`and` / `or` / `not` keywords.** `&`/`|` over `0`/`1` results *are* them; a
   second spelling of one operation would need its own precedence and its own
   short-circuit rule, and there is no `Bool` type for it to be a rule about.
-- **`min`/`max`, and any operator a target cannot express identically.** The
-  kernel-safe subset is the intersection of what the two backends compute the
+- **A native transcendental, and any operator a target cannot express identically.**
+  The kernel-safe subset is the intersection of what the two backends compute the
   same way; an operator outside it would be a silent divergence between backends,
-  not a feature. Floating point is now in the set (`+ - * /` and the four order
-  comparisons over `Float`, plus §7's two crossings), and
-  [floating-point §5](floating-point.md) is the record of which of those the two
-  backends answer alike.
+  not a feature. Floating point is in the set (`+ - * /` and the four order
+  comparisons over `Float`, plus §7's two crossings) and so are `max`, `min` and
+  `exp` (§11) — but `exp` is in the set as a **definition in the IR** rather than as
+  either target's instruction, and `sqrt`, `ln` and the trigonometric family wait
+  for a definition both targets can run. §11 and
+  [floating-point §6](floating-point.md) are the record.
 
 ## 9. Where the coverage is
 
@@ -317,6 +337,14 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - wasm JIT: `jit_lowers_the_arithmetic_comparison_and_bitwise_operators`
   (`crates/lichen-language/tests/compute.rs`) — one kernel per operator, so each
   is on the lowering path.
+- The prefix scalar operators: `fusion_numbers`
+  (`crates/lichen-language/examples/fusion_numbers.rs`), whose kernel column writes a
+  `Float` consumer with `max` over `d - r` and a `Float` producer with a sum, runs
+  them unfused on the cpu backend, and compares them against the two host forms;
+  `reduction_interface` (same directory) is the same for a marked `max`-shaped
+  reduction. Neither is a test, deliberately: the operator's *numbers* are what the
+  example prints, and the two backends are compared on the device by
+  `arithmetic`/`predicates` above.
 - SPIR-V, on a device: `arithmetic`, `predicates` and `unsigned_reading` in
   `crates/lichen-compute-gpu/tests/gpu_matches_cpu.rs`, each checked against a
   hand-written expectation **and** an independent CPU reading of the IR.
@@ -384,13 +412,14 @@ application of an atom to an `angle_tuple`. That is the tree it produced before
 the comparison operators existed, so nothing regresses; the node is only a
 coarser reading, and an editor grammar's job is colouring.
 
-**And the one thing it does not yet know is §7's two keywords.** `int2float` and
-`float2int` colour as identifiers there, because the rule would be a third
+**And the one thing it does not yet know is §7's and §11's five keywords.**
+`int2float`, `float2int`, `max`, `min` and `exp` colour as identifiers there,
+because the rule would be a third
 `prec(PREC.assertion, seq(keyword, field('value', $.application)))` in a grammar
 whose generated parser is gitignored and needs a `tree-sitter` CLI to build, and
 [tree-sitter-generated-files](tree-sitter-generated-files.md) puts a grammar
 change in the hands of whoever can test it. Nothing about the *language* waits
-for it — the compiler's own lexer, parser and checker have the two operators, the
+for it — the compiler's own lexer, parser and checker have the five operators, the
 language server classifies them as keywords (the exhaustive `TokenKind` match in
 `lichen-language-server/src/analysis.rs` is what forces the arm), and an editor
 that highlights through the server's semantic tokens colours them today.
@@ -399,3 +428,98 @@ Verified with `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` and
 `cargo test -p lichen-language-zed --features grammar-consistency`; see
 [tree-sitter-generated-files](tree-sitter-generated-files.md) for the CLI and
 the generated-files policy.
+
+## 11. The prefix scalar operators: `max`, `min`, `exp`
+
+Three operators were missing for the same reason and landed together.
+
+**`max`/`min`, because the language could not write a maximum.** The only
+spelling was `if a > b then a else b`, which lowers to a comparison, an
+`I32WrapI64` and a `Select` — and a **select-valued write is classed by nothing
+the checker recorded**, so the kernel emitter read the buffer position as `Int`
+and a `Float` buffer was refused at the run
+(`compute.parallel: input buffer 0 holds Float elements, but this kernel reads
+that position as Int`). The reference fusion instance's consumer is a maximum, so
+the kernel column `docs/notes/graph-fusion.md` §9 asked for could not exist.
+
+**`exp`, because the first transcendental has no target-neutral instruction.**
+wasm has none, and SPIR-V's GLSL `Exp` is implementation-defined per vendor, so
+bit-for-bit agreement through native instructions is not achievable. The decision,
+its measurement and its cost are [floating-point §6](floating-point.md)'s; what
+belongs here is the *surface*.
+
+**The surface is a prefix keyword, and the alternative lost on the emitter's own
+terms.** The other candidate was a prelude function the emitter recognizes — the
+shape `+` has, where `1 + 2` routes onto `core`'s `add` and the kernel emitter
+reads `TypeOperator::Add` out of that binding's frozen body. Three things decided
+against it:
+
+- **The spelling is prefix, and a prelude binding is applied, not spelled.** A
+  `core` binding takes its operand group as one array (`add [1, 2]`), so the
+  author's `max a b` would have to be `max [a, b]`, and `exp x` a one-element
+  group. The requested surface is the prefix one, and the conversion keywords
+  already establish exactly that shape.
+- **The binding's body would still need a machine operator to name**, so the
+  routing would buy a keyword *and* a binding for one operator — and the body
+  could not be written in the primitives without becoming the `if`/`Select` shape
+  the operator exists to remove.
+- **The class tie is the checker's either way.** `+`'s routing exists to carry the
+  polymorphism contract (`in_ num`), and `arithmetic_class` *is* that contract
+  (below). Routing would be a second spelling of the same tie, not a second
+  mechanism.
+
+What the choice costs, stated plainly:
+
+- **A prefix keyword is reserved, so `max`, `min` and `exp` are no longer names a
+  program can bind.** `int2float`/`float2int` already were; the prelude's `add`
+  and `mul` are not, and are shadowable. That asymmetry is the price of the
+  spelling.
+- **The kernel emitter reaches no binding, so it lowers the operator node in the
+  author's own body.** That is the property the task wanted: `compute/body.rs`
+  answers `TypeOperator::Max`/`Min` through `kernel_bin` and `TypeOperator::Exp`
+  through `unary_class`, and neither inlines a lichen-level body that would
+  collapse into `Select`.
+- **`ln` is not here.** The same mechanism would cover it only if the primitive set
+  could reduce the argument's range, which needs `floor`, a shift or a bitcast; none
+  exists. `ln` stays symbolic, in the fusion engine's inversion table
+  ([floating-point §6](floating-point.md)).
+
+### The rule the two share: `arithmetic_class`
+
+`max`/`min` are the arithmetic tie, not comparisons. `Checker::arithmetic_class`
+is the one function `+ - * /` and `max`/`min` both call: a concrete `Float` operand
+selects `Float` for the whole operation, two stated operands must agree, and two
+unstated ones share one open class gated by the same `@in Num` refinement. So
+`max 1 1.5` is refused by the tie that refuses `1 + 1.5`, the result of
+`max a b` is a value of the operands' class rather than the `0`/`1` a comparison
+yields, and a `Float` maximum is emitted as `Float`.
+
+**The reading of a `NaN` operand is the language's, not a target's.** `max` lowers
+to a comparison and a `select` — `if a > b then a else b` — in **both** backends,
+because wasm's `f32.max` answers NaN where SPIR-V's `OpFMax` answers the other
+operand. The two native forms are therefore not usable: a program's numbers would
+depend on which backend ran it. `KernelBin::Max`/`Min` state the operator; each
+emitter states the same three instructions.
+
+`exp` is `Float`'s alone and pins whatever operand it is given: the instruction has
+no other class to be, so an undecided operand has exactly one possible answer. The
+conversions deliberately do **not** pin (a unify binds every cell the operand's
+class shares, and an undecided one may be shared with a position the author did not
+mean to commit) — `exp` can, because there is no second reading to protect.
+
+Two defects in the emission path surfaced while making the kernel column work, and
+both are `lichen-compute`'s rather than the operator's:
+
+- **The class of an emitted value was filed under the wrong node.** `Lower::emit`
+  recorded a value's class against "the node being defined", which an operand's
+  own emission overwrites: `compute.read ((…)(.at s(0) - 1)) + s(1)` filed the
+  `+`'s class under the read's node, so the operation was emitted `Int` and the two
+  classes met in one instruction. The map is now keyed by the **value** the
+  instruction produced, which is a fact of the instruction and cannot be
+  overwritten.
+- **A buffer's element class came from the body rather than from the parameter.**
+  `Positions::element_class` was "the first write's class, a fallback", so a
+  `Float` buffer whose write was a `select` (or a `@loop` fold) was read as `Int`.
+  `KernelRoles` now carries the class each `Buf T` **states**, and a stated one is
+  the authority; an open element cell still falls back to the write's class, which
+  is what the older spelling means. `compute-buffer-wrapper.md` has the model.

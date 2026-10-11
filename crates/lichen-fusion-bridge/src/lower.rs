@@ -116,7 +116,8 @@ impl Walk<'_> {
     /// # Invariant
     /// One arm per instruction, so an instruction a later compiler adds cannot be read as
     /// something else: the match is exhaustive, and every arm outside the arithmetic subset
-    /// names its own refusal. No arm builds `Expr::Unary`; see docs/notes/graph-fusion.md §3.
+    /// names its own refusal. No arm builds `Expr::Unary`, which is why a transcendental is
+    /// [`BridgeRefusal::Transcendental`] rather than an expression.
     fn instruction(
         &mut self,
         id: ValueId,
@@ -140,6 +141,7 @@ impl Walk<'_> {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
+            KernelInstr::Exp => Err(BridgeRefusal::Transcendental),
             KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),

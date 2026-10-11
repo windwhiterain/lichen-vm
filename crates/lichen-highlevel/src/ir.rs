@@ -84,25 +84,34 @@ impl From<BinOp> for TypeOperator {
     }
 }
 
-/// A prefix **class conversion**: `int2float e` and `float2int e`. See
-/// `docs/notes/floating-point.md` §4.2.
+/// A prefix **keyword operator**: its `arity` operands follow it by juxtaposition.
 ///
 /// # Invariant
-/// These are the only place `Int` and `Float` meet: every other operator
-/// computes within one class. `float2int` has no answer for a `NaN` or a
-/// magnitude past the machine integer ([`crate::program::OUT_OF_RANGE`]).
+/// The conversions are the only place `Int` and `Float` meet: every other operator
+/// computes within one class. `float2int` has no answer for a `NaN` or a magnitude past
+/// the machine integer ([`crate::program::OUT_OF_RANGE`]); `exp` is `Float`'s alone.
+/// See `docs/notes/operators.md` §2, §11.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ConvOp {
+pub enum PrefixOp {
     Int2Float,
     Float2Int,
+    /// `max a b` — the larger of two values, in the operands' class.
+    Max,
+    /// `min a b` — the smaller of two values, in the operands' class.
+    Min,
+    /// `exp x` — the exponential of one `Float`.
+    Exp,
 }
 
-/// The [`TypeOperator`] each [`ConvOp`] runs, as [`BinOp`] does.
-impl From<ConvOp> for TypeOperator {
-    fn from(operator: ConvOp) -> Self {
+/// The [`TypeOperator`] each [`PrefixOp`] runs, as [`BinOp`] does.
+impl From<PrefixOp> for TypeOperator {
+    fn from(operator: PrefixOp) -> Self {
         match operator {
-            ConvOp::Int2Float => TypeOperator::Int2Float,
-            ConvOp::Float2Int => TypeOperator::Float2Int,
+            PrefixOp::Int2Float => TypeOperator::Int2Float,
+            PrefixOp::Float2Int => TypeOperator::Float2Int,
+            PrefixOp::Max => TypeOperator::Max,
+            PrefixOp::Min => TypeOperator::Min,
+            PrefixOp::Exp => TypeOperator::Exp,
         }
     }
 }
@@ -337,13 +346,17 @@ pub enum ExprKind<L> {
     /// undecided is pending, not failed, and the apply clone re-checks the
     /// instantiated condition per call.
     Assert { condition: ExprId },
-    /// `int2float e` / `float2int e` — a **class conversion**.
+    /// `int2float e`, `float2int e`, `max a b`, `min a b`, `exp x` — a **prefix keyword
+    /// operator** over the children arena.
     ///
     /// # Invariant
-    /// The checker pins the operand to the direction's source class and gives the
-    /// expression the target class, so `int2float x` on a float `x` is a check
-    /// error rather than a no-op.
-    Convert { operator: ConvOp, value: ExprId },
+    /// The checker pins the operand list to the operator's own arity and classes, so
+    /// `int2float x` on a float `x` and `exp` on an `Int` are check errors rather than
+    /// no-ops.
+    Prefix {
+        operator: PrefixOp,
+        operands: ChildRange,
+    },
     /// `{ array, index }` — an element read `a[i]`, the container *pinned* to an
     /// array type.
     ///
@@ -536,7 +549,6 @@ impl<L> ExprKind<L> {
                 push(*value);
             }
             ExprKind::Record { value, .. } => push(*value),
-            ExprKind::Convert { value, .. } => push(*value),
             ExprKind::Assert { condition } => push(*condition),
             ExprKind::Index { array, index } => {
                 push(*array);
@@ -582,7 +594,10 @@ impl<L> ExprKind<L> {
             | ExprKind::Table(range)
             | ExprKind::ShallowArray { range, .. }
             | ExprKind::TypeStruct { fields: range, .. }
-            | ExprKind::NativeCall { args: range, .. } => {
+            | ExprKind::NativeCall { args: range, .. }
+            | ExprKind::Prefix {
+                operands: range, ..
+            } => {
                 out.extend_from_slice(&ir.children[range.start as usize..range.end as usize]);
             }
         }
@@ -610,7 +625,8 @@ impl<L> ExprKind<L> {
             | ExprKind::Set(_)
             | ExprKind::Table(_)
             | ExprKind::ShallowArray { .. }
-            | ExprKind::NativeCall { .. } => {}
+            | ExprKind::NativeCall { .. }
+            | ExprKind::Prefix { .. } => {}
             ExprKind::Function {
                 parameter,
                 parameter_type,
@@ -647,7 +663,6 @@ impl<L> ExprKind<L> {
             }
             ExprKind::Record { value, .. } => fix(value),
             ExprKind::Assert { condition } => fix(condition),
-            ExprKind::Convert { value, .. } => fix(value),
             ExprKind::Index { array, index } => {
                 fix(array);
                 fix(index);

@@ -457,3 +457,56 @@ that).
 
 The requirement this all rests on, one sentence: **a crossing is representable on
 both targets, and a mixture a conversion cannot serve is refused by name.**
+
+## 6. The exponential
+
+`exp` is the first transcendental and `Float`'s alone. It is the one operator whose
+cross-backend agreement is a **decision** rather than a consequence of the IR: no
+target has an `exp` the two compute alike. wasm has none at all, and SPIR-V's GLSL
+`Exp` is *implementation-defined per vendor* — the specification fixes no accuracy,
+so two devices, or a device and the CPU, may disagree in the last bits or in more
+than the last bits. Bit-for-bit agreement through native instructions is therefore
+not achievable, and the two honest options were a shared polynomial in the
+primitives both backends already have, or a native instruction with a documented
+relaxation of the bit-exact rule.
+
+**The decision is the shared definition, and it lives in the IR.** `KernelInstr::Exp`
+names the operator; `crates/lichen-kernel-ir/src/unary.rs` defines it as a
+straight-line sequence of primitive instructions both backends already emit — the
+argument clamped at `-128`, a degree-10 Taylor polynomial over `x / 2^7`, and seven
+squarings. `KernelBody::expand_transcendentals` inlines that sequence into the body
+`lichen-compute` registers, so a backend never meets an `Exp`: both targets run the
+**same primitive IR**, which is what makes their answers the same bits rather than
+merely the same function. A hand-written body that still holds one is refused by
+name by each emitter (`UnexpandedTranscendental` in SPIR-V, and the wasm lowering's
+own sentence), so the invariant is loud rather than silent.
+
+Why not the alternatives:
+
+- **A native instruction with a documented relaxation.** It would move the
+  agreement outside the IR, so a program's numbers would depend on which device ran
+  it and no test could pin them. Native `Exp` also cannot be compared against a CPU
+  path at all, which is the only reason `exp` is allowed to exist.
+- **A `KernelUn` enum.** With one tractable operator it would be a one-variant enum;
+  `KernelInstr` names `Exp` directly instead. **`ln` did not come free**: the same
+  mechanism covers it only if the argument's range can be reduced, and that needs
+  `floor`, a shift or a bitcast — the primitive set has none of the three, so `ln`
+  stays symbolic, in `lichen_fusion::UnaryOp::Ln`'s inversion table, where it
+  already was, and no kernel computes it.
+
+**What the definition costs, measured.** Over `[-87, 88]`, where the answer is a
+normal `f32`, the worst relative error against the correctly rounded value is
+**2.4e-5**, and the seven squarings set it: each doubles the polynomial's relative
+error, so more halvings buy a smaller argument and lose more to the squarings than
+they gain in the polynomial, and fewer need a higher degree over a wider argument.
+Past degree ten the measured error stops improving. Below `-87.3` the answer is
+subnormal, where the class's own grid is coarser than any implementation's error;
+the definition is within one ulp of the correctly rounded class value across that
+whole tail. `NaN`, `±inf` and `0` answer correctly by construction — the clamp is a
+`select` on a comparison, so a NaN follows the comparison's false arm and an
+infinity overflows through the squarings.
+
+**The interpreter reads the same definition.** `TypeOperator::run` answers
+`lichen_kernel_ir::exp_value`, the same sequence evaluated in Rust, so an ordinary
+program and a kernel agree. That is the reason the definition lives in the IR crate
+and not in either emitter: a third evaluation site is the one that would drift.

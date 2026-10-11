@@ -133,6 +133,16 @@ into an output `Buf`.
   `KernelFragment::inputs`, counted by the emitter as it emits the read positions
   and hashed by `fragment_digest`; it is a *max*, not a tally, because the read
   positions are a sparse space.
+- **A buffer's element class is the class its parameter states.** `KernelRoles`
+  carries one entry per input and one per output, read from the `Buf T` the
+  parameter names, and the emitter reads it there rather than off the classes the
+  body happens to compute in. That is not a convenience: a `Float` buffer whose
+  write is a `select`, or a `@loop` fold, has no term the class channel can see as
+  `Float`, so reading the class off the body declared the position `Int` and the run
+  then refused the `Float` buffer it was handed. A parameter that states none — the
+  open element cell of the older `(compute.Buf _)` spelling — still falls back to
+  the write's own class, so that spelling keeps working and keeps meaning *the
+  class the body computes in*.
 - **One `Buf` per output field**, and the run's result is the parameter's `.out`
   structure (the named form of "several outputs are the fields, not a tuple of
   buffers"). The ordinal that reaches the `write` import is the write's emission

@@ -200,10 +200,10 @@ five findings, and what this one did with each:
   projection by name (see [floating-point](floating-point.md) §5.1). An element
   function that must be `Float` has to carry a float operand of its own.
 
-**One measurement is still open, and the blocker is now named exactly.** A mark reaches
-the fragment only where the emitter *lowers* its anchor: on the dispatched path the
-kernel compiler walks the value the checker's definition pass already decided, so an
-expression whose value that pass decided is never lowered and its mark never publishes.
+**One measurement is still open for a literal count, and closed for a runtime one.**
+A mark reaches the fragment only where the emitter *lowers* its anchor: on the dispatched
+path the kernel compiler walks the value the checker's definition pass already decided, so
+an expression whose value that pass decided is never lowered and its mark never publishes.
 In the spike's program that is the reduction's `identity`
 (`fold (6, 0.0 ~ "identity")`). The refusal is named
 (`RoleNotMarked { interface, role }`).
@@ -238,8 +238,9 @@ the checker leaves the loop *undecided* — when the entering state is a run-tim
 `value_of_node` nothing to peel. Instrumenting `Lower::apply` and `Lower::lower_loop` and
 running both programs: `a_kernel_loop_nest_carries_a_runtime_state`
 (`crates/lichen-language/tests/compute.rs`, whose seed is a buffer read) reaches each
-**twice**, while `reduction_interface` (whose seed is the literal `0.0`) reaches each
-**zero times**. So the constraint is exactly: *the emitter converts a kernel body's
+**twice**, while `reduction_interface` (whose seed was the literal `0.0` when this was
+measured — it is the runtime extent now, and reaches each twice for that reason) reached
+each **zero times**. So the constraint is exactly: *the emitter converts a kernel body's
 `@loop` only if the definition pass has not already run it.*
 
 **Why the obvious patch is the wrong one.** Preferring the operation over the pair in
@@ -257,6 +258,19 @@ compilation hook the `Ctx` boundary does not expose today (the plugin's
 `NativeOp::build` has the argument's *value node*, not `&mut Module`) — so it is recorded
 here rather than attempted. Until it lands, the fix is in the loop conversion and
 *not* in the mark channel, exactly as this subsection first said.
+
+**And the discriminator is enough to get out of it from the program side, which is what
+`reduction_interface` now does.** A fold whose count is a **runtime** value — the buffer's
+own length, `fold (k.n, 0.0 ~ "identity")` — is exactly the "the definition pass leaves
+the loop undecided" case this subsection measured: the entering state is a runtime scalar,
+so `loop_iteration` reports `Undecided`, `apply_loop` writes no value, the emitter reaches
+`Lower::apply`, `lower_loop` runs, and the marked seed is lowered. The printed run shows
+`identity` published for both the producer and the consumer and the producer's declared
+reduction as `combine + identity 0`, where the literal count published `combine` alone and
+the two-slot reduction was refused. `fusion_numbers`'s `report_marks` producer keeps the
+literal seed and still shows the refusal, so the two halves are visible side by side in
+the examples. What is *not* closed is the literal case: the scheduling change above is
+still what would close it, and nothing here patches around it.
 
 The chain the spike *does* demonstrate end to end: a kernel's claim is read from the
 registry the compile filled and its roles from the fragment beside it
@@ -569,12 +583,12 @@ about shrinks exactly where fusion fires.
 | symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; `crates/lichen-fusion-bridge` carries a *marked subexpression* of a `KernelFragment` to it, for the arithmetic subset and the three slots a projection reads |
 | a **numeric** validation of the engine over real data | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance (producer `sum`, `g = d - r`, consumer `max`) derives, and the emitted rolling update agrees with the two-pass form over fixed seeds and lengths; the per-element identity is checked numerically beside it |
 | buffer ingress for the fused chain (roadmap axis A) | **in** (`compute.buffer`) | a program array as a kernel input, so a chain has data the device did not itself compute |
-| a **kernel** column for the numeric comparison | **missing** | the reference instance's consumer is a maximum, and the language cannot write one: there is no `max` builtin and the kernel IR has no `Max` instruction, while an `if`-shaped fold writes through an `Int` select — so a `Float` buffer is read as `Int` (`compute.parallel` names that). The comparison is therefore the two-pass form against the emitted rolling update rather than a kernel against it |
-| the identity's mark on a `@loop` seed | **missing** (parallel work) | §3's open measurement, measured here: a producer whose fold seeds from a marked literal publishes `combine` and not `identity`, and the two-slot reduction is refused by name |
+| a **kernel** column for the numeric comparison | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance's consumer is a maximum, and the language can write one now: `max a b` lowers to `KernelBin::Max` in both backends and the fusion bridge maps it to `BinaryOp::Max`. The example writes the producer (a sum) and the consumer (a `max` over `d - r`) as `compute.parallel` kernels over `compute.buffer` inputs, runs them unfused on the cpu backend, and prints all three columns — the two host forms and the kernels — with a class-appropriate tolerance. Two emission defects had to fall first: a value's class was filed under the wrong node, and a buffer's element class came from the body rather than from the parameter ([operators](operators.md) §11, [compute-buffer-wrapper](compute-buffer-wrapper.md)) |
+| the identity's mark on a `@loop` seed | **in** (`crates/lichen-language/examples/reduction_interface.rs`) | §3's open measurement, **resolved**: a fold that seeds from a *literal* count is decided by the definition pass before the emitter reaches the loop, so the seed's mark is never lowered; a fold that seeds from the buffer's **runtime** length (`fold (k.n, …)`, with the input arriving through `compute.buffer`) stays undecided through that pass, the emitter reaches the loop, and the marked seed is lowered — `reduction_interface` prints `identity` published for both kernels and `combine + identity 0` for the producer's declared reduction |
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
-| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement: the definition pass runs a convertible `@loop` before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered |
+| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 

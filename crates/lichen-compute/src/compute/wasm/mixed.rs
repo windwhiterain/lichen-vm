@@ -115,18 +115,19 @@ fn check(
             as_operand_class(class_of(&args[0]), class, at)?;
             as_operand_class(class_of(&args[1]), class, at)?;
             // A comparison yields the language's `0`/`1` scalar, in either class.
-            Ok(match operator {
-                KernelBin::Lt
-                | KernelBin::Gt
-                | KernelBin::Leq
-                | KernelBin::Geq
-                | KernelBin::Eq
-                | KernelBin::Neq => OperandClass::Condition,
-                _ => OperandClass::Scalar(class),
+            Ok(if operator.is_comparison() {
+                OperandClass::Condition
+            } else {
+                OperandClass::Scalar(class)
             })
         }
         // The narrowing a `0`/`1` scalar takes to become a condition.
         KernelInstr::I32WrapI64 => Ok(OperandClass::Condition),
+        // The exponential is `Float`'s own instruction, so it states its class.
+        KernelInstr::Exp => {
+            as_operand_class(class_of(&args[0]), ScalarClass::Float, at)?;
+            Ok(OperandClass::Scalar(ScalarClass::Float))
+        }
         // A `select`'s arms are the value it yields, so they are one class.
         KernelInstr::Select => {
             let arms = arms_class(class_of(&args[0]), class_of(&args[1]));

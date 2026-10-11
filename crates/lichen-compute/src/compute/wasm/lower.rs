@@ -304,6 +304,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         // The arms are the value, so either one's type is the result's.
         KernelInstr::Select => operands.first().copied(),
         KernelInstr::Conv { to, .. } => Some(super::assemble::value_type(to)),
+        KernelInstr::Exp => Some(Type::F32),
         KernelInstr::CallKernel(callee) => {
             let at = *context.index.get(&callee)?;
             let target = context.callees.get(at as usize)?;
@@ -341,6 +342,21 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             };
             let value = walk.add(operator, &[], &[ty]);
             walk.values.insert(instr, (value, ty));
+        }
+        KernelInstr::Bin(class, operator @ (KernelBin::Max | KernelBin::Min)) => {
+            // **The language's reading, not wasm's `f32.max`**: the two targets' native
+            // forms answer a NaN operand differently.
+            let (lhs, _) = operands[0];
+            let (rhs, _) = operands[1];
+            let comparison = match operator {
+                KernelBin::Max => KernelBin::Gt,
+                _ => KernelBin::Lt,
+            };
+            let native = binary_operator(class, comparison)?;
+            let condition = walk.add(native, &[lhs, rhs], &[Type::I32]);
+            let result = super::assemble::value_type(class);
+            let value = walk.add(Operator::Select, &[lhs, rhs, condition], &[result]);
+            walk.values.insert(instr, (value, result));
         }
         KernelInstr::Bin(class, operator) => {
             let native = binary_operator(class, operator)?;
@@ -403,6 +419,15 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                     ));
                 }
             }
+        }
+        KernelInstr::Exp => {
+            return Err(
+                "compute.wasm: the exponential has no wasm instruction and is defined by its \
+                 expansion into the primitive operators, which `Lower` applies before a fragment \
+                 is registered — a body that still holds one was not built by it \
+                 (`docs/notes/floating-point.md` §6)"
+                    .into(),
+            );
         }
         KernelInstr::CallKernel(callee) => {
             let arity = callee_arity(walk.context, callee)?;
@@ -565,6 +590,8 @@ fn callee_arity(context: &ModuleCtx<'_>, callee: KernelId) -> Result<usize, Stri
 /// # Invariant
 /// `Rem` and the bitwise trio have no float form, and the refusal is here rather than at the
 /// site: `refuse_mixed_classes` rejects a float operand for them before any module exists.
+/// `Max`/`Min` have no single operator in either class — they are a comparison and a select —
+/// so they are lowered before this table is read.
 fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, String> {
     use KernelBin as Bin;
     use ScalarClass::{Float, Int};
@@ -595,6 +622,13 @@ fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, 
         (Float, Bin::Geq) => Operator::F32Ge,
         (Float, Bin::Eq) => Operator::F32Eq,
         (Float, Bin::Neq) => Operator::F32Ne,
+        (_, Bin::Max) | (_, Bin::Min) => {
+            return Err(
+                "compute.wasm: `max`/`min` is not one wasm operator — it is a comparison and a \
+                 select, which the instruction walk emits before this table is read"
+                    .into(),
+            );
+        }
         (Float, operator) => {
             return Err(format!(
                 "compute.wasm: {operator:?} has no floating-point form — the bitwise operators and \
@@ -608,13 +642,5 @@ fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, 
 /// Whether a binary operator yields the language's `0`/`1` scalar rather than a
 /// value of its operand class.
 fn is_comparison(operator: KernelBin) -> bool {
-    matches!(
-        operator,
-        KernelBin::Lt
-            | KernelBin::Gt
-            | KernelBin::Leq
-            | KernelBin::Geq
-            | KernelBin::Eq
-            | KernelBin::Neq
-    )
+    operator.is_comparison()
 }

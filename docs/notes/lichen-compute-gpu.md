@@ -646,6 +646,26 @@ parallelism. See [attributes.md](attributes.md#nothing-consumes-it-yet).
 `IntWidth` rule above states: a buffer index needs no capability at all, and only
 the data width does.
 
+## The two scalar operators, and the one instruction that is expanded
+
+**`Max`/`Min` are a comparison and a `select` here, not `OpFMax`/`OpFMin`.** The
+native instructions would be one opcode instead of two, and they are deliberately
+not used: `OpFMax`'s reading of a NaN operand is not wasm's `f32.max`'s, so a
+program's maximum would depend on which backend ran it. The emitter states the
+language's reading instead — `OpFGreaterThan` (or `OpUGreaterThan` over `Int`)
+followed by `OpSelect`, `if a > b then a else b` — which is the same sequence the
+wasm backend emits, so the two agree on every input including a NaN. The
+instruction's result type is the operand class's own, so an `Int` maximum in a
+float module stays an `OpTypeInt` value.
+
+**`Exp` never reaches this emitter.** The exponential is defined in the IR as a
+fixed sequence of primitive instructions and `KernelBody::expand_transcendentals`
+inlines it before a fragment is registered, so SPIR-V's implementation-defined GLSL
+`Exp` is not in the picture and the CPU path's numbers are the device's. A body
+handed to this emitter with an `Exp` still in it is refused by name
+(`UnexpandedTranscendental`); the decision and its measured cost are
+[floating-point §6](floating-point.md#6-the-exponential).
+
 ## Not yet
 
 Named rather than implied, because each is a decision rather than a gap:
