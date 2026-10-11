@@ -9,8 +9,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_compute_gpu::LOCAL_SIZE_X;
+use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
@@ -1393,12 +1393,27 @@ fn a_two_step_loop_carries_by_identity() {
         panic!("the entry branches");
     };
     assert_eq!(entry_edge.target, header);
-    assert_eq!(entry_edge.args, vec![zero, zero], "the entry seeds both params");
-    let Terminator::CondBr { if_true, if_false, .. } = &body.blocks[header].terminator else {
+    assert_eq!(
+        entry_edge.args,
+        vec![zero, zero],
+        "the entry seeds both params"
+    );
+    let Terminator::CondBr {
+        if_true, if_false, ..
+    } = &body.blocks[header].terminator
+    else {
         panic!("the header tests");
     };
-    assert_eq!(if_true.args, vec![counter, value], "the body edge passes the params through");
-    assert_eq!(if_false.args, vec![value], "the exit reads the header's value");
+    assert_eq!(
+        if_true.args,
+        vec![counter, value],
+        "the body edge passes the params through"
+    );
+    assert_eq!(
+        if_false.args,
+        vec![value],
+        "the exit reads the header's value"
+    );
     let Terminator::Br(back) = &body.blocks[step].terminator else {
         panic!("the step loops");
     };
@@ -1439,7 +1454,10 @@ fn the_transforms_two_step_loop_carries_by_identity() {
     let merged = 3;
     let params = body.blocks[header].params.clone();
     assert_eq!(params.len(), 3, "the header carries three values");
-    let Terminator::CondBr { if_true, if_false, .. } = &body.blocks[header].terminator else {
+    let Terminator::CondBr {
+        if_true, if_false, ..
+    } = &body.blocks[header].terminator
+    else {
         panic!("the header tests");
     };
     assert_eq!(if_true.target, step);

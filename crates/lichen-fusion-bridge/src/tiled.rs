@@ -233,8 +233,7 @@ impl Folding {
         );
         let identity = builder.constant(entry, self.class, self.identity.bits());
         let zero = builder.constant(entry, ScalarClass::Int, 0);
-        let folded = Loop {
-            builder,
+        let folded = Fold {
             stop,
             start: zero,
             identity,
@@ -243,13 +242,12 @@ impl Folding {
             element: self.element,
             operator: self.combine,
         }
-        .run();
-        let mut builder = folded.builder;
+        .run(&mut builder);
         let position = builder.constant(builder.body.entry, ScalarClass::Int, 0);
         builder.push(
             builder.current(),
             KernelInstr::BufferWriteCall(self.class),
-            vec![position, lane, folded.result],
+            vec![position, lane, folded],
         );
         let dummy = builder.constant(builder.body.entry, self.class, self.identity.bits());
         builder.finish(vec![dummy]);
@@ -284,8 +282,7 @@ impl Folding {
         let steps = count / u64::from(lane_width);
         let stop = builder.constant(entry, ScalarClass::Int, steps as i64);
         let lane_slot = builder.constant(entry, ScalarClass::Int, 0);
-        let folded = Loop {
-            builder,
+        let folded = Fold {
             stop,
             start: lane,
             identity,
@@ -294,17 +291,15 @@ impl Folding {
             element: self.element,
             operator: self.combine,
         }
-        .run();
-        let mut builder = folded.builder;
+        .run(&mut builder);
         let ordinal = builder.constant(builder.body.entry, ScalarClass::Int, slice as i64);
         let write = builder.push(
             builder.current(),
             KernelInstr::SliceWriteCall(self.class),
-            vec![ordinal, slot, folded.result],
+            vec![ordinal, slot, folded],
         );
         let identity = builder.constant(builder.body.entry, self.class, self.identity.bits());
-        let reading = Loop {
-            builder,
+        let reading = Fold {
             stop: width,
             start: lane_slot,
             identity,
@@ -313,10 +308,10 @@ impl Folding {
             element: Element::Slice {
                 ordinal: slice,
                 observed: write,
-            },            operator: self.combine,
+            },
+            operator: self.combine,
         }
-        .run();
-        let mut builder = reading.builder;
+        .run(&mut builder);
         let first = builder
             .slice_reads
             .first()
@@ -327,7 +322,7 @@ impl Folding {
         builder.push(
             builder.current(),
             KernelInstr::BufferWriteCall(self.class),
-            vec![position, lane, folded.result],
+            vec![position, lane, reading],
         );
         let dummy = builder.constant(builder.body.entry, self.class, self.identity.bits());
         builder.finish(vec![dummy]);
@@ -363,8 +358,7 @@ impl Tiled {
 }
 
 /// One fold as a body is built: how many steps it takes, and where each step reads.
-struct Loop {
-    builder: Builder,
+struct Fold {
     /// The value the loop leaves at: the number of steps one lane takes.
     stop: ValueId,
     /// The address the first step reads.
@@ -384,15 +378,9 @@ struct Loop {
     operator: KernelBin,
 }
 
-/// A loop's own carried values and the block it emitted into.
-struct Folded {
-    builder: Builder,
-    /// The value the loop merged its accumulator as.
-    result: ValueId,
-}
-
-impl Loop {
-    /// Emit the loop, leaving the builder emitting into the block it exits to.
+impl Fold {
+    /// Emit the fold, leaving the builder emitting into the block it exits to, and answer the
+    /// value it accumulated.
     ///
     /// # Invariant
     /// The loop is the body's structured control flow: the header is the test, the step is the
@@ -400,18 +388,11 @@ impl Loop {
     /// block parameter and survives the backedge. It carries a **step count and a slot**: the count
     /// is what the bound compares, and the slot is where the element is read, so a fold over a
     /// strided buffer and a fold over a slice's slots are the same loop and a lane's slot advances
-    /// by its stride while the count advances by one.
-    fn run(self) -> Folded {
-        let Loop {
-            mut builder,
-            stop,
-            start,
-            identity,
-            stride,
-            modulo,
-            element,
-            operator,
-        } = self;
+    /// by its stride while the count advances by one. The answer is **returned, not left on the
+    /// builder**: the emitter binds a block's parameters per block, so a value read back out of the
+    /// builder after a later block is emitted is that later block's, and a body with two folds would
+    /// otherwise hand the first fold's answer to both of its readers.
+    fn run(&self, builder: &mut Builder) -> ValueId {
         let from = builder.current();
         // **The blocks are allocated in the order a loop body is walked**: the header, its step,
         // and the merge it exits to last, which is the order `Lower`'s own nests give the emitter.
@@ -432,19 +413,19 @@ impl Loop {
         // and the slot it reads is its own, so a count that began at `start` would take
         // `stop - start` steps and a strided fold would read past its own space.
         let zero = builder.constant(builder.body.entry, ScalarClass::Int, 0);
-        // **The loop's own instructions land in its header**: the slot, the read and the test all
-        // read the header's parameters, so the builder has to be emitting into it and not into the
-        // block the loop was entered from.
+        // **The loop's own instructions land in its header**: the test reads the header's
+        // parameters, so the builder has to be emitting into it and not into the block the loop was
+        // entered from.
         builder.enter(header);
-        // **The element is read in the header**: a slice read carries the barrier that separates
-        // it from the write, and a read in the loop's **step** block is one no barrier can serve —
-        // the step is a block a lane skips when its own bound is reached, so a barrier under it is
-        // in divergent control flow, which is invalid rather than imprecise. The step folds this
-        // value directly: the header dominates it, and a value carried only to be folded again is
-        // a second name for the same read. A slice is addressed **through its own count**, because
+        // **The element is read in the header**: a slice read carries the barrier that separates it
+        // from the write, and a read in the loop's **step** block is one no barrier can serve — the
+        // step is a block a lane skips when its own bound is reached, so a barrier under it is in
+        // divergent control flow, which is invalid rather than imprecise. The step folds this value
+        // directly: the header dominates it, and a value carried only to be folded again is a
+        // second name for the same read. A slice is addressed **through its own count**, because
         // every lane must read every slot and `KernelFragment::barrier_scan` bounds an access by
         // the length the emitter declares.
-        let address = match modulo {
+        let address = match self.modulo {
             Some(modulo) => {
                 let modulo = builder.constant(builder.body.entry, ScalarClass::Int, modulo as i64);
                 builder.push(
@@ -455,17 +436,17 @@ impl Loop {
             }
             None => slot,
         };
-        let read = builder.element_at(element, address);
+        let read = builder.element_at(self.element, address);
         let reached = builder.push(
             header,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
-            vec![counter, stop],
+            vec![counter, self.stop],
         );
         builder.body.set_terminator(
             from,
             Terminator::Br(Br {
                 target: header,
-                args: vec![zero, identity, start],
+                args: vec![zero, self.identity, self.start],
             }),
         );
         builder.body.set_terminator(
@@ -485,7 +466,7 @@ impl Loop {
         builder.enter(step);
         let combined = builder.push(
             step,
-            KernelInstr::Bin(builder.class, operator),
+            KernelInstr::Bin(builder.class, self.operator),
             vec![current, read],
         );
         let one = builder.constant(step, ScalarClass::Int, 1);
@@ -494,13 +475,13 @@ impl Loop {
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![next, one],
         );
-        let stride = builder.constant(step, ScalarClass::Int, stride as i64);
+        let stride = builder.constant(step, ScalarClass::Int, self.stride as i64);
         let moved = builder.push(
             step,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             vec![carried_slot, stride],
         );
-        let moved = match modulo {
+        let moved = match self.modulo {
             Some(modulo) => {
                 let modulo = builder.constant(step, ScalarClass::Int, modulo as i64);
                 builder.push(
@@ -510,7 +491,8 @@ impl Loop {
                 )
             }
             None => moved,
-        };        builder.body.set_terminator(
+        };
+        builder.body.set_terminator(
             step,
             Terminator::Br(Br {
                 target: header,
@@ -531,10 +513,7 @@ impl Loop {
             }),
         );
         builder.enter(after);
-        Folded {
-            builder,
-            result: left,
-        }
+        left
     }
 }
 /// A body being built, with the block its instructions land in and what it has emitted.
@@ -578,7 +557,8 @@ impl Builder {
     /// The terminator of a body whose walk has ended.
     fn finish(&mut self, values: Vec<ValueId>) {
         let block = self.block;
-        self.body.set_terminator(block, Terminator::Return { values });
+        self.body
+            .set_terminator(block, Terminator::Return { values });
     }
 
     fn push(&mut self, block: usize, op: KernelInstr, args: Vec<ValueId>) -> ValueId {

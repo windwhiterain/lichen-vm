@@ -133,7 +133,11 @@ fn a_hand_built_loop_carries_its_accumulator_on_the_device() {
     let resident = context
         .run(&LaunchSet::single(&fragment), &[], 64)
         .unwrap_or_else(|refusal| panic!("a hand-built loop is dispatched: {refusal}"));
-    let answer = words(context.fetch(resident[0], 1).expect("the answer comes back"));
+    let answer = words(
+        context
+            .fetch(resident[0], 1)
+            .expect("the answer comes back"),
+    );
     context.release(resident[0]);
     assert_eq!(
         answer[0], 3,
@@ -191,7 +195,11 @@ fn a_two_step_folded_loop_carries_on_the_device() {
             2,
         )
         .unwrap_or_else(|refusal| panic!("a folded loop is dispatched: {refusal}"));
-    let answer = words(context.fetch(resident[0], 2).expect("the answer comes back"));
+    let answer = words(
+        context
+            .fetch(resident[0], 2)
+            .expect("the answer comes back"),
+    );
     context.release(resident[0]);
     assert_eq!(
         answer,
@@ -207,7 +215,8 @@ fn a_two_step_folded_loop_carries_on_the_device() {
 /// path carries: `lane_width` elements, one per lane, and the workgroup folds the whole tile.
 #[test]
 fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
-    let Some(context) = common::context("a_one_step_tiled_loop_folds_the_tile_on_the_device") else {
+    let Some(context) = common::context("a_one_step_tiled_loop_folds_the_tile_on_the_device")
+    else {
         return;
     };
     let tile = lichen_compute_gpu::LOCAL_SIZE_X;
@@ -264,7 +273,8 @@ fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
     context.release(resident[0]);
     let expected: i64 = data.iter().sum();
     assert_eq!(
-        answer[tile as usize - 1], expected,
+        answer[tile as usize - 1],
+        expected,
         "the workgroup folds the whole tile to its sum"
     );
 }
@@ -276,7 +286,8 @@ fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
 /// the loop's carried slot** — so a run separates the slice's addressing from the fold's.
 #[test]
 fn the_slice_fold_alone_sums_every_slot_on_the_device() {
-    let Some(context) = common::context("the_slice_fold_alone_sums_every_slot_on_the_device") else {
+    let Some(context) = common::context("the_slice_fold_alone_sums_every_slot_on_the_device")
+    else {
         return;
     };
     let tile = lichen_compute_gpu::LOCAL_SIZE_X;
@@ -442,7 +453,8 @@ fn the_slice_fold_alone_sums_every_slot_on_the_device() {
     context.release(resident[0]);
     let expected: i64 = (1..=i64::from(tile)).sum();
     assert_eq!(
-        answer[tile as usize - 1], expected,
+        answer[tile as usize - 1],
+        expected,
         "every lane sums every slot: {answer:?}"
     );
 }
@@ -454,17 +466,18 @@ fn the_slice_fold_alone_sums_every_slot_on_the_device() {
 /// total is their sum; a body that takes one step per lane answers the first step's sum instead.
 #[test]
 fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
-    let Some(context) = common::context("a_two_step_tiled_loop_folds_the_tile_on_the_device") else {
+    let Some(context) = common::context("a_two_step_tiled_loop_folds_the_tile_on_the_device")
+    else {
         return;
     };
     let tile = lichen_compute_gpu::LOCAL_SIZE_X;
-    let steps = 2;
+    let steps = 2u32;
     let body = lichen_fusion_bridge::Folding::new(
         &lichen_fusion::Reduction {
             combine: lichen_fusion::BinaryOp::Add,
             identity: 0.0,
         },
-        tile as u64 * steps,
+        u64::from(tile) * u64::from(steps),
         lichen_fusion_bridge::Element::Buffer { position: 0 },
         ScalarClass::Int,
     )
@@ -497,23 +510,25 @@ fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
     };
     let data: Vec<i64> = (0..(tile as i64 * steps as i64)).collect();
     let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+    // **The launch's extent is the elements the fold reads**, not the lanes: the dispatch stages
+    // `extent × width` bytes of the input, so a launch of one workgroup would leave every element
+    // past the first tile unuploaded and the strided read would answer the padding.
     let resident = context
         .run(
             &LaunchSet::single(&fragment),
             &[BufferSlot::Host(&packed)],
-            tile as usize,
+            (tile * steps) as usize,
         )
         .unwrap_or_else(|refusal| panic!("a two-step tiled loop is dispatched: {refusal}"));
     let answer = words(
         context
-            .fetch(resident[0], tile as usize)
+            .fetch(resident[0], (tile * steps) as usize)
             .expect("the answer comes back"),
     );
     context.release(resident[0]);
     let expected: i64 = data.iter().sum();
-    println!("two-step partials: {answer:?} expected total {expected}");
     assert_eq!(
-        answer[tile as usize - 1], expected,
+        answer[0], expected,
         "the workgroup folds both steps of the tile"
     );
 }
@@ -578,10 +593,7 @@ fn a_two_step_per_lane_fold_carries_on_the_device() {
         "per-lane two-step: [1] {} [0] {} [2] {}",
         answer[1], answer[0], answer[2]
     );
-    assert_eq!(
-        answer[1], 1,
-        "lane 1 folds two steps and answers their sum"
-    );
+    assert_eq!(answer[1], 1, "lane 1 folds two steps and answers their sum");
 }
 
 /// The one-seam pair: a loop whose exit value is its own step counter, seeded two ways.
@@ -707,7 +719,11 @@ fn a_loops_step_count_does_not_depend_on_where_its_seed_comes_from() {
         let resident = context
             .run(&LaunchSet::single(&fragment), &[], tile as usize)
             .unwrap_or_else(|refusal| panic!("the {what}-seeded loop is dispatched: {refusal}"));
-        let answer = words(context.fetch(resident[0], 1).expect("the answer comes back"));
+        let answer = words(
+            context
+                .fetch(resident[0], 1)
+                .expect("the answer comes back"),
+        );
         context.release(resident[0]);
         assert_eq!(
             answer[0], 2,
@@ -855,12 +871,12 @@ fn a_strided_loop_reads_its_second_element_on_the_device() {
         .run(
             &LaunchSet::single(&fragment),
             &[BufferSlot::Host(&packed)],
-            tile as usize,
+            (tile as usize) * 2,
         )
         .unwrap_or_else(|refusal| panic!("the strided loop is dispatched: {refusal}"));
     let answer = words(
         context
-            .fetch(resident[0], tile as usize)
+            .fetch(resident[0], (tile as usize) * 2)
             .expect("the answer comes back"),
     );
     context.release(resident[0]);
@@ -880,19 +896,20 @@ fn a_strided_loop_reads_its_second_element_on_the_device() {
 /// `data[start + stride]`, so a lane that took one step answers its first element alone.
 #[test]
 fn a_two_step_loops_answer_separates_seed_from_stride() {
-    let Some(context) = common::context("a_two_step_loops_answer_separates_seed_from_stride") else {
+    let Some(context) = common::context("a_two_step_loops_answer_separates_seed_from_stride")
+    else {
         return;
     };
     let tile = lichen_compute_gpu::LOCAL_SIZE_X;
-    for (seeded_from_a_parameter, stride) in [
-        (false, 1u32),
-        (false, tile),
-        (true, 1),
-        (true, tile),
-    ] {
+    for (seeded_from_a_parameter, stride) in [(false, 1u32), (false, tile), (true, 1), (true, tile)]
+    {
         let what = format!(
             "{} seed, stride {stride}",
-            if seeded_from_a_parameter { "param" } else { "const" }
+            if seeded_from_a_parameter {
+                "param"
+            } else {
+                "const"
+            }
         );
         let mut body = KernelBody::new();
         let entry = body.add_block();
@@ -1046,7 +1063,8 @@ fn a_two_step_loops_answer_separates_seed_from_stride() {
 }
 
 /// `out[i] = in[i] + in[i] + 1`.
-fn adds() -> KernelFragment {    KernelFragment {
+fn adds() -> KernelFragment {
+    KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
