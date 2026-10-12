@@ -132,6 +132,22 @@ What lives where, and why:
 | `readme.rs` + the `sync-readme` binary | `lichen-tools` | repo tooling that panics outside a checkout must not ship in a library |
 | `lib.rs` (pipeline glue) | **stays** in `lichen-language` | merges lex/parse + resolve + check diagnostics |
 
+### Naming an AST or IR field
+
+The parser's AST and the highlevel IR are separate enums whose fields share
+spellings, and the same spelling can sit on different things: `Expr::Lambda`'s and
+`ExprKind::Function`'s `r#return` is a **body** (the checker hands it to
+`check_lam`), while `Expr::Arrow`'s and `ExprKind::TypeFunction`'s `return_type` is
+a **type**. Two consequences, both measured while those fields were renamed:
+
+- In seven files the `Lambda` and `Arrow` arms of one `match` are textually
+  identical, so a rename that matches pattern text rewrites the wrong arm. Edit
+  per variant, and let `cargo check --all-targets` be the completeness oracle — it
+  is also what covers the four sites inside test files that a lib-only check skips.
+- A **block has no IR kind**: it lowers to `ExprKind::Function`, which is why that
+  one `r#return` covers a lambda's body and a block's tail alike. `Expr::Block` and
+  `Program` call their tail `expr`, so there is nothing to rename there.
+
 ### The back-compat re-export in `lichen-language`
 
 ```rust
