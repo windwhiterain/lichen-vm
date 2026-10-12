@@ -656,6 +656,39 @@ straight block splice earns, so the entry-block inlining is evidenced only by th
 two of the refusals are the function's own gates rather than decisions; and the compaction path that
 would drop an unread `SliceWriteCall`'s version is unreached, because two slice lists are refused.
 
+**And the composition got its caller** (`98761ae4`): `crates/lichen-language/src/region_merge.rs` is a
+graph pass that **derives the regions** (`derive_regions`, its first production caller), checks what it
+may merge, composes, and **rebuilds the graph** — the region becomes one node at the region's last
+position, the absorbed node is gone, later values are renumbered and `returns()` repointed. Measured on
+`examples/fusion_schema.rs`'s chain: two nodes, four values and `returns [3]` become one node, three
+values and `returns [2]`; the answer is element for element the answer the same program gives without
+the pass; and a **counterfactual** closes the question the equal answer cannot — swapping the operands
+inside the composed body moves the answer from `−28` to `35`, so the composed node is what the device
+dispatched, rather than a rewrite nobody ran. Legality is refused by name: a region that is not a pair,
+an edge that is not one input, a produced value the graph **returns** or reads elsewhere (deleting a
+returned value is a wrong answer, not a refusal), extents that do not correspond, a read address the
+survivor cannot compute, disagreeing classes, and **ports that do not correspond** — that last one is
+load-bearing and was not on the list until the caller needed it: `compose` never sees the graph, so the
+position-for-position correspondence of the producer's reads with the consumer's surviving inputs is a
+caller's precondition whose violation would be a wrong answer, and `compose`'s own doc now says so and
+names the check.
+
+**What the merge can reach today is narrower than "shape-changing fusion", and the reason is worth
+stating.** `compose` refuses a forwarded value that is reachable from the producer's invocation index,
+and an **elementwise** producer's value always is — so the only region that merges today is one whose
+producer is **lane-invariant**: a fold over the whole extent, written at position `0`. The address
+check's invocation-index arm is a licence no program cashes. Fan-out and elementwise regions therefore
+need the thing this section's second half is about — **the plan**, which stages a producer's value
+across lanes with a slice and a barrier. The plan is not tuning on this path; it is what makes those
+shapes reachable at all. Two more facts a reader should carry: `returns() == None` forbids **every**
+merge (the runner then takes the whole value table, so a deleted value changes the answer, and the pass
+refuses rather than merging), and the surviving node is **anonymous** — a composed fragment is never
+registered, so it carries no claim and a later digest-keyed pass walks past it, which the merged report
+line now says for itself. Registering it with the consumer's claim is declined for now: a composed
+fragment is not the consumer (it computes a fused reduction that is neither interface's algebra, and
+`compose` empties `roles`), and the registry is process-global and append-only, so a ghost row would be
+visible to every later join in the process.
+
 ### The memory plan: the second thing a pack hands over
 
 A fused body is a DAG, not a chain. Once a kernel's read and write are a value —
@@ -1097,7 +1130,7 @@ about shrinks exactly where fusion fires.
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
-| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **the body half landed; nothing drives it** | §5 measured at `ebae69bc`: **no code path in `crates/` fuses two kernels at all** — `derive_regions` has no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production is the intra-kernel tiling of one reduction. **The body composition then landed** at `027447ab` (`lichen_kernel_ir::compose`: two chained fragments become one, its four decisions named refusals, and a device differential against the two-pass reference and the recorded graph). What a merge still needs: a **caller** — the graph rebuild that drops the absorbed node, repoints `returns` and renumbers — and, for a merge whose ports differ from the target node's, a landing path that is not `replace_kernel` (a merge whose shape matches the producer's already lands). The graph side is already there: a pass can return a merged graph and the runner accepts it |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs; what is left is a directive to ask for it, and the shapes that need the plan** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: a **`fuse` directive** (nothing parses one), the **elementwise and fan-out shapes** (they need the memory plan's cross-lane staging, because `compose` refuses a lane-dependent forwarded value), and the merged node's **anonymity** (unregistered, so no later digest-keyed pass can name it) |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
