@@ -37,16 +37,42 @@ merged fragment is unregistered, so it carries no claim and a later digest-keyed
 (`Select`). **Two ordinary pieces of RMSNorm arithmetic stand between the operator and its own
 fusion**, and neither is negotiable in the current surface:
 
-- **`sqrt` is not `sqrt` to the bridge.** `KernelInstr::Sqrt` is replaced by its IR definition before a
-  kernel is registered (`KernelBody::expand_transcendentals`, `lichen-kernel-ir/src/body.rs`, inlining
-  `sqrt_body` — a Newton iteration full of `Select`s). The bridge reads the inlined **`exp`**
-  (`unary.rs`'s `inlined_exp_operand`, used in `fusion-bridge/src/lower.rs`) and has **no `sqrt`
-  reader**, although `lichen_fusion::UnaryOp::Sqrt` exists and `normalize` folds it. The walk meets the
-  expansion's first `Select` and reports `BridgeRefusal::Select`. **An operator author must know that
-  `sqrt` is not `sqrt` here, and nothing in the surface says so.** The fix mirrors the `exp` reader.
-- **`int2float k.n` refuses the region** (`BridgeRefusal::Conversion`: "the symbolic language is one
-  arithmetic class"). A row reduction divides by its extent and the extent is an `Int`; the symbol
-  `Float(4.0)` already exists, so admitting `Conv{Int→Float}` for a scalar source is the fix.
+- **`sqrt` bridges now** (`c5e8e63e`). The reader matches **the whole of `sqrt_body`, instruction for
+  instruction**, walking the definition backwards from its own result and anchored on the **definition**
+  rather than a copy — so a change to `sqrt_body` moves the reader with it, while a body that is not the
+  expansion (≥ 500 instructions, 90 `Select`s, exact constants in known places) differs in some step, the
+  match answers `None`, and the walk falls through to its own match and refuses the real `Select`.
+  **Measured**: `sqrt (s / int2float 4 + 0.25)` — a **literal** extent — now **fuses**: *"region 0:
+  nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input position 2 of node 1, licensed
+  by the floor: every node of the region claims Reduction and nothing else"*. A **fixed hidden size
+  fuses today**; the runtime extent is the only thing still stopping it.
+- **`int2float` bridges only where the walk already reads a real.** Admitted: `Conv{Int→Float}` of an
+  integer immediate (read as the real it denotes; above `EXACT_INTEGER_LIMIT` it is refused
+  `MachineInteger` rather than answered with a neighbouring number) and of anything else the walk reads
+  as a real, with an integer anywhere else refused **by that instruction's own name**. Still refused:
+  `Float→Int` (truncation is many-to-one — no inverse, no law) and a scalar fragment's own parameter
+  leaf. **`int2float k.n` therefore still stops**, now with the accurate sentence: *"the projection reads
+  parameter leaf 0 of the kernel's own domain — the lane index — and a projection is one function of the
+  fused step's slots"* — the walk goes *through* the whole Newton expansion to stop on the `Conv` inside
+  it. **The measured reason it cannot move**: every `Conv{Int→Float}` that survives the lowering has
+  `ValueId(0)` = `BlockParam { block: 0, index: 0 }`, the **launch extent**, as its source (the lowering
+  folds `int2float` of a *literal* before a kernel is registered, so the literal variant holds **zero**
+  conversions). Reading the extent is excluded by `lower.rs::parameter`'s invariant and unsound as a
+  constant — `canonical_form` excludes a constant extent's value, and a graph's count may be
+  `Count::Value` — so it needs a new symbolic slot rather than a shortcut.
+
+**A caveat that predates this work and is now load-bearing**: the reader claims "the body computes this
+operator", which is a **modelling claim, not a theorem**. `sqrt_body` is a Newton iteration — six steps
+from the seed `2.0` do not land exactly on `√` in exact arithmetic — exactly as the `exp` reader already
+treats a degree-10 Taylor sum as `eˣ`. It matters here because a fused region is **dispatched** as the
+symbolic form; the approximation is the same one the bodies already carry, but it is an assumption
+rather than a proof, and nothing verifies it.
+
+**A test-harness hazard, not a regression**: at `--test-threads 2` a device test can fail with *"the
+\"gpu\" backend declined to return input buffer 0 … not one this device is holding"*, because
+`install_default` replaces the process's backend — a second test installing one while the first is
+running leaves the first's buffers on a device that is no longer installed (`fuse_licence.rs` documents
+the same thing). Those suites are trustworthy at `--test-threads 1`.
 
 ## The hazard: the tiling pass can silently replace the operator's algebra
 
