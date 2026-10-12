@@ -25,6 +25,7 @@ pub mod persist;
 pub mod placement_pack;
 pub mod preprocess;
 pub mod program;
+pub mod region_merge;
 pub mod render;
 pub mod resolve;
 pub mod run;

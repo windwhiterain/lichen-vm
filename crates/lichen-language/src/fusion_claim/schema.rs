@@ -412,6 +412,30 @@ impl SchemaRefusal {
     pub fn message(&self) -> String {
         self.to_string()
     }
+
+    /// The refusal's name, for a report that has to say which check refused a region.
+    ///
+    /// # Invariant
+    /// One variant, one name: a report that printed the sentence alone could not be matched
+    /// against the variant a caller reads, so the two would drift.
+    pub fn name(&self) -> &'static str {
+        match self {
+            SchemaRefusal::AmbiguousClaim { .. } => "AmbiguousClaim",
+            SchemaRefusal::RoleNotMarked { .. } => "RoleNotMarked",
+            SchemaRefusal::ProjectionNotBridged { .. } => "ProjectionNotBridged",
+            SchemaRefusal::NotCanonical { .. } => "NotCanonical",
+            SchemaRefusal::BeyondANode { .. } => "BeyondANode",
+            SchemaRefusal::ReadsAnotherNode { .. } => "ReadsAnotherNode",
+            SchemaRefusal::NotAReductionChain { .. } => "NotAReductionChain",
+            SchemaRefusal::NoElementRole { .. } => "NoElementRole",
+            SchemaRefusal::ElementWithoutProducer { .. } => "ElementWithoutProducer",
+            SchemaRefusal::EdgeOutOfOrder { .. } => "EdgeOutOfOrder",
+            SchemaRefusal::UnknownInterface { .. } => "UnknownInterface",
+            SchemaRefusal::MissingRole { .. } => "MissingRole",
+            SchemaRefusal::NotACombine { .. } => "NotACombine",
+            SchemaRefusal::NotAnIdentity { .. } => "NotAnIdentity",
+        }
+    }
 }
 
 impl fmt::Display for SchemaRefusal {
@@ -514,6 +538,21 @@ pub fn derive_regions(
 ) -> Vec<Result<RegionSchema, SchemaRefusal>> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
+    region_positions(graph, instances)
+        .iter()
+        .map(|positions| region_schema(graph, &starts, &registry, positions))
+        .collect()
+}
+
+/// Which graph positions form each fusible region, in evaluation order.
+///
+/// # Invariant
+/// The grouping [`derive_regions`] derives schemas for, and it is exposed because a rewrite has to
+/// name the graph nodes a region holds: a schema names its instances by kernel id, and a recorded
+/// node holds no kernel id.
+pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>> {
+    let registry = Registry::new(instances);
+    let starts = offsets(graph);
     let mut regions: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     for (position, _) in graph.nodes().iter().enumerate() {
@@ -538,9 +577,6 @@ pub fn derive_regions(
         regions.push(current);
     }
     regions
-        .iter()
-        .map(|positions| region_schema(graph, &starts, &registry, positions))
-        .collect()
 }
 
 /// The schema one region's nodes derive, or the refusal that names why they do not.
@@ -720,7 +756,7 @@ fn produces(graph: &Graph, starts: &[usize], position: usize, value: GraphValueI
 }
 
 /// The first value each node produces, the graph's own inputs coming first.
-fn offsets(graph: &Graph) -> Vec<usize> {
+pub(crate) fn offsets(graph: &Graph) -> Vec<usize> {
     let mut next = graph.input_count();
     let mut starts = Vec::with_capacity(graph.len());
     for node in graph.nodes() {

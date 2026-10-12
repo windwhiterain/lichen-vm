@@ -16,9 +16,10 @@ use crate::program::LangProgram;
 
 mod schema;
 
+pub(crate) use schema::offsets;
 pub use schema::{
     Between, Instance, Port, PortKind, RegionSchema, RoleProjection, SchemaHash, SchemaNode,
-    SchemaRefusal, derive_regions,
+    SchemaRefusal, derive_regions, region_positions,
 };
 
 /// The kernel id a value names, or the refusal that names what the value is.

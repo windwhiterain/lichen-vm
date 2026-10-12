@@ -11,11 +11,10 @@ use crate::{
 /// The fragment `producer` and `consumer` become, or the decision the merge cannot make.
 ///
 /// # Invariant
-/// The consumer's values and blocks are renumbered past the producer's, the value the producer
-/// writes is bound where the consumer read the absorbed position, the producer's store and its
-/// marks go — its buffer is not an output and its roles name a gone interface — and the
-/// consumer's entry block is inlined into the producer's return block, not spliced beside it.
-/// Both gates pass first.
+/// Values are renumbered past the producer's, its store and marks go, and the consumer's entry block
+/// is inlined into the producer's return block. `compose` never sees the graph, so a caller whose
+/// producer reads and surviving consumer inputs are not the same buffers in the same order gets a
+/// wrong answer, not a refusal; the merge pass's `PortsDoNotCorrespond` is that check.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
