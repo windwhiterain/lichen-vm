@@ -108,8 +108,8 @@ impl GraphPass for AutomaticTiling {
     /// Tile every node whose own marks declare a reduction the launch can serve.
     ///
     /// # Invariant
-    /// A node's fragment is looked up by digest, and a fragment with no row is left **alone**:
-    /// that is what another program's kernel looks like.
+    /// Every node is looked at, so every node has one line: a row is tiled or refused, and a
+    /// fragment in no row is refused by name and left **alone**.
     ///
     /// The graph handed over is the **recording** every time, because a rewrite is stored under
     /// its own digest, so a run of the same program is tiled and reported again.
@@ -140,6 +140,7 @@ impl GraphPass for AutomaticTiling {
             let Node::Kernel(kernel) = node;
             let digest = fragment_digest(&kernel.fragment);
             let Some(row) = instances.get(&digest) else {
+                lines.push(unclaimed(position));
                 continue;
             };
             match row {
@@ -180,6 +181,19 @@ impl GraphPass for AutomaticTiling {
 /// node-local derivation reads as a datum.
 fn beyond_a_node(inputs: impl Iterator<Item = usize>, graph_inputs: usize) -> Option<usize> {
     inputs.into_iter().find(|value| *value >= graph_inputs)
+}
+
+/// One node's line, for a fragment no row of the join holds.
+///
+/// # Invariant
+/// A refusal and not a derivation: there is no claim to read roles from and no algebra to
+/// normalize, so the pass reports the join's own miss and tiles nothing. Naming the node is the
+/// whole of the report — a composed fragment is left exactly as the merge left it.
+fn unclaimed(position: usize) -> String {
+    format!(
+        "node {position}: refused: {}",
+        SchemaRefusal::NotClaimed { node: position }.message()
+    )
 }
 
 /// What the installed packs have to say about one node.

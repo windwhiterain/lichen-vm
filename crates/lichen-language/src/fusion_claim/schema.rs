@@ -339,6 +339,16 @@ pub enum SchemaRefusal {
         /// The interfaces that matched.
         claims: Vec<String>,
     },
+    /// A node's fragment is in no row of a digest-keyed join: nothing registered a claim for it.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::AmbiguousClaim`] because it is a distinct answer: that one is a
+    /// join that found two claims and this is a join that found none. A composed fragment is this
+    /// arm, because composition registers neither body it joins.
+    NotClaimed {
+        /// The graph node whose fragment no row holds.
+        node: usize,
+    },
     /// A claimed role has no mark in the kernel's body.
     RoleNotMarked {
         /// The region-local position of the node.
@@ -470,6 +480,7 @@ impl SchemaRefusal {
     pub fn name(&self) -> &'static str {
         match self {
             SchemaRefusal::AmbiguousClaim { .. } => "AmbiguousClaim",
+            SchemaRefusal::NotClaimed { .. } => "NotClaimed",
             SchemaRefusal::RoleNotMarked { .. } => "RoleNotMarked",
             SchemaRefusal::ProjectionNotBridged { .. } => "ProjectionNotBridged",
             SchemaRefusal::NotCanonical { .. } => "NotCanonical",
@@ -496,6 +507,12 @@ impl fmt::Display for SchemaRefusal {
                 "graph node {node} holds a fragment two of this program's kernels share, and \
                  they claim different interfaces ({}), so the node's instance cannot be named",
                 claims.join(", ")
+            ),
+            SchemaRefusal::NotClaimed { node } => write!(
+                formatter,
+                "no claim is registered for the fragment at {node}, so it is in no row of the \
+                 digest join and no algebra can be derived for it; a composed fragment is exactly \
+                 this, because composition registers neither body it joins"
             ),
             SchemaRefusal::RoleNotMarked { node, role } => write!(
                 formatter,
