@@ -241,6 +241,23 @@ The ordering constraint the measurement establishes, with the code path:
    (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) record that accurately
    rather than lazily.
 
+**And a mark on a top-level *routed operator* anchors to the wrong value — measured, unfixed.** The
+mark channel's premise is that a mark names the value its expression produced; where the expression is
+an operator the language **routes** (`compile.rs` sends `a + b` to a prelude binding), that premise does
+not hold today. Seven spellings were measured at `afc116dc`, and the pattern is: in a kernel body, a
+mark written on a top-level operator records the **left operand's value** (`(read * 2.0) ~ "element"`
+records the identity `d`, `((0.0 + read)) ~ "element"` records `0.0`), while a mark on an
+**application** (`exp (…) ~ "element"`) or one **inside a `@loop`** records the whole expression. So a
+role marked the natural way can name a value the body never computed, which is a wrong algebra rather
+than a refusal — the same class as §3's earlier measurement above, but with no definition pass and no
+loop involved, so it is a second cause and not that one. `Checker::anchor_marks` reads
+`state[e].val.or(state[e].term)` and the routing is in `lichen-highlevel`, so the fault is upstream of
+every consumer of a mark. The interface that found it
+(`crates/lichen-language/tests/elementwise_chain.rs`) marks an application and says why in its own
+invariant. **Localizing it is the next thing; its blast radius is not yet measured** — the recorded
+chains whose marks sit inside a loop (`examples/fusion_schema.rs`'s four hashes among them) anchor
+correctly and should not move, so the affected class is top-level marked operators.
+
 **The `lower_loop` path is reachable, and the discriminator is measured.** It fires when
 the checker leaves the loop *undecided* — when the entering state is a run-time value, so
 `loop_iteration` reports `Undecided` and `apply_loop` writes no value, leaving
