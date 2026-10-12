@@ -609,11 +609,25 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   graph inputs, `2a + b + 1` answered over both). The rule is narrower than the buffer
   count: **every buffer a step's argument names must sit under a group named `in` or
   `out`** — the same rule a kernel parameter has, spelled `compute.lichen:5`'s
-  `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, while `compute.graph` leaves its
-  argument's type **unconstrained**, so nothing tells a step's author. Two buffers under
-  `.in` record; a buffer beside `.in` does not — and since `1d7fd753` it says so by
-  name, `build_graph` telling the two ways `parallel_roles` can answer apart instead of
-  discarding the one that had a sentence.
+  `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`. Two buffers under `.in` record; a
+  buffer beside `.in` does not.
+  **The surface says it now** (`8cb866aa`): the author annotates the step's own parameter
+  (`step = (s : GArg) => …` with `GArg = struct{.n Int, .in Pair}` — the language's existing
+  form, because a parameterised `graph` signature steers nothing and would make the type
+  required). The declared type **checks**; it does not steer, so `build_graph` still derives
+  the roles and only the refused answer changes channel: `Module::record_extension_failure`
+  fails the build (`Build::ok` counts it) and the run reports it as `DiagKind::ExtensionRule`,
+  rendering `lichen-compute`'s own sentence, so the rule and its wording stay in one place.
+  **The unannotated form is untouched** — only `Refusal`, never `Undecided`, reaches that
+  channel, so a step whose parameter type is undecided still takes the positional fallback
+  (`graph_jit.rs`'s three unannotated steps). And note what that fallback actually buys, since
+  this note implied more: **no unannotated step completes a recording** — the fallback's
+  placeholder is a bare `GraphInput` rather than a `Buf`, so a dispatch that reads a buffer
+  refuses it — what it buys is that the recording is entered and the fallback's own wording is
+  what such a step hears. **Still open: no source span.** The refusal names the step's function
+  node, and a lambda's value node has no `node_edges` entry, so `node_loc` answers `None` and
+  the error is unattributed; giving it one means `check_app` inserting an edge for the
+  argument's value node, which would re-attribute every runtime diagnostic naming an argument.
 
 ## Landmines, each of which is a silent wrong answer
 
