@@ -1214,7 +1214,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let mut w = Writer::new();
     let t1 = w.int_type("t1");
     let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, "f"), (t2, "t")]);
+    let s = w.struct_type("s", &[(t1, Some("f")), (t2, Some("t"))]);
     let mut b = build(s, w);
     assert!(b.ok, "struct{{.f Int, .t Type}} should kind");
     assert!(b.module.unify_errors.is_empty());
@@ -1318,7 +1318,7 @@ fn a_named_struct_carries_a_name_to_index_table() {
     let mut w = Writer::new();
     let t1 = w.int_type("t1");
     let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, "a"), (t2, "b")]);
+    let s = w.struct_type("s", &[(t1, Some("a")), (t2, Some("b"))]);
     let b = build(s, w);
     assert!(b.ok);
     let kind = b.state[s].ty.unwrap();
@@ -1375,8 +1375,8 @@ fn a_named_struct_carries_a_name_to_index_table() {
 fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s1 = w.struct_type("s1", &[(f, "f")]);
-    let s2 = w.struct_type("s2", &[(f, "f")]);
+    let s1 = w.struct_type("s1", &[(f, Some("f"))]);
+    let s2 = w.struct_type("s2", &[(f, Some("f"))]);
     let pair = w.tuple("pair", &[s1, s2]);
     let b = build(pair, w);
     assert!(b.ok);
@@ -1408,8 +1408,8 @@ fn two_struct_type_occurrences_do_not_unify() {
     // same fields, different occurrences → different ids → nominal conflict
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s1 = w.struct_type("s1", &[(f, "f")]);
-    let s2 = w.struct_type("s2", &[(f, "f")]);
+    let s1 = w.struct_type("s1", &[(f, Some("f"))]);
+    let s2 = w.struct_type("s2", &[(f, Some("f"))]);
     let pair = w.tuple("pair", &[s1, s2]);
     let b = build(pair, w);
     assert!(b.ok);
@@ -1431,7 +1431,7 @@ fn two_struct_type_occurrences_do_not_unify() {
 fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let t = w.type_tuple("t", &[f]);
     let pair = w.tuple("pair", &[s, t]);
     let b = build(pair, w);
@@ -1462,7 +1462,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
 fn a_struct_type_unifies_with_itself() {
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let b = build(s, w);
     assert!(b.ok);
     let mut module = b.module;
@@ -1479,7 +1479,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
     let mut w = Writer::new();
     let five = w.int("five", 5);
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let a = w.annotate("a", five, s);
     let b = build(a, w);
     assert!(!b.ok, "5 : struct{{.f Int}} must fail");
@@ -1503,9 +1503,9 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
     // The argument's struct type has a different fresh id than the annotation's.
     let mut w = Writer::new();
     let f1 = w.int_type("f1");
-    let s1 = w.struct_type("s1", &[(f1, "f")]);
+    let s1 = w.struct_type("s1", &[(f1, Some("f"))]);
     let f2 = w.int_type("f2");
-    let s2 = w.struct_type("s2", &[(f2, "f")]);
+    let s2 = w.struct_type("s2", &[(f2, Some("f"))]);
     let x = w.param("x");
     let body = w.annotate("body", x, s1);
     let l = w.lam("l", x, body);
@@ -1524,7 +1524,7 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     // (\x. (x : struct{.f Int})) 5 — the apply-time unify checks the argument.
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let x = w.param("x");
     let body = w.annotate("body", x, s);
     let l = w.lam("l", x, body);
@@ -1553,7 +1553,7 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     // compiles once, keeping one nominal id.
     let mut w = Writer::new();
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let a = w.array("a", &[s, s]);
     let b = build(a, w);
     assert!(b.ok, "one shared occurrence is one nominal type");
@@ -1578,7 +1578,7 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
     let v = w.tuple("v", &[one, two]);
     let f1 = w.int_type("f1");
     let f2 = w.int_type("f2");
-    let s = w.struct_type("s", &[(f1, "f"), (f2, "g")]);
+    let s = w.struct_type("s", &[(f1, Some("f")), (f2, Some("g"))]);
     let inst = w.instantiate("inst", s, v, &[]);
     let b = build(inst, w);
     assert!(b.ok, "s(1, 2) must check");
@@ -1598,7 +1598,7 @@ fn a_struct_instantiation_checks_its_fields() {
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let inst = w.instantiate("inst", s, v, &[]);
     let b = build(inst, w);
     assert!(
@@ -1612,7 +1612,7 @@ fn a_struct_instantiation_checks_its_fields() {
     let v = w.tuple("v", &[one, two]);
     let t1 = w.universe("t1");
     let t2 = w.universe("t2");
-    let s = w.struct_type("s", &[(t1, "f"), (t2, "t")]);
+    let s = w.struct_type("s", &[(t1, Some("f")), (t2, Some("t"))]);
     let inst = w.instantiate("inst", s, v, &[]);
     let b = build(inst, w);
     assert!(
@@ -1623,7 +1623,7 @@ fn a_struct_instantiation_checks_its_fields() {
     let mut w = Writer::new();
     let five = w.int("five", 5);
     let f = w.int_type("f");
-    let s = w.struct_type("s", &[(f, "f")]);
+    let s = w.struct_type("s", &[(f, Some("f"))]);
     let inst = w.instantiate("inst", s, five, &[]);
     let b = build(inst, w);
     assert!(!b.ok, "s(5) must fail — a literal is not a struct value");
@@ -1638,11 +1638,11 @@ fn instances_of_different_struct_occurrences_conflict() {
     let v = w.tuple("v", &[one, two]);
     let f1 = w.int_type("f1");
     let f2 = w.int_type("f2");
-    let s1 = w.struct_type("s1", &[(f1, "f"), (f2, "g")]);
+    let s1 = w.struct_type("s1", &[(f1, Some("f")), (f2, Some("g"))]);
     let i1 = w.instantiate("i1", s1, v, &[]);
     let f3 = w.int_type("f3");
     let f4 = w.int_type("f4");
-    let s2 = w.struct_type("s2", &[(f3, "f"), (f4, "g")]);
+    let s2 = w.struct_type("s2", &[(f3, Some("f")), (f4, Some("g"))]);
     let i2 = w.instantiate("i2", s2, v, &[]);
     let a = w.array("a", &[i1, i2]);
     let b = build(a, w);
@@ -1674,7 +1674,7 @@ fn an_instantiation_through_a_call_result_callee_checks() {
     let p = w.param("p");
     let f1 = w.int_type("f1");
     let f2 = w.int_type("f2");
-    let s = w.struct_type("s", &[(f1, "f"), (f2, "g")]);
+    let s = w.struct_type("s", &[(f1, Some("f")), (f2, Some("g"))]);
     let mk = w.lam("mk", p, s);
     let arg = w.int_type("arg");
     let call = w.app("call", mk, arg);
@@ -2319,7 +2319,7 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
     let p = w.param("p");
     let int_x = w.int_type("int_x");
     let int_y = w.int_type("int_y");
-    let struct_ty = w.struct_type("struct_ty", &[(int_x, "x"), (int_y, "y")]);
+    let struct_ty = w.struct_type("struct_ty", &[(int_x, Some("x")), (int_y, Some("y"))]);
     let read = w.named_field("read", p, "x");
     let f = w.lam_typed("f", p, Some(struct_ty), read, false);
     let one = w.int("one", 1);
@@ -2343,11 +2343,11 @@ fn two_written_struct_types_are_distinct_nominal_types() {
     let mut w = Writer::new();
     let p = w.param("p");
     let int_a = w.int_type("int_a");
-    let written_in_annotation = w.struct_type("written_in_annotation", &[(int_a, "x")]);
+    let written_in_annotation = w.struct_type("written_in_annotation", &[(int_a, Some("x"))]);
     let read = w.named_field("read", p, "x");
     let f = w.lam_typed("f", p, Some(written_in_annotation), read, false);
     let int_b = w.int_type("int_b");
-    let written_in_argument = w.struct_type("written_in_argument", &[(int_b, "x")]);
+    let written_in_argument = w.struct_type("written_in_argument", &[(int_b, Some("x"))]);
     let one = w.int("one", 1);
     let fields = w.tuple("fields", &[one]);
     let arg = w.instantiate("inst", written_in_argument, fields, &[]);
@@ -2378,7 +2378,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
     let open_o = w.hole("open_o");
     // **One** named struct type for both sides: two written `struct{…}` are
     // distinct.
-    let open_struct = w.struct_type("open_struct", &[(open_i, "I"), (open_o, "O")]);
+    let open_struct = w.struct_type("open_struct", &[(open_i, Some("I")), (open_o, Some("O"))]);
     let read = w.named_field("read", t, "I");
     let f = w.lam_typed("f", t, Some(open_struct), read, false);
     // The argument is an **instance** of that struct whose field values are the
@@ -2476,7 +2476,7 @@ fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
     let p = w.param("p");
     let int_x = w.int_type("int_x");
     let int_y = w.int_type("int_y");
-    let struct_ty = w.struct_type("struct_ty", &[(int_x, "x"), (int_y, "y")]);
+    let struct_ty = w.struct_type("struct_ty", &[(int_x, Some("x")), (int_y, Some("y"))]);
     let f = w.lam_typed("f", p, Some(struct_ty), p, false);
 
     let a = w.param("a");

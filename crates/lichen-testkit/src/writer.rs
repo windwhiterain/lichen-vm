@@ -116,12 +116,51 @@ impl<A: AttrSpec, L> Writer<A, L> {
         body: ExprId,
         looping: bool,
     ) -> ExprId {
+        self.function(name, parameter, parameter_type, None, body, looping)
+    }
+
+    /// `name = \p # a. body` — the `x # n => e` spelling, which the frontend
+    /// keeps rather than desugaring into a block.
+    ///
+    /// # Invariant
+    /// The slot is the optimization for that desugar: an unannotated body
+    /// statement would materialize a block, so a test about the node shape must
+    /// reach for this rather than for [`Self::lam`].
+    pub fn lam_attributed(
+        &mut self,
+        name: &str,
+        parameter: ExprId,
+        parameter_attribute: ExprId,
+        body: ExprId,
+    ) -> ExprId {
+        self.function(
+            name,
+            parameter,
+            None,
+            Some(parameter_attribute),
+            body,
+            false,
+        )
+    }
+
+    /// The one place a lambda's kind is written, so the three spellings above
+    /// cannot disagree about a field.
+    #[allow(clippy::too_many_arguments)]
+    fn function(
+        &mut self,
+        name: &str,
+        parameter: ExprId,
+        parameter_type: Option<ExprId>,
+        parameter_attribute: Option<ExprId>,
+        body: ExprId,
+        looping: bool,
+    ) -> ExprId {
         self.named(
             name,
             ExprKind::Function {
                 parameter,
                 parameter_type,
-                parameter_attribute: None,
+                parameter_attribute,
                 r#return: body,
                 parent: None,
                 looping,
@@ -194,6 +233,33 @@ impl<A: AttrSpec, L> Writer<A, L> {
                 name: field,
             },
         )
+    }
+
+    /// `name = X::<field>` — a *named type access*, yielding the field's **type**
+    /// as a value.
+    ///
+    /// # Invariant
+    /// Distinct from [`Self::named_field`]: this reads the name table off the
+    /// container's own **type**, which must be a `TypeStruct`.
+    pub fn named_type_access(
+        &mut self,
+        name: &str,
+        container: ExprId,
+        field: &'static str,
+    ) -> ExprId {
+        self.named(
+            name,
+            ExprKind::NamedTypeAccess {
+                container,
+                name: field,
+            },
+        )
+    }
+
+    /// `name = X{n}` — a positional *type* access, read without index
+    /// validation.
+    pub fn type_access(&mut self, name: &str, container: ExprId, index: ExprId) -> ExprId {
+        self.named(name, ExprKind::TypeAccess { container, index })
     }
 
     /// `name = a <== k` — a table read.
@@ -331,13 +397,17 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = struct{.a T, .b U}` — the fresh nominal id lives in the kind,
     /// never in the shape.
-    pub fn struct_type(&mut self, name: &str, fields: &[(ExprId, &'static str)]) -> ExprId {
+    ///
+    /// # Invariant
+    /// A `None` name is a field with no name-table entry, which the checker
+    /// refuses rather than reads positionally.
+    pub fn struct_type(&mut self, name: &str, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
         let elements: Vec<ExprId> = fields.iter().map(|&(element, _)| element).collect();
         let field_range = self.push_children(&elements);
         let start = self.ir.struct_names.len() as u32;
         self.ir
             .struct_names
-            .extend(fields.iter().map(|&(_, field)| Some(field)));
+            .extend(fields.iter().map(|&(_, field)| field));
         let name_range = ChildRange {
             start,
             end: self.ir.struct_names.len() as u32,
