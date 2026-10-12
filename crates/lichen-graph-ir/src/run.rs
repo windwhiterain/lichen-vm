@@ -51,6 +51,35 @@ impl Policy {
     }
 }
 
+/// The index range one node dispatches over, and where the number behind it is.
+///
+/// # Invariant
+/// Two arms and no middle: a node's extent is either a number this host holds or one it does
+/// not, and a runner that could not say which would be the thing that decides. [`Self::allocated`]
+/// is the length every run is sized for, which for a device-held number is a bound rather than
+/// the count.
+enum Extent {
+    /// `[0, count)`, a number the host holds.
+    Host(usize),
+    /// `[0, device)`, a number only the device holds.
+    Device(lichen_kernel_ir::DeviceExtent),
+}
+
+impl Extent {
+    /// How many elements a run over this extent is allocated for.
+    ///
+    /// # Invariant
+    /// The device arm's `capacity`, because the number deciding how much of those buffers the
+    /// shader reaches is not one this host has — which is also what the returned ids' count
+    /// means, so a fetch cannot be given a length the allocation does not cover.
+    fn allocated(&self) -> usize {
+        match self {
+            Extent::Host(count) => *count,
+            Extent::Device(device) => device.capacity,
+        }
+    }
+}
+
 /// Runs a graph against a backend, under one policy.
 pub struct Runner<'backend> {
     backend: &'backend dyn ParallelBackend,
@@ -134,8 +163,8 @@ impl<'backend> Runner<'backend> {
 
                     // The extent conversion happens here, not in `as_number`: it
                     // belongs to whoever dispatches over `[0, count)`.
-                    let count = match kernel.count {
-                        Count::Constant(count) => count,
+                    let extent = match kernel.count {
+                        Count::Constant(count) => Extent::Host(count),
                         Count::Value(value) => {
                             let number = values
                                 .get(value)
@@ -146,25 +175,61 @@ impl<'backend> Runner<'backend> {
                                     value,
                                     found,
                                 })?;
-                            usize::try_from(number)
-                                .map_err(|_| GraphRefusal::CountNegative { number })?
+                            Extent::Host(
+                                usize::try_from(number)
+                                    .map_err(|_| GraphRefusal::CountNegative { number })?,
+                            )
+                        }
+                        // The number stays where the device wrote it: the node is
+                        // dispatched over a buffer element and the host reads nothing.
+                        Count::Device { value, index } => {
+                            let counted = values
+                                .get(value)
+                                .ok_or(GraphRefusal::UnknownValue { node: index, value })?;
+                            let buffer = counted.device_buffer().map_err(|found| {
+                                GraphRefusal::ExtentNotADevice {
+                                    node: index,
+                                    value,
+                                    found,
+                                }
+                            })?;
+                            Extent::Device(lichen_kernel_ir::DeviceExtent {
+                                count: buffer,
+                                index,
+                                // Every element the value holds: how many of them the
+                                // device will use is its own news.
+                                capacity: counted.count().unwrap_or(0),
+                            })
                         }
                     };
 
                     // A node's kernel is its own launch set, callees included.
                     let launch = lichen_kernel_ir::LaunchSet::single(&kernel.fragment);
+                    let classes = &kernel.fragment.output_classes;
                     let produced = match self.policy {
-                        Policy::Serial => self
-                            .backend
-                            .run(&launch, &slots, count)
-                            .map(|ids| {
-                                Value::device_all(ids, count, &kernel.fragment.output_classes)
-                            })
-                            .map_err(|reason| GraphRefusal::Backend {
-                                what: "dispatching a kernel node",
-                                reason,
-                            })?,
+                        Policy::Serial => {
+                            let ids = match extent {
+                                Extent::Host(count) => self
+                                    .backend
+                                    .run(&launch, &slots, count)
+                                    .map_err(|reason| GraphRefusal::Backend {
+                                        what: "dispatching a kernel node",
+                                        reason,
+                                    })?,
+                                Extent::Device(device) => self
+                                    .backend
+                                    .run_over_device_extent(&launch, &slots, device)
+                                    .map_err(|reason| GraphRefusal::Backend {
+                                        what: "dispatching a kernel node over a device-held count",
+                                        reason,
+                                    })?,
+                            };
+                            Value::device_all(ids, extent.allocated(), classes)
+                        }
                         _ => {
+                            let Extent::Host(count) = extent else {
+                                return Err(GraphRefusal::ExtentIsNotInFlight { node: index });
+                            };
                             let submission =
                                 self.backend
                                     .submit(&launch, &slots, count)
@@ -173,12 +238,7 @@ impl<'backend> Runner<'backend> {
                                         reason,
                                     })?;
                             let ids = submission.outputs().to_vec();
-                            Value::pending_all(
-                                submission,
-                                ids,
-                                count,
-                                &kernel.fragment.output_classes,
-                            )
+                            Value::pending_all(submission, ids, count, classes)
                         }
                     };
                     values.extend(produced);

@@ -5344,6 +5344,8 @@ where
             Node::Kernel(kernel) => match kernel.count {
                 Count::Constant(count) => Some(count),
                 Count::Value(value) => argument_extent(&run_arguments, value),
+                // The number is on the device, so this host has no answer to hand a pass.
+                Count::Device { .. } => None,
             },
         }
     };

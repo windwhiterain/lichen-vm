@@ -161,6 +161,23 @@ pub enum BufferSlot<'a> {
     Resident(ResidentId),
 }
 
+/// Where a dispatch's index range lives when the device, not the host, computed it.
+///
+/// # Invariant
+/// **A place, not a number**: the host has not read it, which is the whole point — a count
+/// fetched back is a stall between two dispatches. `capacity` is how many elements the run is
+/// **allocated** for, because a buffer must be sized before the number deciding how much of it
+/// to write is known. What surrounds the count is the override's business.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceExtent {
+    /// The buffer holding the number, as one `Int` element — what a `compute.write` produces.
+    pub count: ResidentId,
+    /// Which element of that buffer holds it.
+    pub index: usize,
+    /// How many elements this run's outputs are allocated for.
+    pub capacity: usize,
+}
+
 /// A submission a backend has taken but not yet waited for.
 ///
 /// # Invariant
@@ -316,6 +333,38 @@ pub trait ParallelBackend: Send + Sync {
         Ok(Box::new(Waited {
             ids: self.run(launch, inputs, count)?,
         }))
+    }
+
+    /// [`Self::run`], with the index range read from a number the device already holds.
+    ///
+    /// # Invariant
+    /// Defaults to reading the number and calling [`Self::run`]: a backend that cannot dispatch
+    /// over a device-held extent still satisfies the contract, and requiring the entry would
+    /// leave a caller unable to tell "cannot" from "not implemented yet". Only an override pays
+    /// nothing for it — the default's read is the stall this exists to avoid.
+    fn run_over_device_extent(
+        &self,
+        launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot],
+        extent: DeviceExtent,
+    ) -> Result<Vec<ResidentId>, String> {
+        let read = extent.index + 1;
+        let number = self
+            .fetch(extent.count, read)?
+            .as_ints()
+            .and_then(|elements| elements.get(extent.index))
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "buffer {} holds no integer element {}, so there is no number there to \
+                     dispatch over",
+                    extent.count.0, extent.index
+                )
+            })?;
+        let count = usize::try_from(number).map_err(|_| {
+            format!("the extent the device holds is {number}, which is not a count")
+        })?;
+        self.run(launch, inputs, count)
     }
 
     /// The first `count` elements of a buffer this backend is holding.

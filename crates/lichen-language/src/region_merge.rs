@@ -568,6 +568,16 @@ fn extents_correspond(producer: Count, consumer: Count) -> bool {
     match (producer, consumer) {
         (Count::Constant(producer), Count::Constant(consumer)) => producer == consumer,
         (Count::Value(producer), Count::Value(consumer)) => producer == consumer,
+        (
+            Count::Device {
+                value: producer,
+                index: producer_index,
+            },
+            Count::Device {
+                value: consumer,
+                index: consumer_index,
+            },
+        ) => producer == consumer && producer_index == consumer_index,
         _ => false,
     }
 }
@@ -582,8 +592,11 @@ fn readers(graph: &Graph, value: GraphValueId) -> Vec<usize> {
                 read.push(position);
             }
         }
-        if kernel.count == Count::Value(value) {
-            read.push(position);
+        match kernel.count {
+            Count::Value(extent) | Count::Device { value: extent, .. } if extent == value => {
+                read.push(position);
+            }
+            _ => {}
         }
     }
     read
@@ -645,6 +658,10 @@ fn mapped_count(count: Count, map: &[Option<GraphValueId>]) -> Option<Count> {
     match count {
         Count::Constant(count) => Some(Count::Constant(count)),
         Count::Value(value) => Some(Count::Value(map[value]?)),
+        Count::Device { value, index } => Some(Count::Device {
+            value: map[value]?,
+            index,
+        }),
     }
 }
 

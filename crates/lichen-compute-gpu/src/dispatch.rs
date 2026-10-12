@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
 use lichen_kernel_ir::{
-    BufferSlot, LaunchSet, ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, DeviceExtent, LaunchSet, ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
 use crate::spirv::{self, Binding, SpirvRefusal};
@@ -79,6 +79,21 @@ pub enum RunError {
     /// be read as without inventing one: the ABI calls this leaf a count, so a `Float` one would
     /// push a converted number where the program wrote a whole number.
     ExtentNotAnInteger { class: ScalarClass },
+    /// A fragment that reads its extent leaf, dispatched over a number only the device holds.
+    ///
+    /// # Invariant
+    /// An indirect dispatch reads the workgroup count out of a buffer and hands the shader
+    /// nothing: the extent leaf is a push constant, fixed when the command is recorded, so a
+    /// body that reads it would loop to a number this backend does not have.
+    ExtentLeafUnfixed,
+    /// An extent that is not a whole number of integers in a buffer this context holds.
+    IndirectExtentNotIntegers { len: usize },
+    /// An extent whose element has no room for the command read out of it.
+    ///
+    /// # Invariant
+    /// The read is twelve bytes and the elements are eight, so the count cannot be the last one
+    /// in the buffer: refused rather than read past what was allocated.
+    IndirectExtentOutOfReach { index: usize, len: usize },
     /// A leaf block past what this device offers.
     ///
     /// # Invariant
@@ -164,6 +179,23 @@ impl fmt::Display for RunError {
                  is the count this run dispatches over: there is no float a count could be read as \
                  without inventing one, so it is refused rather than converted"
             ),
+            RunError::ExtentLeafUnfixed => write!(
+                f,
+                "this fragment reads its extent leaf, and the number it would read is only on the \
+                 device: an indirect dispatch gives the shader no extent to push. It is refused \
+                 rather than dispatched over a number the program did not write"
+            ),
+            RunError::IndirectExtentNotIntegers { len } => write!(
+                f,
+                "the extent names a buffer holding {len} element(s) that are not integers, so \
+                 the workgroup count would be read out of bits that are not a number"
+            ),
+            RunError::IndirectExtentOutOfReach { index, len } => write!(
+                f,
+                "the extent names element {index} of a buffer holding {len} element(s): a \
+                 dispatch reads a twelve-byte command, so the count and the element after it \
+                 must both be inside the buffer"
+            ),
             RunError::PushConstantsTooLarge { bytes, max } => write!(
                 f,
                 "this fragment's scalar leaves fill {bytes} byte(s) of push constants and this \
@@ -201,6 +233,40 @@ impl fmt::Display for RunError {
 }
 
 impl std::error::Error for RunError {}
+
+/// Where a staged run's index range comes from.
+///
+/// # Invariant
+/// The arms differ in where the number lives and nowhere else, so every step that takes a
+/// count is written once: each asks this for the extent it allocates, and for the dispatch
+/// command that does not need the number at all.
+enum Extent {
+    /// `[0, count)`, a number the host holds.
+    Host(usize),
+    /// `[0, device)`, a number only the device holds, with the run's allocation.
+    Device(DeviceExtent),
+}
+
+/// Where a recorded dispatch's workgroup count is read from.
+///
+/// # Invariant
+/// `Indirect` names a **command block of the backend's own** and the element the count is
+/// copied out of: `vkCmdDispatchIndirect` reads three workgroup counts, and one with none in
+/// `y` or `z` runs nothing at all — so the block, not the caller's buffer, carries that shape.
+/// The count reaches it on the device, so the host never holds the number it dispatched over.
+enum Workgroups {
+    /// A number the host already holds.
+    Direct(u32),
+    /// A number a device buffer holds, read when the submission executes.
+    Indirect {
+        /// The twelve bytes a dispatch reads its three workgroup counts from.
+        block: vk::Buffer,
+        /// The buffer the count is in.
+        source: vk::Buffer,
+        /// Where in it, in bytes.
+        offset: vk::DeviceSize,
+    },
+}
 
 /// One leaf's bytes at its member's offset, at the width the emitter gave that class.
 ///
@@ -372,6 +438,19 @@ struct Token(u32);
 
 /// How many freed buffers of one size are kept for reuse.
 const RECYCLED_PER_SIZE: usize = 4;
+
+/// The bytes one `Int` element occupies, which is also a transfer's minimum chunk size.
+const SCALAR_BYTES: vk::DeviceSize = 8;
+
+/// The bytes one workgroup count occupies: a `u32`, whatever the element class is.
+const COUNT_BYTES: vk::DeviceSize = 4;
+
+/// The elements in a dispatch command block: three `u32` counts in sixteen bytes.
+///
+/// # Invariant
+/// Two elements rather than one and a half, because every buffer here is a whole number of
+/// elements and a block that size costs the pool nothing to recycle.
+const SCALAR_WORDS: usize = 2;
 
 /// The descriptor set and pipeline layouts for a run, keyed by its buffers and its
 /// push-constant block.
@@ -592,9 +671,37 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, RunError> {
-        let staged = self.stage_run(launch, inputs, count)?;
-        // The upload targets are recycled after the wait rather than in a `finally`, so
-        // a failed wait does not leak them.
+        self.staged_and_waited(launch, inputs, Extent::Host(count))
+    }
+
+    /// [`Self::run`] over a number only the device holds, with no read-back in between.
+    ///
+    /// # Invariant
+    /// The count is never on the host: the workgroup count is handed to the queue as a buffer
+    /// offset, and the outputs are allocated for the extent's `capacity` rather than for a
+    /// number nobody has. What the count *is* decides only how much of those buffers the shader
+    /// reaches.
+    pub fn run_over_device_extent(
+        &self,
+        launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot],
+        extent: DeviceExtent,
+    ) -> Result<Vec<ResidentId>, RunError> {
+        self.staged_and_waited(launch, inputs, Extent::Device(extent))
+    }
+
+    /// Stage one run at `extent`, wait for it, and hand back the ids.
+    ///
+    /// # Invariant
+    /// The upload targets are recycled after the wait rather than in a `finally`, so a failed
+    /// wait does not leak them.
+    fn staged_and_waited(
+        &self,
+        launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot],
+        extent: Extent,
+    ) -> Result<Vec<ResidentId>, RunError> {
+        let staged = self.stage_run(launch, inputs, extent)?;
         let waited = self.sync(staged.token);
         for buffer in staged.scratch {
             self.recycle(buffer);
@@ -615,7 +722,7 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<GpuPending<'_>, RunError> {
-        let staged = self.stage_run(launch, inputs, count)?;
+        let staged = self.stage_run(launch, inputs, Extent::Host(count))?;
         Ok(GpuPending {
             context: self,
             token: staged.token,
@@ -636,12 +743,21 @@ impl GpuContext {
         &self,
         launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
-        count: usize,
+        extent: Extent,
     ) -> Result<Staged, RunError> {
         let fragment = launch.root();
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        // The number the extent leaf is pushed with; a device-held extent has none.
+        let (leaf, held) = match extent {
+            Extent::Host(count) => (count, None),
+            Extent::Device(held) => (0, Some(held)),
+        };
+        let count = match held {
+            None => leaf,
+            Some(held) => held.capacity,
+        };
         // The block the entry point reads the launch's leaves out of.
-        let scalars = self.scalar_block(launch, class, count)?;
+        let scalars = self.scalar_block(launch, class, leaf)?;
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
@@ -733,6 +849,15 @@ impl GpuContext {
         let output_classes: Vec<ScalarClass> = (0..binding.outputs)
             .map(|ordinal| spirv::buffer_class_of(fragment, binding.inputs + ordinal, class))
             .collect();
+        // The command block is scratch like an upload target: this submission owns it.
+        let indirect = match held {
+            None => None,
+            Some(held) => {
+                let (command, block) = self.indirect_extent(launch, held)?;
+                scratch.buffers.push(block);
+                Some(command)
+            }
+        };
         // Each output is allocated and recorded at its own class, the width a fetch reads it at.
         for buffer_class in &output_classes {
             let buffer = self.allocate(padded, *buffer_class)?;
@@ -745,7 +870,10 @@ impl GpuContext {
             pipeline,
             &descriptors,
             &uploads,
-            workgroups as u32,
+            match indirect {
+                None => Workgroups::Direct(workgroups as u32),
+                Some(indirect) => indirect,
+            },
             &scalars,
         )?;
         // Nothing below can fail, so the bookkeeping comes after the submit: a failed
@@ -903,7 +1031,13 @@ impl GpuContext {
             } else {
                 &[]
             };
-            segment.record(pipeline, &descriptors, uploads, workgroups as u32, &scalars)?;
+            segment.record(
+                pipeline,
+                &descriptors,
+                uploads,
+                Workgroups::Direct(workgroups as u32),
+                &scalars,
+            )?;
             current = into;
             std::mem::swap(&mut into, &mut onto);
         }
@@ -927,6 +1061,47 @@ impl GpuContext {
             },
         );
         Ok(id)
+    }
+
+    /// The dispatch command that takes its workgroup count from a device buffer.
+    ///
+    /// # Invariant
+    /// The count is the low `u32` of the named element — an `Int` is a little-endian `i64`, and
+    /// its high half is zero for any count a device could schedule. A body reading the extent
+    /// leaf is refused rather than pushed a placeholder: that leaf is the entry block's first
+    /// parameter, and the number this path reads is not one the host has.
+    fn indirect_extent(
+        &self,
+        launch: &LaunchSet<'_>,
+        extent: DeviceExtent,
+    ) -> Result<(Workgroups, DeviceBuffer), RunError> {
+        let body = &launch.root().body;
+        if let Some(leaf) = body
+            .blocks
+            .get(body.entry)
+            .and_then(|entry| entry.params.first())
+            && body.operands().contains(leaf)
+        {
+            return Err(RunError::ExtentLeafUnfixed);
+        }
+        let buffer = self.resident_buffer(extent.count)?;
+        let len = buffer.padded;
+        if buffer.class != ScalarClass::Int {
+            return Err(RunError::IndirectExtentNotIntegers { len });
+        }
+        if extent.index >= len {
+            return Err(RunError::IndirectExtentOutOfReach {
+                index: extent.index,
+                len,
+            });
+        }
+        let block = self.allocate(SCALAR_WORDS, ScalarClass::Int)?;
+        let command = Workgroups::Indirect {
+            block: block.handle,
+            source: buffer.handle,
+            offset: extent.index as vk::DeviceSize * SCALAR_BYTES,
+        };
+        Ok((command, block))
     }
 
     /// The push-constant bytes this launch hands the shader.
@@ -1010,7 +1185,8 @@ impl GpuContext {
                     .usage(
                         vk::BufferUsageFlags::STORAGE_BUFFER
                             | vk::BufferUsageFlags::TRANSFER_DST
-                            | vk::BufferUsageFlags::TRANSFER_SRC,
+                            | vk::BufferUsageFlags::TRANSFER_SRC
+                            | vk::BufferUsageFlags::INDIRECT_BUFFER,
                     )
                     .sharing_mode(vk::SharingMode::EXCLUSIVE),
                 None,
@@ -1201,7 +1377,7 @@ impl GpuContext {
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
-        workgroups: u32,
+        workgroups: Workgroups,
         scalars: &[u8],
     ) -> Result<(), RunError> {
         let total = descriptors.len();
@@ -1324,7 +1500,51 @@ impl GpuContext {
                     scalars,
                 );
             }
-            device.cmd_dispatch(command, workgroups, 1, 1);
+            match workgroups {
+                Workgroups::Direct(groups) => device.cmd_dispatch(command, groups, 1, 1),
+                Workgroups::Indirect {
+                    block,
+                    source,
+                    offset,
+                } => {
+                    // `y` and `z` are one work each — a dispatch with none runs
+                    // nothing — and `x` is copied out of the caller's buffer.
+                    device.cmd_pipeline_barrier(
+                        command,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[vk::MemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+                        &[],
+                        &[],
+                    );
+                    device.cmd_fill_buffer(command, block, 4, 8, 1);
+                    device.cmd_copy_buffer(
+                        command,
+                        source,
+                        block,
+                        &[vk::BufferCopy {
+                            src_offset: offset,
+                            dst_offset: 0,
+                            size: COUNT_BYTES,
+                        }],
+                    );
+                    device.cmd_pipeline_barrier(
+                        command,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::DRAW_INDIRECT,
+                        vk::DependencyFlags::empty(),
+                        &[vk::MemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ)],
+                        &[],
+                        &[],
+                    );
+                    device.cmd_dispatch_indirect(command, block, 0)
+                }
+            }
             // The trailing barrier names every reader of these results, including a later
             // dispatch in the same command buffer.
             device.cmd_pipeline_barrier(
@@ -1543,6 +1763,18 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         Ok(Box::new(
             GpuContext::submit(self, launch, inputs, count).map_err(|error| error.to_string())?,
         ))
+    }
+
+    /// The one backend that reads no number back: the workgroup count is an indirect
+    /// command's, and the host never holds it.
+    fn run_over_device_extent(
+        &self,
+        launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot],
+        extent: DeviceExtent,
+    ) -> Result<Vec<ResidentId>, String> {
+        GpuContext::run_over_device_extent(self, launch, inputs, extent)
+            .map_err(|error| error.to_string())
     }
 
     /// The class comes off the resident record, so a float fragment's result is
@@ -1932,7 +2164,7 @@ impl Segment<'_> {
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
-        workgroups: u32,
+        workgroups: Workgroups,
         scalars: &[u8],
     ) -> Result<(), RunError> {
         self.context.record_dispatch(

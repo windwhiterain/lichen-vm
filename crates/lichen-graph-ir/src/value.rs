@@ -204,6 +204,20 @@ impl<'backend> Value<'backend> {
         }
     }
 
+    /// The device buffer this names, for an extent only the device holds.
+    ///
+    /// # Invariant
+    /// The mirror of [`Self::slot`] and separate for the same reason: the two disagree about
+    /// what a caller is asking — one wants the data, the other wants the address the device
+    /// will count over. `Err` names what this value is, so a refused role is a refusal the
+    /// caller can read.
+    pub fn device_buffer(&self) -> Result<ResidentId, &'static str> {
+        match self {
+            Value::Device { id, .. } | Value::Pending { id, .. } => Ok(*id),
+            Value::Host { .. } | Value::Int(_) => Err(self.state()),
+        }
+    }
+
     /// The elements of a host value, one word each, or `None` for anything else.
     ///
     /// # Invariant

@@ -249,4 +249,12 @@ pub enum Count {
     /// # Invariant
     /// Never pending: a number is not produced by a device, so a count edge owes no wait.
     Value(ValueId),
+    /// One element of a buffer value in the table, read on the device when the node runs.
+    ///
+    /// # Invariant
+    /// **Where the number is, not the number**: the node is dispatched without the host ever
+    /// reading it, which is the whole point of this arm — the other two name a number the host
+    /// has. `index` is the element, because a counting kernel writes its count beside whatever
+    /// else it produced rather than instead of it.
+    Device { value: ValueId, index: usize },
 }

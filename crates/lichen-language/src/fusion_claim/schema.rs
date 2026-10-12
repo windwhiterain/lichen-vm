@@ -937,6 +937,7 @@ fn extent_of(graph: &Graph, position: usize) -> Option<GraphValueId> {
     let Node::Kernel(node) = &graph.nodes()[position];
     match node.count {
         Count::Value(value) => Some(value),
+        Count::Device { value, .. } => Some(value),
         Count::Constant(_) => None,
     }
 }
@@ -978,7 +979,7 @@ fn region_ports(graph: &Graph, starts: &[usize], positions: &[usize]) -> Vec<Por
                 value: None,
                 count: Some(count),
             }),
-            Count::Value(value) => {
+            Count::Value(value) | Count::Device { value, .. } => {
                 if region_producer(graph, starts, positions, value).is_none() {
                     ports.push(Port {
                         kind: PortKind::Extent,

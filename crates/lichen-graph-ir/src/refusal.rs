@@ -133,6 +133,23 @@ pub enum GraphRefusal {
     /// because a number is asked for as an extent by a node *or* handed back as a return
     /// value nobody asked for; naming one would invent a node where the mistake is in none.
     CountNegative { number: i64 },
+    /// An extent named a value that is not a buffer the device is holding.
+    ///
+    /// # Invariant
+    /// A device-held extent names an address, so a number or host data is not one. It is a
+    /// refusal rather than a read-back because the fallback would be the stall the arm exists
+    /// to avoid, and a silent stall is worse than a named one.
+    ExtentNotADevice {
+        node: usize,
+        value: usize,
+        found: &'static str,
+    },
+    /// A device-held extent under a policy that hands the node back in flight.
+    ///
+    /// # Invariant
+    /// Named rather than approximated: the contract has one entry for a device-held extent and
+    /// it waits, so submitting one would report a submission for a schedule nobody asked for.
+    ExtentIsNotInFlight { node: usize },
     /// The policy asked for is not something a backend can do.
     ///
     /// # Invariant
@@ -269,6 +286,18 @@ impl fmt::Display for GraphRefusal {
             GraphRefusal::CountNegative { number } => {
                 write!(f, "a count is {number}, and a count cannot be negative.")
             }
+            GraphRefusal::ExtentNotADevice { node, value, found } => write!(
+                f,
+                "node {node} takes its extent from element of value {value}, and that value is \
+                 {found}. A count read on the device names an address, so it has to be a buffer \
+                 the device is holding."
+            ),
+            GraphRefusal::ExtentIsNotInFlight { node } => write!(
+                f,
+                "node {node}'s extent is only on the device, and the policy asks for the node \
+                 back in flight. The backend contract has one entry for such an extent and it \
+                 waits, so submitting one would be a different schedule wearing its name."
+            ),
             GraphRefusal::PolicyUnsupported { policy, reason } => {
                 write!(f, "the {policy} schedule is not available: {reason}")
             }
