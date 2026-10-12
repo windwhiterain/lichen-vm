@@ -73,11 +73,22 @@ where
         // The pair is registered before the body, so a self-reference
         // resolves to it instead of re-entering this check.
 
-        // Every lambda takes this path: a non-referencing lambda's
-        // pre-registration is overwritten identically below.
+        // The term is its own type (`f : f : f …`), stated once, before the body.
         let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
-        let pair = self.array_node(return_block, &[func_node, ty_cell]);
+        let pair = self.alloc_node(return_block, None, None);
+        // One node, not a type node beside the pair: a distinct one collides
+        // under the clone's topology re-establishment.
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
+            ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
+        ];
+        self.module.write_node_value(
+            pair,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, return_block),
+            ))),
+        );
         self.state[e].term = Some(pair);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(ty_cell);
@@ -145,21 +156,6 @@ where
             )))),
         );
         self.lambda_value_nodes.push(func_node);
-        // The term becomes its own type (`f : f : f …`): the pre-body pair is
-        // mutated in place into `[Function(fid), ↺]`.
-
-        // One node, not a type node beside the pair: a distinct one collides
-        // under the clone's topology re-establishment.
-        let items = [
-            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
-            ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
-        ];
-        self.module.write_node_value(
-            pair,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block),
-            ))),
-        );
         // The placeholder type cell joins the pair's class, so a body reference
         // to it now reads the function type.
         self.module.unify(ty_cell, pair);
@@ -230,7 +226,9 @@ where
             )))),
         );
         let ty_cell = self.fresh_cell();
-        let pair = self.array_node(return_block, &[func_node, ty_cell]);
+        // The paired term `[Function(fid), ↺]`, written once: a value a slot holds is
+        // never replaced.
+        let pair = self.alloc_node(return_block, None, None);
         let items = [
             ArrayItem::new(AnyNodeId::Dynamic(func_node)),
             ArrayItem::new(AnyNodeId::Dynamic(pair)),

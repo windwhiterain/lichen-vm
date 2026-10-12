@@ -83,13 +83,13 @@ impl<P: Program> Module<P> {
                     let Some(r#type) = r#type else {
                         // A function whose return is stated bare: the value is
                         // the result, and there is no cell to bind.
-                        self.write_node_value(node, decided);
+                        self.write_node_value_if_absent(node, decided);
                         return decided;
                     };
                     let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
                     let array = self.alloc_array(&items, block);
                     let result = P::Value::from(LowValue::Array(array));
-                    self.write_node_value(node, Some(result.clone()));
+                    self.write_node_value_if_absent(node, Some(result.clone()));
                     if let Some(cell) = cell {
                         // The return type is resolved before the cell binds, as
                         // the unroll's tail does.

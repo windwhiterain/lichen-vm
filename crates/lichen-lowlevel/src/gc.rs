@@ -170,7 +170,10 @@ impl<P: Program> Module<P> {
             }
             _ => value,
         });
-        self.write_node_value(node, value);
+        // The slot is rewritten by a value it already holds: the one licensed rewrite.
+        if let Some(value) = value {
+            self.relocate_node_value(node, value);
+        }
         value
     }
 
@@ -204,7 +207,7 @@ impl<P: Program> Module<P> {
             .iter()
             .find_map(|&member| self.nodes.get(member).and_then(|node| node.value))
         {
-            self.propagate_class_value(representative, value);
+            self.fill_class_holes(representative, value);
         }
     }
 

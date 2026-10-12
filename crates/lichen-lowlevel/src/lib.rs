@@ -749,13 +749,14 @@ pub struct EvaluatedDeep {
 
 #[derive(Debug)]
 pub struct Node<P: Program> {
-    /// The node's **private** value slot; written only through [`Module::write_node_value`].
+    /// The node's **private** value slot; every member of a class holds the class's one value.
     ///
     /// # Invariant
-    /// This slot carries two axes: decided or not (an empty slot is undecided, read by
-    /// [`Module::node_value`]) and has-run or not (the run stamp, read by
-    /// [`Module::has_no_result_yet`]). An operation-bearing member of a decided class holds
-    /// that value while the stamp stays zero: the slot is an assertion still owed an answer.
+    /// A slot that holds a value is never given a different one — `write_node_value`
+    /// asserts it, GC's relocation being the one licensed rewrite. Two axes meet here:
+    /// decided or not ([`Module::node_value`]) and has-run or not, the run stamp
+    /// ([`Module::has_no_result_yet`]). An operation-bearing member holds that value
+    /// while the stamp stays zero, so it still reads as owed an answer.
     value: Option<P::Value>,
     /// The value epoch the node's operator ran under: zero means it never ran — a produced
     /// answer versus an asserted one.

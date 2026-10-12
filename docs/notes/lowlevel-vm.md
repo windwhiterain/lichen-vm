@@ -231,25 +231,38 @@ The arms, in order:
   `struct{.x Int, .y Int}`'s field types reach the importer's cells as `Int`, so a
   placeholder instantiation across the boundary never learns its field types.
 
-Two rules decide what a class's members then hold:
+Three rules decide what a class's members then hold.
 
-- **A write is unconditional and reaches every member.** `write_node_value`
-  writes the node's own slot and, for a concrete value, propagates it to the
-  whole class (`propagate_class_value`). So **one class has one value**, and no
-  reader has to know which member a write started from. A writer that must not
-  claim an operator's answer restores the node's own slot afterwards
-  (`write_node_answer`), which is how an operation-bearing member keeps its
-  computation while the class's value is visible around it. A `None` value clears
-  only the node's own slot — undecided is not a fact to propagate.
-- **A merge fills only the holes, and overwrites nobody.** `add_equality` reads
-  what either side already knew *before* the union (the union re-elects the
-  representative) and fills the members that hold nothing (`fill_class_holes`). A
-  member that already holds something keeps it, because a merge is where two
-  decided sides meet and a class routinely holds a different value on each
-  member — a term pair on one, the resolved value on another, a type cell on a
-  third. Overwriting would move a node out of a slot the structure still names.
-  The same merge carries the class's **low type** (joined, not overwritten) and
-  the value to the members it adds.
+1. **A slot that holds a value is never given a different one.** `write_node_value` is
+   the caller-facing entry and asserts the slot is empty; a writer that must not claim
+   an occupied slot goes through `write_node_value_if_absent`. The one licensed rewrite
+   is GC's `relocate_node_value`: compaction re-allocates a payload into the surviving
+   block **from the same items**, so the value is moved rather than replaced — a fact of
+   the walk that reached it, not one re-proved there.
+2. **Setting a value always propagates, and propagation writes every member**, so a
+   class holds one value and no reader has to know which member the write started from.
+   It is admitted only into a class that holds nothing: a value enters a class once, and
+   `write_node_value` asserts the class was empty *before* the write, which is the only
+   moment that is knowable — the propagation itself runs after the slot is written.
+3. **A merge fills the holes, and replaces nobody** (`fill_class_holes`). A member that
+   already holds a value keeps it. That is safe because a merge may only happen where the
+   two sides are one value or one side is undecided — `unify` establishes that on every
+   path reaching `add_equality` and returns on the conflicting arms. So the filled class is
+   uniform either way, and "one class holds one value" follows from the precondition rather
+   than from writing over anybody. A merge of two decided-different classes is not a merge:
+   that is what `unify_function_types` stops doing, since two function types agree on their
+   signature cells while each names its own `Function`.
+
+**The one writer that does replace** is `write_node_answer`, and it has to: a propagated
+class value sits in an operation-bearing member's slot, and the answer must take its place,
+or a dependent codomain binds the concrete type over it and the operator never runs again.
+So "a slot is written once" holds for every *writer*; GC's relocation and an operator's own
+answer are the two paths that rewrite an occupied slot, and each says why.
+
+The consequence worth stating plainly: a class never holds two different values, because the
+only moment two classes could start doing so is a merge, and the merge does not do it. That
+is why `(n => ([1,2,3] : array{Int, n})) 5` is still refused — the apply compares a pinned
+`3` against the argument `5`, and neither ever entered the other's class.
 
 `class_value` / `class_committed_value` read the class's value through its
 representative, `class_root` walks the union-find without path compression so a

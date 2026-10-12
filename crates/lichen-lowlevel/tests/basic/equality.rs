@@ -6,13 +6,18 @@ use lichen_utils::disjoint;
 
 // --- the DSU equivalence classes behind unify --------------------------
 
+/// # Invariant
+/// The nodes are **undecided**: a merge may only reach a member already holding a value
+/// when both sides hold the same one, so a chain built out of decided nodes would not be
+/// a legal merge at all. What this measures is the parent chain, which is a fact of the
+/// union-find alone.
 #[test]
 fn add_equality_merges_equivalence_classes() {
-    let mut m = Module::new();
+    let mut m: Module<TestProgram> = Module::new();
     let root = m.add_block(None);
-    let a = u128_node(&mut m, root, 1);
-    let b = u128_node(&mut m, root, 2);
-    let c = u128_node(&mut m, root, 3);
+    let a = m.add_node(root, None, None);
+    let b = m.add_node(root, None, None);
+    let c = m.add_node(root, None, None);
 
     // Fresh nodes are their own representatives.
     assert_eq!(m.equality_representative(a), a);
@@ -28,11 +33,14 @@ fn add_equality_merges_equivalence_classes() {
     assert_eq!(m.equality_representative(a), rep);
     assert_eq!(m.equality_representative(c), rep);
 }
+/// # Invariant
+/// Undecided nodes, as in the merge test above: this measures the parent chain, and a
+/// merge is only legal while the sides agree on their value or one is undecided.
 #[test]
 fn root_node_compresses_deep_paths() {
-    let mut m = Module::new();
+    let mut m: Module<TestProgram> = Module::new();
     let root = m.add_block(None);
-    let nodes: Vec<_> = (0..5).map(|i| u128_node(&mut m, root, i as u128)).collect();
+    let nodes: Vec<_> = (0..5).map(|_| m.add_node(root, None, None)).collect();
     // The chain is built through the union-find's own operations, never a hand-installed link.
 
     // Union by size cannot make it deeper at this size: `1` ends under `3`, `2` two edges down.

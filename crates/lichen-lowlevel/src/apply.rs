@@ -125,7 +125,10 @@ impl<P: Program> Module<P> {
             // SAFETY: `array` is `result`'s live payload; this covers both `items()` calls.
             (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
                 let items = unsafe { array.items() };
-                self.write_node_value(node, result);
+                // The result is written only into a class that holds nothing.
+                if self.class_value(node).is_none() {
+                    self.write_node_value(node, result);
+                }
                 self.unify(node, applied);
                 // Resolve the return type first — the deep pass does not replicate
                 // to class members.

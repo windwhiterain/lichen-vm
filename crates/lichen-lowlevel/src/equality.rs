@@ -79,13 +79,13 @@ impl<P: Program> disjoint::Node for Node<P> {
 }
 
 impl<P: Program> Module<P> {
-    /// Merge the classes of `a` and `b`, then fill the members that hold nothing.
+    /// Merge the classes of `a` and `b`, then give the merged class its one value.
     ///
     /// # Invariant
-    /// Both sides' low types and decided values are read before the union, which
-    /// re-elects a representative; the merge joins the low types and fills only the
-    /// members that hold nothing, overwriting nobody — each member keeps the value it
-    /// holds. See docs/notes/lowlevel-vm.md.
+    /// **The caller's contract**: where both sides are decided, they are one value —
+    /// [`Module::unify`] establishes that on every path that reaches here, returning on
+    /// the conflicting arms instead. A merge of two decided-different classes is not a
+    /// merge, and this is the one thing the write rules rely on.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let left = self.class_low_type(a).cloned();
         let right = self.class_low_type(b).cloned();
@@ -99,6 +99,22 @@ impl<P: Program> Module<P> {
             self.fill_class_holes(representative, value);
         }
         representative
+    }
+
+    /// Give `value` to every member of `representative`'s class that holds nothing.
+    ///
+    /// # Invariant
+    /// A member that already holds a value keeps it, so the merge never replaces one. The
+    /// filled class is uniform because a merge only happens where the two sides are one
+    /// value or one side is undecided: "one class holds one value" follows from that, not
+    /// from writing over anybody. See docs/notes/lowlevel-vm.md.
+    pub(crate) fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
+        let members: Vec<NodeId> = self.class_members(representative).collect();
+        for member in members {
+            if self.nodes[member].value.is_none() {
+                self.set_node_value(member, Some(value));
+            }
+        }
     }
 
     pub fn equality_representative(&mut self, node: NodeId) -> NodeId {
@@ -239,14 +255,23 @@ impl<P: Program> Module<P> {
         deepened
     }
 
-    /// Write `value` onto `node`, then propagate a concrete value to its whole class.
+    /// Write `value` onto `node`, then give its whole class that value.
     ///
     /// # Invariant
-    /// The write is unconditional and reaches every member, so one class has one
-    /// value; a `None` clears only the node's own slot — undecided is not a fact to
-    /// propagate. This is the single value-write choke-point and one of the class's
-    /// two low-type observation sites. See docs/notes/lowlevel-vm.md.
+    /// A slot that holds a value is never given a different one, so the caller's
+    /// contract is that `node` holds nothing — GC's relocation is the one licensed
+    /// writer of an occupied slot. A value also enters a class once, so a `Some`
+    /// requires the whole class to hold nothing. It always propagates, so one class
+    /// holds one value; a `None` clears only the slot it was given.
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
+        debug_assert!(
+            self.nodes[node].value.is_none(),
+            "a value a slot holds is never replaced by another: {node:?}"
+        );
+        debug_assert!(
+            value.is_none() || self.class_value(node).is_none(),
+            "a value enters a class once, so only a class holding nothing is written: {node:?}"
+        );
         self.set_node_value(node, value);
         if let Some(value) = value {
             // A lone representative has nobody to distribute to; the slot write is all.
@@ -268,32 +293,43 @@ impl<P: Program> Module<P> {
     /// moves exactly when some node's value changes — see [`Module::value_epoch`]. The
     /// epoch is bumped before the slot is written, so an epoch observed during a
     /// subsequent read is one that saw the write.
-    fn set_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
+    pub(crate) fn set_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.bump_value_epoch();
         self.nodes[node].value = value;
     }
 
-    /// [`Self::set_node_value`] for a member that holds nothing; a member that holds
-    /// something keeps it.
-    fn set_node_value_if_absent(&mut self, node: NodeId, value: P::Value) {
-        if self.nodes[node].value.is_none() {
-            self.set_node_value(node, Some(value));
+    /// [`Self::write_node_value`] for a writer that must not claim an occupied slot.
+    pub fn write_node_value_if_absent(&mut self, node: NodeId, value: Option<P::Value>) {
+        if self.nodes[node].value.is_some() {
+            return;
         }
+        self.write_node_value(node, value);
     }
 
-    /// Commit an operation's answer, then restore the node's own slot so its run state survives.
+    /// GC's sole licence to rewrite an occupied slot.
     ///
     /// # Invariant
-    /// The class's value is distributed, but the node's own slot keeps the operator's
-    /// answer: a propagated class value must never masquerade as a produced answer, or
-    /// the operator that owed one would never run again ([`Module::has_no_result_yet`]).
-    /// The answer meets the class as a node-less side, so a conflict is the ordinary
-    /// unification conflict. See docs/notes/lowlevel-vm.md.
+    /// Not a licence to change the value: compaction re-allocates the payload into the
+    /// surviving block **from the same items**, so the value is *moved*, not replaced —
+    /// a fact of the walk that got here, not one re-proved here. No propagation: the
+    /// collect visits every class member itself, so each is relocated once.
+    pub(crate) fn relocate_node_value(&mut self, node: NodeId, value: P::Value) {
+        self.set_node_value(node, Some(value));
+    }
+
+    /// Commit an operation's answer, unifying it against what the class holds.
+    ///
+    /// # Invariant
+    /// **Unify is the gate, and it is the only one.** An empty class takes the answer
+    /// whole. A class holding a value is unified with the answer: one value and the
+    /// answer is that class's own, so it fills this node's hole; a disagreement is
+    /// recorded and nothing is written. A slot that holds a value is left alone either
+    /// way, so an answer never overwrites one.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
         let held = self.class_committed_value(node);
-        self.unify_inner(
+        let agrees = self.unify_inner(
             Side::value(Some(value)),
             Side::value(held),
             &mut path,
@@ -301,31 +337,24 @@ impl<P: Program> Module<P> {
             &mut steps,
             (node, node),
         );
-        self.write_node_value(node, Some(value));
-        self.set_node_value(node, Some(value));
+        if agrees {
+            self.write_node_value_if_absent(node, Some(value));
+        }
         self.stamp_node_ran(node);
     }
 
-    /// Distribute a concrete `value` over the whole class of `representative`.
+    /// Give a concrete `value` to **every** member of `representative`'s class.
     ///
     /// # Invariant
-    /// Undecided is not a fact to propagate, so only a decided value reaches here. An
-    /// operation-bearing member keeps its computation: its slot holds the class's value
-    /// while its run stamp stays zero, which [`Module::has_no_result_yet`] reads as the
-    /// operator still owing its own answer. A merge does not use this path — it fills
-    /// only the holes. See docs/notes/lowlevel-vm.md.
+    /// Writing **every** member is what makes one class hold one value after a write. It
+    /// is admitted only into a class that holds nothing — a value enters a class once,
+    /// asserted by the caller that knows the class was empty *before* the write, which is
+    /// why it is not re-checked here. A merge does not come through this path: it uses
+    /// [`Module::fill_class_holes`].
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
             self.set_node_value(member, Some(value));
-        }
-    }
-
-    /// Fill the class's members that hold nothing; a member that holds something keeps it.
-    fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
-        let members: Vec<NodeId> = self.class_members(representative).collect();
-        for member in members {
-            self.set_node_value_if_absent(member, value);
         }
     }
 
@@ -586,8 +615,13 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        // The elements agree, so the types are one; no value is written back — both carry one.
-        self.add_equality(ra, rb);
+        // One signature does not make one value: each pair names its own function.
+        if self.function_identity_equal(
+            self.function_type_function(ra).expect("a function type"),
+            self.function_type_function(rb).expect("a function type"),
+        ) {
+            self.add_equality(ra, rb);
+        }
         true
     }
 
@@ -681,9 +715,9 @@ impl<P: Program> Module<P> {
                 true
             }
             // One side knows a value: the merged class holds it; there is nothing to descend into.
-            (Some(value), None) | (None, Some(value)) => {
-                let rep = self.add_equality(ra, rb);
-                self.write_node_value(rep, Some(value));
+            (Some(_), None) | (None, Some(_)) => {
+                // The merge already gave every member the value the deciding side kept.
+                self.add_equality(ra, rb);
                 true
             }
             // Both sides know a value: they must be the same; for an array the elements decide it.
