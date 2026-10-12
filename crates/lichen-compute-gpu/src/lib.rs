@@ -15,4 +15,4 @@ pub use dispatch::{
     DEFAULT_SLOT_DEPTH, GpuConfig, GpuContext, RunError, install, install_default,
     installed_backend_name, uninstall,
 };
-pub use spirv::{Binding, LOCAL_SIZE_X, SpirvRefusal};
+pub use spirv::{Binding, LOCAL_SIZE_X, SUBGROUP_WIDTH, SpirvRefusal};

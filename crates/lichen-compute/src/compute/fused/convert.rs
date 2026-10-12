@@ -129,6 +129,7 @@ impl From<schema::Space> for ir::Space {
     fn from(space: schema::Space) -> Self {
         match space {
             schema::Space::Register => ir::Space::Register,
+            schema::Space::Warp => ir::Space::Warp,
             schema::Space::Shared => ir::Space::Shared,
         }
     }
@@ -138,6 +139,7 @@ impl From<ir::Space> for schema::Space {
     fn from(space: ir::Space) -> Self {
         match space {
             ir::Space::Register => schema::Space::Register,
+            ir::Space::Warp => schema::Space::Warp,
             ir::Space::Shared => schema::Space::Shared,
         }
     }

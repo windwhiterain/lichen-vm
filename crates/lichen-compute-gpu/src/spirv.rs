@@ -92,12 +92,21 @@ mod op {
     pub const BITWISE_AND: u16 = 199;
     /// The workgroup barrier: no invocation of the workgroup passes before every one arrives.
     pub const CONTROL_BARRIER: u16 = 224;
+    /// The read of another lane's value through the exchange network, at subgroup scope.
+    pub const GROUP_NON_UNIFORM_SHUFFLE: u16 = 345;
 }
 
-/// `SpvCapabilityShader`, `SpvCapabilityInt64`.
+/// `SpvCapabilityShader`, `SpvCapabilityInt64`, `SpvCapabilityGroupNonUniformShuffle`.
 mod capability {
     pub const SHADER: u32 = 1;
     pub const INT64: u32 = 11;
+    /// The exchange network a `Warp` slice reads through.
+    ///
+    /// # Invariant
+    /// Its own capability and not `GroupNonUniform`: `OpGroupNonUniformShuffle` is refused without
+    /// it, so a module declaring the parent alone would validate its absence as a missing one only
+    /// at the shuffle — or, before that, at the validator.
+    pub const GROUP_NON_UNIFORM_SHUFFLE: u32 = 65;
 }
 
 /// `SpvStorageClass` values used below.
@@ -129,7 +138,18 @@ const BUILT_IN_GLOBAL_INVOCATION_ID: u32 = 28;
 /// workgroup-memory semantics are one fact about shared memory — the lanes of a workgroup, and the
 /// storage they exchange through (`docs/notes/shared-memory-and-barriers.md` §4).
 const SCOPE_WORKGROUP: u32 = 2;
+/// `SpvScopeSubgroup`: the scope a `Warp` exchange's barrier is ordered at.
+const SCOPE_SUBGROUP: u32 = 3;
 const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
+/// `AcquireRelease | WorkgroupMemory`, the semantics a `Warp` pair's barrier is ordered at.
+///
+/// # Invariant
+/// **The acquire/release bits are what make the exchange sound and are not the workgroup
+/// barrier's**: the staged value is a register, so ordering it is an acquire/release, and
+/// `WorkgroupMemory` alone orders shared memory — which a `Warp` slice has none of. It stays the
+/// memory scope because that must not be *narrower* than the execution scope, and `Subgroup` is
+/// narrower than it.
+const MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY: u32 = 0x108;
 /// The `None` a merge instruction's optional control mask carries.
 const CONTROL_NONE: u32 = 0;
 /// `SpvExecutionModelGLCompute`, `SpvExecutionModeLocalSize`.
@@ -164,6 +184,15 @@ fn element_stride(class: ScalarClass) -> u32 {
 /// schedules, so a fragment declaring another is refused by name rather than having its `LocalSize`
 /// rounded to this.
 pub const LOCAL_SIZE_X: u32 = 64;
+
+/// The lanes one subgroup runs, as this target's device reports them.
+///
+/// # Invariant
+/// The width a `Warp` exchange is legal at, read the way [`LOCAL_SIZE_X`] is: a fact about the
+/// device rather than the body, so a slice that does not fit in one is refused by name. **The
+/// module cannot state it** — `SubgroupSize` is an execution mode Vulkan 1.3 introduced and this
+/// target emits SPIR-V 1.3 — which is why it is the narrow width every subgroup here runs.
+pub const SUBGROUP_WIDTH: u32 = 32;
 
 /// Why a fragment cannot be emitted for this target: every variant names its own
 /// cause and nothing is approximated.
@@ -202,6 +231,27 @@ pub enum SpirvRefusal {
     /// array per lane, so `Workgroup` storage would let a lane see another's elements — a different
     /// program (`docs/notes/shared-memory-and-barriers.md` §5).
     StagingNotOnThisBackend { space: Space, at: usize },
+    /// A `Warp`-placed slice that does not hold exactly one element per lane of a subgroup.
+    ///
+    /// # Invariant
+    /// Refused **by name** rather than placed in [`Space::Shared`]: the exchange reads the value a
+    /// named lane of the reader's own subgroup staged, so a count that is not one per lane either
+    /// names a lane the reader cannot reach or one its siblings also staged — a different program,
+    /// not a slower one (`docs/notes/shared-memory-and-barriers.md` §5).
+    StagingNotOneElementPerLane {
+        /// The slice's element count.
+        count: u32,
+        /// The lanes one subgroup runs.
+        subgroup_width: u32,
+        at: usize,
+    },
+    /// A `Warp` read of a slice this lane never staged a value into.
+    ///
+    /// # Invariant
+    /// The exchange takes each lane's own staged value, so a read with none is a value no lane
+    /// ever held — refused by name rather than answered from whatever the register carried
+    /// (`docs/notes/shared-memory-and-barriers.md` §5).
+    WarpExchangeWithoutAWrite { at: usize },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
     /// The fragment declares a workgroup width this target cannot schedule.
@@ -314,6 +364,26 @@ impl fmt::Display for SpirvRefusal {
                  storage; this emitter declares `Workgroup` storage only, so emitting that here \
                  would let a lane read another's elements — a different program than the \
                  fragment states."
+            ),
+            SpirvRefusal::StagingNotOneElementPerLane {
+                count,
+                subgroup_width,
+                at,
+            } => write!(
+                f,
+                "instruction {at} stages {count} element(s) in the `Warp` space, and one subgroup \
+                 of this target runs {subgroup_width} lane(s). The exchange reads the value a \
+                 named lane of the reader's own subgroup staged, so a slice holds exactly one \
+                 element per lane: a wider one names a lane the reader cannot reach and a narrower \
+                 one a lane its siblings also staged (`docs/notes/shared-memory-and-barriers.md` \
+                 §5)."
+            ),
+            SpirvRefusal::WarpExchangeWithoutAWrite { at } => write!(
+                f,
+                "instruction {at} reads a `Warp` slice this lane never staged a value into. The \
+                 exchange takes each lane's own value rather than a memory the reader may address, \
+                 so there is no uninitialised element for a read to name (`docs/notes/shared-\
+                 memory-and-barriers.md` §5)."
             ),
             SpirvRefusal::UnsupportedIntWidth { bits } => write!(
                 f,
@@ -648,6 +718,10 @@ struct Ids {
     shared_lengths: Vec<(u32, u32)>,
     /// The barrier's three operands name these two ids: the scope constant, and the semantics.
     barrier_scope: u32,
+    /// The same barrier at the scope a `Warp` exchange is ordered at, with its semantics.
+    subgroup_scope: u32,
+    /// The semantics that order a register rather than a memory.
+    subgroup_semantics: u32,
     barrier_semantics: u32,
     /// The push-constant block's struct, its variable, and a pointer to each class's
     /// member within it.
@@ -847,6 +921,22 @@ fn shared_shapes(launch: &LaunchSet<'_>) -> Vec<Slice> {
     shapes
 }
 
+/// Whether any fragment in the launch set places a slice for a warp exchange.
+///
+/// # Invariant
+/// The capability is declared once for the module, so it follows the launch set rather than the
+/// body being emitted: a module that declared it for a slice no access reached would ask the
+/// device for a support it does not use, and a module that omitted it for one it did would fail
+/// validation at the shuffle.
+fn exchanges_a_warp(launch: &LaunchSet<'_>) -> bool {
+    launch.ordered().iter().copied().any(|fragment| {
+        fragment
+            .slices
+            .iter()
+            .any(|slice| slice.space == Space::Warp)
+    })
+}
+
 /// The class a fragment's arithmetic is built for, and the answer for one with no
 /// declared buffer class.
 ///
@@ -984,6 +1074,8 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         .map(|fragment| take(fragment.slices.len() as u32))
         .collect();
     let barrier_scope = take(1);
+    let subgroup_scope = take(1);
+    let subgroup_semantics = take(1);
     let barrier_semantics = take(1);
     // The push-constant block's ids: struct, pointer, variable, per-class
     // pointers, and one member index per leaf.
@@ -1020,6 +1112,8 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         shared: shared_variables,
         shared_lengths,
         barrier_scope,
+        subgroup_scope,
+        subgroup_semantics,
         barrier_semantics,
         push_block,
         push_block_ptr,
@@ -1057,6 +1151,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         binding,
         &classes,
         &shared,
+        exchanges_a_warp(launch),
         needs_int64(launch)?,
         &literals.declarations,
         &bodies,
@@ -1133,6 +1228,8 @@ fn emit_function(
     let mut prologue: Vec<Inst> = Vec::new();
     let mut parameters: Vec<Inst> = Vec::new();
     let mut slots: HashMap<ValueId, Slot> = HashMap::new();
+    // What each `Warp` slice holds in this lane: the exchange reads a register, not a memory.
+    let mut warp_values: HashMap<usize, Slot> = HashMap::new();
 
     // Every parameter is placed by the one mechanism this target has for it.
     let leaves = fragment.param_shape.leaf_classes();
@@ -1655,62 +1752,123 @@ fn emit_function(
                         }
                         KernelInstr::SliceWriteCall(_) => {
                             let index = operand(1)?;
-                            let (pointer, element_class) = slice_pointer(
-                                fragment,
-                                shared,
-                                ids,
-                                operand(0)?,
-                                index,
-                                at,
-                                &mut code,
-                                &mut literals,
-                                &mut next,
-                            )?;
-                            // **The version this leaves is not materialised**: its only
-                            // consumer is a read's third operand, which emission ignores.
+                            let (ordinal, shape) = slice_shape(fragment, shared, operand(0)?, at)?;
                             let value = as_class(
                                 operand(2)?,
-                                element_class,
+                                shape.class,
                                 &ids,
                                 &mut literals,
                                 &mut code,
                                 &mut next,
                                 at,
                             )?;
-                            code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                            match shape.space {
+                                Space::Warp => {
+                                    // **Nothing is emitted**: the value is the lane's own, and the
+                                    // read is what names it across lanes.
+                                    warp_values.insert(ordinal, value);
+                                }
+                                Space::Register => {
+                                    return Err(SpirvRefusal::StagingNotOnThisBackend {
+                                        space: shape.space,
+                                        at,
+                                    });
+                                }
+                                Space::Shared => {
+                                    let (pointer, element_class) = slice_pointer(
+                                        &ids,
+                                        shared,
+                                        shape,
+                                        ordinal,
+                                        index,
+                                        at,
+                                        &mut code,
+                                        &mut literals,
+                                        &mut next,
+                                    )?;
+                                    // **The version this leaves is not materialised**: its only
+                                    // consumer is a read's third operand, which emission ignores.
+                                    let value = as_class(
+                                        value,
+                                        element_class,
+                                        &ids,
+                                        &mut literals,
+                                        &mut code,
+                                        &mut next,
+                                        at,
+                                    )?;
+                                    code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                                }
+                            }
                         }
                         KernelInstr::SliceReadCall(_) => {
-                            // Immediately before the read's definition
-                            // (`docs/notes/shared-memory-and-barriers.md` §9).
-                            if barrier_reads.contains(&definition) {
-                                code.push(Inst::new(
-                                    op::CONTROL_BARRIER,
-                                    vec![
-                                        ids.barrier_scope,
-                                        ids.barrier_scope,
-                                        ids.barrier_semantics,
-                                    ],
-                                ));
-                            }
                             let index = operand(1)?;
-                            let (pointer, element_class) = slice_pointer(
-                                fragment,
-                                shared,
-                                ids,
-                                operand(0)?,
-                                index,
-                                at,
-                                &mut code,
-                                &mut literals,
-                                &mut next,
-                            )?;
-                            let loaded = next;
-                            next += 1;
-                            code.push(Inst::new(
-                                op::LOAD,
-                                vec![ids.type_of(element_class), loaded, pointer],
-                            ));
-                            slots.insert(definition, scalar(loaded, element_class));
+                            let (ordinal, shape) = slice_shape(fragment, shared, operand(0)?, at)?;
+                            match shape.space {
+                                Space::Warp => {
+                                    // Immediately before the read, at the scope the
+                                    // exchange is confined to (§9).
+                                    if barrier_reads.contains(&definition) {
+                                        code.push(Inst::new(
+                                            op::CONTROL_BARRIER,
+                                            vec![
+                                                ids.subgroup_scope,
+                                                ids.subgroup_scope,
+                                                ids.subgroup_semantics,
+                                            ],
+                                        ));
+                                    }
+                                    let exchanged = exchange_through_a_warp(
+                                        warp_values.get(&ordinal).copied(),
+                                        shape,
+                                        index,
+                                        &ids,
+                                        &mut literals,
+                                        &mut code,
+                                        &mut next,
+                                        at,
+                                    )?;
+                                    slots.insert(definition, exchanged);
+                                }
+                                Space::Register => {
+                                    return Err(SpirvRefusal::StagingNotOnThisBackend {
+                                        space: shape.space,
+                                        at,
+                                    });
+                                }
+                                Space::Shared => {
+                                    // Immediately before the read's definition
+                                    // (`docs/notes/shared-memory-and-barriers.md` §9).
+                                    if barrier_reads.contains(&definition) {
+                                        code.push(Inst::new(
+                                            op::CONTROL_BARRIER,
+                                            vec![
+                                                ids.barrier_scope,
+                                                ids.barrier_scope,
+                                                ids.barrier_semantics,
+                                            ],
+                                        ));
+                                    }
+                                    let (pointer, element_class) = slice_pointer(
+                                        &ids,
+                                        shared,
+                                        shape,
+                                        ordinal,
+                                        index,
+                                        at,
+                                        &mut code,
+                                        &mut literals,
+                                        &mut next,
+                                    )?;
+                                    let loaded = next;
+                                    next += 1;
+                                    code.push(Inst::new(
+                                        op::LOAD,
+                                        vec![ids.type_of(element_class), loaded, pointer],
+                                    ));
+                                    slots.insert(definition, scalar(loaded, element_class));
+                                }
+                            }
                         }
                         // **The callee's own facts**: the set carries its arity,
                         // which is its domain's flattening.
@@ -2922,6 +3080,7 @@ fn assemble(
     binding: Binding,
     classes: &[ScalarClass],
     shared: &[Slice],
+    warp: bool,
     needs_int64: bool,
     literals: &[Inst],
     bodies: &[Vec<Inst>],
@@ -2937,11 +3096,17 @@ fn assemble(
         }
     };
 
-    // 1. Capabilities. `Int64` only where the module has a 64-bit integer: a float
-    // module's integers are 32-bit indices.
+    // 1. Capabilities: `Int64` for a 64-bit module, `GroupNonUniformShuffle` for a
+    // `Warp` slice.
     let mut capabilities = vec![Inst::new(op::CAPABILITY, vec![capability::SHADER])];
     if ids.class == ScalarClass::Int {
         capabilities.push(Inst::new(op::CAPABILITY, vec![capability::INT64]));
+    }
+    if warp {
+        capabilities.push(Inst::new(
+            op::CAPABILITY,
+            vec![capability::GROUP_NON_UNIFORM_SHUFFLE],
+        ));
     }
     emit_all(&mut out, &capabilities);
 
@@ -3190,8 +3355,9 @@ fn assemble(
         opcode: literal.opcode,
         operands: literal.operands.clone(),
     }));
-    if !shared.is_empty() {
-        // The barrier's scope and semantics: two ids its operands name.
+    if !shared.is_empty() || warp {
+        // The barrier's scope and semantics: the ids its operands name, at each of the two scopes
+        // a staged pair is ordered at.
         constants.extend([
             Inst::new(
                 op::CONSTANT,
@@ -3199,10 +3365,22 @@ fn assemble(
             ),
             Inst::new(
                 op::CONSTANT,
+                vec![ids.uint, ids.subgroup_scope, SCOPE_SUBGROUP],
+            ),
+            Inst::new(
+                op::CONSTANT,
                 vec![
                     ids.uint,
                     ids.barrier_semantics,
                     MEMORY_SEMANTICS_WORKGROUP_MEMORY,
+                ],
+            ),
+            Inst::new(
+                op::CONSTANT,
+                vec![
+                    ids.uint,
+                    ids.subgroup_semantics,
+                    MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY,
                 ],
             ),
         ]);
@@ -3417,30 +3595,53 @@ fn buffer_slot(
     Ok(base + value as usize)
 }
 
+/// The slice an access names, and its own shape.
+///
+/// # Invariant
+/// The ordinal is a compile-time ordinal into `fragment`'s **own** `slices` — the rule a buffer
+/// position follows — and it is what every placement decision is read off: the space says which of
+/// them the access takes, and **a `Warp` one is measured before any access reaches it**, so a slice
+/// too wide for the exchange is refused by whichever access comes first.
+fn slice_shape(
+    fragment: &KernelFragment,
+    base: u32,
+    slice: Slot,
+    at: usize,
+) -> Result<(usize, Slice), SpirvRefusal> {
+    let variable = buffer_slot(slice, at, base as usize, fragment.slices.len(), "slice")?;
+    let shape = fragment.slices[variable - base as usize];
+    if shape.space == Space::Warp && shape.count != SUBGROUP_WIDTH {
+        return Err(SpirvRefusal::StagingNotOneElementPerLane {
+            count: shape.count,
+            subgroup_width: SUBGROUP_WIDTH,
+            at,
+        });
+    }
+    Ok((variable - base as usize, shape))
+}
+
 /// The pointer a slice access names, and the class of the element it holds, with the access chain
 /// emitted.
 ///
 /// # Invariant
-/// The slice is a compile-time ordinal into `fragment`'s **own** `slices` — the rule a buffer
-/// position follows — the index operand indexes the array that slice's own count declares, and a
-/// space this target does not emit is refused rather than placed in `Workgroup` storage.
+/// The index operand indexes the array that slice's own count declares, and a space this target
+/// does not emit is refused rather than placed in `Workgroup` storage — which is why a `Warp`
+/// access never reaches here, carrying no address to place.
 fn slice_pointer(
-    fragment: &KernelFragment,
-    base: u32,
     ids: &Ids,
-    slice: Slot,
+    base: u32,
+    shape: Slice,
+    variable: usize,
     index: Slot,
     at: usize,
     code: &mut Vec<Inst>,
     literals: &mut Literals,
     next: &mut u32,
 ) -> Result<(u32, ScalarClass), SpirvRefusal> {
-    let variable = buffer_slot(slice, at, base as usize, fragment.slices.len(), "slice")?;
-    let shape = fragment.slices[variable - base as usize];
     let class = shape.class;
     let chain = match shape.space {
         Space::Shared => ids.shared_of(shape),
-        Space::Register => {
+        Space::Warp | Space::Register => {
             return Err(SpirvRefusal::StagingNotOnThisBackend {
                 space: shape.space,
                 at,
@@ -3452,7 +3653,67 @@ fn slice_pointer(
     *next += 1;
     code.push(Inst::new(
         op::ACCESS_CHAIN,
-        vec![chain.ptr_elem, pointer, variable as u32, index.id],
+        vec![chain.ptr_elem, pointer, base + variable as u32, index.id],
     ));
     Ok((pointer, class))
+}
+
+/// `slot` as the 32-bit unsigned a shuffle names the lane it exchanges from by.
+///
+/// # Invariant
+/// The `Id` operand is a 32-bit integer scalar and this module's `Int` is 64 bits wide, so an
+/// index read as `Int` is narrowed here rather than named — a 64-bit operand is not a lane id at
+/// all, and `spirv-val` reads the difference as a missing type rather than a missing capability.
+fn as_lane_id(
+    slot: Slot,
+    ids: &Ids,
+    literals: &mut Literals,
+    code: &mut Vec<Inst>,
+    next: &mut u32,
+    at: usize,
+) -> Result<u32, SpirvRefusal> {
+    let value = as_class(slot, ScalarClass::Int, ids, literals, code, next, at)?;
+    if ids.integer() == ids.uint {
+        return Ok(value.id);
+    }
+    let narrowed = *next;
+    *next += 1;
+    code.push(Inst::new(op::U_CONVERT, vec![ids.uint, narrowed, value.id]));
+    Ok(narrowed)
+}
+
+/// The value one lane stages into a `Warp` slice, and what the read of it emits.
+///
+/// # Invariant
+/// **The value is the lane's own**: a write emits nothing, because the exchange reads each lane's
+/// register rather than an address, so the staged value is what the next read shuffles from. The
+/// subgroup barrier is not emitted here — a read states the scope it is ordered at only when a
+/// recorded pair is owed for it, which is what keeps an unordered read from carrying one.
+fn exchange_through_a_warp(
+    held: Option<Slot>,
+    shape: Slice,
+    index: Slot,
+    ids: &Ids,
+    literals: &mut Literals,
+    code: &mut Vec<Inst>,
+    next: &mut u32,
+    at: usize,
+) -> Result<Slot, SpirvRefusal> {
+    let staged = held.ok_or(SpirvRefusal::WarpExchangeWithoutAWrite { at })?;
+    let source = as_lane_id(index, ids, literals, code, next, at)?;
+    let exchanged = *next;
+    *next += 1;
+    code.push(Inst::new(
+        op::GROUP_NON_UNIFORM_SHUFFLE,
+        vec![
+            ids.type_of(shape.class),
+            exchanged,
+            // **The scope is an operand, not an implied default**: it is what confines the
+            // exchange to the reader's own subgroup.
+            ids.subgroup_scope,
+            staged.id,
+            source,
+        ],
+    ));
+    Ok(scalar(exchanged, shape.class))
 }

@@ -39,6 +39,8 @@ pub enum IntWidth {
 pub enum Space {
     /// One array per lane.
     Register,
+    /// One value per lane, readable within the writing lane's subgroup.
+    Warp,
     /// One array per workgroup.
     Shared,
 }

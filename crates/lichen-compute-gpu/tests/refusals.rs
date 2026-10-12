@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use lichen_compute_gpu::SUBGROUP_WIDTH;
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
     Br, FlatOp, IntWidth, KernelBody, KernelFragment, KernelId, KernelInstr, KernelRoles,
@@ -592,5 +593,53 @@ fn a_register_placed_slice_is_refused_by_name() {
     assert!(
         message.contains("does not emit"),
         "says why this target cannot honour it: {message}"
+    );
+}
+
+/// A `Warp` slice that reaches past one subgroup is refused, not quietly made shared.
+///
+/// # Invariant
+/// `writes_a_slice` stages 64 elements, the **whole workgroup** and twice this target's subgroup:
+/// a read at index `j` would name the lane `j` of the reader's own subgroup, and `j` reaches past
+/// it. The refusal carries the count and the width because which two numbers met is what tells
+/// the author what to change — `Shared`, or a narrower tile.
+#[test]
+fn a_warp_slice_reaching_past_one_subgroup_is_refused_by_name() {
+    let fragment = writes_a_slice(Space::Warp);
+    fragment
+        .body
+        .validate()
+        .expect("the body is well formed; it is the *placement* that is refused");
+    let refusal = spirv::compile(
+        &LaunchSet::single(&fragment),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .expect_err("a slice wider than a subgroup cannot be exchanged");
+    match &refusal {
+        SpirvRefusal::StagingNotOneElementPerLane {
+            count,
+            subgroup_width,
+            ..
+        } => {
+            assert_eq!(*count, 64, "names the slice's count");
+            assert_eq!(
+                *subgroup_width, SUBGROUP_WIDTH,
+                "names the width one subgroup runs"
+            );
+        }
+        other => panic!("refused for the placement, not something else: {other:?}"),
+    }
+    let message = refusal.to_string();
+    assert!(message.contains('6'), "names the count: {message}");
+    assert!(
+        message.contains(&SUBGROUP_WIDTH.to_string()),
+        "names the width: {message}"
+    );
+    assert!(
+        message.contains("cannot reach"),
+        "says what the read would have named: {message}"
     );
 }

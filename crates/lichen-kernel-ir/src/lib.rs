@@ -755,7 +755,7 @@ impl KernelInstr {
 /// Where a slice's elements live, as the plan names the choice.
 ///
 /// # Invariant
-/// The two spaces the plan admits (`docs/notes/graph-fusion.md` §5), and the vocabulary
+/// The three spaces a plan admits (`docs/notes/graph-fusion.md` §5), and the vocabulary
 /// [`Slice::space`] states: a backend that cannot honour one refuses it **by name** rather than
 /// emitting the other. `Global` is not a member: a value two workgroups must exchange means the
 /// region did not fuse — the graph's decision, not a slice's home
@@ -764,6 +764,14 @@ impl KernelInstr {
 pub enum Space {
     /// One array per lane, readable by the lane that wrote it and no other.
     Register,
+    /// One value per lane, readable by any lane of the writing lane's subgroup.
+    ///
+    /// # Invariant
+    /// Element `i` is staged by the lane whose subgroup-local id is `i`, which is the lane a read's
+    /// index names as the one it exchanges from; a backend narrows the slice to its target's
+    /// subgroup width and refuses a wider one **by name** rather than exchanging it in shared
+    /// memory (`docs/notes/shared-memory-and-barriers.md` §5).
+    Warp,
     /// One array per workgroup, readable by every lane of it.
     Shared,
 }
