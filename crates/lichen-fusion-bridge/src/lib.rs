@@ -2,10 +2,10 @@
 //! See docs/notes/graph-fusion.md §3.
 //!
 //! # Invariant
-//! The bridge is total: a marked value it cannot read as one symbolic expression is a
-//! [`BridgeRefusal`] naming the instruction it met, never a panic and never a guess. What
-//! it reads is small on purpose — constants, the fragment's reads and its carried state,
-//! and the arithmetic over them.
+//! The bridge is total: a value it cannot read as one symbolic expression is a
+//! [`BridgeRefusal`] naming the instruction it met — never a panic, never a guess. What it
+//! reads is small on purpose: constants, the fragment's reads and carried state, and the
+//! arithmetic over them — **except a transcendental**, read as its definition inlined.
 
 mod lower;
 mod operators;

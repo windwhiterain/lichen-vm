@@ -1,11 +1,17 @@
 //! The walk that reads a marked body value as one symbolic expression.
+//!
+//! # Invariant
+//! **A transcendental is read as the operator whose definition the body holds**: a registered
+//! fragment carries [`KernelBody::expand_transcendentals`]'s expansion, so a `sqrt` arrives as
+//! a Newton iteration of `Select`s. Each is read through its definition's own reader, which
+//! answers only a subtree that *is* that definition; any other is refused as it really stands.
 
 use std::collections::HashMap;
 
 use lichen_fusion::{Expr, UnaryOp, Variable};
 use lichen_kernel_ir::{
-    KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId,
-    inlined_exp_operand,
+    KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, inlined_exp_operand,
+    inlined_sqrt_operand,
 };
 
 use crate::operators::binary;
@@ -20,6 +26,14 @@ use crate::roles::ReadRoles;
 /// double per level. The budget keeps the walk total: past it the projection is refused by
 /// name rather than expanded into a tree no report could hold.
 const EXPRESSION_NODE_BUDGET: usize = 4096;
+
+/// The largest integer a machine-integer immediate may state and still read as one real number.
+///
+/// # Invariant
+/// The symbolic language's numbers are `f64`, whose significand is 53 bits: every integer up to
+/// `2^53` is one it holds exactly and beyond that it rounds, so an immediate above this number
+/// is refused as the machine integer it is rather than answered with a neighbouring number.
+const EXACT_INTEGER_LIMIT: u64 = 1 << 53;
 
 /// The symbolic expression a marked body value denotes.
 ///
@@ -121,17 +135,15 @@ impl Walk<'_> {
     /// something else: the match is exhaustive, and every arm outside the arithmetic subset
     /// names its own refusal. A transcendental is read through the definition's own reader
     /// first, because the fragment a dispatcher registers holds the expansion rather than
-    /// [`KernelInstr::Exp`].
+    /// [`KernelInstr::Exp`] or [`KernelInstr::Sqrt`].
     fn instruction(
         &mut self,
         id: ValueId,
         op: KernelInstr,
         args: &[ValueId],
     ) -> Result<Expr, BridgeRefusal> {
-        if matches!(op, KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul))
-            && let Some(operand) = inlined_exp_operand(self.body, id)
-        {
-            return Ok(UnaryOp::Exp.apply(self.value(operand)?));
+        if let Some((operator, operand)) = inlined_transcendental(self.body, id) {
+            return Ok(operator.apply(self.value(operand)?));
         }
         match op {
             KernelInstr::Const(ScalarClass::Float, bits) => Ok(Expr::Constant(float_of_bits(bits))),
@@ -159,7 +171,7 @@ impl Walk<'_> {
                 Ok(UnaryOp::Sqrt.apply(operand))
             }
             KernelInstr::Floor => Err(BridgeRefusal::Floor),
-            KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
+            KernelInstr::Conv { from, to } => self.conversion(args, from, to),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),
             KernelInstr::BufferReadCall(ScalarClass::Float) => {
@@ -196,6 +208,43 @@ impl Walk<'_> {
         }
     }
 
+    /// The expression one class conversion computes.
+    ///
+    /// # Invariant
+    /// **Only `Int → Float`, of a real the walk can name**: the integer *is* the real it
+    /// denotes. An immediate is read as the number it names, every other source goes to the
+    /// walk, and a **scalar fragment's** leaf is refused, its class being stated beside the
+    /// parameter. `Float → Int` truncates, and a truncation inverts on nothing.
+    fn conversion(
+        &mut self,
+        args: &[ValueId],
+        from: ScalarClass,
+        to: ScalarClass,
+    ) -> Result<Expr, BridgeRefusal> {
+        let [operand] = args[..] else {
+            return Err(BridgeRefusal::Conversion { from, to });
+        };
+        if from != ScalarClass::Int || to != ScalarClass::Float {
+            return Err(BridgeRefusal::Conversion { from, to });
+        }
+        if let Some(ValueDef::Instr {
+            op: KernelInstr::Const(ScalarClass::Int, bits),
+            ..
+        }) = self.body.values.get(operand.0 as usize)
+        {
+            let number = *bits as u64;
+            return if number > EXACT_INTEGER_LIMIT {
+                Err(BridgeRefusal::MachineInteger { value: operand })
+            } else {
+                Ok(Expr::Constant(number as f64))
+            };
+        }
+        if self.reads.parameter_leaves.is_some() && self.body.is_a_parameter(operand) {
+            return Err(BridgeRefusal::Conversion { from, to });
+        }
+        self.value(operand)
+    }
+
     /// The compile-time ordinal a memory instruction's first operand names: a buffer position or
     /// a slice ordinal.
     ///
@@ -223,4 +272,20 @@ impl Walk<'_> {
 /// is exact in `f64`: every `f32` is a real number `f64` holds.
 fn float_of_bits(bits: i64) -> f64 {
     f32::from_bits(bits as u32) as f64
+}
+
+/// The operator a body value holds as an inlined transcendental definition, and its operand.
+///
+/// # Invariant
+/// **Each reader answers only a subtree that is its own definition**, so a value one of them
+/// holds is read as the operator that definition computes and any other falls through to the
+/// walk's own refusal. **The two are disjoint** — a match is the definition's whole
+/// instruction set — and `floor`, which has no reader here, is refused by the `Select` its
+/// expansion holds.
+fn inlined_transcendental(body: &KernelBody, value: ValueId) -> Option<(UnaryOp, ValueId)> {
+    if let Some(operand) = inlined_exp_operand(body, value) {
+        return Some((UnaryOp::Exp, operand));
+    }
+    let operand = inlined_sqrt_operand(body, value)?;
+    Some((UnaryOp::Sqrt, operand))
 }

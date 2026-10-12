@@ -458,12 +458,40 @@ pub fn exp_body() -> KernelBody {
 /// constants: a subtree that is not an instance of the definition answers `None`, so a change
 /// to the definition moves this with it rather than leaving a second copy behind.
 pub fn inlined_exp_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
-    let definition = exp_body();
+    inlined_operand(body, value, &exp_body())
+}
+
+/// The operand of the square root a body value holds as an inlined definition, or `None`.
+///
+/// # Invariant
+/// **The reader's half of [`sqrt_body`]**, matched on the same terms as
+/// [`inlined_exp_operand`]: the whole of that body's instructions and constants, and `None` for
+/// anything that is not an instance of it.
+pub fn inlined_sqrt_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
+    inlined_operand(body, value, &sqrt_body())
+}
+
+/// The operand `value` holds as an inlined copy of `definition`, or `None`.
+///
+/// # Invariant
+/// **The whole of `definition`, instruction for instruction**, rebuilt here rather than kept
+/// beside it, so no match is against a stale copy. From `value` the walk follows it backwards;
+/// every step must be in the body at the mapped value with the same opcode and arity, a value
+/// the body holds twice is refused, and every occurrence of the parameter lands on one value.
+fn inlined_operand(body: &KernelBody, value: ValueId, definition: &KernelBody) -> Option<ValueId> {
     let source = &definition.blocks[definition.entry];
     let result = match &source.terminator {
         Terminator::Return { values } => *values.first()?,
         _ => return None,
     };
+    let produced = match definition.values.get(result.0 as usize)? {
+        ValueDef::Instr { op, .. } => *op,
+        _ => return None,
+    };
+    // The definition's own last instruction, so a definition answering another way moves this.
+    if !computes(body, value, produced) {
+        return None;
+    }
     let parameter = *source.params.first()?;
     let mut mapped: HashMap<ValueId, ValueId> = HashMap::new();
     mapped.insert(result, value);
@@ -500,4 +528,12 @@ pub fn inlined_exp_operand(body: &KernelBody, value: ValueId) -> Option<ValueId>
         }
     }
     operand
+}
+
+/// Whether `value` is a body value the instruction `op` produces.
+fn computes(body: &KernelBody, value: ValueId, op: KernelInstr) -> bool {
+    matches!(
+        body.values.get(value.0 as usize),
+        Some(ValueDef::Instr { op: found, .. }) if *found == op
+    )
 }

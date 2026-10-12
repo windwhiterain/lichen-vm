@@ -156,7 +156,8 @@ impl fmt::Display for BridgeRefusal {
             BridgeRefusal::Conversion { from, to } => write!(
                 formatter,
                 "the projection converts {from:?} to {to:?}, and the symbolic language is one \
-                 arithmetic class"
+                 arithmetic class: only a widening of a value the projection already reads as a \
+                 real is carried"
             ),
             BridgeRefusal::BooleanNarrowing => write!(
                 formatter,
