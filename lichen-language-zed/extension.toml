@@ -85,13 +85,15 @@ languages = ["Lichen"]
 # `rev` must be a real Git SHA in `lichen-vm` — set it to the commit that
 # contains the `tree-sitter-lichen/` directory.  Zed builds the grammar from the
 # committed `grammar.js` (it runs `tree-sitter generate` itself), so the generated
-# `src/parser.c` need not be committed.  `0773b18` is the grammar update
-# that added the `return` keyword (and regenerated `src/parser.c`); the earlier
-# `9b23892` rev predates `return`, which made the extension's `highlights.scm`
-# fail on load with `Query error ... Invalid node type "return"`.  The current
-# rev is the one that added the full operator set to the grammar and its
-# highlight queries, so a load before it would colour none of `* / % | ^ &` and
-# read `a < b` as an error node.
+# `src/parser.c` need not be committed.  The `grammar_rev_is_not_stale` guard in
+# `tests/grammar_consistency.rs` fails whenever `rev` is behind the last commit
+# touching `tree-sitter-lichen/grammar.js`, `tree-sitter-lichen/queries/` or
+# `lichen-language-zed/languages/lichen/`, so it must be bumped in the same
+# commit as any grammar, query or highlight change.  The current rev is the
+# braced-type-form migration: `tuple{…}`, `struct{…}`, `array{…}`, `set{…}` and
+# `table{K, V}` replaced the retired angle forms, and the glued `X{n}`/`X::a`
+# reads, `t <== k`, `set(…)`/`table(…)` values, the prefix keyword operators and
+# `@any` were added.
 #
 # The `repository` is the public HTTPS remote and `rev` is a commit pushed to
 # `origin/dev`, so a registry install (or any machine without a local clone) can
@@ -100,5 +102,5 @@ languages = ["Lichen"]
 # same `rev`.
 [grammars.lichen]
 repository = "https://github.com/windwhiterain/lichen-vm"
-rev = "2d54f2aed408905a6ddf95e611065873d79ea56c"
+rev = "2ef68c103b9a3954ae51b8532df0cc954ef1f030"
 path = "tree-sitter-lichen"

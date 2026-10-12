@@ -1,7 +1,7 @@
 # tree-sitter-lichen
 
 A [tree-sitter](https://tree-sitter.github.io/tree-sitter/) grammar for the
-[Lichen](https://github.com/lichen-lang/lichen-vm) programming language.
+[Lichen](https://github.com/windwhiterain/lichen-vm) programming language.
 
 Lichen is a small, strongly-typed, dependent-ish functional language.  Its real
 frontend (`crates/lichen-language`) is a strict, correctness-first lexer and
@@ -9,18 +9,21 @@ parser with whitespace-sensitive postfix forms.  This grammar is **deliberately
 simple and permissive**: its job is syntax highlighting, outline and
 bracket-matching, not semantic correctness.  It:
 
-- accepts more than the strict parser (the whitespace "Glue" distinction is
-  glossed over — the same delimiter may be read as postfix or as a fresh atom);
+- models the current surface syntax — the keyword-led braced types (`tuple{…}`,
+  `struct{…}`, `array{T, n}`, `set{E}`, `table{K, V}`), the parenthesised
+  `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`, `X{n}`,
+  `X::a`), the infix `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix
+  keyword operators.  The retired angle forms (`<…>`, `struct<…>`,
+  `array<…, n>`) do not parse; `tests/samples.rs` pins that;
 - models the `--- ... ---` preprocessor block, Lichen's only "prose" home, as a
   node so doc strings can be highlighted;
 - keeps a light operator-precedence ladder for readable trees, in the language's
   own order (see [docs/notes/operators.md](../docs/notes/operators.md) §3), with
   one rule per level;
-- keeps `<` and `>` as **two** tokens — a glued one that opens an angle form and
-  a spaced one that is the order comparison — because the real language's rule
-  for telling them apart is the adjacency, and an LR table has no lookahead to
-  spend. That one rule is written up in
-  [operators §9](../docs/notes/operators.md#9-the-editor-grammar).
+- keeps the whitespace "Glue" distinction for the postfix forms that need it
+  (`token.immediate`), so `a[0]` is an index and `a [0]` applies `a` to an array
+  — the real language's own rule.  That model is written up in
+  [operators §10](../docs/notes/operators.md#10-the-editor-grammar).
 
 ## Usage
 
@@ -33,8 +36,8 @@ tree-sitter generate
 
 `bindings/rust/build.rs` also regenerates them automatically when they are missing or older
 than `grammar.js`, so building the Rust crate works from a clean checkout. It needs a
-`tree-sitter` CLI on PATH (`cargo install tree-sitter-cli`, or your preferred method); it
-prints that if it is missing.
+`tree-sitter` CLI (on `PATH`, or an npm `tree-sitter-cli` under `node_modules/`, which
+`build.rs` finds as a fallback); it prints that if it is missing.
 
 Parse a file:
 
@@ -64,7 +67,7 @@ the `path` field:
 
 ```toml
 [grammars.lichen]
-repository = "https://github.com/lichen-lang/lichen-vm"
+repository = "https://github.com/windwhiterain/lichen-vm"
 rev = "<commit>"
 path = "tree-sitter-lichen"
 ```

@@ -650,11 +650,9 @@ checker's builtin remains only inside the built-in module's own source.
 What stays open after the migration: the kernel side of the routing (§7.1 cost
 1); the read's monomorphism ([type-of-in-std](type-of-in-std.md)), which is off
 the contract's path now that the class refinement needs no read and is visible as
-§7.1 cost 2's `raw[?a, ?b]`; the two cross-module diagnostics (a refusal inside
+§7.1 cost 2's `raw[?a, ?b]`; and the two cross-module diagnostics (a refusal inside
 the prelude reads the generic wording, and the diagnostic names the built-in's
-line rather than the application — [core-prelude](core-prelude.md) §5); and the
-editor grammar, which still spells the assert as the prefix `!` and still models
-the retired `set{…}` / `table{…}` forms, so it has neither `set(…)` nor `@in`.
+line rather than the application — [core-prelude](core-prelude.md) §5).
 
 ## Recovered measurements
 

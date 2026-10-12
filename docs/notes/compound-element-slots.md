@@ -244,6 +244,7 @@ per entry.
 
 ## What is open
 
-- **`tree-sitter-lichen/grammar.js` still models the retired forms.** Regenerating
-  and validating it needs the tree-sitter CLI, which this checkout cannot run;
-  `docs/notes/operators.md` §10 records the gap.
+- Nothing here. The editor grammar models these forms too —
+  `tree-sitter-lichen/grammar.js` has the keyword-led `tuple{…}`, `struct{…}`,
+  `array{…}`, `set{…}` and `table{…}` types and the value-less annotation chain
+  `: T # a` — and `docs/notes/operators.md` §10 records that grammar's state.
