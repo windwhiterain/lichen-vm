@@ -538,6 +538,17 @@ region is refused (`EmptyPlan`), a `fuse` with no region steers no fusion, and t
 gate is "names this node **and** stages a value", so a fusion-only pack can never fire there. A region's
 `requires` is read off its first input **port**'s class — one rule with the node case, not a second one.
 
+**A runner names its packs on its command line, and a bad one stops the run** (decided at `5167cb5c`).
+There is no directory convention and no manifest: the host's own arguments say which pack files this run
+uses, because a pack is *that machine's* decision and the only place that knows it is the invocation.
+A pack whose text does not parse is a **named refusal that fails the run** (`read_placement_pack`'s
+refusals are all named) — a machine's own file that cannot be read means its policy did not take effect,
+and reporting it as a line while carrying on would be the swallowed refusal this repository bans. An
+inert pack is not a bad one: a pack that matches nothing is silent, since `select`ing nothing is a
+legitimate answer. The runner installs them through the **floor**, so a pack's `plan` and its `fuse`
+both apply — one pass, the chain above. The merged node's registration stays **declined** (two passes
+already name it), so a pack never has a composed node's claim to match against.
+
 The landed pack's plan is **the fused artifact's own spelling** — one `Plan`
 type, not a second one — so a pack and an artifact cannot disagree about what a
 staging entry is.
