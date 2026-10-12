@@ -633,10 +633,28 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   `[12,…,26]`. **Still refused**: a fan-out with no pack (`NotAReductionChain`, from the licence), a
   **fan-in**, a three-node *chain* (`RegionIsNotAPair` — `compose` inlines consumers of one producer
   only), a non-last consumer whose entry block branches (`ConsumerEntryDoesNotReturn`), and a
-  composition naming no consumer. **And one honest limit**: `compute.collect` gathers the graph's
-  returns into one array, so the run observes only one of the two outputs; what backs the other is
-  that the merged fragment is byte-equal to `compose_fan_out(…)`, declares 3 inputs and 2 outputs,
-  and `rebuild` maps both graph values.
+  composition naming no consumer.
+  **The two outputs are both observable, and finding that out found a bug** (`e36a0cfe`). A run's
+  answer is one `RunResult` per return, in order — the bare value when there is **one** return, an
+  `Array` of them when there are more — and `r[0]`/`r[1]` check and run unannotated, so the surface
+  already reached every return and no new spelling was needed. What it exposed: `collect` handed a
+  two-return array reads **its first item** (`buf_payload` takes an array's first), which is why the
+  slice before this one believed only one output was observable — and behind that blindness
+  `compose_fan_out` had renumbered each consumer's **reads** into the union of inputs but never its
+  **writes**, so both writes addressed `Const(Int, 0)` while the fragment declared `outputs = 2` and
+  the second consumer's buffer read back as **zeros**. `shifted_write_positions` gives each consumer's
+  output `p` the merged position `base + p`; a position that does not move takes no fresh value, so
+  `compose` and a fan-out's first consumer stayed byte-identical and the 26 compose tests did not
+  move. Measured: recorded `([3,5,…,17], [3,5,…,17])`, merged identical on **both** ordinals, and
+  moving only the **second** consumer's `+ 1.0` to `+ 10.0` answers `([3,5,…,17], [12,14,…,26])` —
+  before the fix that same test read `([3,5,…,17], [0,0,0,0,0,0,0,0])`.
+  **And a pre-existing recording bug, out of that slice's reach**: a graph's function cannot return
+  two **different** kernels' results when their output types are the **same** struct. Measured matrix:
+  the same kernel twice records (and returns `[3,4]`); different kernels with **different** output
+  types record; different kernels with the **same** output type are refused — *"this function's return
+  is not a value a graph can hand back"*, because `returned_value_ids` finds the first return's node
+  holds no value. So two ordinals of one kernel are distinguishable, two kernels of one output type
+  are not, and that wants its own slice.
   [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
