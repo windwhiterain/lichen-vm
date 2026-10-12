@@ -599,6 +599,18 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
 - **`traced`'s first real user.** The graph is not it; see the builder.
+- **What a graph's argument may be — unexercised with two buffers.** Every step this
+  tree records names **one** buffer beside the extent (`GArg = struct{.n Int, .in In}`:
+  six files, ten sites, no exception), so a step naming **two** independent argument
+  buffers has never run, and it does not record: the checker refuses `s.q.p` with
+  `this value is not a container — it has no element to read` (twice), the dispatch
+  with `argument 0 of this dispatch is not a buffer` (`compute.rs`'s own rule), and the
+  recording with `this function's return is not a value a graph can hand back`
+  (`compute.rs:5020`). Whether the recording path *should* accept two buffers, or
+  whether one buffer and an extent **is** the contract, is undecided — and unstated:
+  no note says what the argument may be. Found while writing the union's end-to-end
+  test (`crates/lichen-language/tests/union_ports.rs`), which dropped that case rather
+  than land a program that cannot build.
 
 ## Landmines, each of which is a silent wrong answer
 
