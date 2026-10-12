@@ -37,4 +37,14 @@ facet.workspace = true
 facet-json.workspace = true
 # The engine one backend caches its compiled modules in. It is a runtime, not a
 # language: `wasmi::Module` is a compiled wasm module and not `lichen_lowlevel::Module`.
-wasmi.workspace = true
+# Optional, and behind the `wasm` feature: an engine exists here only to hold a compiled
+# module, so a backend that runs no wasm takes this crate with `default-features = false`
+# and never resolves it.
+wasmi = { workspace = true, optional = true }
+
+# The wasm half is the emitted-module cache and the engine it holds. It is on by
+# default, so every in-tree consumer keeps its wasm path unchanged and only a backend
+# that reads no cache opts out.
+[features]
+default = ["wasm"]
+wasm = ["dep:wasmi"]

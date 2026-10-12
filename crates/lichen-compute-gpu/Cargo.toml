@@ -22,10 +22,12 @@ ash = "0.38.0"
 lichen-kernel-ir.workspace = true
 # The artifact loader and the `DeviceFactsSource` trait it declares: a Vulkan context
 # answers what the device **is**, which is a runtime fact and not part of the backend
-# contract. The edge is deliberately one way — the runtime names no backend — and it
-# costs the wasm engine's presence in a GPU binary, which is why it is the runtime that
-# declares the trait rather than this crate.
-lichen-runtime.workspace = true
+# contract. The edge is deliberately one way — the runtime names no backend — and
+# `default-features = false` drops the runtime's `wasm` feature, because nothing in
+# this crate reads the emitted-module cache or the engine behind it. The path is
+# stated here rather than inherited because cargo refuses `default-features = false`
+# on an inherited `workspace.dependencies` entry.
+lichen-runtime = { path = "../lichen-runtime", default-features = false }
 
 # The graph IR, so a graph can be run against a real device. A **dev**
 # dependency on purpose: this crate is a backend and takes no part in building

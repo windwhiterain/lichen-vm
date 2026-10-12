@@ -29,6 +29,8 @@ pub use fused::{
 pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
 pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};
 pub use load::{LoadRefusal, LoadedKernel, load_fused_kernel};
-pub use module_cache::{cached_module, module_cache_misses};
+#[cfg(feature = "wasm")]
+pub use module_cache::cached_module;
+pub use module_cache::module_cache_misses;
 pub use placement_pack::{PlacementPack, read_placement_pack};
 pub use region_merge::{MergeRefusal, region_merge_pass};
