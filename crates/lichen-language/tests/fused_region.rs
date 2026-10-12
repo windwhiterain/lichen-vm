@@ -14,8 +14,8 @@ use lichen_kernel_ir::{
     KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, ScalarClass, ValueDef,
     compose, fragment_digest,
 };
-use lichen_language::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_language::floor::{floor_pass_with_packs, install_floor};
+use lichen_language::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::region_merge::{install_region_merge, region_merge_pass};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module};
@@ -645,15 +645,15 @@ fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
     );
 }
 
-/// The floor runs both stages on a real dispatch, answers the un-passed program, and a
-/// counterfactual inside the composed body moves the answer.
+/// The floor runs both stages on a real dispatch, and a counterfactual moves the answer.
 ///
 /// # Invariant
 /// The report is read from the run's own channel, not from a hand-installed consult: the claim
 /// is that a dispatch under the floor reports both stages, which only a run can show.
 #[test]
 fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
-    let Some(_context) = device("the_floor_run_reports_both_stages_and_answers_the_un_passed_program")
+    let Some(_context) =
+        device("the_floor_run_reports_both_stages_and_answers_the_un_passed_program")
     else {
         return;
     };
@@ -670,10 +670,7 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
     let (floored_module, floored_value, _root) = common::run(&running());
     let passed = answer(&floored_module, &floored_value);
     let report = pass_report(&floored_module);
-    println!(
-        "the floor's run reported:\n  {}",
-        report.join("\n  ")
-    );
+    println!("the floor's run reported:\n  {}", report.join("\n  "));
     assert!(
         report
             .iter()
@@ -682,9 +679,10 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
         "the run's own report says the merge stage merged while the run was dispatched: {report:?}"
     );
     assert!(
-        report.iter().any(|line| line.contains(
-            "node 0: refused: no claim is registered for the fragment at 0"
-        )),
+        report
+            .iter()
+            .any(|line| line
+                .contains("node 0: refused: no claim is registered for the fragment at 0")),
         "and the tiling stage looked at the node the merge left, by name: {report:?}"
     );
     assert_eq!(
@@ -699,7 +697,9 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
     ))));
     let (swapped_module, swapped_value, _root) = common::run(&running());
     let swapped = answer(&swapped_module, &swapped_value);
-    println!("the device ran: recorded {baseline:?}, floored {passed:?}, floored with `d - r` swapped {swapped:?}");
+    println!(
+        "the device ran: recorded {baseline:?}, floored {passed:?}, floored with `d - r` swapped {swapped:?}"
+    );
     assert_eq!(
         swapped,
         vec![swapped_form(); COUNT],
