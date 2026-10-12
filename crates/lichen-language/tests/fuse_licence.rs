@@ -48,8 +48,8 @@ static DEVICE: Mutex<()> = Mutex::new(());
 /// # Invariant
 /// Each kernel reads at its own invocation index, which is the pairing that makes the producer's
 /// lane-dependent value bindable in-lane. The consumer declares `k.in.d` beside the buffer it
-/// absorbs because the merged node's one surviving input is the producer's, and the port check
-/// reads the two lists position for position.
+/// absorbs, which the union does not need — `union_ports.rs` merges the same chain without it —
+/// so this one states two bodies naming one buffer at two ports.
 fn program() -> String {
     r#"
 ---
@@ -143,8 +143,7 @@ const SHIFTED_DEFINED: usize = COUNT - 1;
 /// # Invariant
 /// The consumer reads `e` **at an address it computes** — `s(0) - 1`, a loop-carried index that no
 /// entry parameter is — so the shape is the one people write and the one no entry parameter
-/// answers; the consumer declares `k.in.d` beside the buffer it absorbs because the merged node's
-/// one surviving input is the producer's.
+/// answers; `k.in.d` is declared beside the buffer it absorbs, which the union does not need.
 fn folding() -> String {
     let head = program();
     let head = head
@@ -793,7 +792,14 @@ fn the_floor_still_merges_a_reduction_chain_with_no_pack_installed() {
         "and the report says the floor's own proof answered, not a pack: {lines:?}"
     );
     // A carried parameter is reused, never copied: the producer's own loop answers the read.
-    let body = &merged(&merged_graph).body;
+    let fragment = &merged(&merged_graph);
+    let body = &fragment.body;
+    assert_eq!(
+        (fragment.inputs, fragment.input_classes.clone()),
+        (2, vec![ScalarClass::Float, ScalarClass::Float]),
+        "the merged ports are the union: the producer's own input and the consumer's surviving \
+         one, which names the same buffer at the producer's ordinal"
+    );
     assert!(
         body.blocks
             .iter()
@@ -804,13 +810,19 @@ fn the_floor_still_merges_a_reduction_chain_with_no_pack_installed() {
         body.blocks
     );
     assert!(
-        buffer_reads_at(body, 1).is_empty(),
-        "the consumer's read of the absorbed buffer is gone: the producer's own fold is what \
-         answers it, not a copy"
+        buffer_reads_at(body, 2).is_empty(),
+        "the consumer's read of the absorbed buffer is gone: its ordinal 1 is past the merged \
+         fragment's {inputs} port(s), so no read can name it — the producer's own fold is what \
+         answers it, not a copy",
+        inputs = fragment.inputs
     );
     assert!(
         !buffer_reads_at(body, 0).is_empty(),
-        "and the producer's own reads of its input survive inside the fold that computed the value"
+        "the producer's own reads of its input survive inside the fold that computed the value"
+    );
+    assert!(
+        !buffer_reads_at(body, 1).is_empty(),
+        "and the consumer's own reads of the same buffer sit at the union's second port"
     );
 }
 

@@ -523,9 +523,10 @@ fn merge_region(
         .inputs
         .saturating_add(consumer_node.fragment.inputs)
         .saturating_sub(1);
-    if let Some(position) = inputs.len().checked_sub(ports + 1) {        return Err(MergeRefusal::PortsDoNotCorrespond {
-            position,
-            producer: inputs[position],
+    if inputs.len() > ports {
+        return Err(MergeRefusal::PortsDoNotCorrespond {
+            position: ports,
+            producer: inputs[ports],
             merged: None,
         });
     }
