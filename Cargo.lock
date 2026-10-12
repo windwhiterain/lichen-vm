@@ -940,6 +940,7 @@ version = "0.1.0"
 dependencies = [
  "lichen-kernel-ir",
  "lichen-lowlevel",
+ "lichen-testkit",
  "lichen-utils",
  "slotmap",
  "stacksafe",
@@ -1084,6 +1085,15 @@ version = "0.1.0"
 
 [[package]]
 name = "lichen-std-native"
+version = "0.1.0"
+dependencies = [
+ "lichen-highlevel",
+ "lichen-lowlevel",
+ "lichen-utils",
+]
+
+[[package]]
+name = "lichen-testkit"
 version = "0.1.0"
 dependencies = [
  "lichen-highlevel",

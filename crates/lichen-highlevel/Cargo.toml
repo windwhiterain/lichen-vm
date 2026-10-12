@@ -11,3 +11,8 @@ lichen-lowlevel.workspace = true
 # The mark and claim vocabulary the IR-time assembly shares with the kernel
 # artifact: `lichen-kernel-ir` is a dependency-free leaf, so this costs no layer.
 lichen-kernel-ir.workspace = true
+
+[dev-dependencies]
+# The one test harness: a named IR writer and an inspection surface over the
+# built module. A dev-dependency, so no library half of the workspace links it.
+lichen-testkit.workspace = true

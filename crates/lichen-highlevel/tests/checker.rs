@@ -1,170 +1,24 @@
 //! The runtime is the typechecker; see docs/notes/lowlevel-vm.md and
 //! docs/language-spec.md.
 
-use lichen_highlevel::checker::Checker;
+use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{ChildRange, ExprId, ExprKind, IR};
-use lichen_highlevel::program::{
-    HighGlobal, HighProgramLiteral, HighProgramValue, IntLit, IntTypeLit, ProgramImpl, TypeTypeLit,
-    TypeValue,
-};
+use lichen_highlevel::ir::{BinOp, ExprId, ExprKind};
+use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeValue};
+use lichen_highlevel::NoAttr;
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, FunctionId, LowValue, NodeId};
+use lichen_testkit::{Writer, dyn_node};
 use lichen_utils::compose::AsField;
 
-// --- hand-built IR helpers (the language frontend will produce these) -----
-
-/// The dynamic node behind an item ref — the checker builds only dynamic graphs.
-fn dyn_node(id: AnyNodeId) -> NodeId {
-    match id {
-        AnyNodeId::Dynamic(node) => node,
-        AnyNodeId::Static(_) => unreachable!("checker graphs are dynamic"),
-    }
-}
-
-fn int(ir: &mut IR, n: u64) -> ExprId {
-    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(
-        n as usize,
-    ))))
-}
-fn ty(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)))
-}
-fn int_t(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)))
-}
-fn param(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Parameter)
-}
-fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
-    lam_at(ir, b, body, None)
-}
-/// A lambda whose enclosing function is `parent`, the explicit link the checker
-/// turns into `Function::parent`.
+/// Check the program `w` built, rooted at `root`.
 ///
 /// # Invariant
-/// A nested closure joins the enclosing template; `None` is top level (or the
-/// mutual-recursion sibling case), which hangs under nothing.  A nested lambda
-/// may be built *before* the lambda enclosing it, hence the reserved id.
-fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, parent: Option<ExprId>) -> ExprId {
-    lam_at_typed(ir, b, None, body, parent)
-}
-/// A lambda whose parameter carries its annotated type — `x : T => e`.
-fn lam_at_typed(
-    ir: &mut IR,
-    b: ExprId,
-    t: Option<ExprId>,
-    body: ExprId,
-    parent: Option<ExprId>,
-) -> ExprId {
-    ir.alloc(ExprKind::Function {
-        parameter: b,
-        parameter_type: t,
-        parameter_attribute: None,
-        r#return: body,
-        parent,
-        looping: false,
-    })
-}
-/// A lambda nested inside another that is not allocated yet: reserves the
-/// enclosing node's id, then fills its kind in.
-///
-/// # Invariant
-/// Returns `(enclosing, inner)`; the reserve-then-stamp order is what lets the
-/// inner lambda's parent link name the enclosing node.
-fn lam_nested(
-    ir: &mut IR,
-    inner_b: ExprId,
-    inner_body: ExprId,
-    outer_b: ExprId,
-) -> (ExprId, ExprId) {
-    let reserved = ir.alloc(ExprKind::Placeholder);
-    let inner = lam_at(ir, inner_b, inner_body, Some(reserved));
-    ir.set_kind(
-        reserved,
-        ExprKind::Function {
-            parameter: outer_b,
-            parameter_type: None,
-            parameter_attribute: None,
-            r#return: inner,
-            parent: None,
-            looping: false,
-        },
-    );
-    (reserved, inner)
-}
-fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Apply {
-        function: f,
-        argument: x,
-    })
-}
-/// `a[i]` — an array-element read (the container is pinned to an array).
-fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Index { array: a, index: i })
-}
-/// `a(k)` — a positional slot read over a tuple element.
-fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Field {
-        container: c,
-        key: k,
-    })
-}
-/// A **named** field read `c.name` — the form that accepts a struct container.
-fn named_field(ir: &mut IR, c: ExprId, name: &'static str) -> ExprId {
-    ir.alloc(ExprKind::NamedField { container: c, name })
-}
-fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Annotation {
-        value: e,
-        r#type: Some(t),
-        attributes: ChildRange::EMPTY,
-    })
-}
-fn arrow(ir: &mut IR, d: ExprId, c: ExprId) -> ExprId {
-    ir.alloc(ExprKind::TypeFunction {
-        parameter: d,
-        return_type: c,
-    })
-}
-fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_tuple(elements)
-}
-/// A tuple type expression: `[int, int]`.
-fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_type_tuple(elements)
-}
-/// A struct type expression with named fields: `struct{.a T1, .b T2}`.
-fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
-    let fields: Vec<(ExprId, Option<&'static str>)> =
-        fields.iter().map(|&(e, name)| (e, Some(name))).collect();
-    ir.alloc_type_struct(&fields)
-}
-/// An array literal: `[1, 2]` — all elements share one type.
-fn array(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_array(elements)
-}
-/// The real array type: `array{Int, 3}`.
-fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
-    ir.alloc(ExprKind::TypeArray {
-        element_type,
-        length,
-    })
-}
-/// `_` — an inference placeholder hole in any position (type or value).
-fn hole(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Placeholder)
-}
-/// A recovered-error region — an opaque leaf the checker skips, distinct from [`hole`].
-fn err_block(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::ErrorBlock)
+/// A refusing build is still returned: the refusal is what most of these tests
+/// assert, so the caller reads `ok` and the diagnostics itself.
+fn build(root: ExprId, w: Writer<NoAttr>) -> Build<ProgramImpl> {
+    Checker::build(w.finish(root).ir)
 }
 
-fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build<ProgramImpl> {
-    ir.set_root(root);
-    Checker::build(ir)
-}
-
-/// The ids inside a checker-built array value.
 fn array_ids(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     node: lichen_lowlevel::NodeId,
@@ -258,9 +112,9 @@ fn is_int_type_value(
 
 #[test]
 fn int_literal_checks() {
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let b = build(five, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let b = build(five, w);
     assert!(b.ok, "5 should check");
     // The type of 5 is [int, [Type, ↺]], rebuilt fresh per occurrence.
     assert!(is_int_type(&b, b.state[five].ty.unwrap()));
@@ -279,11 +133,11 @@ fn int_literal_checks() {
 #[test]
 fn annotated_literal_checks() {
     // 5 : int
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let t = int_t(&mut ir);
-    let a = ann(&mut ir, five, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let t = w.int_type("t");
+    let a = w.annotate("a", five, t);
+    let b = build(a, w);
     assert!(b.ok, "5 : int should check");
     assert!(is_int_type(&b, b.state[a].ty.unwrap()));
 }
@@ -292,9 +146,9 @@ fn annotated_literal_checks() {
 fn the_type_universe_is_self_referential() {
     // `Type` compiles to the canonical node K = [Type, K] — Type : Type via
     // a self-cycle, closing every type spine.
-    let mut ir = IR::new();
-    let t = ty(&mut ir);
-    let b = build(t, ir);
+    let mut w = Writer::new();
+    let t = w.universe("t");
+    let b = build(t, w);
     assert!(b.ok);
     assert_eq!(b.state[t].term, Some(b.type_expr));
     assert_eq!(b.state[t].ty, Some(b.type_expr), "Type : Type");
@@ -314,9 +168,9 @@ fn the_type_universe_is_self_referential() {
 fn an_error_block_is_skipped_and_never_cascades() {
     // A recovered-error region is a pair of fresh cells: it carries no
     // grammar, so nothing inside it is checked.
-    let mut ir = IR::new();
-    let e = err_block(&mut ir);
-    let b = build(e, ir);
+    let mut w = Writer::new();
+    let e = w.error_block("e");
+    let b = build(e, w);
     assert!(b.ok, "a masked error region is not a check failure");
     // The skip path records the pair's slots, so downstream reads still work.
     assert!(b.state[e].term.is_some(), "the skip path records the pair");
@@ -340,18 +194,18 @@ fn an_error_block_is_skipped_and_never_cascades() {
 fn an_error_block_as_a_child_does_not_cascade() {
     // An error block in real code must not poison it: its fresh type cell
     // binds quietly to the int sibling.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let e = err_block(&mut ir);
-    let b = build(array(&mut ir, &[e, five]), ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let e = w.error_block("e");
+    let b = build(w.array("array", &[e, five]), w);
     assert!(b.ok, "the error block binds without a conflict");
 
     // A heterogeneous tuple does not unify elements at all; the error block
     // rides along and the whole thing checks.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let e = err_block(&mut ir);
-    let b = build(tuple(&mut ir, &[e, five]), ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let e = w.error_block("e");
+    let b = build(w.tuple("tuple", &[e, five]), w);
     assert!(b.ok, "a tuple with an error block checks");
     assert!(
         b.state[e].term.is_some(),
@@ -362,22 +216,22 @@ fn an_error_block_as_a_child_does_not_cascade() {
 #[test]
 fn literal_against_type_fails() {
     // 5 : Type
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let t = ty(&mut ir);
-    let a = ann(&mut ir, five, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let t = w.universe("t");
+    let a = w.annotate("a", five, t);
+    let b = build(a, w);
     assert!(!b.ok, "5 : Type must fail");
     assert!(!b.module.unify_errors.is_empty());
 }
 
 #[test]
 fn lambda_has_arrow_type() {
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let b = build(l, ir);
+    let l = w.lam("l", x, x);
+    let b = build(l, w);
     assert!(b.ok, "\\x. x should check");
     // The lambda's type is the function itself: a self-referential
     // `[Function(fid), ↺]`, slot 1 being the node itself.
@@ -397,15 +251,15 @@ fn lambda_has_arrow_type() {
 #[test]
 fn lambda_checks_against_arrow_annotation() {
     // (\x. x) : int → int
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let d = int_t(&mut ir);
-    let c = int_t(&mut ir);
-    let t = arrow(&mut ir, d, c);
-    let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let l = w.lam("l", x, x);
+    let d = w.int_type("d");
+    let c = w.int_type("c");
+    let t = w.type_function("t", d, c);
+    let a = w.annotate("a", l, t);
+    let b = build(a, w);
     assert!(b.ok, "(\\x. x) : int → int should check");
 }
 
@@ -413,15 +267,15 @@ fn lambda_checks_against_arrow_annotation() {
 fn annotating_a_lambda_with_a_tuple_type_fails() {
     // (\x. x) : [int, int] — a tuple type, not a function type: the kind
     // markers now distinguish the two, so this must fail.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let d = int_t(&mut ir);
-    let c = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[d, c]);
-    let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let l = w.lam("l", x, x);
+    let d = w.int_type("d");
+    let c = w.int_type("c");
+    let t = w.type_tuple("t", &[d, c]);
+    let a = w.annotate("a", l, t);
+    let b = build(a, w);
     assert!(
         !b.ok,
         "(\\x. x) : [int, int] must fail (a lambda is not a tuple)"
@@ -431,11 +285,11 @@ fn annotating_a_lambda_with_a_tuple_type_fails() {
 #[test]
 fn typed_tuple_is_a_kinded_tuple() {
     // [1, 2] — the pair [[1, 2], [[int, int], [TupleType, Type]]].
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[e1, e2]);
-    let b = build(tup, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let tup = w.tuple("tup", &[e1, e2]);
+    let b = build(tup, w);
     assert!(b.ok, "[1, 2] should check");
     let ty = b.state[tup].ty.unwrap();
     let ids = array_ids(&b, ty);
@@ -466,11 +320,11 @@ fn typed_tuple_is_a_kinded_tuple() {
 fn real_array_type_is_type_and_length() {
     // Array(int, 3) is [[int, 3], [ArrayType, Type]]: the element type and the
     // length.
-    let mut ir = IR::new();
-    let t = int_t(&mut ir);
-    let n = int(&mut ir, 3);
-    let arr = type_array(&mut ir, t, n);
-    let b = build(arr, ir);
+    let mut w = Writer::new();
+    let t = w.int_type("t");
+    let n = w.int("n", 3);
+    let arr = w.type_array("arr", t, n);
+    let b = build(arr, w);
     assert!(b.ok, "Array(int, 3) should check");
     // The type of the array type is its kind [ArrayType, Type].
     let ty = b.state[arr].ty.unwrap();
@@ -509,13 +363,13 @@ fn real_array_type_is_type_and_length() {
 fn the_array_type_has_a_kind_not_a_type() {
     // Array(int, 3) : Type — the array type's own type is the kind
     // [ArrayType, Type], not the universe.
-    let mut ir = IR::new();
-    let t = int_t(&mut ir);
-    let n = int(&mut ir, 3);
-    let arr = type_array(&mut ir, t, n);
-    let type_val = ty(&mut ir);
-    let a = ann(&mut ir, arr, type_val);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let t = w.int_type("t");
+    let n = w.int("n", 3);
+    let arr = w.type_array("arr", t, n);
+    let type_val = w.universe("type_val");
+    let a = w.annotate("a", arr, type_val);
+    let b = build(a, w);
     assert!(!b.ok, "an array type is not itself a Type");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -533,14 +387,14 @@ fn the_array_type_has_a_kind_not_a_type() {
 #[test]
 fn lambda_against_an_array_type_conflicts_on_the_length() {
     // (\x. x) : Array(int, 3) — a function's type is not an array type.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let l = lam(&mut ir, x, x);
-    let t = int_t(&mut ir);
-    let n = int(&mut ir, 3);
-    let arr_ty = type_array(&mut ir, t, n);
-    let a = ann(&mut ir, l, arr_ty);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let l = w.lam("l", x, x);
+    let t = w.int_type("t");
+    let n = w.int("n", 3);
+    let arr_ty = w.type_array("arr_ty", t, n);
+    let a = w.annotate("a", l, arr_ty);
+    let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(
@@ -555,11 +409,11 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
 fn array_literal_is_homogeneous() {
     // [1, 2] — one type slot shared by all elements, the length the element
     // count.
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let arr = array(&mut ir, &[e1, e2]);
-    let b = build(arr, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let arr = w.array("arr", &[e1, e2]);
+    let b = build(arr, w);
     assert!(b.ok, "[1, 2] as an array literal should check");
     let ty = b.state[arr].ty.unwrap();
     let ids = array_ids(&b, ty);
@@ -594,15 +448,15 @@ fn array_literal_is_homogeneous() {
 #[test]
 fn array_literal_typechecks_against_an_array_type() {
     // [1, 2] : Array(int, 2)
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let arr = array(&mut ir, &[e1, e2]);
-    let t = int_t(&mut ir);
-    let n = int(&mut ir, 2);
-    let arr_ty = type_array(&mut ir, t, n);
-    let a = ann(&mut ir, arr, arr_ty);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let arr = w.array("arr", &[e1, e2]);
+    let t = w.int_type("t");
+    let n = w.int("n", 2);
+    let arr_ty = w.type_array("arr_ty", t, n);
+    let a = w.annotate("a", arr, arr_ty);
+    let b = build(a, w);
     assert!(b.ok, "[1, 2] : int[2] should check");
     assert!(b.module.unify_errors.is_empty());
 }
@@ -610,15 +464,15 @@ fn array_literal_typechecks_against_an_array_type() {
 #[test]
 fn array_literal_length_mismatch_fails() {
     // [1, 2] : Array(int, 3)
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let arr = array(&mut ir, &[e1, e2]);
-    let t = int_t(&mut ir);
-    let n = int(&mut ir, 3);
-    let arr_ty = type_array(&mut ir, t, n);
-    let a = ann(&mut ir, arr, arr_ty);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let arr = w.array("arr", &[e1, e2]);
+    let t = w.int_type("t");
+    let n = w.int("n", 3);
+    let arr_ty = w.type_array("arr_ty", t, n);
+    let a = w.annotate("a", arr, arr_ty);
+    let b = build(a, w);
     assert!(!b.ok, "[1, 2] : int[3] must fail (length mismatch)");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -637,11 +491,11 @@ fn array_literal_length_mismatch_fails() {
 fn heterogeneous_array_literal_fails() {
     // [1, int] — the second element's type is Type; the first fixed the
     // shared element type to int.
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int_t(&mut ir); // `int` as a value — its type is Type
-    let arr = array(&mut ir, &[e1, e2]);
-    let b = build(arr, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int_type("e2"); // `int` as a value — its type is Type
+    let arr = w.array("arr", &[e1, e2]);
+    let b = build(arr, w);
     assert!(
         !b.ok,
         "[1, int] must fail (the elements must share one type)"
@@ -663,24 +517,24 @@ fn heterogeneous_array_literal_fails() {
 fn let_bound_functions_are_polymorphic() {
     // `let` is desugared by the frontend into an applied binding; polymorphism
     // is the apply's fresh clones.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let id = lam(&mut ir, x, x);
-    let b1 = param(&mut ir);
-    let five = int(&mut ir, 5);
-    let call1 = app(&mut ir, b1, five);
-    let t1 = int_t(&mut ir);
-    let a = ann(&mut ir, call1, t1);
-    let b2 = param(&mut ir);
-    let type_val = ty(&mut ir);
-    let call2 = app(&mut ir, b1, type_val); // a second use of id
-    let t2 = ty(&mut ir);
-    let body2 = ann(&mut ir, call2, t2);
-    let (outer_lam, inner_lam) = lam_nested(&mut ir, b2, body2, b1);
-    let inner = app(&mut ir, inner_lam, a);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let id = w.lam("id", x, x);
+    let b1 = w.param("b1");
+    let five = w.int("five", 5);
+    let call1 = w.app("call1", b1, five);
+    let t1 = w.int_type("t1");
+    let a = w.annotate("a", call1, t1);
+    let b2 = w.param("b2");
+    let type_val = w.universe("type_val");
+    let call2 = w.app("call2", b1, type_val); // a second use of id
+    let t2 = w.universe("t2");
+    let body2 = w.annotate("body2", call2, t2);
+    let (outer_lam, inner_lam) = w.lam_nested(("inner_lam", b2, body2), ("outer_lam", b1));
+    let inner = w.app("inner", inner_lam, a);
     // The enclosing lambda's return is the applied inner one, so its kind is
     // re-stamped.
-    ir.set_kind(
+    w.fill(
         outer_lam,
         ExprKind::Function {
             parameter: b1,
@@ -691,8 +545,8 @@ fn let_bound_functions_are_polymorphic() {
             looping: false,
         },
     );
-    let whole = app(&mut ir, outer_lam, id);
-    let b = build(whole, ir);
+    let whole = w.app("whole", outer_lam, id);
+    let b = build(whole, w);
     assert!(
         b.ok,
         "two uses of id at different types must both check (polymorphism via the apply's fresh clones)"
@@ -701,11 +555,11 @@ fn let_bound_functions_are_polymorphic() {
 
 #[test]
 fn applying_a_non_function_fails() {
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let six = int(&mut ir, 6);
-    let a = app(&mut ir, five, six);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let six = w.int("six", 6);
+    let a = w.app("a", five, six);
+    let b = build(a, w);
     assert!(!b.ok, "applying an int must fail (the function-ness guard)");
     assert!(!b.module.unify_errors.is_empty());
 }
@@ -713,42 +567,42 @@ fn applying_a_non_function_fails() {
 #[test]
 fn tuple_typechecks_elementwise() {
     // [1, 2] : [int, int]
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[e1, e2]);
-    let d = int_t(&mut ir);
-    let c = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[d, c]);
-    let a = ann(&mut ir, tup, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let tup = w.tuple("tup", &[e1, e2]);
+    let d = w.int_type("d");
+    let c = w.int_type("c");
+    let t = w.type_tuple("t", &[d, c]);
+    let a = w.annotate("a", tup, t);
+    let b = build(a, w);
     assert!(b.ok, "[1, 2] : [int, int] should check");
 }
 
 #[test]
 fn tuple_length_mismatch_fails() {
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[e1, e2]);
-    let d = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[d]);
-    let a = ann(&mut ir, tup, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let tup = w.tuple("tup", &[e1, e2]);
+    let d = w.int_type("d");
+    let t = w.type_tuple("t", &[d]);
+    let a = w.annotate("a", tup, t);
+    let b = build(a, w);
     assert!(!b.ok, "[1, 2] : [int] must fail (length mismatch)");
 }
 
 #[test]
 fn types_are_first_class() {
     // let T = int in \x. (x : T) → (\T. \x. (x : T)) int
-    let mut ir = IR::new();
-    let bt = param(&mut ir);
-    let tval = int_t(&mut ir);
-    let bx = param(&mut ir);
-    let body = ann(&mut ir, bx, bt); // (x : T) — both uses are parameter ids
-    let (t_lam, _inner) = lam_nested(&mut ir, bx, body, bt);
-    let whole = app(&mut ir, t_lam, tval);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let bt = w.param("bt");
+    let tval = w.int_type("tval");
+    let bx = w.param("bx");
+    let body = w.annotate("body", bx, bt); // (x : T) — both uses are parameter ids
+    let (t_lam, _inner) = w.lam_nested(("inner_lam", bx, body), ("outer_lam", bt));
+    let whole = w.app("whole", t_lam, tval);
+    let b = build(whole, w);
     assert!(b.ok, "(\\T. \\x. (x : T)) int should check");
 }
 
@@ -757,15 +611,15 @@ fn types_are_first_class() {
 #[test]
 fn built_program_runs_to_a_value() {
     // (\id. id 5) (\x. x)  ==  5
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let id = lam(&mut ir, x, x);
-    let b1 = param(&mut ir);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, b1, five);
-    let outer = lam(&mut ir, b1, call);
-    let whole = app(&mut ir, outer, id);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let id = w.lam("id", x, x);
+    let b1 = w.param("b1");
+    let five = w.int("five", 5);
+    let call = w.app("call", b1, five);
+    let outer = w.lam("outer", b1, call);
+    let whole = w.app("whole", outer, id);
+    let b = build(whole, w);
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
@@ -778,13 +632,13 @@ fn built_program_runs_to_a_value() {
 #[test]
 fn inline_lambda_applies() {
     // (\x. x) 5  ==  5
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, l, five);
-    let b = build(call, ir);
+    let l = w.lam("l", x, x);
+    let five = w.int("five", 5);
+    let call = w.app("call", l, five);
+    let b = build(call, w);
     // PROBE: what the build reports when the unify no longer forces.
     if !b.ok && std::env::var_os("LICHEN_BUILD_TRACE").is_some() {
         for d in b.diagnostics() {
@@ -812,16 +666,16 @@ fn inline_lambda_applies() {
 #[test]
 fn nested_polymorphic_applies_run() {
     // (\id. id (id 5)) (\x. x)  ==  5
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let id = lam(&mut ir, x, x);
-    let b1 = param(&mut ir);
-    let five = int(&mut ir, 5);
-    let inner = app(&mut ir, b1, five);
-    let call = app(&mut ir, b1, inner); // the same parameter id, nested
-    let outer = lam(&mut ir, b1, call);
-    let whole = app(&mut ir, outer, id);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let id = w.lam("id", x, x);
+    let b1 = w.param("b1");
+    let five = w.int("five", 5);
+    let inner = w.app("inner", b1, five);
+    let call = w.app("call", b1, inner); // the same parameter id, nested
+    let outer = w.lam("outer", b1, call);
+    let whole = w.app("whole", outer, id);
+    let b = build(whole, w);
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None).unwrap();
@@ -836,11 +690,11 @@ fn nested_polymorphic_applies_run() {
 #[test]
 fn annotation_mismatch_reports_expected_found() {
     // 5 : Type  →  expected TypeType, found TypeInt
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let t = ty(&mut ir);
-    let a = ann(&mut ir, five, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let t = w.universe("t");
+    let a = w.annotate("a", five, t);
+    let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -860,11 +714,11 @@ fn annotation_mismatch_reports_expected_found() {
 fn applying_a_non_function_reports_expected_function() {
     // 5 6 — the function-ness guard, with the flow showing where `int` came
     // from
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let six = int(&mut ir, 6);
-    let call = app(&mut ir, five, six);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let six = w.int("six", 6);
+    let call = w.app("call", five, six);
+    let b = build(call, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -885,12 +739,12 @@ fn applying_a_non_function_reports_expected_function() {
 #[test]
 fn indexing_a_function_reports_expected_tuple_or_array() {
     // (\x. x)[0] — the index-target guard: a function type is not indexable.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let l = lam(&mut ir, x, x);
-    let zero = int(&mut ir, 0);
-    let idx = index(&mut ir, l, zero);
-    let b = build(idx, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let l = w.lam("l", x, x);
+    let zero = w.int("zero", 0);
+    let idx = w.index("idx", l, zero);
+    let b = build(idx, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -912,11 +766,11 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
 #[test]
 fn indexing_an_int_reports_expected_tuple_or_array() {
     // 5[0] — an atomic type is not indexable either.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let zero = int(&mut ir, 0);
-    let idx = index(&mut ir, five, zero);
-    let b = build(idx, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let zero = w.int("zero", 0);
+    let idx = w.index("idx", five, zero);
+    let b = build(idx, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -926,14 +780,14 @@ fn indexing_an_int_reports_expected_tuple_or_array() {
 #[test]
 fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     // (\x. (x : Type)) 5 — the parameter's type is Type, the argument's int.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let t = ty(&mut ir);
-    let body = ann(&mut ir, x, t);
-    let l = lam(&mut ir, x, body);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, l, five);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let t = w.universe("t");
+    let body = w.annotate("body", x, t);
+    let l = w.lam("l", x, body);
+    let five = w.int("five", 5);
+    let call = w.app("call", l, five);
+    let b = build(call, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -954,15 +808,15 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 #[test]
 fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
     // (\x. x) : tuple{Type, Int} — a function's type is not a tuple type.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let t1 = ty(&mut ir);
-    let t2 = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[t1, t2]);
-    let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let l = w.lam("l", x, x);
+    let t1 = w.universe("t1");
+    let t2 = w.int_type("t2");
+    let t = w.type_tuple("t", &[t1, t2]);
+    let a = w.annotate("a", l, t);
+    let b = build(a, w);
     assert!(!b.ok, "a function is not a tuple type");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -973,13 +827,13 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
 fn an_unannotated_lambda_has_an_undecided_arrow_type() {
     // (\x. x) : Type — a function's type is not Type, so the annotation
     // conflicts.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let t = ty(&mut ir);
-    let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let l = w.lam("l", x, x);
+    let t = w.universe("t");
+    let a = w.annotate("a", l, t);
+    let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -995,15 +849,15 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
 fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
     // (\id. id 5) (\x. x) — the call's result cell is a lazy record, synced
     // to the return pair by the apply's evaluation.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let id = lam(&mut ir, x, x);
-    let b1 = param(&mut ir);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, b1, five);
-    let outer = lam(&mut ir, b1, call);
-    let whole = app(&mut ir, outer, id);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let id = w.lam("id", x, x);
+    let b1 = w.param("b1");
+    let five = w.int("five", 5);
+    let call = w.app("call", b1, five);
+    let outer = w.lam("outer", b1, call);
+    let whole = w.app("whole", outer, id);
+    let b = build(whole, w);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
     assert!(
@@ -1016,19 +870,19 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
 fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     // a = \x. (1, Int)[x]; (a 0, a 1) — the element types are the calls'
     // lazy result cells, synced with their return pairs.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let tval = ty(&mut ir);
-    let tup = tuple(&mut ir, &[one, tval]);
-    let idx = field(&mut ir, tup, x);
-    let a = lam(&mut ir, x, idx);
-    let zero = int(&mut ir, 0);
-    let c0 = app(&mut ir, a, zero);
-    let one1 = int(&mut ir, 1);
-    let c1 = app(&mut ir, a, one1);
-    let whole = tuple(&mut ir, &[c0, c1]);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let one = w.int("one", 1);
+    let tval = w.universe("tval");
+    let tup = w.tuple("tup", &[one, tval]);
+    let idx = w.field("idx", tup, x);
+    let a = w.lam("a", x, idx);
+    let zero = w.int("zero", 0);
+    let c0 = w.app("c0", a, zero);
+    let one1 = w.int("one1", 1);
+    let c1 = w.app("c1", a, one1);
+    let whole = w.tuple("whole", &[c0, c1]);
+    let b = build(whole, w);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
     // The resolved root type is the tuple type `tuple{Int, Type}`; each element's
@@ -1049,14 +903,14 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
 #[test]
 fn tuple_length_mismatch_reports_both_sides() {
     // [1, 2] : [int]
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[e1, e2]);
-    let d = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[d]);
-    let a = ann(&mut ir, tup, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let tup = w.tuple("tup", &[e1, e2]);
+    let d = w.int_type("d");
+    let t = w.type_tuple("t", &[d]);
+    let a = w.annotate("a", tup, t);
+    let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1078,18 +932,18 @@ fn tuple_length_mismatch_reports_both_sides() {
 fn a_call_result_annotation_is_checked_against_the_return_type() {
     // (\f. (f 5 : int)) (\x. Type) — f returns Type, so the annotation's int
     // is refused when the apply syncs the cell.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let tval = ty(&mut ir);
-    let f = lam(&mut ir, x, tval);
-    let b1 = param(&mut ir);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, b1, five);
-    let want = int_t(&mut ir);
-    let a = ann(&mut ir, call, want);
-    let f_lam = lam(&mut ir, b1, a);
-    let whole = app(&mut ir, f_lam, f);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let tval = w.universe("tval");
+    let f = w.lam("f", x, tval);
+    let b1 = w.param("b1");
+    let five = w.int("five", 5);
+    let call = w.app("call", b1, five);
+    let want = w.int_type("want");
+    let a = w.annotate("a", call, want);
+    let f_lam = w.lam("f_lam", b1, a);
+    let whole = w.app("whole", f_lam, f);
+    let b = build(whole, w);
     assert!(!b.ok, "(f 5 : int) must fail: the annotation is checked");
     assert!(!b.module.unify_errors.is_empty());
     let diags = b.diagnostics();
@@ -1101,15 +955,15 @@ fn a_call_result_annotation_is_checked_against_the_return_type() {
 fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
     // (\x. x) 5 : Type — the identity returns int, so the annotation is
     // refused when the apply syncs the result cell.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
     // The return expression uses the parameter's id directly.
-    let l = lam(&mut ir, x, x);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, l, five);
-    let want = ty(&mut ir);
-    let a = ann(&mut ir, call, want);
-    let b = build(a, ir);
+    let l = w.lam("l", x, x);
+    let five = w.int("five", 5);
+    let call = w.app("call", l, five);
+    let want = w.universe("want");
+    let a = w.annotate("a", call, want);
+    let b = build(a, w);
     assert!(
         !b.ok,
         "(\\x. x) 5 : Type must fail: the annotation is checked"
@@ -1124,18 +978,18 @@ fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
 fn a_nested_function_value_captures_the_applied_outer_parameter() {
     // A closure capturing its enclosing parameter: `f1 3 4` yields
     // [1, 2, 3, 4], not the leaked template.
-    let mut ir = IR::new();
-    let a = int(&mut ir, 1);
-    let b = int(&mut ir, 2);
-    let x = param(&mut ir);
-    let y = param(&mut ir);
-    let f2_body = array(&mut ir, &[a, b, x, y]);
-    let (f1, _f2) = lam_nested(&mut ir, y, f2_body, x);
-    let three = int(&mut ir, 3);
-    let four = int(&mut ir, 4);
-    let call1 = app(&mut ir, f1, three);
-    let whole = app(&mut ir, call1, four);
-    let mut b = build(whole, ir);
+    let mut w = Writer::new();
+    let a = w.int("a", 1);
+    let b = w.int("b", 2);
+    let x = w.param("x");
+    let y = w.param("y");
+    let f2_body = w.array("f2_body", &[a, b, x, y]);
+    let (f1, _f2) = w.lam_nested(("inner_lam", y, f2_body), ("outer_lam", x));
+    let three = w.int("three", 3);
+    let four = w.int("four", 4);
+    let call1 = w.app("call1", f1, three);
+    let whole = w.app("whole", call1, four);
+    let mut b = build(whole, w);
     assert!(b.ok, "the closure program must check");
     let value = b.module.evaluate_node_deep(b.root_val, None).unwrap();
     let ids = array_ids_from(value);
@@ -1167,12 +1021,12 @@ fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> 
 fn a_nested_lambda_hangs_under_its_enclosing_function() {
     // The nesting half of the parent rule: a body closure joins the enclosing
     // template and clones with it.
-    let mut ir = IR::new();
-    let a = int(&mut ir, 1);
-    let x = param(&mut ir);
-    let y = param(&mut ir);
-    let (outer, inner) = lam_nested(&mut ir, y, a, x);
-    let b = build(outer, ir);
+    let mut w = Writer::new();
+    let a = w.int("a", 1);
+    let x = w.param("x");
+    let y = w.param("y");
+    let (outer, inner) = w.lam_nested(("inner_lam", y, a), ("outer_lam", x));
+    let b = build(outer, w);
     assert!(b.ok, "the nested closure must check");
     let outer_id = function_of(&b, outer);
     let inner_id = function_of(&b, inner);
@@ -1187,11 +1041,11 @@ fn a_nested_lambda_hangs_under_its_enclosing_function() {
 fn a_sibling_lambda_hangs_under_nothing() {
     // The sibling half: two same-level lambdas hang under nothing, so neither
     // template absorbs the other.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let sibling = lam(&mut ir, x, x);
-    let other = lam(&mut ir, x, sibling);
-    let b = build(other, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let sibling = w.lam("sibling", x, x);
+    let other = w.lam("other", x, sibling);
+    let b = build(other, w);
     assert!(b.ok, "the sibling binding must check");
     assert_eq!(
         b.module.functions[function_of(&b, sibling)].parent,
@@ -1210,13 +1064,13 @@ fn a_sibling_lambda_hangs_under_nothing() {
 #[test]
 fn tuple_index_selects_value_and_type() {
     // (1, 2)[0] — the tuple's element-type list is structural, a plain Index.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[one, two]);
-    let zero = int(&mut ir, 0);
-    let idx = field(&mut ir, tup, zero);
-    let mut b = build(idx, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let tup = w.tuple("tup", &[one, two]);
+    let zero = w.int("zero", 0);
+    let idx = w.field("idx", tup, zero);
+    let mut b = build(idx, w);
     assert!(b.ok, "(1, 2)[0] should check");
     assert!(
         matches!(
@@ -1241,14 +1095,14 @@ fn tuple_index_selects_value_and_type() {
 fn array_index_selects_value_and_type() {
     // [1, 2, 3][1] — the shape holds the length as data, so the type
     // evaluation dispatches on the kind.
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let e3 = int(&mut ir, 3);
-    let arr = array(&mut ir, &[e1, e2, e3]);
-    let one = int(&mut ir, 1);
-    let idx = index(&mut ir, arr, one);
-    let mut b = build(idx, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let e3 = w.int("e3", 3);
+    let arr = w.array("arr", &[e1, e2, e3]);
+    let one = w.int("one", 1);
+    let idx = w.index("idx", arr, one);
+    let mut b = build(idx, w);
     assert!(b.ok, "[1, 2, 3][1] should check");
     assert!(
         matches!(
@@ -1273,13 +1127,13 @@ fn array_index_selects_value_and_type() {
 fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     // (1, 2)[5] — both evaluations hit the bounds check, collapsing to one
     // diagnostic.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let tup = tuple(&mut ir, &[one, two]);
-    let five = int(&mut ir, 5);
-    let idx = field(&mut ir, tup, five);
-    let b = build(idx, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let tup = w.tuple("tup", &[one, two]);
+    let five = w.int("five", 5);
+    let idx = w.field("idx", tup, five);
+    let b = build(idx, w);
     assert!(!b.ok, "(1, 2)[5] must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1301,14 +1155,14 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
 fn array_index_out_of_bounds_renders_a_diagnostic() {
     // [1, 2, 3][5] — the type side checks the index against the ArrayType's
     // length (3), not the shape's structural size (2).
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let e3 = int(&mut ir, 3);
-    let arr = array(&mut ir, &[e1, e2, e3]);
-    let five = int(&mut ir, 5);
-    let idx = index(&mut ir, arr, five);
-    let b = build(idx, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let e3 = w.int("e3", 3);
+    let arr = w.array("arr", &[e1, e2, e3]);
+    let five = w.int("five", 5);
+    let idx = w.index("idx", arr, five);
+    let b = build(idx, w);
     assert!(!b.ok, "[1, 2, 3][5] must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1329,16 +1183,16 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
 #[test]
 fn array_index_out_of_bounds_against_a_bound_length() {
     // (\x. x[3])([1, 2]) — the type is known only once the apply binds it.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let three = int(&mut ir, 3);
-    let body = index(&mut ir, x, three);
-    let l = lam(&mut ir, x, body);
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let arr = array(&mut ir, &[e1, e2]);
-    let whole = app(&mut ir, l, arr);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let three = w.int("three", 3);
+    let body = w.index("body", x, three);
+    let l = w.lam("l", x, body);
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let arr = w.array("arr", &[e1, e2]);
+    let whole = w.app("whole", l, arr);
+    let b = build(whole, w);
     assert!(!b.ok, "(\\x. x[3])([1, 2]) must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1357,11 +1211,11 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     // struct{.f Int, .t Type} — the pair [[int, Type], [[TypeId(0), names,
     // names_in_order], TypeStruct]].
-    let mut ir = IR::new();
-    let t1 = int_t(&mut ir);
-    let t2 = ty(&mut ir);
-    let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
-    let mut b = build(s, ir);
+    let mut w = Writer::new();
+    let t1 = w.int_type("t1");
+    let t2 = w.universe("t2");
+    let s = w.struct_type("s", &[(t1, "f"), (t2, "t")]);
+    let mut b = build(s, w);
     assert!(b.ok, "struct{{.f Int, .t Type}} should kind");
     assert!(b.module.unify_errors.is_empty());
     // the shape is the positional field-**slot** list [slot(Int), slot(Type)] —
@@ -1461,11 +1315,11 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
     // struct{.a Int, .b Type} — the names slot maps each name to its index.
-    let mut ir = IR::new();
-    let t1 = int_t(&mut ir);
-    let t2 = ty(&mut ir);
-    let s = named_type_struct(&mut ir, &[(t1, "a"), (t2, "b")]);
-    let b = build(s, ir);
+    let mut w = Writer::new();
+    let t1 = w.int_type("t1");
+    let t2 = w.universe("t2");
+    let s = w.struct_type("s", &[(t1, "a"), (t2, "b")]);
+    let b = build(s, w);
     assert!(b.ok);
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
@@ -1519,12 +1373,12 @@ fn a_named_struct_carries_a_name_to_index_table() {
 
 #[test]
 fn each_struct_type_occurrence_allocates_a_distinct_id() {
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s1 = named_type_struct(&mut ir, &[(f, "f")]);
-    let s2 = named_type_struct(&mut ir, &[(f, "f")]);
-    let pair = tuple(&mut ir, &[s1, s2]);
-    let b = build(pair, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s1 = w.struct_type("s1", &[(f, "f")]);
+    let s2 = w.struct_type("s2", &[(f, "f")]);
+    let pair = w.tuple("pair", &[s1, s2]);
+    let b = build(pair, w);
     assert!(b.ok);
     assert_eq!(
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
@@ -1552,12 +1406,12 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
     // same fields, different occurrences → different ids → nominal conflict
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s1 = named_type_struct(&mut ir, &[(f, "f")]);
-    let s2 = named_type_struct(&mut ir, &[(f, "f")]);
-    let pair = tuple(&mut ir, &[s1, s2]);
-    let b = build(pair, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s1 = w.struct_type("s1", &[(f, "f")]);
+    let s2 = w.struct_type("s2", &[(f, "f")]);
+    let pair = w.tuple("pair", &[s1, s2]);
+    let b = build(pair, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s1].term.unwrap(), b.state[s2].term.unwrap());
@@ -1575,12 +1429,12 @@ fn two_struct_type_occurrences_do_not_unify() {
 
 #[test]
 fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let t = type_tuple(&mut ir, &[f]);
-    let pair = tuple(&mut ir, &[s, t]);
-    let b = build(pair, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let t = w.type_tuple("t", &[f]);
+    let pair = w.tuple("pair", &[s, t]);
+    let b = build(pair, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
@@ -1606,10 +1460,10 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
 
 #[test]
 fn a_struct_type_unifies_with_itself() {
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let b = build(s, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let b = build(s, w);
     assert!(b.ok);
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[s].term.unwrap());
@@ -1622,12 +1476,12 @@ fn a_struct_type_unifies_with_itself() {
 #[test]
 fn an_annotation_against_a_struct_type_reports_the_conflict() {
     // 5 : struct{.f Int} — the literal's int type conflicts with the struct type.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let a = ann(&mut ir, five, s);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let a = w.annotate("a", five, s);
+    let b = build(a, w);
     assert!(!b.ok, "5 : struct{{.f Int}} must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1647,16 +1501,16 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
 #[test]
 fn two_struct_types_conflict_reports_the_nominal_ids() {
     // The argument's struct type has a different fresh id than the annotation's.
-    let mut ir = IR::new();
-    let f1 = int_t(&mut ir);
-    let s1 = named_type_struct(&mut ir, &[(f1, "f")]);
-    let f2 = int_t(&mut ir);
-    let s2 = named_type_struct(&mut ir, &[(f2, "f")]);
-    let x = param(&mut ir);
-    let body = ann(&mut ir, x, s1);
-    let l = lam(&mut ir, x, body);
-    let whole = app(&mut ir, l, s2);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let f1 = w.int_type("f1");
+    let s1 = w.struct_type("s1", &[(f1, "f")]);
+    let f2 = w.int_type("f2");
+    let s2 = w.struct_type("s2", &[(f2, "f")]);
+    let x = w.param("x");
+    let body = w.annotate("body", x, s1);
+    let l = w.lam("l", x, body);
+    let whole = w.app("whole", l, s2);
+    let b = build(whole, w);
     assert!(!b.ok, "two distinct struct types must not unify");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1668,15 +1522,15 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
 #[test]
 fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     // (\x. (x : struct{.f Int})) 5 — the apply-time unify checks the argument.
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let x = param(&mut ir);
-    let body = ann(&mut ir, x, s);
-    let l = lam(&mut ir, x, body);
-    let five = int(&mut ir, 5);
-    let whole = app(&mut ir, l, five);
-    let b = build(whole, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let x = w.param("x");
+    let body = w.annotate("body", x, s);
+    let l = w.lam("l", x, body);
+    let five = w.int("five", 5);
+    let whole = w.app("whole", l, five);
+    let b = build(whole, w);
     assert!(!b.ok, "a literal is not a struct value");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1697,11 +1551,11 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
 fn a_shared_expression_compiles_once_with_one_nominal_id() {
     // The IR is a graph: the same expression may have several parents, so it
     // compiles once, keeping one nominal id.
-    let mut ir = IR::new();
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let a = array(&mut ir, &[s, s]);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let a = w.array("a", &[s, s]);
+    let b = build(a, w);
     assert!(b.ok, "one shared occurrence is one nominal type");
     assert!(b.module.unify_errors.is_empty());
     assert_eq!(
@@ -1711,11 +1565,6 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     );
 }
 
-/// Struct instantiation: `s(1, 2)` — the struct type applied to a tuple.
-fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
-    ir.alloc_instantiate(type_expr, value, &[])
-}
-
 // --- struct instantiation ----------------------------------------------------
 
 // `s(1, 2)` wraps the positional tuple in the struct type: the element-type
@@ -1723,15 +1572,15 @@ fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
 
 #[test]
 fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
-    let inst = instantiate(&mut ir, s, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let f1 = w.int_type("f1");
+    let f2 = w.int_type("f2");
+    let s = w.struct_type("s", &[(f1, "f"), (f2, "g")]);
+    let inst = w.instantiate("inst", s, v, &[]);
+    let b = build(inst, w);
     assert!(b.ok, "s(1, 2) must check");
     assert!(b.module.unify_errors.is_empty());
     // the instance's type is the struct type, not the tuple type
@@ -1744,59 +1593,59 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
 #[test]
 fn a_struct_instantiation_checks_its_fields() {
     // arity: two fields, one value
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let inst = instantiate(&mut ir, s, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let inst = w.instantiate("inst", s, v, &[]);
+    let b = build(inst, w);
     assert!(
         !b.ok,
         "s(1, 2) against a one-field struct must fail (arity)"
     );
     // field type: the tuple's Ints are not Type
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let t1 = ty(&mut ir);
-    let t2 = ty(&mut ir);
-    let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
-    let inst = instantiate(&mut ir, s, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let t1 = w.universe("t1");
+    let t2 = w.universe("t2");
+    let s = w.struct_type("s", &[(t1, "f"), (t2, "t")]);
+    let inst = w.instantiate("inst", s, v, &[]);
+    let b = build(inst, w);
     assert!(
         !b.ok,
         "s(1, 2) against struct{{.f Type, .t Type}} must fail (fields)"
     );
     // a literal is not a positional value
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let f = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f, "f")]);
-    let inst = instantiate(&mut ir, s, five);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let f = w.int_type("f");
+    let s = w.struct_type("s", &[(f, "f")]);
+    let inst = w.instantiate("inst", s, five, &[]);
+    let b = build(inst, w);
     assert!(!b.ok, "s(5) must fail — a literal is not a struct value");
 }
 
 #[test]
 fn instances_of_different_struct_occurrences_conflict() {
     // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let s1 = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
-    let i1 = instantiate(&mut ir, s1, v);
-    let f3 = int_t(&mut ir);
-    let f4 = int_t(&mut ir);
-    let s2 = named_type_struct(&mut ir, &[(f3, "f"), (f4, "g")]);
-    let i2 = instantiate(&mut ir, s2, v);
-    let a = array(&mut ir, &[i1, i2]);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let f1 = w.int_type("f1");
+    let f2 = w.int_type("f2");
+    let s1 = w.struct_type("s1", &[(f1, "f"), (f2, "g")]);
+    let i1 = w.instantiate("i1", s1, v, &[]);
+    let f3 = w.int_type("f3");
+    let f4 = w.int_type("f4");
+    let s2 = w.struct_type("s2", &[(f3, "f"), (f4, "g")]);
+    let i2 = w.instantiate("i2", s2, v, &[]);
+    let a = w.array("a", &[i1, i2]);
+    let b = build(a, w);
     assert!(
         !b.ok,
         "instances of different struct occurrences must conflict"
@@ -1821,19 +1670,19 @@ fn instances_of_different_struct_occurrences_conflict() {
 fn an_instantiation_through_a_call_result_callee_checks() {
     // `(mk (Int))(1, 2)` with `mk = u => struct{...}` — the callee is an
     // unevaluated apply the checker forces first.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let s = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
-    let mk = lam(&mut ir, p, s);
-    let arg = int_t(&mut ir);
-    let call = app(&mut ir, mk, arg);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let inst = instantiate(&mut ir, call, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let f1 = w.int_type("f1");
+    let f2 = w.int_type("f2");
+    let s = w.struct_type("s", &[(f1, "f"), (f2, "g")]);
+    let mk = w.lam("mk", p, s);
+    let arg = w.int_type("arg");
+    let call = w.app("call", mk, arg);
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let inst = w.instantiate("inst", call, v, &[]);
+    let b = build(inst, w);
     assert!(
         b.ok,
         "a call-result callee resolves to its struct type: {:?}",
@@ -1848,17 +1697,17 @@ fn an_instantiation_through_a_call_result_callee_checks() {
 #[test]
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
     // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is not a struct.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let intt = int_t(&mut ir);
-    let mk = lam(&mut ir, p, intt);
-    let arg = int_t(&mut ir);
-    let call = app(&mut ir, mk, arg);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let inst = instantiate(&mut ir, call, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let intt = w.int_type("intt");
+    let mk = w.lam("mk", p, intt);
+    let arg = w.int_type("arg");
+    let call = w.app("call", mk, arg);
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let inst = w.instantiate("inst", call, v, &[]);
+    let b = build(inst, w);
     assert!(!b.ok, "a non-struct callee must not instantiate");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1873,15 +1722,15 @@ fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
 #[test]
 fn an_instantiation_requires_a_struct_type_callee() {
     // Nominality: a tuple type is not a struct — it cannot instantiate.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let t = type_tuple(&mut ir, &[f1, f2]);
-    let inst = instantiate(&mut ir, t, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let f1 = w.int_type("f1");
+    let f2 = w.int_type("f2");
+    let t = w.type_tuple("t", &[f1, f2]);
+    let inst = w.instantiate("inst", t, v, &[]);
+    let b = build(inst, w);
     assert!(!b.ok, "tuple{{Int, Int}}(1, 2) must be rejected");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1892,15 +1741,15 @@ fn an_instantiation_requires_a_struct_type_callee() {
         "the not-a-struct error points at the callee"
     );
     // Nor can a function type.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let d = int_t(&mut ir);
-    let c = int_t(&mut ir);
-    let f = arrow(&mut ir, d, c);
-    let inst = instantiate(&mut ir, f, v);
-    let b = build(inst, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let d = w.int_type("d");
+    let c = w.int_type("c");
+    let f = w.type_function("f", d, c);
+    let inst = w.instantiate("inst", f, v, &[]);
+    let b = build(inst, w);
     assert!(!b.ok, "(Int -> Int)(1, 2) must be rejected");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1911,16 +1760,16 @@ fn an_instantiation_requires_a_struct_type_callee() {
 fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
     // `f = s => s(1, 2); f (Int)` — the undecided callee is pinned to a struct
     // kind; a non-struct argument fails the check.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let inst = instantiate(&mut ir, p, v);
-    let f = lam(&mut ir, p, inst);
-    let arg = int_t(&mut ir);
-    let call = app(&mut ir, f, arg);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let inst = w.instantiate("inst", p, v, &[]);
+    let f = w.lam("f", p, inst);
+    let arg = w.int_type("arg");
+    let call = w.app("call", f, arg);
+    let b = build(call, w);
     assert!(!b.ok, "applying f to a non-struct type must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -1933,18 +1782,18 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
         "the refusal names the instantiation whose callee is not a struct"
     );
     // The pin rejects a tuple type too (nominality through the deferral).
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let inst = instantiate(&mut ir, p, v);
-    let f = lam(&mut ir, p, inst);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let arg = type_tuple(&mut ir, &[f1, f2]);
-    let call = app(&mut ir, f, arg);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let v = w.tuple("v", &[one, two]);
+    let inst = w.instantiate("inst", p, v, &[]);
+    let f = w.lam("f", p, inst);
+    let f1 = w.int_type("f1");
+    let f2 = w.int_type("f2");
+    let arg = w.type_tuple("arg", &[f1, f2]);
+    let call = w.app("call", f, arg);
+    let b = build(call, w);
     assert!(
         !b.ok,
         "a tuple type must not instantiate through a parameter"
@@ -1955,14 +1804,14 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
 fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
     // `f = s => s(.x 1, .y Int)` — the name table is not known through a
     // parameter, so the reorder stays a lazy read.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let t = ty(&mut ir);
-    let v = tuple(&mut ir, &[one, t]);
-    let inst = ir.alloc_instantiate(p, v, &[Some("x"), Some("y")]);
-    let f = lam(&mut ir, p, inst);
-    let b = build(f, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let one = w.int("one", 1);
+    let t = w.universe("t");
+    let v = w.tuple("v", &[one, t]);
+    let inst = w.instantiate("inst", p, v, &[Some("x"), Some("y")]);
+    let f = w.lam("f", p, inst);
+    let b = build(f, w);
     assert!(
         b.ok,
         "a named instantiation through a parameter is not refused: {:?}",
@@ -2000,11 +1849,11 @@ fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
 fn an_underscore_annotation_infers_the_type() {
     // 5 : _ — the placeholder's value slot binds to the int marker, its
     // kind slot to the universe.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let h = hole(&mut ir);
-    let a = ann(&mut ir, five, h);
-    let mut b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let h = w.hole("h");
+    let a = w.annotate("a", five, h);
+    let mut b = build(a, w);
     assert!(b.ok, "5 : _ should check");
     let ids = array_ids(&b, b.state[a].ty.unwrap());
     assert_eq!(ids.len(), 2);
@@ -2024,12 +1873,12 @@ fn an_underscore_annotation_infers_the_type() {
 fn an_underscore_annotation_binds_a_function_type() {
     // (\x. x) : _ — the placeholder binds to the whole function-type node:
     // clone-on-unify never fires without a signature.
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let l = lam(&mut ir, x, x);
-    let h = hole(&mut ir);
-    let a = ann(&mut ir, l, h);
-    let mut b = build(a, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let l = w.lam("l", x, x);
+    let h = w.hole("h");
+    let a = w.annotate("a", l, h);
+    let mut b = build(a, w);
     assert!(b.ok, "(\\x. x) : _ should check");
     // The placeholder binds to the function-type node.
     assert_eq!(
@@ -2054,14 +1903,14 @@ fn partial_inference_in_an_arrow_type() {
 
     // The identity is monomorphic at this type; the cost is deliberate
     // (`docs/notes/function-type-merge.md`).
-    let mut ir = IR::new();
-    let x = param(&mut ir);
-    let l = lam(&mut ir, x, x);
-    let it = int_t(&mut ir);
-    let h = hole(&mut ir);
-    let t = arrow(&mut ir, it, h);
-    let a = ann(&mut ir, l, t);
-    let mut b = build(a, ir);
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let l = w.lam("l", x, x);
+    let it = w.int_type("it");
+    let h = w.hole("h");
+    let t = w.type_function("t", it, h);
+    let a = w.annotate("a", l, t);
+    let mut b = build(a, w);
     assert!(b.ok, "the identity fits Int -> _");
     // The annotation's domain reached the template's own parameter type cell.
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
@@ -2083,16 +1932,16 @@ fn partial_inference_in_an_arrow_type() {
 fn an_underscore_in_the_array_length_position() {
     // [1, 2, 3] : array{Int, _} — the placeholder length binds to the
     // element count.
-    let mut ir = IR::new();
-    let e1 = int(&mut ir, 1);
-    let e2 = int(&mut ir, 2);
-    let e3 = int(&mut ir, 3);
-    let arr = array(&mut ir, &[e1, e2, e3]);
-    let it = int_t(&mut ir);
-    let h = hole(&mut ir);
-    let t = type_array(&mut ir, it, h);
-    let a = ann(&mut ir, arr, t);
-    let mut b = build(a, ir);
+    let mut w = Writer::new();
+    let e1 = w.int("e1", 1);
+    let e2 = w.int("e2", 2);
+    let e3 = w.int("e3", 3);
+    let arr = w.array("arr", &[e1, e2, e3]);
+    let it = w.int_type("it");
+    let h = w.hole("h");
+    let t = w.type_array("t", it, h);
+    let a = w.annotate("a", arr, t);
+    let mut b = build(a, w);
     assert!(b.ok, "[1, 2, 3] : array{{Int, _}} should check");
     // The annotated type's length slot unifies with the literal's length 3.
     let ann_shape = array_ids(&b, b.state[a].ty.unwrap())[0];
@@ -2114,13 +1963,13 @@ fn an_underscore_in_the_array_length_position() {
 fn a_mismatch_against_a_partial_type_is_still_an_error() {
     // 5 : (Int -> _) — the placeholder does not mask the mismatch between
     // the literal and the function type.
-    let mut ir = IR::new();
-    let five = int(&mut ir, 5);
-    let it = int_t(&mut ir);
-    let h = hole(&mut ir);
-    let t = arrow(&mut ir, it, h);
-    let a = ann(&mut ir, five, t);
-    let b = build(a, ir);
+    let mut w = Writer::new();
+    let five = w.int("five", 5);
+    let it = w.int_type("it");
+    let h = w.hole("h");
+    let t = w.type_function("t", it, h);
+    let a = w.annotate("a", five, t);
+    let b = build(a, w);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
@@ -2131,11 +1980,11 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 fn shallow_array_is_masked_and_typed_like_a_tuple() {
     // [1, @shallow(2)] — the marker marks position 1; the type is a tuple, not an
     // array type.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)]);
-    let mut b = build(arr, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let arr = w.shallow_array("arr", &[(one, 0), (two, usize::MAX)]);
+    let mut b = build(arr, w);
     assert!(b.ok, "the shallow array should check");
     let value = b
         .module
@@ -2180,20 +2029,16 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
 fn shallow_marked_position_stays_lazy_until_a_read() {
     // [1, @shallow(x => x + 1) 5] — the apply sits at the bare-`@shallow` position, so the
     // deep pass skips it.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let five = int(&mut ir, 5);
-    let x = param(&mut ir);
-    let one2 = int(&mut ir, 1);
-    let add = ir.alloc(ExprKind::BinOp {
-        operator: lichen_highlevel::ir::BinOp::Add,
-        left: x,
-        right: one2,
-    });
-    let lam = lam(&mut ir, x, add);
-    let call = app(&mut ir, lam, five);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)]);
-    let b = build(arr, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let five = w.int("five", 5);
+    let x = w.param("x");
+    let one2 = w.int("one2", 1);
+    let add = w.binop("add", BinOp::Add, x, one2);
+    let lam = w.lam("lam", x, add);
+    let call = w.app("call", lam, five);
+    let arr = w.shallow_array("arr", &[(one, 0), (call, usize::MAX)]);
+    let b = build(arr, w);
     assert!(b.ok, "the shallow array should check");
     let ids = array_ids(&b, b.state[arr].val.unwrap());
     assert_eq!(ids.len(), 2);
@@ -2207,22 +2052,18 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
 fn a_read_of_a_shallow_position_forces_the_element() {
     // [1, @shallow(x => x + 1) 5][1] — the read runs the apply that the deep pass
     // deliberately skipped.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let five = int(&mut ir, 5);
-    let x = param(&mut ir);
-    let one2 = int(&mut ir, 1);
-    let add = ir.alloc(ExprKind::BinOp {
-        operator: lichen_highlevel::ir::BinOp::Add,
-        left: x,
-        right: one2,
-    });
-    let lam = lam(&mut ir, x, add);
-    let call = app(&mut ir, lam, five);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)]);
-    let one_idx = int(&mut ir, 1);
-    let read = field(&mut ir, arr, one_idx);
-    let mut b = build(read, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let five = w.int("five", 5);
+    let x = w.param("x");
+    let one2 = w.int("one2", 1);
+    let add = w.binop("add", BinOp::Add, x, one2);
+    let lam = w.lam("lam", x, add);
+    let call = w.app("call", lam, five);
+    let arr = w.shallow_array("arr", &[(one, 0), (call, usize::MAX)]);
+    let one_idx = w.int("one_idx", 1);
+    let read = w.field("read", arr, one_idx);
+    let mut b = build(read, w);
     assert!(b.ok, "the read should check");
     assert_eq!(
         b.module
@@ -2235,24 +2076,15 @@ fn a_read_of_a_shallow_position_forces_the_element() {
 
 // --- assert: explicit constraints ---------------------------------------
 
-/// `a == b` as an IR BinOp.
-fn eq_binop(ir: &mut IR, a: ExprId, b: ExprId) -> ExprId {
-    ir.alloc(ExprKind::BinOp {
-        operator: lichen_highlevel::ir::BinOp::Eq,
-        left: a,
-        right: b,
-    })
-}
-
 #[test]
 fn top_level_assert_passes_when_the_condition_is_one() {
     // assert(1 == 1) — the condition resolves to 1 at check time.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let one2 = int(&mut ir, 1);
-    let cond = eq_binop(&mut ir, one, one2);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
-    let b = build(asserted, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let one2 = w.int("one2", 1);
+    let cond = w.binop("cond", BinOp::Eq, one, one2);
+    let asserted = w.assert("asserted", cond);
+    let b = build(asserted, w);
     assert!(b.ok, "assert(1 == 1) should check");
     assert!(b.module.assert_errors.is_empty());
 }
@@ -2261,12 +2093,12 @@ fn top_level_assert_passes_when_the_condition_is_one() {
 fn top_level_assert_fails_when_the_condition_is_not_one() {
     // assert(1 == 2) — the condition resolves to 0: a failed assert, not a
     // unification failure.
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let cond = eq_binop(&mut ir, one, two);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
-    let b = build(asserted, ir);
+    let mut w = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let cond = w.binop("cond", BinOp::Eq, one, two);
+    let asserted = w.assert("asserted", cond);
+    let b = build(asserted, w);
     assert!(!b.ok, "assert(1 == 2) must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
@@ -2280,15 +2112,15 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
 fn in_function_assert_passes_for_a_satisfying_argument() {
     // f = n => assert(n == 1); f 1 — the apply clones the undecided assert and
     // re-checks it.
-    let mut ir = IR::new();
-    let n = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
-    let f = lam(&mut ir, n, asserted);
-    let one_arg = int(&mut ir, 1);
-    let root = app(&mut ir, f, one_arg);
-    let b = build(root, ir);
+    let mut w = Writer::new();
+    let n = w.param("n");
+    let one = w.int("one", 1);
+    let cond = w.binop("cond", BinOp::Eq, n, one);
+    let asserted = w.assert("asserted", cond);
+    let f = w.lam("f", n, asserted);
+    let one_arg = w.int("one_arg", 1);
+    let root = w.app("root", f, one_arg);
+    let b = build(root, w);
     assert!(b.ok, "f 1 should check");
     assert_eq!(
         b.module.asserts.len(),
@@ -2301,15 +2133,15 @@ fn in_function_assert_passes_for_a_satisfying_argument() {
 #[test]
 fn in_function_assert_fails_for_a_violating_argument() {
     // f 2 — the clone's condition resolves to 0.
-    let mut ir = IR::new();
-    let n = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
-    let f = lam(&mut ir, n, asserted);
-    let two_arg = int(&mut ir, 2);
-    let root = app(&mut ir, f, two_arg);
-    let b = build(root, ir);
+    let mut w = Writer::new();
+    let n = w.param("n");
+    let one = w.int("one", 1);
+    let cond = w.binop("cond", BinOp::Eq, n, one);
+    let asserted = w.assert("asserted", cond);
+    let f = w.lam("f", n, asserted);
+    let two_arg = w.int("two_arg", 2);
+    let root = w.app("root", f, two_arg);
+    let b = build(root, w);
     assert!(!b.ok, "f 2 must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(
@@ -2326,13 +2158,13 @@ fn in_function_assert_fails_for_a_violating_argument() {
 #[test]
 fn never_called_function_assert_is_not_triggered() {
     // f = n => assert(n == 1), never applied: the assert stays pending.
-    let mut ir = IR::new();
-    let n = param(&mut ir);
-    let one = int(&mut ir, 1);
-    let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
-    let f = lam(&mut ir, n, asserted);
-    let b = build(f, ir);
+    let mut w = Writer::new();
+    let n = w.param("n");
+    let one = w.int("one", 1);
+    let cond = w.binop("cond", BinOp::Eq, n, one);
+    let asserted = w.assert("asserted", cond);
+    let f = w.lam("f", n, asserted);
+    let b = build(f, w);
     assert!(b.ok, "an untriggered assert is no failure");
     assert_eq!(b.module.asserts.len(), 1);
     assert!(b.module.assert_errors.is_empty());
@@ -2342,10 +2174,10 @@ fn never_called_function_assert_is_not_triggered() {
 fn assert_on_a_literal_checks_the_value_itself() {
     // assert(3) — the condition is the literal's value: it resolves to 3,
     // not 1, so the assert fails.
-    let mut ir = IR::new();
-    let three = int(&mut ir, 3);
-    let asserted = ir.alloc(ExprKind::Assert { condition: three });
-    let b = build(asserted, ir);
+    let mut w = Writer::new();
+    let three = w.int("three", 3);
+    let asserted = w.assert("asserted", three);
+    let b = build(asserted, w);
     assert!(!b.ok, "assert(3) must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(
@@ -2360,14 +2192,14 @@ fn assert_on_a_literal_checks_the_value_itself() {
 fn an_out_of_bounds_array_index_fails_a_generated_assert() {
     // [1, 2, 3][3] — the generated `i < len` constraint is what fails; the
     // read stays in-bounds for the runtime.
-    let mut ir = IR::new();
-    let a = int(&mut ir, 1);
-    let b2 = int(&mut ir, 2);
-    let c = int(&mut ir, 3);
-    let arr = array(&mut ir, &[a, b2, c]);
-    let idx = int(&mut ir, 3);
-    let e = index(&mut ir, arr, idx);
-    let b = build(e, ir);
+    let mut w = Writer::new();
+    let a = w.int("a", 1);
+    let b2 = w.int("b2", 2);
+    let c = w.int("c", 3);
+    let arr = w.array("arr", &[a, b2, c]);
+    let idx = w.int("idx", 3);
+    let e = w.index("e", arr, idx);
+    let b = build(e, w);
     assert!(!b.ok, "an out-of-range read must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
@@ -2385,13 +2217,13 @@ fn an_out_of_bounds_array_index_fails_a_generated_assert() {
 fn an_in_bounds_generated_constraint_is_drained() {
     // [1, 2][1] — `1 < 2` holds, so the constraint is consumed like a passing
     // assert.
-    let mut ir = IR::new();
-    let a = int(&mut ir, 1);
-    let b2 = int(&mut ir, 2);
-    let arr = array(&mut ir, &[a, b2]);
-    let idx = int(&mut ir, 1);
-    let e = index(&mut ir, arr, idx);
-    let b = build(e, ir);
+    let mut w = Writer::new();
+    let a = w.int("a", 1);
+    let b2 = w.int("b2", 2);
+    let arr = w.array("arr", &[a, b2]);
+    let idx = w.int("idx", 1);
+    let e = w.index("e", arr, idx);
+    let b = build(e, w);
     assert!(b.ok, "an in-range read should check");
     assert!(b.module.assert_errors.is_empty());
     assert!(
@@ -2404,17 +2236,17 @@ fn an_in_bounds_generated_constraint_is_drained() {
 fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
     // f = i => [7, 8, 9][i] — the body's `i < 3` constraint stays pending; it
     // is cloned and decided per apply.
-    let mut ir = IR::new();
-    let i = param(&mut ir);
-    let a = int(&mut ir, 7);
-    let b2 = int(&mut ir, 8);
-    let c = int(&mut ir, 9);
-    let arr = array(&mut ir, &[a, b2, c]);
-    let read = index(&mut ir, arr, i);
-    let f = lam(&mut ir, i, read);
-    let two = int(&mut ir, 2);
-    let good = app(&mut ir, f, two);
-    let b = build(good, ir);
+    let mut w = Writer::new();
+    let i = w.param("i");
+    let a = w.int("a", 7);
+    let b2 = w.int("b2", 8);
+    let c = w.int("c", 9);
+    let arr = w.array("arr", &[a, b2, c]);
+    let read = w.index("read", arr, i);
+    let f = w.lam("f", i, read);
+    let two = w.int("two", 2);
+    let good = w.app("good", f, two);
+    let b = build(good, w);
     assert!(b.ok, "f 2 should check");
     assert!(b.module.assert_errors.is_empty());
     assert_eq!(
@@ -2428,17 +2260,17 @@ fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
 fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
     // f = i => [7, 8, 9][i]; f 3 — the generated `i < 3` constraint is not
     // reachable from the return; the clone fails.
-    let mut ir = IR::new();
-    let i = param(&mut ir);
-    let a = int(&mut ir, 7);
-    let b2 = int(&mut ir, 8);
-    let c = int(&mut ir, 9);
-    let arr = array(&mut ir, &[a, b2, c]);
-    let read = index(&mut ir, arr, i);
-    let f = lam(&mut ir, i, read);
-    let three = int(&mut ir, 3);
-    let bad = app(&mut ir, f, three);
-    let b = build(bad, ir);
+    let mut w = Writer::new();
+    let i = w.param("i");
+    let a = w.int("a", 7);
+    let b2 = w.int("b2", 8);
+    let c = w.int("c", 9);
+    let arr = w.array("arr", &[a, b2, c]);
+    let read = w.index("read", arr, i);
+    let f = w.lam("f", i, read);
+    let three = w.int("three", 3);
+    let bad = w.app("bad", f, three);
+    let b = build(bad, w);
     assert!(!b.ok, "f 3 must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
@@ -2456,17 +2288,17 @@ fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
 #[test]
 fn a_body_index_fails_at_the_violating_argument() {
     // f = i => [7, 8, 9][i]; f 5 — the instantiated clone's `5 < 3` fails.
-    let mut ir = IR::new();
-    let i = param(&mut ir);
-    let a = int(&mut ir, 7);
-    let b2 = int(&mut ir, 8);
-    let c = int(&mut ir, 9);
-    let arr = array(&mut ir, &[a, b2, c]);
-    let read = index(&mut ir, arr, i);
-    let f = lam(&mut ir, i, read);
-    let five = int(&mut ir, 5);
-    let bad = app(&mut ir, f, five);
-    let b = build(bad, ir);
+    let mut w = Writer::new();
+    let i = w.param("i");
+    let a = w.int("a", 7);
+    let b2 = w.int("b2", 8);
+    let c = w.int("c", 9);
+    let arr = w.array("arr", &[a, b2, c]);
+    let read = w.index("read", arr, i);
+    let f = w.lam("f", i, read);
+    let five = w.int("five", 5);
+    let bad = w.app("bad", f, five);
+    let b = build(bad, w);
     assert!(!b.ok, "f 5 must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(
@@ -2483,19 +2315,19 @@ fn a_body_index_fails_at_the_violating_argument() {
 #[test]
 fn an_annotated_struct_parameter_function_reads_a_named_field() {
     // `f = (p : struct{.x Int, .y Int} => p.x)`; `f (struct{.x 1, .y 2})`.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let int_x = int_t(&mut ir);
-    let int_y = int_t(&mut ir);
-    let struct_ty = named_type_struct(&mut ir, &[(int_x, "x"), (int_y, "y")]);
-    let read = named_field(&mut ir, p, "x");
-    let f = lam_at_typed(&mut ir, p, Some(struct_ty), read, None);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let fields = tuple(&mut ir, &[one, two]);
-    let arg = instantiate(&mut ir, struct_ty, fields);
-    let call = app(&mut ir, f, arg);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let int_x = w.int_type("int_x");
+    let int_y = w.int_type("int_y");
+    let struct_ty = w.struct_type("struct_ty", &[(int_x, "x"), (int_y, "y")]);
+    let read = w.named_field("read", p, "x");
+    let f = w.lam_typed("f", p, Some(struct_ty), read, false);
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let fields = w.tuple("fields", &[one, two]);
+    let arg = w.instantiate("inst", struct_ty, fields, &[]);
+    let call = w.app("call", f, arg);
+    let b = build(call, w);
     assert!(b.ok, "f (struct{{.x 1, .y 2}}) must check");
 }
 
@@ -2508,19 +2340,19 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
 /// type expression is what makes an annotation and an instance agree.
 #[test]
 fn two_written_struct_types_are_distinct_nominal_types() {
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let int_a = int_t(&mut ir);
-    let written_in_annotation = named_type_struct(&mut ir, &[(int_a, "x")]);
-    let read = named_field(&mut ir, p, "x");
-    let f = lam_at_typed(&mut ir, p, Some(written_in_annotation), read, None);
-    let int_b = int_t(&mut ir);
-    let written_in_argument = named_type_struct(&mut ir, &[(int_b, "x")]);
-    let one = int(&mut ir, 1);
-    let fields = tuple(&mut ir, &[one]);
-    let arg = instantiate(&mut ir, written_in_argument, fields);
-    let call = app(&mut ir, f, arg);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let int_a = w.int_type("int_a");
+    let written_in_annotation = w.struct_type("written_in_annotation", &[(int_a, "x")]);
+    let read = w.named_field("read", p, "x");
+    let f = w.lam_typed("f", p, Some(written_in_annotation), read, false);
+    let int_b = w.int_type("int_b");
+    let written_in_argument = w.struct_type("written_in_argument", &[(int_b, "x")]);
+    let one = w.int("one", 1);
+    let fields = w.tuple("fields", &[one]);
+    let arg = w.instantiate("inst", written_in_argument, fields, &[]);
+    let call = w.app("call", f, arg);
+    let b = build(call, w);
     for d in b.diagnostics() {
         eprintln!("PROBE two occurrences diag: {d:?}");
     }
@@ -2540,23 +2372,23 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 
     // So the body's `T.I` reads a field the annotation already named, and
     // applying `F` to a struct type closes it.
-    let mut ir = IR::new();
-    let t = param(&mut ir);
-    let open_i = hole(&mut ir);
-    let open_o = hole(&mut ir);
+    let mut w = Writer::new();
+    let t = w.param("t");
+    let open_i = w.hole("open_i");
+    let open_o = w.hole("open_o");
     // **One** named struct type for both sides: two written `struct{…}` are
     // distinct.
-    let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
-    let read = named_field(&mut ir, t, "I");
-    let f = lam_at_typed(&mut ir, t, Some(open_struct), read, None);
+    let open_struct = w.struct_type("open_struct", &[(open_i, "I"), (open_o, "O")]);
+    let read = w.named_field("read", t, "I");
+    let f = w.lam_typed("f", t, Some(open_struct), read, false);
     // The argument is an **instance** of that struct whose field values are the
     // *types* `Int` — the struct contains a type.
-    let int_i = int_t(&mut ir);
-    let int_o = int_t(&mut ir);
-    let fields = tuple(&mut ir, &[int_i, int_o]);
-    let arg = instantiate(&mut ir, open_struct, fields);
-    let call = app(&mut ir, f, arg);
-    let b = build(call, ir);
+    let int_i = w.int_type("int_i");
+    let int_o = w.int_type("int_o");
+    let fields = w.tuple("fields", &[int_i, int_o]);
+    let arg = w.instantiate("inst", open_struct, fields, &[]);
+    let call = w.app("call", f, arg);
+    let b = build(call, w);
     // The checker's own per-expression view, not mutated by the unify.
     for (at, st) in b.state.iter().enumerate() {
         let e = ExprId(at as u32);
@@ -2589,19 +2421,19 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 fn an_annotated_tuple_parameter_function_reads_an_element() {
     // The regression `f = p : tuple{Int, Int} => p(0)`; `f (1, 2)` failed with
     // `expected raw[?a, Int], found raw[?a, Int]`.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let int1 = int_t(&mut ir);
-    let int2 = int_t(&mut ir);
-    let tuple_ty = type_tuple(&mut ir, &[int1, int2]);
-    let zero = int(&mut ir, 0);
-    let read = field(&mut ir, p, zero);
-    let f = lam_at_typed(&mut ir, p, Some(tuple_ty), read, None);
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let fields = tuple(&mut ir, &[one, two]);
-    let call = app(&mut ir, f, fields);
-    let b = build(call, ir);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let int1 = w.int_type("int1");
+    let int2 = w.int_type("int2");
+    let tuple_ty = w.type_tuple("tuple_ty", &[int1, int2]);
+    let zero = w.int("zero", 0);
+    let read = w.field("read", p, zero);
+    let f = w.lam_typed("f", p, Some(tuple_ty), read, false);
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let fields = w.tuple("fields", &[one, two]);
+    let call = w.app("call", f, fields);
+    let b = build(call, w);
     for d in b.diagnostics() {
         eprintln!(
             "PROBE tuple read diag: kind={:?} loc={:?} a={:?} b={:?}",
@@ -2640,18 +2472,18 @@ fn common_value(value: &HighProgramValue) -> u64 {
 #[test]
 fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
     // `f = (p : struct{.x Int, .y Int} => p)`; `g = (a => f a)`.
-    let mut ir = IR::new();
-    let p = param(&mut ir);
-    let int_x = int_t(&mut ir);
-    let int_y = int_t(&mut ir);
-    let struct_ty = named_type_struct(&mut ir, &[(int_x, "x"), (int_y, "y")]);
-    let f = lam_at_typed(&mut ir, p, Some(struct_ty), p, None);
+    let mut w = Writer::new();
+    let p = w.param("p");
+    let int_x = w.int_type("int_x");
+    let int_y = w.int_type("int_y");
+    let struct_ty = w.struct_type("struct_ty", &[(int_x, "x"), (int_y, "y")]);
+    let f = w.lam_typed("f", p, Some(struct_ty), p, false);
 
-    let a = param(&mut ir);
-    let call = app(&mut ir, f, a);
-    let g = lam(&mut ir, a, call);
+    let a = w.param("a");
+    let call = w.app("call", f, a);
+    let g = w.lam("g", a, call);
 
-    let b = build(g, ir);
+    let b = build(g, w);
     assert!(b.ok, "the wrapper must check");
     let gtype = b.state[g].ty.expect("a lambda has a type");
     let gid = function_type_id(&b, gtype);
