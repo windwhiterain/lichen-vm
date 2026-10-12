@@ -142,8 +142,21 @@ fn recorded(value: &LangValue) -> Option<Graph> {
 ///
 /// # Invariant
 /// The diagnostics are read and dropped: this asks only whether a graph came out, so the
-/// wording of a refusal is not part of what any test here pins.
+/// wording of a refusal is not part of what any test here pins — except
+/// [`a_buffer_beside_the_in_group_is_refused_by_the_line_that_names_it`], which reads the
+/// same run's report.
 fn records(source: &str) -> bool {
+    reported_run(source).1.as_ref().and_then(recorded).is_some()
+}
+
+/// `source` compiled and run: every line its report carried, and the root value.
+///
+/// # Invariant
+/// The lines are the ones a user reads, in both channels and in the order they were
+/// produced: the check report's own, then the run's refusals as `render_build` prints
+/// them (`category: message`). A run is not entered for a program the checker already
+/// refused, so a check-stage failure stays check-stage.
+fn reported_run(source: &str) -> (Vec<String>, Option<LangValue>) {
     let mut store = PackageStore::<LangProgram>::new();
     let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
     assert!(diags.is_empty(), "the program's imports resolve: {diags:?}");
@@ -155,13 +168,24 @@ fn records(source: &str) -> bool {
         &lichen_language::lex::line_starts(source),
         lichen_highlevel::no_native_ops(),
     );
+    let mut lines: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|line| line.message.clone())
+        .collect();
     if !report.ok() {
-        return false;
+        return (lines, None);
     }
     let build = report.build.expect("an accepted program has a build");
     let mut module = build.module;
     let root = module.evaluate_node_deep(build.root_val, None);
-    root.as_ref().and_then(recorded).is_some()
+    lines.extend(
+        module
+            .extension_diagnostics
+            .iter()
+            .map(|entry| format!("{}: {}", entry.category, entry.message)),
+    );
+    (lines, root)
 }
 
 /// The extent and two buffers are three separate graph inputs, wired to three separate ports.
@@ -237,6 +261,51 @@ fn a_buffer_beside_the_in_group_records_and_the_same_buffer_under_it_does_not() 
         "a buffer outside `.in`/`.out` has no place in the parameter, and the step does \
          not record — unread or not, this is where the buffer sits"
     );
+}
+
+/// The misplaced buffer's report is the one line that is the cause.
+///
+/// # Invariant
+/// The four lines the positional fallback used to answer with — two `this value is not a
+/// container`, `argument 0 of this dispatch is not a buffer`, and the return a graph
+/// cannot hand back — are symptoms of reading a struct parameter as a flat tuple, so
+/// none names what the program did. The refusal names its subject and its position, and
+/// it is the only line the run reports.
+#[test]
+fn a_buffer_beside_the_in_group_is_refused_by_the_line_that_names_it() {
+    let (lines, value) = reported_run(&chain(MISPLACED_BUFFER));
+    assert!(
+        value.as_ref().and_then(recorded).is_none(),
+        "the step still records nothing: a refused parameter has no placeholders to apply"
+    );
+    assert_eq!(
+        lines.len(),
+        1,
+        "one cause, one line:\n  {}",
+        lines.join("\n  ")
+    );
+    let refusal = &lines[0];
+    assert!(
+        refusal.contains("a buffer outside `.in`/`.out`"),
+        "the line names the buffer and the rule it broke:\n  {refusal}"
+    );
+    assert!(
+        refusal.contains("position 2.0"),
+        "the line names where in the parameter the buffer sits:\n  {refusal}"
+    );
+    for symptom in [
+        "is not a container",
+        "is not a buffer",
+        "is not a value a graph can hand back",
+    ] {
+        assert!(
+            !lines.iter().any(|line| line.contains(symptom)),
+            "{symptom:?} is a symptom of the positional fallback, not this program's cause, \
+             and the report was:\n  {}",
+            lines.join("\n  ")
+        );
+    }
+    println!("the misplaced buffer is refused by:\n  {refusal}");
 }
 
 /// A context on a device, or `None` when there is none here, with the device held for the run.

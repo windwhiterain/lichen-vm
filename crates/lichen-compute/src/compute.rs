@@ -1236,11 +1236,17 @@ where
                             // An unresolved parameter annotation leaves the operator
                             // undecided and silent — not an error: a later pass
                             // compiles it.
-                            if err == PARALLEL_PARAMETER_UNDECIDED {
-                                return None;
+                            match err {
+                                RoleUnread::Undecided => return None,
+                                RoleUnread::Refusal(why) => {
+                                    module.record_extension_diagnostic(
+                                        PARALLEL_DIAGNOSTIC,
+                                        None,
+                                        why,
+                                    );
+                                    None
+                                }
                             }
-                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                            None
                         }
                     }
                 }
@@ -1856,14 +1862,43 @@ where
     Ok(classes)
 }
 
+/// Why a parallel parameter's roles could not be read.
+///
+/// # Invariant
+/// [`Self::Undecided`] is produced only where the annotation is still a cell with
+/// no value: there is nothing to read and nothing to report. [`Self::Refusal`]
+/// always carries the sentence its subject was named in. A caller tells them apart
+/// by the variant, never by comparing text, so no later edit to a message can turn
+/// a refusal into a "not yet".
+pub enum RoleUnread {
+    /// The parameter's type has not resolved yet: a later pass compiles the kernel
+    /// once the annotation states the struct.
+    Undecided,
+    /// A named refusal: the parameter is not a kernel ABI, and this is why.
+    Refusal(String),
+}
+
+impl From<String> for RoleUnread {
+    fn from(why: String) -> Self {
+        Self::Refusal(why)
+    }
+}
+
+impl From<&str> for RoleUnread {
+    fn from(why: &str) -> Self {
+        Self::Refusal(why.to_string())
+    }
+}
+
 /// The role table of a parallel kernel's parameter struct, decoded from the
 /// parameter's **type slot**.
 ///
 /// # Invariant
-/// `Ok(None)` when the parameter is not a named struct term (the older
-/// `cfg = (n, (buffers…))` shape); `Err` when it is one but lacks both reserved
-/// fields, because a fallback would silently read it as the old shape.
-fn parallel_roles<P>(module: &mut Module<P>, cfg_pair: NodeId) -> Result<KernelRoles, String>
+/// `Undecided` when the parameter's type is not readable as a struct term yet (the
+/// older `cfg = (n, (buffers…))` shape, or an annotation still a cell). A parameter
+/// that *is* a struct term and names a field the ABI cannot hold is `Refusal`, so a
+/// caller cannot mistake a mistake for a "not yet" and read the struct as the old shape.
+fn parallel_roles<P>(module: &mut Module<P>, cfg_pair: NodeId) -> Result<KernelRoles, RoleUnread>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -1871,10 +1906,10 @@ where
 {
     // SAFETY: `cfg_pair` is a live node of `module`.
     let Some(items) = (unsafe { module.array_items(cfg_pair) }) else {
-        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
+        return Err(RoleUnread::Undecided);
     };
     let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
-        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
+        return Err(RoleUnread::Undecided);
     };
     // Undecided is not a mistake: a kernel compiled before its annotation
     // resolved waits for a later pass.
@@ -1882,7 +1917,7 @@ where
     // The type slot holds either the type term or a node that holds one; the
     // decode decides which ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
-        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
+        return Err(RoleUnread::Undecided);
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     // A reserved group may be absent or written empty: the walk treats both
@@ -1891,7 +1926,7 @@ where
     let outputs_at = named("out");
     // SAFETY: `shape` is a live node of `module`.
     let Some(fields) = field_types_of(module, shape) else {
-        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
+        return Err(RoleUnread::Undecided);
     };
     let mut roles = KernelRoles::default();
     for (field, &field_type) in fields.iter().enumerate() {
@@ -1940,7 +1975,7 @@ fn walk_role<P>(
     path: &[usize],
     role: LeafRole,
     roles: &mut KernelRoles,
-) -> Result<(), String>
+) -> Result<(), RoleUnread>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2015,23 +2050,14 @@ fn shape_name(shape: &LowShape) -> &'static str {
 }
 
 /// The refusal a role walk gives: the path it was walking, and what it found.
-fn role_refusal(path: &[usize], what: &str) -> String {
+fn role_refusal(path: &[usize], what: &str) -> RoleUnread {
     let path: Vec<String> = path.iter().map(usize::to_string).collect();
-    format!(
+    RoleUnread::Refusal(format!(
         "a parallel kernel's parameter holds {what} at position {}, and the ABI has no place for \
          it",
         path.join(".")
-    )
+    ))
 }
-
-/// A parallel kernel whose parameter's type has not resolved yet.
-///
-/// # Invariant
-/// The annotation is still a cell with no value, so there is nothing to read and
-/// nothing to report: the operator answers undecided, and a later pass compiles
-/// the kernel once the annotation states the struct.
-const PARALLEL_PARAMETER_UNDECIDED: &str =
-    "a parallel kernel's parameter type has not resolved yet";
 
 /// A parameter slot in a kernel's wasm signature.
 ///
@@ -2334,7 +2360,7 @@ where
 pub fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
-) -> Result<KernelFragment, String>
+) -> Result<KernelFragment, RoleUnread>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2414,7 +2440,8 @@ where
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
                  (an index function must write every output it declares)"
-            ));
+            )
+            .into());
         }
         // **A write fills the output it names**, not the position it is walked at.
         if !conditional {
@@ -2432,7 +2459,8 @@ where
                          outputs are {:?})",
                         roles.outputs
                     ),
-                });
+                }
+                .into());
             }
         }
     }
@@ -2446,7 +2474,8 @@ where
              the type",
             outputs.len(),
             roles.outputs.len()
-        ));
+        )
+        .into());
     }
     // A write-only body leaves one dummy scalar, which is what `results` records.
 
@@ -4890,7 +4919,17 @@ where
     let mut parameter_slot = None;
     if let AnyFunctionId::Dynamic(fid) = function {
         let parameter = module.functions[fid].parameter;
-        roles = parallel_roles(module, parameter).ok();
+        match parallel_roles(module, parameter) {
+            Ok(decoded) => roles = Some(decoded),
+            // A refusal reaches the user: the fallback below reports the
+            // symptoms of this one cause, never the cause itself.
+            Err(RoleUnread::Refusal(why)) => {
+                refuse(module, why);
+                return None;
+            }
+            // A "not yet", and only that: the flat tuple below is the honest reading.
+            Err(RoleUnread::Undecided) => {}
+        }
         // SAFETY: `parameter` is a live node of `module`.
         parameter_slot = unsafe { module.array_items(parameter) }
             .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node));
@@ -4948,8 +4987,8 @@ where
                 }
             }
         }
-        // The arity is not knowable: a read in an unapplied body is a bare cell, so
-        // the tuple is built at a ceiling.
+        // The roles are undecided, so the arity is not knowable and the
+        // tuple is built at a ceiling.
 
         // One placeholder per slot, and the slot is the number, so `ins(k)` is the
         // `k`-th argument.

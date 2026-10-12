@@ -11,8 +11,8 @@ pub use compute::{
     BufferCollectOp, BufferOp, BufferPayload, CallOp, ComputeOperator, ComputePlugin, ComputeValue,
     FusedKernel, FusedRefusal, GraphId, GraphOp, GraphPass, GraphRunOp, GraphValueId, JitOp,
     KernelEntry, KernelId, LANDING_DIAGNOSTIC, LandingRefusal, LaunchExtent, LaunchOp, ParLaunchOp,
-    ParallelOp, RangeOp, ReadOp, WRAPPER_SOURCE, WriteOp, clear_graph_pass, compile_fragment,
-    compile_parallel_fragment, consult_graph_pass, kernel_claim, kernel_fragment,
+    ParallelOp, RangeOp, ReadOp, RoleUnread, WRAPPER_SOURCE, WriteOp, clear_graph_pass,
+    compile_fragment, compile_parallel_fragment, consult_graph_pass, kernel_claim, kernel_fragment,
     land_fused_kernel, module_cache_misses, read_fused_kernel, set_graph_pass, set_graph_policy,
     take_graph_pass_lines, write_fused_kernel,
 };
