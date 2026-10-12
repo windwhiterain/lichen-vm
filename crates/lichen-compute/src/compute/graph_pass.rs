@@ -34,6 +34,47 @@ pub trait GraphPass {
     ) -> Option<Graph>;
 }
 
+/// The one pass that applies `stages` in turn, for a caller that wants several.
+///
+/// # Invariant
+/// A stage sees the graph the stage before it answered, or the one it was handed when that
+/// stage answered `None` — the trait's `None` means "leave it as it was". The lines are the
+/// stages' own, in stage order and verbatim, so a reader can still tell which stage spoke, and
+/// the chain answers `None` only when no stage rewrote anything.
+pub fn pass_chain(stages: Vec<Box<dyn GraphPass>>) -> Box<dyn GraphPass> {
+    Box::new(PassChain { stages })
+}
+
+/// The chain: an ordered list of passes, one installed pass in its place.
+struct PassChain {
+    /// The stages, in the order they are applied.
+    stages: Vec<Box<dyn GraphPass>>,
+}
+
+impl GraphPass for PassChain {
+    /// Apply every stage in turn, each to the graph the one before it answered.
+    ///
+    /// # Invariant
+    /// The graph running is the last answer, or the caller's own while it is `None`: a stage
+    /// that rewrote nothing hands the next stage the graph it was given, which is what makes a
+    /// chain of one refusing stage and one rewriting stage the second stage's own answer.
+    fn apply(
+        &self,
+        graph: &Graph,
+        extent: &LaunchExtent<'_>,
+        lines: &mut Vec<String>,
+    ) -> Option<Graph> {
+        let mut current: Option<Graph> = None;
+        for stage in &self.stages {
+            let seen = current.as_ref().unwrap_or(graph);
+            if let Some(rewritten) = stage.apply(seen, extent, lines) {
+                current = Some(rewritten);
+            }
+        }
+        current
+    }
+}
+
 thread_local! {
     /// The installed pass, and the lines the last consultation recorded.
     ///

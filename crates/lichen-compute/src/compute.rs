@@ -45,7 +45,7 @@ pub use fused::{
 };
 pub use graph::GraphId;
 pub use graph_pass::{
-    GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, set_graph_pass,
+    GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, pass_chain, set_graph_pass,
     take_graph_pass_lines,
 };
 

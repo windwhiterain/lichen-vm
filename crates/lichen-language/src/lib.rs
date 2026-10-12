@@ -20,6 +20,7 @@ pub mod compile;
 pub mod diag;
 mod dirty;
 pub mod fusion_claim;
+pub mod floor;
 pub mod package;
 pub mod persist;
 pub mod placement_pack;

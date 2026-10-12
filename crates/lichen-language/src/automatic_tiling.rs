@@ -57,10 +57,27 @@ pub fn install_tiling(module: &Module<LangProgram>) {
 /// whose hash is the node's and whose constraints hold fires; a node no pack covers is tiled by
 /// the engine's own choice, the floor `docs/notes/graph-fusion.md` §5 puts under every pack.
 pub fn install_tiling_with_packs(module: &Module<LangProgram>, packs: &[PlacementPack]) {
-    set_graph_pass(Box::new(AutomaticTiling {
+    set_graph_pass(tiling_pass_with_packs(module, packs));
+}
+
+/// The pass `install_tiling` installs, for a caller that wants to wrap it.
+pub fn tiling_pass(module: &Module<LangProgram>) -> Box<dyn GraphPass> {
+    tiling_pass_with_packs(module, &[])
+}
+
+/// The pass `install_tiling_with_packs` installs, for a caller that wants to wrap it.
+///
+/// # Invariant
+/// The one spelling of the construction: `install_tiling_with_packs` installs exactly this pass,
+/// so a caller that wraps it — in a chain, or in a test — wraps what the installer runs.
+pub fn tiling_pass_with_packs(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+) -> Box<dyn GraphPass> {
+    Box::new(AutomaticTiling {
         instances: instances(module),
         packs: packs.to_vec(),
-    }));
+    })
 }
 
 /// One kernel as the derivation reads it: the claim, and the algebra its own marks declare.

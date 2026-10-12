@@ -15,6 +15,7 @@ use lichen_kernel_ir::{
     compose, fragment_digest,
 };
 use lichen_language::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
+use lichen_language::floor::{floor_pass_with_packs, install_floor};
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::region_merge::{install_region_merge, region_merge_pass};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module};
@@ -600,6 +601,114 @@ fn a_fan_out_region_is_refused_by_the_derivations_own_name() {
                 .to_string()
         ],
         "the region is refused by the derivation's own name, and nothing merged"
+    );
+    clear_graph_pass();
+}
+
+/// The floor's one report carries both stages: the merge, and the tiling pass after it.
+///
+/// # Invariant
+/// The two lines are the whole claim. The seam holds **one** pass, so a chain is the only way
+/// both transforms can run, and a tiling pass that stayed silent would leave a merged node
+/// nobody looked at — which is the half-apply the floor exists to close.
+#[test]
+fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
+    clear_graph_pass();
+    let (module, value, _root) = common::run(&recording());
+    let graph = recorded(&module, &value);
+    install_floor(&module);
+    let rewritten = consult_graph_pass(&graph, &|_node| Some(COUNT))
+        .expect("the merge stage answers a graph for a region it may merge");
+    let lines = take_graph_pass_lines();
+    clear_graph_pass();
+    assert_eq!(
+        rewritten.len(),
+        1,
+        "the merge stage ran first and left the tiling stage one node"
+    );
+    assert_eq!(
+        lines,
+        vec![
+            format!(
+                "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
+                 position {ABSORBED} of node 1, licensed by the floor: every node of the region \
+                 claims Reduction and nothing else; the merged fragment is unregistered, so it \
+                 carries no claim and a later digest-keyed pass cannot name it"
+            ),
+            "node 0: refused: no claim is registered for the fragment at 0, so it is in no row \
+             of the digest join and no algebra can be derived for it; a composed fragment is \
+             exactly this, because composition registers neither body it joins"
+                .to_string()
+        ],
+        "one line per stage in stage order: the region line is the merge's, and the node line is \
+         the tiling pass naming the merged node it was handed"
+    );
+}
+
+/// The floor runs both stages on a real dispatch, answers the un-passed program, and a
+/// counterfactual inside the composed body moves the answer.
+///
+/// # Invariant
+/// The report is read from the run's own channel, not from a hand-installed consult: the claim
+/// is that a dispatch under the floor reports both stages, which only a run can show.
+#[test]
+fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
+    let Some(_context) = device("the_floor_run_reports_both_stages_and_answers_the_un_passed_program")
+    else {
+        return;
+    };
+    clear_graph_pass();
+    let (base_module, base_value, _root) = common::run(&running());
+    let baseline = answer(&base_module, &base_value);
+    assert_eq!(
+        baseline,
+        vec![closed_form(); COUNT],
+        "the un-passed two-node program answers the hand-derived closed form"
+    );
+
+    install_floor(&base_module);
+    let (floored_module, floored_value, _root) = common::run(&running());
+    let passed = answer(&floored_module, &floored_value);
+    let report = pass_report(&floored_module);
+    println!(
+        "the floor's run reported:\n  {}",
+        report.join("\n  ")
+    );
+    assert!(
+        report
+            .iter()
+            .any(|line| line.contains("merged into one node at 1")
+                && line.contains("licensed by the floor")),
+        "the run's own report says the merge stage merged while the run was dispatched: {report:?}"
+    );
+    assert!(
+        report.iter().any(|line| line.contains(
+            "node 0: refused: no claim is registered for the fragment at 0"
+        )),
+        "and the tiling stage looked at the node the merge left, by name: {report:?}"
+    );
+    assert_eq!(
+        passed, baseline,
+        "the floored graph answers the un-passed program's answer element for element"
+    );
+
+    // **The counterfactual**: only the composed node can answer a value the recording cannot.
+    set_graph_pass(Box::new(SwappedElement(floor_pass_with_packs(
+        &base_module,
+        &[],
+    ))));
+    let (swapped_module, swapped_value, _root) = common::run(&running());
+    let swapped = answer(&swapped_module, &swapped_value);
+    println!("the device ran: recorded {baseline:?}, floored {passed:?}, floored with `d - r` swapped {swapped:?}");
+    assert_eq!(
+        swapped,
+        vec![swapped_form(); COUNT],
+        "the composed body with `d - r` swapped answers `Σ d - min d`, which the recording \
+         cannot answer"
+    );
+    assert_ne!(
+        swapped, passed,
+        "the answer moved with the composed body, so the merged node is what the run dispatched"
     );
     clear_graph_pass();
 }
