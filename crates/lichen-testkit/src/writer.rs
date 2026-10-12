@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::attr::AttrSpec;
+use lichen_highlevel::attr::{AttrSpec, NoAttr};
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, PrefixOp};
 use lichen_highlevel::program::{
     FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
@@ -16,7 +16,7 @@ use lichen_highlevel::program::{
 /// Every allocation goes through a builder that names its result, so a
 /// [`Program`] has a name for **every** expression in it — never a node a
 /// failure message can only call `ExprId(17)`.
-pub struct Writer<A: AttrSpec, L = HighProgramLiteral> {
+pub struct Writer<A = NoAttr, L = HighProgramLiteral> {
     ir: IR<A, L>,
     names: HashMap<ExprId, String>,
 }
@@ -78,6 +78,33 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// still decides whether a loop is emitted.
     pub fn lam_looping(&mut self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
         self.lam_typed(name, parameter, None, body, true)
+    }
+
+    /// Stamp a [`Self::binding`]'s reserved id with its lambda, so a recursion
+    /// can name its own id before the body exists.
+    ///
+    /// # Invariant
+    /// The returned id is the reserved one, so a call written against it
+    /// resolves to the function this stamps rather than to a fresh sibling.
+    pub fn close_binding(
+        &mut self,
+        reserved: ExprId,
+        parameter: ExprId,
+        body: ExprId,
+        looping: bool,
+    ) -> ExprId {
+        self.fill(
+            reserved,
+            ExprKind::Function {
+                parameter,
+                parameter_type: None,
+                parameter_attribute: None,
+                r#return: body,
+                parent: None,
+                looping,
+            },
+        );
+        reserved
     }
 
     /// `name = \p : T. body` — the annotated parameter's type.
@@ -160,7 +187,13 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = a.<field>` — the named form, which also accepts a struct.
     pub fn named_field(&mut self, name: &str, container: ExprId, field: &'static str) -> ExprId {
-        self.named(name, ExprKind::NamedField { container, name: field })
+        self.named(
+            name,
+            ExprKind::NamedField {
+                container,
+                name: field,
+            },
+        )
     }
 
     /// `name = a <== k` — a table read.
@@ -227,7 +260,13 @@ impl<A: AttrSpec, L> Writer<A, L> {
             start,
             end: self.ir.children.len() as u32,
         };
-        self.named(name, ExprKind::Prefix { operator, operands: range })
+        self.named(
+            name,
+            ExprKind::Prefix {
+                operator,
+                operands: range,
+            },
+        )
     }
 
     /// `name = assert(condition)`.
@@ -344,7 +383,13 @@ impl<A: AttrSpec, L> Writer<A, L> {
             start,
             end: self.ir.struct_names.len() as u32,
         };
-        self.named(name, ExprKind::Record { value, names: name_range })
+        self.named(
+            name,
+            ExprKind::Record {
+                value,
+                names: name_range,
+            },
+        )
     }
 
     /// `name = T -> U` — a function type.
@@ -419,7 +464,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
         }
     }
 
-    fn range(&mut self, name: &str, elements: &[ExprId], make: fn(ChildRange) -> ExprKind<L>) -> ExprId {
+    fn range(
+        &mut self,
+        name: &str,
+        elements: &[ExprId],
+        make: fn(ChildRange) -> ExprKind<L>,
+    ) -> ExprId {
         let range = self.push_children(elements);
         self.named(name, make(range))
     }
@@ -473,7 +523,7 @@ impl<A: AttrSpec, L> Default for Writer<A, L> {
 }
 
 /// A finished program: the IR, the root, and every expression's name.
-pub struct Program<A: AttrSpec, L = HighProgramLiteral> {
+pub struct Program<A = NoAttr, L = HighProgramLiteral> {
     pub ir: IR<A, L>,
     pub names: HashMap<ExprId, String>,
     pub root: ExprId,

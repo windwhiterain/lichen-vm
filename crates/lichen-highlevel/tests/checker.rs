@@ -1,11 +1,11 @@
 //! The runtime is the typechecker; see docs/notes/lowlevel-vm.md and
 //! docs/language-spec.md.
 
+use lichen_highlevel::NoAttr;
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{BinOp, ExprId, ExprKind};
 use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeValue};
-use lichen_highlevel::NoAttr;
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, FunctionId, LowValue, NodeId};
 use lichen_testkit::{Writer, dyn_node};
 use lichen_utils::compose::AsField;

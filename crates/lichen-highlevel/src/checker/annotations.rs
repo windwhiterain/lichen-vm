@@ -488,7 +488,8 @@ where
         // index. `ExprState::attr` names one node without that index, so the
         // lowering map reads it from here instead (see `crate::lowering`).
         for (index, &node) in slots.iter().enumerate() {
-            self.node_edges.insert(node, self.loc(e, shape::attr_slot(index)));
+            self.node_edges
+                .insert(node, self.loc(e, shape::attr_slot(index)));
         }
         // The constraint slot is what the apply-time check reads; a label is
         // metadata only.

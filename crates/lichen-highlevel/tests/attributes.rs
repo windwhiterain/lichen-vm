@@ -5,12 +5,13 @@ use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSet, AttrSpec};
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{ExprKind, IR, Loc, Schema};
+use lichen_highlevel::ir::{ExprKind, Loc, Schema};
 use lichen_highlevel::program::{
-    Ctx, HighProgram, HighProgramLiteral, HighProgramOperator, HighProgramValue, IntLit,
-    ProgramImpl, ValueType,
+    Ctx, HighProgram, HighProgramLiteral, HighProgramOperator, HighProgramValue, ProgramImpl,
+    ValueType,
 };
 use lichen_lowlevel::{LowValue, NodeId, Registry};
+use lichen_testkit::Writer;
 use std::sync::{Arc, RwLock};
 
 /// A one-member attribute set: the canonical order is the single-element list.
@@ -48,20 +49,21 @@ where
 type TaggedProgram = ProgramImpl<HighProgramValue, HighProgramOperator, Tag, HighProgramLiteral>;
 
 /// `5 # tag` — an annotated int whose schema tail carries `Tag`.
-fn annotated_int() -> (lichen_highlevel::ir::ExprId, IR<Tag, HighProgramLiteral>) {
-    let mut ir: IR<Tag, HighProgramLiteral> = IR::new();
-    let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));
-    let tag_value = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(4))));
-    let annotation = ir.alloc_annotation(five, None, &[tag_value]);
-    ir.set_schema(annotation, Schema { tail: vec![Tag] });
-    ir.set_root(annotation);
-    (annotation, ir)
+fn annotated_int() -> lichen_testkit::Program<Tag, HighProgramLiteral> {
+    let mut w: Writer<Tag> = Writer::new();
+    let five = w.int("five", 5);
+    let tag_value = w.int("tag_value", 4);
+    let annotation = w.annotate_with("annotation", five, None, &[tag_value]);
+    w.ir_mut()
+        .set_schema(annotation, Schema { tail: vec![Tag] });
+    w.finish(annotation)
 }
 
 #[test]
 fn an_annotated_program_without_an_attribute_extension_reports_a_guard() {
-    let (annotation, ir) = annotated_int();
-    let build = Checker::<TaggedProgram>::build(ir);
+    let program = annotated_int();
+    let annotation = program.root;
+    let build = Checker::<TaggedProgram>::build(program.ir);
     assert!(
         !build.ok,
         "a schema carrying an attribute that cannot be lowered must fail the build"
@@ -82,9 +84,10 @@ fn an_annotated_program_without_an_attribute_extension_reports_a_guard() {
 fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
     // A refused annotation still compiles to the schema's full width; the
     // attribute slot is a fresh undecided hole.
-    let (annotation, ir) = annotated_int();
-    let build = Checker::<TaggedProgram>::build(ir);
-    let pair = build.state[annotation.0 as usize]
+    let program = annotated_int();
+    let annotation = program.root;
+    let build = Checker::<TaggedProgram>::build(program.ir);
+    let pair = build.state[annotation]
         .term
         .expect("the annotation compiled to a pair");
     // SAFETY: `pair` is a live node of the build under test, whose block has
@@ -101,12 +104,12 @@ fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
 fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
     // One build, one missing extension, one diagnostic: the apply's slot
     // check is skipped rather than reported again.
-    let mut ir: IR<Tag, HighProgramLiteral> = IR::new();
-    let f = ir.alloc(ExprKind::Placeholder);
-    let x = ir.alloc(ExprKind::Parameter);
-    ir.set_schema(x, Schema { tail: vec![Tag] });
-    let declared = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(4))));
-    ir.set_kind(
+    let mut w: Writer<Tag> = Writer::new();
+    let f = w.binding("f");
+    let x = w.param("x");
+    w.ir_mut().set_schema(x, Schema { tail: vec![Tag] });
+    let declared = w.int("declared", 4);
+    w.fill(
         f,
         ExprKind::Function {
             parameter: x,
@@ -117,13 +120,9 @@ fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
             looping: false,
         },
     );
-    let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));
-    let call = ir.alloc(ExprKind::Apply {
-        function: f,
-        argument: five,
-    });
-    ir.set_root(call);
-    let build = Checker::<TaggedProgram>::build(ir);
+    let five = w.int("five", 5);
+    let call = w.app("call", f, five);
+    let build = Checker::<TaggedProgram>::build(w.finish(call).ir);
     assert!(!build.ok, "the annotated parameter cannot be lowered");
     assert_eq!(
         build
@@ -138,13 +137,13 @@ fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
 
 #[test]
 fn an_attribute_aware_build_lowers_the_annotation() {
-    let (_annotation, ir) = annotated_int();
+    let program = annotated_int();
     // Single-threaded: filed values hold raw arena handles, so this `Arc` is
     // not `Send`; the builder takes it by value.
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::<TaggedProgram>::new()));
     let attr_ext: AttrExtRegistry<TaggedProgram, Tag> = Box::new(|_marker: &Tag| &Tag);
-    let build = Checker::<TaggedProgram>::build_in_attr(ir, registry, attr_ext);
+    let build = Checker::<TaggedProgram>::build_in_attr(program.ir, registry, attr_ext);
     assert!(
         build.ok,
         "an attribute-aware build must check the annotation"
@@ -158,10 +157,9 @@ fn an_attribute_aware_build_lowers_the_annotation() {
 
 #[test]
 fn a_schema_without_an_attribute_is_unaffected_by_the_missing_extension() {
-    let mut ir: IR<NoAttr, HighProgramLiteral> = IR::new();
-    let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));
-    ir.set_root(five);
-    let build = Checker::<ProgramImpl>::build(ir);
+    let mut w: Writer<NoAttr> = Writer::new();
+    let five = w.int("five", 5);
+    let build = Checker::<ProgramImpl>::build(w.finish(five).ir);
     assert!(build.ok, "an unannotated program must check");
     assert!(
         build

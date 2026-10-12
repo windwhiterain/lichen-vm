@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::{Diag, DiagKind};
 use lichen_highlevel::ir::ExprId;
-use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::lowering;
+use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 use lichen_utils::extend::AsEnum;
 
@@ -67,26 +67,37 @@ where
 
     // --- values, by the name they were written with ------------------------
 
+    /// The expression written under `name`, or `None` when none is.
+    ///
+    /// # Invariant
+    /// Names are **unique per program**: a builder that reuses one is a test
+    /// bug, and resolving to one of the two would silently pick an arbitrary
+    /// node. [`Self::expr_of`] panics on that case; this answers `None`.
+    pub fn expr_named(&self, name: &str) -> Option<ExprId> {
+        let mut found = self
+            .names
+            .iter()
+            .filter(|(_, written)| written.as_str() == name)
+            .map(|(&expr, _)| expr);
+        let first = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
     /// The expression written under `name`.
     ///
     /// # Invariant
     /// A name is unique in a program, so this is the one expression it names; a
     /// duplicate is a test bug and the panic says so rather than picking one.
     fn expr_of(&self, name: &str) -> ExprId {
-        let found: Vec<ExprId> = self
-            .names
-            .iter()
-            .filter(|(_, written)| written.as_str() == name)
-            .map(|(&expr, _)| expr)
-            .collect();
-        match found.as_slice() {
-            [expr] => *expr,
-            [] => panic!(
+        self.expr_named(name).unwrap_or_else(|| {
+            panic!(
                 "no expression named {name:?}; the program names {}",
                 self.spellings().join(", ")
-            ),
-            many => panic!("{name:?} names {} expressions, not one", many.len()),
-        }
+            )
+        })
     }
 
     /// Every name in the program, sorted — the text of a "no such name" panic.
@@ -179,10 +190,7 @@ where
                     .get(&loc.expr)
                     .map(String::as_str)
                     .unwrap_or("<unnamed>");
-                format!(
-                    "node {node:?} ← `{name}` ({})",
-                    slot_at(&self.build, node)
-                )
+                format!("node {node:?} ← `{name}` ({})", slot_at(&self.build, node))
             }
             None => format!("node {node:?} ← no expression in this build"),
         }
@@ -201,7 +209,11 @@ where
 
     /// The kinds of the build's diagnostics, in order — what most tests assert.
     pub fn diagnostic_kinds(&self) -> Vec<DiagKind> {
-        self.build.diagnostics().into_iter().map(|d| d.kind).collect()
+        self.build
+            .diagnostics()
+            .into_iter()
+            .map(|d| d.kind)
+            .collect()
     }
 
     /// The first diagnostic of `kind`, rendered.

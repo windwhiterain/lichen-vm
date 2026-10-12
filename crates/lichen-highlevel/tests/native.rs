@@ -3,13 +3,14 @@
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::checker::{Build, Checker};
-use lichen_highlevel::ir::{ChildRange, ExprId, ExprKind, IR, Loc};
+use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
 use lichen_highlevel::program::{
-    Ctx, HighProgram, HighProgramLiteral, HighProgramOperator, HighProgramValue, IntLit,
-    ProgramImpl, ValueType,
+    Ctx, HighProgram, HighProgramLiteral, HighProgramOperator, HighProgramValue, ProgramImpl,
+    ValueType,
 };
 use lichen_lowlevel::Registry;
+use lichen_testkit::{Program, Writer};
 use std::sync::{Arc, RwLock};
 
 /// The probe program: the built-in vocabularies and no attribute.
@@ -40,18 +41,11 @@ where
 }
 
 /// `$probe(5)` — one native call whose single argument is an int literal.
-fn probe_call() -> IR<NoAttr, HighProgramLiteral> {
-    let mut ir: IR<NoAttr, HighProgramLiteral> = IR::new();
-    let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));
-    let start = ir.children.len() as u32;
-    ir.children.push(five);
-    let args = ChildRange {
-        start,
-        end: ir.children.len() as u32,
-    };
-    let call = ir.alloc(ExprKind::NativeCall { op: "probe", args });
-    ir.set_root(call);
-    ir
+fn probe_call() -> Program {
+    let mut w: Writer = Writer::new();
+    let five = w.int("five", 5);
+    let call = w.native_call("call", "probe", &[five]);
+    w.finish(call)
 }
 
 fn ops(operator: &'static dyn NativeOp<ProbeProgram>) -> NativeOps<ProbeProgram> {
@@ -64,7 +58,7 @@ fn build(operator: &'static dyn NativeOp<ProbeProgram>) -> Build<ProbeProgram> {
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     Checker::<ProbeProgram>::build_in_attr_native(
-        probe_call(),
+        probe_call().ir,
         registry,
         Box::new(|_: &NoAttr| -> &'static dyn AttrExt<ProbeProgram> { unreachable!() }),
         ops(operator),

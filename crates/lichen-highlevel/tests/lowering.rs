@@ -1,0 +1,136 @@
+//! A lowlevel node names the expression it lowered from; see
+//! docs/notes/lowering-map.md.
+
+use lichen_highlevel::program::ProgramImpl;
+use lichen_lowlevel::NodeId;
+use lichen_testkit::{Probe, Writer};
+
+/// `(\x. x) 5` — the smallest program with a named value, a named type, and a
+/// named apply.
+fn identity_applied() -> Probe<ProgramImpl> {
+    let mut w = Writer::new();
+    let x = w.param("x");
+    let id = w.lam("id", x, x);
+    let five = w.int("five", 5);
+    let call = w.app("call", id, five);
+    Probe::build(w.finish(call))
+}
+
+#[test]
+fn a_node_answers_the_expression_it_lowered_from() {
+    let probe = identity_applied();
+    let node = probe.node_of("five");
+    assert_eq!(
+        probe.explain(node),
+        format!("node {node:?} ← `five` (value)"),
+        "a value node names the expression and the slot it is"
+    );
+}
+
+#[test]
+fn the_three_slots_of_one_expression_are_three_attributions() {
+    let probe = identity_applied();
+    let pair = probe.pair_of("five");
+    let value = probe.node_of("five");
+    let ty = probe.type_of("five");
+    assert!(
+        (pair != value) && (value != ty) && (pair != ty),
+        "a pair, its value and its type are three distinct nodes"
+    );
+    assert!(
+        probe
+            .explain(pair)
+            .ends_with("`five` (the expression itself)")
+    );
+    assert!(probe.explain(value).ends_with("`five` (value)"));
+    assert!(probe.explain(ty).ends_with("`five` (type)"));
+}
+
+/// The map is total over the compiled slots, so an expression reached only
+/// through another one is still attributable.
+#[test]
+fn every_named_expression_answers_the_node_it_lowered_to() {
+    let probe = identity_applied();
+    for name in ["id", "five", "call"] {
+        let node = probe.node_of(name);
+        assert_eq!(probe.expr_at(node), probe.expr_named(name));
+        assert!(
+            probe.explain(node).contains(&format!("`{name}`")),
+            "`{name}` must name its own node, got {}",
+            probe.explain(node)
+        );
+    }
+}
+
+/// A parameter has no separate value node: its value is `Index(pair, 0)` the
+/// checker builds on demand, so the attribution available is the pair.
+#[test]
+fn a_parameter_is_attributed_through_the_pair_it_compiled_to() {
+    let probe = identity_applied();
+    let pair = probe.pair_of("x");
+    assert!(
+        probe.explain(pair).ends_with("`x` (the expression itself)"),
+        "got {}",
+        probe.explain(pair)
+    );
+    assert!(
+        probe.checked().state[probe.expr_named("x").unwrap()]
+            .val
+            .is_none()
+    );
+}
+
+#[test]
+fn a_node_nothing_attributed_reads_as_such() {
+    let probe = identity_applied();
+    // The marker nodes the checker installs are built before any expression
+    // exists, so one of them is lowered from nothing at all.
+    let marker = probe.checked().markers.int_marker;
+    assert_eq!(
+        probe.explain(marker),
+        format!("node {marker:?} ← no expression in this build"),
+        "an installed marker is not lowered from anything"
+    );
+}
+
+/// The whole point of a name: a probe that cannot find it says so in the words
+/// the program was written with, not as an id.
+#[test]
+fn an_unknown_name_panics_with_the_names_the_program_has() {
+    let missing = std::panic::catch_unwind(|| {
+        let mut w: Writer = Writer::new();
+        let five = w.int("five", 5);
+        let mut probe: Probe<ProgramImpl> = Probe::build(w.finish(five));
+        probe.usize_of("five_")
+    });
+    let message = missing
+        .expect_err("an unknown name is a panic")
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("five_") && message.contains("five"),
+        "the panic names what was asked for and what exists: {message}"
+    );
+}
+
+/// A node the reader already holds is the other direction: the name comes back
+/// out of the graph rather than out of the writer.
+#[test]
+fn a_node_read_out_of_an_array_names_its_expression() {
+    let mut w: Writer = Writer::new();
+    let one = w.int("one", 1);
+    let two = w.int("two", 2);
+    let three = w.int("three", 3);
+    let arr = w.array("arr", &[one, two, three]);
+    let mut probe: Probe<ProgramImpl> = Probe::build(w.finish(arr));
+    let elements = probe.array_of("arr");
+    assert_eq!(elements.len(), 3);
+    let second = probe.node_of("two");
+    assert!(
+        probe.explain(second).contains("`two`"),
+        "the element node is still the one `two` lowered to: {}",
+        probe.explain(second)
+    );
+    let _: NodeId = second;
+}

@@ -8,189 +8,88 @@
 
 use lichen_highlevel::checker::{Build, Checker, WorkBudget};
 use lichen_highlevel::diagnostic::{Diag, DiagKind};
-use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR};
-use lichen_highlevel::program::{HighProgramLiteral, IntLit, ProgramImpl};
+use lichen_highlevel::ir::BinOp;
+use lichen_highlevel::program::ProgramImpl;
+use lichen_testkit::{Program, Writer};
 
-/// `count n = if n == 0 then 0 else count (n - 1)`, applied to `argument`;
-/// `None` means the undecided `_` hole.
-fn countdown(marked: bool, argument: Option<usize>) -> (ExprId, IR) {
-    let mut ir = IR::new();
+/// The recursion under test, written under `count` and applied to `argument`.
+fn countdown(marked: bool, argument: Option<usize>) -> Program {
+    let mut w = Writer::new();
     // A block-wide binding reserves its id before its value compiles, so the
     // recursive call resolves to it.
-    let count = ir.alloc(ExprKind::Placeholder);
-    ir.block_roots.insert(count);
-    let n = ir.alloc(ExprKind::Parameter);
-    let zero = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(0))));
-    let condition = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Eq,
-        left: n,
-        right: zero,
-    });
-    let one = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(1))));
-    let decrement = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Sub,
-        left: n,
-        right: one,
-    });
-    let recursive = ir.alloc(ExprKind::Apply {
-        function: count,
-        argument: decrement,
-    });
-    let base = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(0))));
-    let branches = ir.alloc_tuple(&[recursive, base]);
-    let body = ir.alloc(ExprKind::Field {
-        container: branches,
-        key: condition,
-    });
-    ir.set_kind(
-        count,
-        ExprKind::Function {
-            parameter: n,
-            parameter_type: None,
-            parameter_attribute: None,
-            r#return: body,
-            parent: None,
-            looping: marked,
-        },
-    );
+    let count = w.binding("count");
+    let n = w.param("n");
+    let zero = w.int("zero", 0);
+    let condition = w.binop("condition", BinOp::Eq, n, zero);
+    let one = w.int("one", 1);
+    let decrement = w.binop("decrement", BinOp::Sub, n, one);
+    let recursive = w.app("recursive", count, decrement);
+    let base = w.int("base", 0);
+    let branches = w.tuple("branches", &[recursive, base]);
+    let body = w.field("body", branches, condition);
+    let count = w.close_binding(count, n, body, marked);
     let argument = match argument {
-        Some(value) => ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(value)))),
-        None => ir.alloc(ExprKind::Placeholder),
+        Some(value) => w.int("argument", value),
+        None => w.hole("argument"),
     };
-    let root = ir.alloc(ExprKind::Apply {
-        function: count,
-        argument,
-    });
-    ir.set_root(root);
-    (root, ir)
+    let root = w.app("root", count, argument);
+    w.finish(root)
 }
 
 /// `count n = if n == 0 then 0 else count (n - 1) + 1`: the call sits in an
 /// operand, not in the return spine.
-fn non_tail(marked: bool) -> (ExprId, IR) {
-    let mut ir = IR::new();
-    let count = ir.alloc(ExprKind::Placeholder);
-    ir.block_roots.insert(count);
-    let n = ir.alloc(ExprKind::Parameter);
-    let zero = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(0))));
-    let condition = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Eq,
-        left: n,
-        right: zero,
-    });
-    let one = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(1))));
-    let decrement = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Sub,
-        left: n,
-        right: one,
-    });
-    let recursive = ir.alloc(ExprKind::Apply {
-        function: count,
-        argument: decrement,
-    });
-    let stepped = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Add,
-        left: recursive,
-        right: one,
-    });
-    let base = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(0))));
-    let branches = ir.alloc_tuple(&[stepped, base]);
-    let body = ir.alloc(ExprKind::Field {
-        container: branches,
-        key: condition,
-    });
-    ir.set_kind(
-        count,
-        ExprKind::Function {
-            parameter: n,
-            parameter_type: None,
-            parameter_attribute: None,
-            r#return: body,
-            parent: None,
-            looping: marked,
-        },
-    );
-    let argument = ir.alloc(ExprKind::Placeholder);
-    let root = ir.alloc(ExprKind::Apply {
-        function: count,
-        argument,
-    });
-    ir.set_root(root);
-    (root, ir)
+fn non_tail(marked: bool) -> Program {
+    let mut w = Writer::new();
+    let count = w.binding("count");
+    let n = w.param("n");
+    let zero = w.int("zero", 0);
+    let condition = w.binop("condition", BinOp::Eq, n, zero);
+    let one = w.int("one", 1);
+    let decrement = w.binop("decrement", BinOp::Sub, n, one);
+    let recursive = w.app("recursive", count, decrement);
+    let stepped = w.binop("stepped", BinOp::Add, recursive, one);
+    let base = w.int("base", 0);
+    let branches = w.tuple("branches", &[stepped, base]);
+    let body = w.field("body", branches, condition);
+    let count = w.close_binding(count, n, body, marked);
+    let argument = w.hole("argument");
+    let root = w.app("root", count, argument);
+    w.finish(root)
 }
 
 /// `sum_to s = if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)`: a
 /// tuple carried state, one slot per element.
-fn tuple_state(marked: bool) -> (ExprId, IR) {
-    let mut ir = IR::new();
-    let sum_to = ir.alloc(ExprKind::Placeholder);
-    ir.block_roots.insert(sum_to);
-    let s = ir.alloc(ExprKind::Parameter);
-    let zero = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(0))));
-    let one = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(1))));
-    let first = ir.alloc(ExprKind::Field {
-        container: s,
-        key: zero,
-    });
-    let second = ir.alloc(ExprKind::Field {
-        container: s,
-        key: one,
-    });
-    let condition = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Eq,
-        left: first,
-        right: zero,
-    });
-    let decrement = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Sub,
-        left: first,
-        right: one,
-    });
-    let increment = ir.alloc(ExprKind::BinOp {
-        operator: BinOp::Add,
-        left: second,
-        right: one,
-    });
-    let next = ir.alloc_tuple(&[decrement, increment]);
-    let recursive = ir.alloc(ExprKind::Apply {
-        function: sum_to,
-        argument: next,
-    });
-    let branches = ir.alloc_tuple(&[recursive, second]);
-    let body = ir.alloc(ExprKind::Field {
-        container: branches,
-        key: condition,
-    });
-    ir.set_kind(
-        sum_to,
-        ExprKind::Function {
-            parameter: s,
-            parameter_type: None,
-            parameter_attribute: None,
-            r#return: body,
-            parent: None,
-            looping: marked,
-        },
-    );
-    let argument = ir.alloc(ExprKind::Placeholder);
-    let root = ir.alloc(ExprKind::Apply {
-        function: sum_to,
-        argument,
-    });
-    ir.set_root(root);
-    (root, ir)
+fn tuple_state(marked: bool) -> Program {
+    let mut w = Writer::new();
+    let sum_to = w.binding("sum_to");
+    let s = w.param("s");
+    let zero = w.int("zero", 0);
+    let one = w.int("one", 1);
+    let first = w.field("first", s, zero);
+    let second = w.field("second", s, one);
+    let condition = w.binop("condition", BinOp::Eq, first, zero);
+    let decrement = w.binop("decrement", BinOp::Sub, first, one);
+    let increment = w.binop("increment", BinOp::Add, second, one);
+    let next = w.tuple("next", &[decrement, increment]);
+    let recursive = w.app("recursive", sum_to, next);
+    let branches = w.tuple("branches", &[recursive, second]);
+    let body = w.field("body", branches, condition);
+    let sum_to = w.close_binding(sum_to, s, body, marked);
+    let argument = w.hole("argument");
+    let root = w.app("root", sum_to, argument);
+    w.finish(root)
 }
 
-fn build(range: (ExprId, IR)) -> Build<ProgramImpl> {
-    Checker::build(range.1)
+fn build(program: Program) -> Build<ProgramImpl> {
+    Checker::build(program.ir)
 }
 
-fn diagnostics(range: (ExprId, IR)) -> Vec<Diag<ProgramImpl>> {
-    build(range).diagnostics()
+fn diagnostics(program: Program) -> Vec<Diag<ProgramImpl>> {
+    build(program).diagnostics()
 }
 
-fn kinds(range: (ExprId, IR)) -> Vec<DiagKind> {
-    diagnostics(range).into_iter().map(|d| d.kind).collect()
+fn kinds(program: Program) -> Vec<DiagKind> {
+    diagnostics(program).into_iter().map(|d| d.kind).collect()
 }
 
 /// The one marked function a marked build produced, which the conversion is
@@ -313,8 +212,8 @@ fn a_host_that_wants_a_large_trip_count_raises_the_work_bound() {
         apply_depth_limit: 500,
         apply_total_limit: 100_000,
     };
-    let (_root, ir) = countdown(true, Some(3_000));
-    let looped: Build<ProgramImpl> = Checker::build_with_budget(ir, budget);
+    let program = countdown(true, Some(3_000));
+    let looped: Build<ProgramImpl> = Checker::build_with_budget(program.ir, budget);
     assert!(
         looped.ok,
         "the raised work bound must let the loop run: {:?}",
