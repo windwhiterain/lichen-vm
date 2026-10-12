@@ -17,6 +17,8 @@ use lichen_language::persist::{self, ArtifactCodec};
 use lichen_language::preprocess::stage_depends;
 use lichen_language::program::GcdOp;
 
+use crate::packs;
+
 /// One native plugin package for a compiler's store: `(virtual_path,
 /// embedded_source, private_native_ops)`.
 pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
@@ -30,6 +32,9 @@ struct Cli {
     /// directory scanned for `.lichen` files.
     #[arg(value_name = "program")]
     program: Option<PathBuf>,
+    /// A placement pack to install for this run; name it once per pack.
+    #[arg(long = "pack", value_name = "path", global = true)]
+    pack: Vec<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -106,6 +111,18 @@ where
         Ok(cli) => cli,
         Err(e) => e.exit(),
     };
+    // A pack that is not one stops the run here, before anything is installed or run.
+    let packs = match packs::load_packs(&cli.pack) {
+        Ok(packs) => packs,
+        Err(refusal) => {
+            eprintln!("{refusal}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The floor goes in before the compile, because that is when a graph is consulted.
+    if !packs.is_empty() {
+        lichen_language::floor::install_floor_for_run(&packs);
+    }
     match cli.command {
         Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native),
         Some(Command::Build { path }) => build_file::<P>(cache_root, &path, native),

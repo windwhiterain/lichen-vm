@@ -869,8 +869,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "lichen-compute",
+ "lichen-compute-gpu",
  "lichen-highlevel",
  "lichen-language",
+ "lichen-lowlevel",
  "lichen-utils",
 ]
 
