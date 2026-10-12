@@ -292,12 +292,21 @@ On top of that plan:
 - **The returned values are the terminator's list**, so the result arity is a fact
   of the body rather than of whatever happened to be left over.
 
-Three class facts the walk carries:
+The class facts the walk carries:
 
 - **A comparison's operands and result need not be scalars** — `(a < b) == c`
   compares the scalar a comparison means — so both are materialised where the
   position demands it. A comparison itself yields a `bool`, which is what `Select`
   consumes and needs no widening.
+- **A `Select`'s arms take the class of the values that define them, never the module's**
+  (`b05ad0c1`). `KernelInstr::Select` states no class of its own, so the arms are the only
+  evidence: `operand_class` answers `None` for a `Select` and the two sites that hold the
+  arguments route through `select_class`, which reads each arm through `value_class` — the same
+  walk the phi rule above installed. This is what makes a **conditional index** legal in a float
+  body (`if i < 7 then i + 1 else 0`: an integer in a `Float` module, which used to be refused
+  `MixedClasses` before any fusion question could be asked). Two arms of different classes are
+  `SelectArmClassesDisagree`, and the emitter **does not pick one of them** to type the result
+  by: an `OpSelect` has one result type, so a program whose arms disagree has no type to give it.
 - **Float `==`/`!=` compares bit patterns.** The language routes both through
   `ValueExt::value_eq`, which for a float compares `to_bits`, so `0.0 == -0.0` is
   `0` and `NaN == NaN` is `1`. `OpFOrdEqual` is the trap here — right for IEEE and
