@@ -30,6 +30,10 @@ const PACK: &str = "sum-in-shared";
 /// The staging the pack's plan publishes, which is the mark the landed fragment carries.
 const STAGING: &str = "tile";
 
+/// A hash no node spells, so a pack carrying it is consulted and matches nothing.
+const NO_SUCH_SCHEMA: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
 /// The shipping compiler's own binary, so a refusal is read as a user reads it.
 const BINARY: &str = env!("CARGO_BIN_EXE_lichen-compiler");
 
@@ -42,13 +46,19 @@ fn closed_form() -> f32 {
     (COUNT * (COUNT + 1) / 2) as f32
 }
 
-/// A program whose one kernel declares a reduction over a **runtime** extent.
+/// The declared program with the dispatch's own answer as its root: the run's value is the sum.
+fn declared() -> String {
+    rooted("out")
+}
+
+/// A program whose one kernel declares a reduction over a **runtime** extent, answering `root`.
 ///
 /// # Invariant
 /// This is the program `crates/lichen-language/tests/pack_placement.rs` writes and its pack
 /// steers: the body folds each lane's own elements, so the per-lane answer at element zero is
-/// `1.0` and the tiled answer is the whole sum.
-fn declared() -> String {
+/// `1.0` and the tiled answer is the whole sum. `root` is the whole of what differs between two
+/// roots: the graph is dispatched on the way to either, so the floor is consulted either way.
+fn rooted(root: &str) -> String {
     format!(
         r#"
 ---
@@ -69,7 +79,7 @@ step = (s : Par) => {{
 built = compute.graph step
 data = (compute.buffer ([{elements}] : array{{Float, LENGTH}}) : (compute.Buf _))
 out = compute.collect (compute.graphrun built ({count}, data))
-out
+{root}
 "#,
         elements = data(),
         count = COUNT,
@@ -211,6 +221,29 @@ fn invoke(program: &Path, packs: &[PathBuf]) -> Output {
         .arg(program)
         .output()
         .expect("the compiler binary ran")
+}
+
+/// The schema the node of `program` spells, read off a run of it that named `probe`.
+///
+/// # Invariant
+/// The floor is installed **only for an invocation that names a pack**, so the line that prints the
+/// schema cannot be read off a run that named none. What it prints is a property of the node, not
+/// of which packs were consulted, so the same `sha256:…` is on the line that says a pack fired.
+fn probe_schema(program: &Path, probe: &Path) -> String {
+    let output = invoke(program, &[probe.to_path_buf()]);
+    let lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    reported_schema(&lines)
+}
+
+/// The one stage line that names `needle`, as stderr carries it.
+fn stage_line<'a>(stderr: &'a str, needle: &str) -> &'a str {
+    stderr
+        .lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("a stage line names {needle:?}: {stderr}"))
 }
 
 /// A pack a command line names is read by the loader, installed beside the floor, and fires.
@@ -419,6 +452,11 @@ fn a_pack_that_is_not_one_is_refused_and_nothing_runs() {
             stderr.contains(&pack.display().to_string()),
             "and it names the file: {stderr}"
         );
+        assert_eq!(
+            stderr.lines().count(),
+            1,
+            "one refusal is one line, and no report is printed beside it: {stderr}"
+        );
     }
 }
 
@@ -436,4 +474,77 @@ fn a_run_that_names_no_pack_is_the_run_it_was() {
 
     let loaded = load_packs(&[]).expect("no path named is no refusal");
     assert!(loaded.is_empty(), "and no path is no pack to install");
+}
+
+/// A run that named a pack says what the pack did with it, on the stream that is not the value.
+///
+/// # Invariant
+/// **The report is stderr and the value is stdout**: the program produced `2: Int` and the run
+/// succeeded, so the report cannot have travelled as a refusal — it is the stage line itself, with
+/// nothing in front of it, because the pass's own sentence already names its node and its pack.
+#[test]
+fn a_run_that_named_a_pack_reports_what_the_pack_did() {
+    let program = written("reported.lichen", &rooted("1 + 1"));
+    let probe = written("reported-probe.pack", &pack_text(NO_SUCH_SCHEMA));
+    let schema = probe_schema(&written("reported-probe.lichen", &declared()), &probe);
+
+    let pack = written("reported.pack", &pack_text(&schema));
+    let output = invoke(&program, std::slice::from_ref(&pack));
+    assert_eq!(output.status.code(), Some(0), "the run produced a value");
+    assert_eq!(
+        output.stdout, b"2: Int\n",
+        "stdout is the program's own output, and the report is not on it"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let fired = stage_line(&stderr, &format!("pack \"{PACK}\" fired"));
+    assert!(
+        fired.starts_with("node "),
+        "the pass's own sentence, unprefixed: {fired}"
+    );
+    assert!(
+        !fired.contains("error:") && !fired.contains("compute.graph.pass"),
+        "a stage line is a fact and not a refusal: {fired}"
+    );
+    assert!(
+        stderr.contains(&schema),
+        "and it is the node the pack spelled: {stderr}"
+    );
+}
+
+/// The same run with no pack named is the run it was, byte for byte.
+///
+/// # Invariant
+/// **Both streams are compared as bytes**: the value line is the whole of stdout and stderr is
+/// empty, so nothing a report could have said was said — and stdout is the answer, which no stage
+/// line ever contributes to.
+#[test]
+fn the_same_run_with_no_pack_named_prints_exactly_what_it_printed_before() {
+    let program = written("silent.lichen", &rooted("1 + 1"));
+    let probe = written("silent-probe.pack", &pack_text(NO_SUCH_SCHEMA));
+    let schema = probe_schema(&written("silent-probe.lichen", &declared()), &probe);
+
+    let packed = invoke(&program, &[written("silent.pack", &pack_text(&schema))]);
+    assert!(
+        stage_line(
+            &String::from_utf8_lossy(&packed.stderr),
+            &format!("pack \"{PACK}\" fired")
+        )
+        .starts_with("node "),
+        "naming the pack is what the report came from"
+    );
+
+    let output = invoke(&program, &[]);
+    assert_eq!(
+        output.stdout,
+        b"2: Int\n",
+        "the value, as it was before a report existed: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "and nothing was reported beside it: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0), "the run is the run it was");
 }

@@ -20,16 +20,66 @@ use crate::render::{print_type_lang, print_value_lang, render_attributes, value_
 
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::ValueType;
+use lichen_lowlevel::Module;
 use lichen_utils::extend::AsEnum;
 
-/// Run a checked build to its output text: `value<attributes>: type`.
+/// Whether a run says what the passes it dispatched did.
+///
+/// # Invariant
+/// **Naming a pack is the whole trigger**: an invocation that named none collects nothing and
+/// prints the run it printed before packs existed, while an invocation that named one reports the
+/// stage lines verbatim. There is no third state and no second trigger, so what a run reports is
+/// decided by the command line alone and never by what the program turned out to be.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PassReport {
+    /// The invocation named no pack: the program's own output is the whole of what the run says.
+    #[default]
+    Silent,
+    /// The invocation named packs: the passes' own stage lines are reported beside that output.
+    Reported,
+}
+
+/// A run that produced a value: the program's output line, and the stage lines reported with it.
+///
+/// # Invariant
+/// The report is **carried, not written**: a host decides which stream carries it, so the value and
+/// what the passes did with it can never reach one stream by accident.
+pub struct RunOutput {
+    /// The rendered output value, `value<attributes>: type`.
+    pub output: String,
+    /// The passes' stage lines, verbatim and in the order they were recorded; empty unless the run
+    /// reported.
+    pub pass_lines: Vec<String>,
+}
+
+/// The stage lines a run's passes recorded, verbatim.
+///
+/// # Invariant
+/// **Only the pass channel is read**: every other extension diagnostic is a refusal whose gate is
+/// [`render_build`]'s own, and a run that produced a value drops those on purpose — reporting one
+/// here would publish an explanation the run already decided against. A line is self-describing
+/// (`region N: …`, `node N: …`, `pack "…" fired`), so it is carried as the pass wrote it.
+fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>) -> Vec<String> {
+    module
+        .extension_diagnostics
+        .iter()
+        .filter(|entry| entry.category == lichen_compute::LANDING_DIAGNOSTIC)
+        .map(|entry| entry.message.clone())
+        .collect()
+}
+
+/// Run a checked build to its output text: `value<attributes>: type`, and the
+/// stage lines when the run reports.
 ///
 /// # Invariant
 ///
 /// A runtime refusal explains a value that never arrived, so it is reported
 /// only when evaluation produced nothing; a provisional refusal on a program
 /// that produced a value is not reported. See docs/notes/language-toolchain.md.
-fn render_build<P>(build: Build<P>) -> Result<String, Vec<Diag<P>>>
+///
+/// A stage line is **not a refusal**: the run reports it beside the value, so
+/// naming a pack still says whether the pack fired.
+fn render_build<P>(build: Build<P>, pass_report: PassReport) -> Result<RunOutput, Vec<Diag<P>>>
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -66,32 +116,36 @@ where
             })
             .collect());
     }
+    // Read after the root is evaluated, because the consultation happens in there.
+    let pass_lines = match pass_report {
+        PassReport::Silent => Vec::new(),
+        PassReport::Reported => pass_lines(&module),
+    };
     // Render only the attributes the root expression actually carries.
     let attr_ext = lang_attr_ext::<P>();
     let tail = &build.root_schema_tail;
     // A value one of whose attributes names it reads as that name.
     // See docs/notes/operator-polymorphism.md §8.1.
-    if let Some(label) = value_label::<P>(&module, build.root_term, tail, &*attr_ext) {
-        return Ok(format!(
-            "{label}: {}",
+    let output = if let Some(label) = value_label::<P>(&module, build.root_term, tail, &*attr_ext) {
+        format!("{label}: {}", print_type_lang::<P>(&module, build.root_ty))
+    } else {
+        // An undecided root renders as the printer's no-value reading.
+        let value = value.unwrap_or_else(|| P::Value::from(lichen_lowlevel::LowValue::None));
+        format!(
+            "{}{}: {}",
+            print_value_lang::<P>(&module, value, build.root_ty),
+            {
+                let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
+                if attrs.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {attrs}")
+                }
+            },
             print_type_lang::<P>(&module, build.root_ty)
-        ));
-    }
-    // An undecided root renders as the printer's no-value reading.
-    let value = value.unwrap_or_else(|| P::Value::from(lichen_lowlevel::LowValue::None));
-    Ok(format!(
-        "{}{}: {}",
-        print_value_lang::<P>(&module, value, build.root_ty),
-        {
-            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
-            if attrs.is_empty() {
-                String::new()
-            } else {
-                format!(" {attrs}")
-            }
-        },
-        print_type_lang::<P>(&module, build.root_ty)
-    ))
+        )
+    };
+    Ok(RunOutput { output, pass_lines })
 }
 
 /// Compile, check, and run `source`; the rendered output value and its type.
@@ -106,7 +160,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    render_build(report.build.unwrap())
+    render_build(report.build.unwrap(), PassReport::Silent).map(|run| run.output)
 }
 
 /// Compile, check, and run a preprocessed source file; the store is the caller's.
@@ -115,6 +169,31 @@ pub fn evaluate_raw<P>(
     base: Option<&Path>,
     store: &mut PackageStore<P>,
 ) -> Result<String, Vec<Diag<P>>>
+where
+    P: LangProgramShape,
+    P::Value: ValueType
+        + AsEnum<lichen_compute::ComputeValue>
+        + From<lichen_compute::ComputeValue>
+        + 'static,
+    P::Operator: From<GcdOp>
+        + From<lichen_highlevel::program::TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+{
+    evaluate_raw_reporting(source, base, store, PassReport::Silent).map(|run| run.output)
+}
+
+/// [`Self::evaluate_raw`], with the run's pass report carried beside its value.
+///
+/// # Invariant
+/// One run, one implementation: this is [`Self::evaluate_raw`]'s body, and `evaluate_raw` is this
+/// call with the report dropped, so the two cannot say a run did different work.
+pub fn evaluate_raw_reporting<P>(
+    source: &str,
+    base: Option<&Path>,
+    store: &mut PackageStore<P>,
+    pass_report: PassReport,
+) -> Result<RunOutput, Vec<Diag<P>>>
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -142,5 +221,5 @@ where
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    render_build(report.build.unwrap())
+    render_build(report.build.unwrap(), pass_report)
 }

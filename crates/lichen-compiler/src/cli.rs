@@ -16,6 +16,7 @@ use lichen_language::package::PackageStore;
 use lichen_language::persist::{self, ArtifactCodec};
 use lichen_language::preprocess::stage_depends;
 use lichen_language::program::GcdOp;
+use lichen_language::run::{PassReport, RunOutput};
 
 use crate::packs;
 
@@ -123,12 +124,18 @@ where
     if !packs.is_empty() {
         lichen_language::floor::install_floor_for_run(&packs);
     }
+    // The one value every run below reads: this invocation named packs, or it named none.
+    let report = if cli.pack.is_empty() {
+        PassReport::Silent
+    } else {
+        PassReport::Reported
+    };
     match cli.command {
-        Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native),
-        Some(Command::Build { path }) => build_file::<P>(cache_root, &path, native),
+        Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native, report),
+        Some(Command::Build { path }) => build_file::<P>(cache_root, &path, native, report),
         None => {
             if let Some(program) = cli.program {
-                run_path::<P>(cache_root, &program, native)
+                run_path::<P>(cache_root, &program, native, report)
             } else {
                 eprintln!("{}", Cli::command().name(bin).render_help());
                 ExitCode::FAILURE
@@ -137,7 +144,25 @@ where
     }
 }
 
-fn run_path<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
+/// The stage lines a run's passes recorded, on **stderr**.
+///
+/// # Invariant
+/// **stderr, because stdout is the program's own output**: a host reads a value off stdout, and a
+/// report written there would be read as part of the value. Each line is the pass's own sentence,
+/// verbatim and unprefixed — it already names its node and its pack — so what a machine parses is
+/// what the pass wrote.
+fn report_passes(run: &RunOutput) {
+    for line in &run.pass_lines {
+        eprintln!("{line}");
+    }
+}
+
+fn run_path<P>(
+    cache_root: &Path,
+    path: &Path,
+    native: &[NativePackage<P>],
+    report: PassReport,
+) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -147,9 +172,9 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     if path.is_dir() {
-        run_directory::<P>(cache_root, path, native)
+        run_directory::<P>(cache_root, path, native, report)
     } else {
-        run_file::<P>(cache_root, path, native)
+        run_file::<P>(cache_root, path, native, report)
     }
 }
 
@@ -187,7 +212,12 @@ where
     (store, diags)
 }
 
-fn run_file<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
+fn run_file<P>(
+    cache_root: &Path,
+    path: &Path,
+    native: &[NativePackage<P>],
+    report: PassReport,
+) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -208,9 +238,11 @@ where
         print!("{}", lichen_language::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
     }
-    match lichen_language::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
-        Ok(output) => {
-            println!("{output}");
+    match lichen_language::run::evaluate_raw_reporting::<P>(&source, Some(path), &mut store, report)
+    {
+        Ok(run) => {
+            report_passes(&run);
+            println!("{}", run.output);
             ExitCode::SUCCESS
         }
         Err(diags) => {
@@ -220,7 +252,12 @@ where
     }
 }
 
-fn run_directory<P>(cache_root: &Path, dir: &Path, native: &[NativePackage<P>]) -> ExitCode
+fn run_directory<P>(
+    cache_root: &Path,
+    dir: &Path,
+    native: &[NativePackage<P>],
+    report: PassReport,
+) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -258,9 +295,19 @@ where
             print!("{}", lichen_language::render::render_all(&source, &diags));
             continue;
         }
-        match lichen_language::run::evaluate_raw::<P>(&source, Some(&file), &mut store) {
-            Ok(output) => {
-                println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
+        match lichen_language::run::evaluate_raw_reporting::<P>(
+            &source,
+            Some(&file),
+            &mut store,
+            report,
+        ) {
+            Ok(run) => {
+                report_passes(&run);
+                println!(
+                    "{}: {}",
+                    file.file_name().unwrap().to_string_lossy(),
+                    run.output
+                );
             }
             Err(diags) => {
                 failed += 1;
@@ -276,7 +323,12 @@ where
     }
 }
 
-fn build_file<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
+fn build_file<P>(
+    cache_root: &Path,
+    path: &Path,
+    native: &[NativePackage<P>],
+    report: PassReport,
+) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -298,8 +350,19 @@ where
             // real importer path, and it prints the exported type.
             let name = path.file_name().unwrap().to_string_lossy();
             let source = format!("---\n  _pkg = import \"{name}\"\n---\n_pkg\n");
-            match lichen_language::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
-                Ok(output) => println!("type: {}", output.split(": ").nth(1).unwrap_or(&output)),
+            match lichen_language::run::evaluate_raw_reporting::<P>(
+                &source,
+                Some(path),
+                &mut store,
+                report,
+            ) {
+                Ok(run) => {
+                    report_passes(&run);
+                    println!(
+                        "type: {}",
+                        run.output.split(": ").nth(1).unwrap_or(&run.output)
+                    )
+                }
                 Err(diags) => {
                     print!("{}", lichen_language::render::render_all(&source, &diags));
                     return ExitCode::FAILURE;
