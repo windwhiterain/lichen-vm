@@ -99,6 +99,22 @@ fn recording() -> String {
     format!("{}(scale, offset, built)\n", program())
 }
 
+/// The chain whose consumer reads the producer's output at a **conditional** address.
+///
+/// # Invariant
+/// The address is `if i < 7 then i + 1 else 0`: an integer in a float body, which is the shape the
+/// emitter once refused because it typed a `Select`'s arms by the module. No lane's write answers
+/// it and no entry parameter re-derives it, so the consumer recomputes the producer's cone there.
+fn conditional() -> String {
+    format!(
+        "{}(scale, offset, built)\n",
+        program().replace(
+            "(.from k.in.p, .at i)",
+            "(.from k.in.p, .at (if i < 7 then i + 1 else 0))",
+        )
+    )
+}
+
 /// The chain as a program that runs its recording and answers it, over `elements` data elements.
 fn running_recording(recording: &str, elements: usize) -> String {
     format!(
@@ -174,6 +190,23 @@ fn shifted_answer(bias: f32) -> Vec<f32> {
 fn folded_answer(bias: f32) -> Vec<f32> {
     let total: f32 = (1..=COUNT).map(|k| 2.0 * k as f32 + bias).sum();
     vec![total; COUNT]
+}
+
+/// The address the conditional consumer reads at: `i + 1` while `i < COUNT - 1`, `0` at the last lane.
+///
+/// # Invariant
+/// The last lane is the one that wraps, so every address stays inside what the producer wrote —
+/// which is what lets the whole answer be compared, where the shifted chain's last element reads
+/// `e[COUNT]` and has no answer at all.
+fn conditional_address(lane: usize) -> usize {
+    if lane < COUNT - 1 { lane + 1 } else { 0 }
+}
+
+/// The answer `z[i] = 2 d[addr(i)] + bias` over `d = 1 … COUNT`, the conditional chain's.
+fn conditional_answer(bias: f32) -> Vec<f32> {
+    (0..COUNT)
+        .map(|lane| 2.0 * (conditional_address(lane) + 1) as f32 + bias)
+        .collect()
 }
 
 /// The root tuple's items, read from the value the program answered.
@@ -688,6 +721,24 @@ fn a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves(
         COUNT + 1,
         SHIFTED_DEFINED,
         shifted_answer,
+    );
+}
+
+/// A consumer that reads at a **conditional** address runs on the device.
+///
+/// # Invariant
+/// **All `COUNT` elements are compared**, where the shifted chain compares seven of nine: the last
+/// lane's address wraps to `0`, so every read is of an element some lane wrote and the whole answer
+/// is defined. The address is a `Select` with `Int` arms inside a float body, so a run here says the
+/// emitter typed the arms by the values that define them.
+#[test]
+fn a_read_at_a_conditional_address_runs_on_the_device_and_the_counterfactual_moves() {
+    device_triple(
+        "a_read_at_a_conditional_address_runs_on_the_device_and_the_counterfactual_moves",
+        &conditional(),
+        COUNT,
+        COUNT,
+        conditional_answer,
     );
 }
 

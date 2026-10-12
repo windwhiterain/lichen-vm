@@ -265,6 +265,89 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     assert!(refusal.to_string().contains("output"));
 }
 
+/// A `Float` module whose one `Select` has an `Int` arm and a `Float` one.
+///
+/// # Invariant
+/// **The language cannot say this**: its checker refuses the conditional first — `expected Float,
+/// found Int` at the arm — so a fragment whose arms disagree is something a builder or a merge
+/// composed, and the emitter is the last place that can name it.
+fn mixed_arm_conditional() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(1),                                        // idx
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // then, an integer
+                FlatOp::Instr(KernelInstr::Const(
+                    // otherwise, a float
+                    ScalarClass::Float,
+                    i64::from(2.0f32.to_bits()),
+                )),
+                FlatOp::Read(1),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 3)),
+                FlatOp::Instr(KernelInstr::Bin(
+                    ScalarClass::Int,
+                    lichen_kernel_ir::KernelBin::Leq,
+                )),
+                FlatOp::Instr(KernelInstr::I32WrapI64),
+                FlatOp::Instr(KernelInstr::Select),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Float)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        result_classes: vec![ScalarClass::Float; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    }
+}
+
+/// Two arms of different classes are refused by name, not typed by one of them.
+///
+/// # Invariant
+/// An `OpSelect` has one result type and both arms feed it, so the refusal **carries the two
+/// classes**: which pair met is what tells a fragment's author which arm to convert, and picking
+/// either arm would answer a program the body does not state.
+#[test]
+fn a_select_whose_arms_disagree_is_refused_by_name() {
+    let fragment = mixed_arm_conditional();
+    fragment
+        .body
+        .validate()
+        .expect("the body is well formed; it is the arms' classes that are refused");
+    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT)
+        .expect_err("arms of two classes have no one result type");
+    assert_eq!(
+        refusal,
+        SpirvRefusal::SelectArmClassesDisagree {
+            classes: vec![ScalarClass::Int, ScalarClass::Float],
+        },
+        "the refusal names the pair that met, in class order"
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("`Select`") && message.contains("different classes"),
+        "names the instruction and the fact: {message}"
+    );
+    assert!(
+        message.contains("Int") && message.contains("Float"),
+        "and carries both classes: {message}"
+    );
+}
+
 #[test]
 fn an_operator_with_too_few_operands_is_refused_by_arity() {
     // `Bin(Add)` names two operands and is given none: `KernelBody::validate`

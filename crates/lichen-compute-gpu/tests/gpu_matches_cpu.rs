@@ -42,6 +42,27 @@ fn words(data: ScalarData) -> Vec<i64> {
     }
 }
 
+/// The `f32` elements of a fetched payload, for a fragment whose class is `Float`.
+fn floats(data: ScalarData) -> Vec<f32> {
+    match data {
+        ScalarData::Float(elements) => elements,
+        ScalarData::Int(elements) => {
+            panic!(
+                "a float run's result came back as {} integer element(s)",
+                elements.len()
+            )
+        }
+    }
+}
+
+/// The packed bytes of `values`, one `f32` each.
+fn pack_floats(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
 /// A fragment over `(input, index)`: the shape a single-input parallel kernel has.
 fn fragment(body: Vec<FlatOp>) -> KernelFragment {
     KernelFragment {
@@ -119,6 +140,70 @@ fn conditional() -> KernelFragment {
     )));
     body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
     fragment(body)
+}
+
+/// `out[i] = if in[i] <= 3.0 then 7.5 else in[i] * 2.0`, a `Float` module.
+///
+/// # Invariant
+/// **Both arms are the module's own class**, which is the shape that has to keep working: the arm a
+/// `Select` is typed by is the class of the value in each position, and here that is `Float` for a
+/// constant, a product and the comparison alike.
+fn float_conditional() -> KernelFragment {
+    let read = |body: &mut Vec<FlatOp>| {
+        body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+        body.push(FlatOp::Read(1));
+        body.push(FlatOp::Instr(KernelInstr::BufferReadCall(
+            ScalarClass::Float,
+        )));
+    };
+    let literal = |body: &mut Vec<FlatOp>, value: f32| {
+        body.push(FlatOp::Instr(KernelInstr::Const(
+            ScalarClass::Float,
+            i64::from(value.to_bits()),
+        )));
+    };
+    let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+        FlatOp::Read(1),
+    ];
+    literal(&mut body, 7.5); // then
+    read(&mut body); // in[i]
+    literal(&mut body, 2.0);
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Float,
+        KernelBin::Mul,
+    ))); // in[i] * 2.0, the else arm
+    read(&mut body); // in[i]
+    literal(&mut body, 3.0);
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Float,
+        KernelBin::Leq,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::I32WrapI64)); // a no-op on this target
+    body.push(FlatOp::Instr(KernelInstr::Select));
+    body.push(FlatOp::Instr(KernelInstr::BufferWriteCall(
+        ScalarClass::Float,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(2, &body),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        result_classes: vec![ScalarClass::Float; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    }
 }
 
 /// `out[i] = (in[i] * 3) % 7 + in[i] / 5`
@@ -616,6 +701,62 @@ fn a_conditional_write_matches_the_cpu_bit_for_bit() {
         .collect();
     let device = check(&context, &conditional(), &input, &expected);
     println!("ran on {device}");
+}
+
+/// A `Select` whose arms are the module's class still runs, in a float module.
+///
+/// # Invariant
+/// **Checked three ways like every run here**, and the reference is read in this file's own word
+/// layout — a float element is its low 32 bits — so the shader's `OpSelect` has to agree on the
+/// type as well as on the values.
+#[test]
+fn a_float_conditional_write_matches_the_cpu_bit_for_bit() {
+    let Some(context) = common::context("a_float_conditional_write_matches_the_cpu_bit_for_bit")
+    else {
+        return;
+    };
+    let count = 100;
+    let input: Vec<f32> = (0..count).map(|value| value as f32 - 20.0).collect();
+    let expected: Vec<f32> = input
+        .iter()
+        .map(|value| if *value <= 3.0 { 7.5 } else { value * 2.0 })
+        .collect();
+    let fragment = float_conditional();
+    let resident = context
+        .run(
+            &only(&fragment),
+            &[BufferSlot::Host(&pack_floats(&input))],
+            count,
+        )
+        .expect("a float module's conditional is dispatched");
+    let from_gpu = floats(
+        context
+            .fetch(resident[0], count)
+            .expect("the result comes back off the device"),
+    );
+    assert_eq!(
+        from_gpu,
+        expected,
+        "the GPU disagrees with the hand-written expectation at index {:?}",
+        (0..count).find(|i| from_gpu[*i] != expected[*i])
+    );
+    assert_eq!(
+        from_gpu,
+        reference(
+            &fragment,
+            &input
+                .iter()
+                .map(|value| i64::from(value.to_bits()))
+                .collect::<Vec<i64>>(),
+            count
+        )
+        .iter()
+        .map(|word| f32::from_bits(*word as u32))
+        .collect::<Vec<f32>>(),
+        "the GPU disagrees with the CPU reference"
+    );
+    context.release(resident[0]);
+    println!("ran on {}", context.device_name());
 }
 
 /// Two runs in a row over data that never leaves the device.

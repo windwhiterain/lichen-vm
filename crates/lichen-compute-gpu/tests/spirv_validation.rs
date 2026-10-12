@@ -71,10 +71,10 @@ fn adds_one() -> KernelFragment {
 /// `out[i] = if in[0] then in[i] * 2.5 + (in[i] == 0.0) + in[i] / 2.5 else 0.0`
 ///
 /// # Invariant
-/// The float module's shape in one body: `OpTypeFloat 32` as scalar and element, a 32-bit index so no
-/// `Int64` capability is declared, the `f32` constant pool, `OpFMul`/`OpFDiv`/`OpFAdd`, and the two
+/// The float module's shape in one body: `OpTypeFloat 32` as scalar and element, a 32-bit index so
+/// no `Int64` capability is declared, the `f32` constant pool, `OpFMul`/`OpFDiv`/`OpFAdd`, and the two
 /// the emitter is careful about — bit-pattern equality and a bit-pattern condition, because a
-/// `NaN`'s bits are non-zero. The read takes a constant element index.
+/// `NaN`'s bits are non-zero. The read takes a constant index; every operator states `Float`.
 fn scales_a_float() -> KernelFragment {
     let read = |body: &mut Vec<FlatOp>| {
         body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
@@ -101,12 +101,13 @@ fn scales_a_float() -> KernelFragment {
     // … + (in[i] == 0.0), a comparison materialised into the float `1.0`/`0.0`
     read(&mut body);
     body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Float, 0))); // `0.0f32` is the bit pattern zero
+    // **Every operator states `Float`**: a `Select` is typed by what defines it.
     body.push(FlatOp::Instr(KernelInstr::Bin(
-        ScalarClass::Int,
+        ScalarClass::Float,
         KernelBin::Eq,
     )));
     body.push(FlatOp::Instr(KernelInstr::Bin(
-        ScalarClass::Int,
+        ScalarClass::Float,
         KernelBin::Add,
     )));
     // … + in[i] / 2.5
@@ -120,11 +121,11 @@ fn scales_a_float() -> KernelFragment {
         KernelBin::Div,
     )));
     body.push(FlatOp::Instr(KernelInstr::Bin(
-        ScalarClass::Int,
+        ScalarClass::Float,
         KernelBin::Add,
     )));
     // else: 0.0
-    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Float, 0)));
     // the selector: in[0], a float value rather than a comparison's bool, read at
     // a constant index
     body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));

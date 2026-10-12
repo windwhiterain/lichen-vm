@@ -228,6 +228,17 @@ pub enum SpirvRefusal {
         /// The classes its reads asked for, in name order.
         classes: Vec<ScalarClass>,
     },
+    /// A `Select`'s two arms are computed in different classes.
+    ///
+    /// # Invariant
+    /// An `OpSelect` has one result type and both arms feed it, so a fragment whose arms disagree
+    /// has no type to give the result. The classes are carried rather than the fact alone, because
+    /// which two met is what tells the fragment's author which arm to convert; nothing here picks
+    /// one arm to type the result by, which would answer a program the body does not state.
+    SelectArmClassesDisagree {
+        /// The classes the two arms are computed in, in name order.
+        classes: Vec<ScalarClass>,
+    },
     /// The body computes a transcendental, which this target has no instruction for.
     ///
     /// # Invariant
@@ -334,6 +345,16 @@ impl fmt::Display for SpirvRefusal {
                      another in another ({classes:?}). A block parameter is one `OpPhi` and has one \
                      type however its edges were written, and this target does not guess between \
                      them."
+                )
+            }
+            SpirvRefusal::SelectArmClassesDisagree { classes } => {
+                write!(
+                    f,
+                    "a `Select`'s two arms are computed in different classes ({classes:?}). An \
+                     `OpSelect` has one result type, `KernelInstr::Select` states no class of its \
+                     own, so the only honest answer is the classes the arms are computed in — and \
+                     this emitter does not pick one of them to type the result by. Convert one arm, \
+                     or write the conditional over values of one class."
                 )
             }
             SpirvRefusal::UnexpandedTranscendental { at } => write!(
@@ -1467,11 +1488,12 @@ fn emit_function(
                             let selector = operand(2)?;
                             let otherwise = operand(1)?;
                             let then = operand(0)?;
-                            // The arms are the language's scalars; the selector is the bool
-                            // `select` takes.
+                            // **The arms' own class**, which the module never decides.
+                            let arms =
+                                select_class(fragment, launch, module, args, &mut Vec::new())?;
                             let then = as_class(
                                 then,
-                                ids.class,
+                                arms,
                                 &ids,
                                 &mut literals,
                                 &mut code,
@@ -1480,7 +1502,7 @@ fn emit_function(
                             )?;
                             let otherwise = as_class(
                                 otherwise,
-                                ids.class,
+                                arms,
                                 &ids,
                                 &mut literals,
                                 &mut code,
@@ -1493,9 +1515,15 @@ fn emit_function(
                             next += 1;
                             code.push(Inst::new(
                                 op::SELECT,
-                                vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
+                                vec![
+                                    ids.type_of(arms),
+                                    result,
+                                    selector.id,
+                                    then.id,
+                                    otherwise.id,
+                                ],
                             ));
-                            slots.insert(definition, scalar(result, ids.class));
+                            slots.insert(definition, scalar(result, arms));
                         }
                         // **The direction is the instruction's**, which is why the IR carries
                         // the pair: both crossings have one operand shape.
@@ -1841,6 +1869,26 @@ fn read_class(
     module: ScalarClass,
     block: usize,
     parameter: ValueId,
+    visiting: &mut Vec<ValueId>,
+) -> Result<Option<ScalarClass>, SpirvRefusal> {
+    // **A cycle of reads**: a parameter already under resolution answers `None`.
+    if visiting.contains(&parameter) {
+        return Ok(None);
+    }
+    visiting.push(parameter);
+    let stated = stated_class(fragment, launch, module, block, parameter, visiting);
+    visiting.pop();
+    stated
+}
+
+/// The loop of [`read_class`], with `parameter` already marked as under resolution.
+fn stated_class(
+    fragment: &KernelFragment,
+    launch: &LaunchSet<'_>,
+    module: ScalarClass,
+    block: usize,
+    parameter: ValueId,
+    visiting: &mut Vec<ValueId>,
 ) -> Result<Option<ScalarClass>, SpirvRefusal> {
     let mut stated: Option<ScalarClass> = None;
     for &definition in &fragment.body.blocks[block].instrs {
@@ -1853,8 +1901,13 @@ fn read_class(
             if operand != parameter {
                 continue;
             }
-            let Some(class) = operand_class(launch, module, op, position) else {
-                continue;
+            let class = match operand_class(launch, op, position) {
+                Some(class) => class,
+                // **A `Select` arm**: the class of the value this position holds.
+                None if matches!(op, KernelInstr::Select) && position != 2 => {
+                    select_class(fragment, launch, module, args, visiting)?
+                }
+                None => continue,
             };
             match stated {
                 Some(seen) if seen != class => {
@@ -1897,13 +1950,17 @@ fn value_class(
         return Ok(*class);
     }
     let ValueDef::BlockParam { block, index } = definition else {
-        let ValueDef::Instr { op, .. } = definition else {
+        let ValueDef::Instr { op, args, .. } = definition else {
             return Ok(module);
         };
-        return Ok(operand_class(launch, module, op, 0).unwrap_or(module));
+        // **The one instruction stating no class**: its own is the arms' class.
+        if matches!(op, KernelInstr::Select) {
+            return select_class(fragment, launch, module, args, visiting);
+        }
+        return Ok(operand_class(launch, op, 0).unwrap_or(module));
     };
     let (block, index) = (*block, *index as usize);
-    if let Some(class) = read_class(fragment, launch, module, block, value)? {
+    if let Some(class) = read_class(fragment, launch, module, block, value, visiting)? {
         return Ok(class);
     }
     if !visiting.contains(&value) {
@@ -1967,18 +2024,14 @@ fn incoming_edges(fragment: &KernelFragment, block: usize) -> Vec<&[ValueId]> {
 /// # Invariant
 /// One arm per operand position: an operator's operands are the class it names; a read's index
 /// and a write's position are access-chain indices, so `Int` whatever the buffer holds; a slice
-/// access's third operand is a version the emission ignores; a `Select`'s selector is a condition
-/// and its arms the module's class; a conversion's operand is the class it comes from.
-fn operand_class(
-    launch: &LaunchSet<'_>,
-    module: ScalarClass,
-    op: &KernelInstr,
-    position: usize,
-) -> Option<ScalarClass> {
+/// access's third operand is a version the emission ignores; a conversion's operand is the class it
+/// comes from; a `Select` states none, so its arms are [`select_class`]'s to read.
+fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> Option<ScalarClass> {
     match *op {
         KernelInstr::Bin(class, _) => Some(class),
         KernelInstr::Conv { from, .. } => (position == 0).then_some(from),
-        KernelInstr::Select => (position != 2).then_some(module),
+        // **A `Select` arm**: a fact about the value in the position, not the op.
+        KernelInstr::Select => None,
         KernelInstr::BufferReadCall(_) => (position == 0).then_some(ScalarClass::Int),
         KernelInstr::SliceReadCall(_) => (position == 0).then_some(ScalarClass::Int),
         KernelInstr::BufferWriteCall(class) => (position == 2).then_some(class),
@@ -1993,6 +2046,35 @@ fn operand_class(
         | KernelInstr::Sqrt
         | KernelInstr::Floor => None,
     }
+}
+
+/// The class a `Select`'s two arms are computed in, which is the class its result has.
+///
+/// # Invariant
+/// `KernelInstr::Select` states no class, so the arms are the only evidence and each is read
+/// through [`value_class`] — an integer index stays one whatever the module computes. `visiting` is
+/// the phi's own, which also bounds a pair of arms that feed each other's class. Two arms of
+/// different classes are [`SpirvRefusal::SelectArmClassesDisagree`]: an `OpSelect` has one
+/// result type.
+fn select_class(
+    fragment: &KernelFragment,
+    launch: &LaunchSet<'_>,
+    module: ScalarClass,
+    args: &[ValueId],
+    visiting: &mut Vec<ValueId>,
+) -> Result<ScalarClass, SpirvRefusal> {
+    let [then, otherwise, ..] = args else {
+        return Ok(module);
+    };
+    let then = value_class(fragment, launch, module, *then, visiting)?;
+    let otherwise = value_class(fragment, launch, module, *otherwise, visiting)?;
+    if then != otherwise {
+        let mut classes = vec![then, otherwise];
+        classes.sort_by_key(|class| class.index());
+        classes.dedup();
+        return Err(SpirvRefusal::SelectArmClassesDisagree { classes });
+    }
+    Ok(then)
 }
 
 /// One emitted block.
@@ -2548,7 +2630,7 @@ struct Emitter<'a> {
     plan: &'a Plan,
     /// The launch set, so a call's operands read the callee's own leaves.
     launch: &'a LaunchSet<'a>,
-    /// The module's numeric class, which a `Select`'s arms are stated in.
+    /// The module's numeric class, which a value no body computes in any class is given.
     module: ScalarClass,
     blocks: &'a mut Vec<Block>,
     slots: &'a mut HashMap<ValueId, Slot>,
