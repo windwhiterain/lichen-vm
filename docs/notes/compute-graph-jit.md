@@ -610,7 +610,11 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   whether one buffer and an extent **is** the contract, is undecided — and unstated:
   no note says what the argument may be. Found while writing the union's end-to-end
   test (`crates/lichen-language/tests/union_ports.rs`), which dropped that case rather
-  than land a program that cannot build.
+  than land a program that cannot build. **The recording path itself is not the
+  suspect**: it applies the step to placeholders built from the **cells of the
+  parameter** and reads back what dispatched, with no one-buffer assumption in it
+  (`compute.rs:4965`–`5005`), so the two refusals that fire first are about typing the
+  step, not about the graph machinery.
 
 ## Landmines, each of which is a silent wrong answer
 
