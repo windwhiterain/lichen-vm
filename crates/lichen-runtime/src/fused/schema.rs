@@ -411,10 +411,39 @@ pub struct Plan {
 #[repr(C)]
 #[facet(deny_unknown_fields)]
 pub struct Artifact {
+    /// The format this text was written in.
+    ///
+    /// # Invariant
+    /// Required and first, so a text written before this field read fails here rather
+    /// than somewhere deeper: `deny_unknown_fields` refuses a later format's own fields
+    /// too, and the version is what says which of the two a reader met.
+    pub version: u32,
     /// The fragment.
     pub fragment: Fragment,
     /// The interface it is interned with, or `null`.
     pub claim: Option<Claim>,
     /// The plan it was checked against.
     pub plan: Plan,
+}
+
+/// The format version this build reads and writes.
+///
+/// # Invariant
+/// One number for the whole artifact rather than one per type: the fragment, the claim
+/// and the plan travel as one text, so a reader that could read a fragment at one
+/// version and a plan at another would have to decide which to believe.
+pub const FORMAT_VERSION: u32 = 1;
+
+/// The artifact's version, read on its own.
+///
+/// # Invariant
+/// **Unknown fields are not denied here**, which is the whole point: this probes for
+/// the one field naming the format, so it answers on a text whose body is another
+/// version's — or on a text that names no version at all — where the strict read would
+/// answer with a parse error naming a byte offset rather than the format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub struct VersionProbe {
+    /// The version the text states, or `None` where it states none.
+    pub version: Option<u32>,
 }

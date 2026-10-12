@@ -2,14 +2,18 @@
 //! See `docs/notes/graph-fusion.md` §5.
 
 use super::common;
+use super::warp_exchange::sums_a_staged_tile;
 
-use lichen_compute_gpu::GpuContext;
+use lichen_compute_gpu::{GpuContext, SUBGROUP_WIDTH};
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelFragment, KernelRoles, KernelShape, LaneWidth, Plan, ScalarClass,
     ScalarData, Slice, Space, TargetFacts, fragment_digest,
 };
-use lichen_runtime::{FusedKernel, LandingRefusal, land_fused_kernel, write_fused_kernel};
+use lichen_runtime::{
+    ARTIFACT_FORMAT_VERSION, DeviceFacts, DeviceFactsSource, DeviceRefusal, FusedKernel,
+    LandingRefusal, LoadRefusal, land_fused_kernel, load_fused_kernel, write_fused_kernel,
+};
 
 /// A one-node graph over `fragment`, whose return is that node's output.
 ///
@@ -252,6 +256,184 @@ fn a_landing_onto_a_node_the_graph_does_not_have_is_refused() {
         fragment_digest(node_fragment(&graph)),
         before,
         "nothing moved"
+    );
+}
+
+/// The artifact a caller lands, at a format version this build does not read.
+///
+/// # Invariant
+/// **The version is the only thing changed**, and it is changed in the text the writer
+/// produced rather than in a second hand-written artifact, so a refusal cannot be about a
+/// body that differs from the one the happy path lands.
+const ANOTHER_FORMAT: u32 = ARTIFACT_FORMAT_VERSION + 1;
+
+/// [`tiled_artifact`] naming [`ANOTHER_FORMAT`] instead of this build's.
+///
+/// # Invariant
+/// A replacement, not a rewrite: what the reader parses is the same artifact with one
+/// number changed, which is what makes the refusal attributable to that number alone.
+fn at_another_format(text: &str) -> String {
+    text.replace(
+        &format!("\"version\": {ARTIFACT_FORMAT_VERSION}"),
+        &format!("\"version\": {ANOTHER_FORMAT}"),
+    )
+}
+
+/// The loader's one call, against the three lines it replaces.
+///
+/// # Invariant
+/// **One graph shape, one data set, one device**, and each path starts from the same
+/// unlanded node, so the two answers are one measurement rather than two and a difference
+/// could only be the loader. The submission counter is read either side, so "the device
+/// ran it" is a number rather than a claim.
+#[test]
+fn an_artifact_loaded_in_one_call_answers_what_the_direct_path_answers() {
+    let Some(context) =
+        common::context("an_artifact_loaded_in_one_call_answers_what_the_direct_path_answers")
+    else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let count = tile as usize;
+    let data: Vec<i64> = (1..=count as i64).collect();
+    let text = tiled_artifact(tile);
+    let before = context.submissions();
+
+    let mut loaded = graph_over(per_lane_fragment(tile), count);
+    load_fused_kernel(&text, &mut loaded, 0, &context)
+        .unwrap_or_else(|refusal| panic!("the tiled artifact loads: {refusal}"));
+    let one_call = settled(&context, &loaded, &data, count, Policy::Async);
+
+    let mut direct = graph_over(per_lane_fragment(tile), count);
+    land_fused_kernel(&mut direct, 0, &text)
+        .unwrap_or_else(|refusal| panic!("the tiled artifact lands: {refusal}"));
+    let three_lines = settled(&context, &direct, &data, count, Policy::Async);
+
+    // The oracle the acceptance case derives by hand: a sum over `1..=count`.
+    let expected = count as i64 * (count as i64 + 1) / 2;
+    assert_eq!(
+        one_call,
+        vec![expected; count],
+        "the loaded body is the tile's own sum, not the node's"
+    );
+    assert_eq!(
+        one_call, three_lines,
+        "the one call answers what read-then-land answers, lane for lane"
+    );
+    assert!(
+        context.submissions() > before,
+        "the device dispatched both graphs: {} submission(s) where {} stood",
+        context.submissions(),
+        before
+    );
+}
+
+/// An artifact in another format is refused by name, with nothing dispatched.
+///
+/// # Invariant
+/// The graph is run **first**, so "nothing was recorded or submitted" is a claim about a
+/// device that had been dispatching rather than about a counter that had never moved, and
+/// the node's digest is read either side because a loader that parsed a text it cannot
+/// honour and then failed would leave a graph nobody asked it to change.
+#[test]
+fn an_artifact_naming_another_format_is_refused_before_the_device_is_asked() {
+    let Some(context) =
+        common::context("an_artifact_naming_another_format_is_refused_before_the_device_is_asked")
+    else {
+        return;
+    };
+    let tile = lichen_compute_gpu::LOCAL_SIZE_X;
+    let count = tile as usize;
+    let mut graph = graph_over(per_lane_fragment(tile), count);
+    settled(
+        &context,
+        &graph,
+        &(1..=count as i64).collect::<Vec<i64>>(),
+        count,
+        Policy::Async,
+    );
+    let before = (
+        context.submissions(),
+        context.fence_waits(),
+        fragment_digest(node_fragment(&graph)),
+    );
+
+    let refusal = load_fused_kernel(
+        &at_another_format(&tiled_artifact(tile)),
+        &mut graph,
+        0,
+        &context,
+    )
+    .expect_err("an artifact this build does not read is not read at all");
+
+    assert_eq!(refusal.name(), "VersionMismatch", "the gate is named");
+    assert_eq!(
+        refusal,
+        LoadRefusal::VersionMismatch {
+            found: ANOTHER_FORMAT,
+            wanted: ARTIFACT_FORMAT_VERSION,
+        },
+        "and it carries both versions rather than only saying it did not match"
+    );
+    assert_eq!(
+        (
+            context.submissions(),
+            context.fence_waits(),
+            fragment_digest(node_fragment(&graph)),
+        ),
+        before,
+        "nothing was recorded, nothing was submitted, and the node is untouched"
+    );
+}
+
+/// A device whose subgroups are narrower than the artifact's `Warp` slice.
+///
+/// # Invariant
+/// **Hand-made, and said so**: this machine's own device answers 32, so the case is stated
+/// rather than waited for — a table of numbers is exactly what a `DeviceFactsSource` is,
+/// and no stub backend is involved, so the refusal is the loader's and not a stub's.
+struct NarrowSubgroups;
+
+impl DeviceFactsSource for NarrowSubgroups {
+    fn device_facts(&self) -> DeviceFacts {
+        DeviceFacts {
+            int_bits: 64,
+            max_workgroup_lanes: 1024,
+            subgroup_width: Some(16),
+            max_shared_bytes: 48 * 1024,
+            max_storage_buffers: 4,
+        }
+    }
+}
+
+/// A `Warp` slice one subgroup too wide is refused by name, before the emitter sees it.
+///
+/// # Invariant
+/// The same refusal [`super::warp_exchange`] pins at the emitter, one gate earlier: the
+/// emitter refuses when a slice access is reached, the loader refuses before any dispatch
+/// happens at all, and both name the count and the width so a report says which pair
+/// disagreed.
+#[test]
+fn a_warp_slice_wider_than_this_devices_subgroup_is_refused_by_name() {
+    let warp = sums_a_staged_tile(Space::Warp, SUBGROUP_WIDTH);
+    let mut graph = graph_over(warp.clone(), lichen_compute_gpu::LOCAL_SIZE_X as usize);
+    let text = write_fused_kernel(&FusedKernel {
+        fragment: warp,
+        claim: None,
+        plan: Plan::default(),
+    });
+
+    let refusal = load_fused_kernel(&text, &mut graph, 0, &NarrowSubgroups)
+        .expect_err("a 32-element warp slice cannot be honoured by a 16-lane subgroup");
+
+    assert_eq!(refusal.name(), "Device", "the gate is named");
+    assert_eq!(
+        refusal,
+        LoadRefusal::Device(DeviceRefusal::SubgroupWidthMismatch {
+            count: SUBGROUP_WIDTH,
+            subgroup_width: 16,
+        }),
+        "the refusal carries the slice's count and the device's subgroup width"
     );
 }
 

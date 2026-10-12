@@ -27,6 +27,7 @@ use lichen_kernel_ir::{
     BatchExtent, BatchInput, BatchRefusal, BufferSlot, DeviceExtent, Dispatch, LaunchSet,
     ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
+use lichen_runtime::{DeviceFacts, DeviceFactsSource};
 
 use crate::spirv::{self, Binding, SpirvRefusal};
 
@@ -339,6 +340,58 @@ fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunE
     Ok(count.div_ceil(lane_width as usize))
 }
 
+/// What the chosen device is, as the facts an artifact is checked against.
+///
+/// # Invariant
+/// Each field is the device's **own** answer, not this target's constant: `shaderInt64`
+/// for the integer width, `maxComputeWorkGroupInvocations` against `maxComputeWorkGroupSize[0]`
+/// for the lanes a workgroup may run, `subgroupSize` for the subgroup, and
+/// `maxComputeSharedMemorySize` and `maxPerStageDescriptorStorageBuffers` for the two
+/// ceilings a module declares against.
+fn device_facts(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    properties: &vk::PhysicalDeviceProperties,
+    shader_int64: bool,
+) -> DeviceFacts {
+    let limits = properties.limits;
+    DeviceFacts {
+        int_bits: if shader_int64 { 64 } else { 32 },
+        max_workgroup_lanes: limits
+            .max_compute_work_group_invocations
+            .min(limits.max_compute_work_group_size[0]),
+        subgroup_width: subgroup_width(entry, instance, physical),
+        max_shared_bytes: limits.max_compute_shared_memory_size,
+        max_storage_buffers: limits.max_per_stage_descriptor_storage_buffers,
+    }
+}
+
+/// The lanes one subgroup runs, or `None` where the loader cannot be asked.
+///
+/// # Invariant
+/// `subgroupSize` is reachable only through `vkGetPhysicalDeviceProperties2`, and the
+/// **loader** decides whether that entry point exists: a Vulkan 1.1 loader exports the
+/// 1.1 points whatever instance version was asked for, and this crate asks for none.
+/// A 1.0 loader therefore leaves the fact unreported rather than guessing a width.
+fn subgroup_width(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+) -> Option<u32> {
+    let loader = unsafe { entry.try_enumerate_instance_version() }
+        .ok()
+        .flatten()?;
+    if loader < vk::API_VERSION_1_1 {
+        return None;
+    }
+    let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+    let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup);
+    // SAFETY: `subgroup` is chained into `properties` and outlives the call.
+    unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
+    Some(subgroup.subgroup_size)
+}
+
 /// A device, its compute queue, and the pipelines built on it.
 ///
 /// # Invariant
@@ -366,6 +419,14 @@ pub struct GpuContext {
     /// A limit, not a promise: a fragment may declare more scalar leaves than it covers, and the
     /// block would be read past rather than refused, so it is checked where the block is built.
     push_constant_bytes: u32,
+    /// What this device is, as the facts a fragment is checked against.
+    ///
+    /// # Invariant
+    /// Probed once, where the device is chosen, and never re-read: a loader compares the
+    /// artifact's assumptions against it before anything is dispatched, and a query per load
+    /// would be a second answer to a question whose first answer cannot change while the
+    /// context lives.
+    facts: DeviceFacts,
     /// The pipeline cache, keyed on the **whole set's** digests, not the root's:
     /// two sets sharing a root are two modules.
     pipelines: Mutex<HashMap<(Vec<u64>, usize, usize), vk::Pipeline>>,
@@ -591,6 +652,7 @@ impl GpuContext {
         };
         let name = device_name(&properties);
         let push_constant_bytes = properties.limits.max_push_constants_size;
+        let facts = device_facts(&entry, &instance, physical, &properties, shader_int64);
 
         // The priorities array has to outlive the create-info that points into it,
         // so it is a local rather than a temporary.
@@ -637,6 +699,7 @@ impl GpuContext {
             name,
             shader_int64,
             push_constant_bytes,
+            facts,
             pipelines: Mutex::new(HashMap::new()),
             resident: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -2089,6 +2152,18 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
 
     fn release(&self, id: ResidentId) {
         GpuContext::release(self, id);
+    }
+}
+
+/// What this context's device is, for a loader that checks an artifact against it.
+///
+/// # Invariant
+/// **Read, not re-queried**: the context probed the device where it was chosen, so a
+/// loader's answer is the same one every later run will be given — and a context that
+/// cannot report a subgroup width reports none rather than assuming this target's.
+impl DeviceFactsSource for GpuContext {
+    fn device_facts(&self) -> DeviceFacts {
+        self.facts
     }
 }
 

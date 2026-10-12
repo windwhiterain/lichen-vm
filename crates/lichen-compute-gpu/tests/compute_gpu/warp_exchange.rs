@@ -91,10 +91,12 @@ fn barrier_scopes(words: &[u32]) -> Vec<u32> {
 ///
 /// # Invariant
 /// **Every lane writes the same value into every slot**, so the shared path has no write to race
-/// on and the two placements owe the same number: lane `L` of a subgroup holds `in[j]` in its own
-/// register, and a read at index `j` names exactly that lane. That is what makes this a
-/// differential rather than two answers to compare by eye.
-fn sums_a_staged_tile(space: Space, count: u32) -> KernelFragment {
+/// on and the two placements owe the same number: a read at index `j` names the lane whose
+/// subgroup-local id is `j`, which is the value it staged.
+///
+/// `pub(super)`: the loader's device gate is checked against this same body, so the artifact it
+/// refuses is the one the emitter would refuse.
+pub(super) fn sums_a_staged_tile(space: Space, count: u32) -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     body.add_param(entry);

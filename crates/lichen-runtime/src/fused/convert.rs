@@ -585,6 +585,7 @@ impl From<ir::KernelFragment> for schema::Fragment {
 impl From<&FusedKernel> for schema::Artifact {
     fn from(kernel: &FusedKernel) -> Self {
         schema::Artifact {
+            version: schema::FORMAT_VERSION,
             fragment: kernel.fragment.clone().into(),
             claim: kernel.claim.clone().map(Into::into),
             plan: kernel.plan.clone().into(),

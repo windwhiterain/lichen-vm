@@ -130,6 +130,7 @@ fn a_kernel_with_no_claim_and_an_empty_plan_reads_back() {
 fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "tuple": [{ "scalar": "int" }, { "scalar": "int" }] },
         "roles": {
@@ -247,6 +248,7 @@ fn json_missing_a_required_field_is_refused_by_path() {
 fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -277,6 +279,7 @@ fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
 fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -348,6 +351,7 @@ fn a_plan_naming_a_mark_the_body_never_published_is_refused() {
 fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -387,6 +391,7 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
 fn a_field_the_schema_does_not_have_is_refused_by_path() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -417,6 +422,7 @@ fn a_field_the_schema_does_not_have_is_refused_by_path() {
 fn every_instruction_the_ir_has_is_expressed_by_the_text() {
     let text = r#"
     {
+      "version": 1,
       "fragment": {
         "param_shape": { "tuple": [
           { "scalar": "int" }, { "scalar": "int" }, { "scalar": "float" }

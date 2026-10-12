@@ -16,6 +16,7 @@ use lichen_kernel_ir::{
 /// body, which is what a landed replacement is supposed to change.
 const ARTIFACT: &str = r#"
 {
+  "version": 1,
   "fragment": {
     "param_shape": { "tuple": [{ "scalar": "int" }, { "scalar": "int" }] },
     "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },

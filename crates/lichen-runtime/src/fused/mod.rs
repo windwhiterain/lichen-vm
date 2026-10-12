@@ -113,7 +113,8 @@ pub fn write_fused_kernel(kernel: &FusedKernel) -> String {
     facet_json::to_string_pretty(&artifact).expect("a fused kernel is a plain data artifact")
 }
 
-/// Read `text` back as the kernel it names, checking it as it goes.
+/// Read `text` back as the kernel it names, checking it as it goes. The text must
+/// name this build's format version.
 ///
 /// # Invariant
 /// **Pure**: nothing is interned, registered or looked up in a global, so reading
@@ -161,7 +162,11 @@ pub fn malformed_at(
 }
 
 /// The refusal a `facet_json` parse error earns, with where it happened.
-fn malformed(error: facet_json::DeserializeError) -> FusedRefusal {
+///
+/// # Invariant
+/// `pub(crate)` because the loader reads a text of its own before this reader does, and one
+/// parse error earns one refusal however many passes met it.
+pub(crate) fn malformed(error: facet_json::DeserializeError) -> FusedRefusal {
     let (path, at, message) = malformed_at(error);
     FusedRefusal::Malformed { path, at, message }
 }

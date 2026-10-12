@@ -8,22 +8,27 @@
 //! lichen-runtime` naming no language crate *is* the check.
 
 pub mod automatic_tiling;
+pub mod device;
 pub mod fused;
 pub mod fusion_claim;
 pub mod graph_pass;
 pub mod kernel_registry;
+pub mod load;
 pub mod module_cache;
 pub mod packs;
 pub mod placement_pack;
 pub mod region_merge;
 
 pub use automatic_tiling::tiling_pass;
+pub use device::{DeviceFacts, DeviceFactsSource, DeviceRefusal};
+pub use fused::schema::FORMAT_VERSION as ARTIFACT_FORMAT_VERSION;
 pub use fused::{
     FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, malformed_at, read_fused_kernel,
     write_fused_kernel,
 };
 pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
 pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};
+pub use load::{LoadRefusal, LoadedKernel, load_fused_kernel};
 pub use module_cache::{cached_module, module_cache_misses};
 pub use placement_pack::{PlacementPack, read_placement_pack};
 pub use region_merge::{MergeRefusal, region_merge_pass};

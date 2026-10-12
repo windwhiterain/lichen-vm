@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 # A second backend for the lowered-kernel IR, and deliberately a crate of its
-# own: it depends on `lichen-kernel-ir` (the IR) and on a GPU runtime, and
-# nothing that merely wants the IR has to take either.  `lichen-compute` — the
-# wasm backend — does not depend on this crate, so a build that never dispatches
-# a kernel to a device never links a GPU loader.
+# own: it depends on `lichen-kernel-ir` (the IR), on `lichen-runtime` (the
+# artifact and the device facts) and on a GPU runtime, and nothing that merely
+# wants the IR has to take either.  `lichen-compute` — the wasm backend — does
+# not depend on this crate, so a build that never dispatches a kernel to a
+# device never links a GPU loader.
 #
 # This crate is not a workspace dependency of anything else in the workspace.  It
 # is a member so `cargo test --workspace` exercises it, which means the GPU
@@ -19,6 +20,12 @@ edition.workspace = true
 [dependencies]
 ash = "0.38.0"
 lichen-kernel-ir.workspace = true
+# The artifact loader and the `DeviceFactsSource` trait it declares: a Vulkan context
+# answers what the device **is**, which is a runtime fact and not part of the backend
+# contract. The edge is deliberately one way — the runtime names no backend — and it
+# costs the wasm engine's presence in a GPU binary, which is why it is the runtime that
+# declares the trait rather than this crate.
+lichen-runtime.workspace = true
 
 # The graph IR, so a graph can be run against a real device. A **dev**
 # dependency on purpose: this crate is a backend and takes no part in building
@@ -26,11 +33,6 @@ lichen-kernel-ir.workspace = true
 # than so the backend can see a graph.
 [dev-dependencies]
 lichen-graph-ir = { path = "../lichen-graph-ir" }
-# The fused-kernel artifact: a device test lands one into a recorded node, and the
-# artifact's reader and lander live in the runtime. A **dev** dependency for the same
-# reason `lichen-graph-ir` above is one, and naming the runtime rather than the
-# sub-language is what keeps every language crate out of this one, test or not.
-lichen-runtime = { path = "../lichen-runtime" }
 # The acceptance case's bodies: a declared reduction tiled across the workgroup, checked against
 # the emitter here and run on a device from `lichen-language`'s own tests.
 lichen-fusion = { path = "../lichen-fusion" }
