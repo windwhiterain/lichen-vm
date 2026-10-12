@@ -549,6 +549,35 @@ legitimate answer. The runner installs them through the **floor**, so a pack's `
 both apply — one pass, the chain above. The merged node's registration stays **declined** (two passes
 already name it), so a pack never has a composed node's claim to match against.
 
+**And the runner is real now** (`288612e1`): `--pack <path>`, repeatable and **global** in the compiler's
+own arguments (`crates/lichen-compiler/src/cli.rs`), so one option serves the bare `lichen <file>` form
+and `run`/`build` alike; `lichen_compiler::packs::load_packs` reads each path and hands the text to
+`read_placement_pack`, all-or-nothing, and a bad pack prints the reader's own sentence, prefixed with
+the path, on stderr with a non-zero exit — **before anything runs**. A **pack can fire and the user
+never see it**, though: the stage lines live in `module.extension_diagnostics`, which `render_build`
+prints only when the program produced nothing, so a real `lichen --pack p.lichen prog.lichen` run is
+silent about a pack that fired (true of every floor line today; recorded as its own open item below).
+
+**Where the packs are installed is not where it looks like it should be, and that is measured.** The
+obvious point — after the compile, before the run — **does not work**: for a program whose graph is
+dispatched *during* compilation, the consult happens inside the compile and `evaluate_node_deep`
+afterwards finds the node already decided, so a pass installed in between is **never consulted at all**
+(marker pass: zero lines installed after the compile, consulted when installed before it). The packs are
+therefore installed **before dispatch** (`main_with_native_packages`), through
+`floor::install_floor_for_run(&packs)` (`crates/lichen-language/src/floor.rs`) on an **empty** module.
+That is not a workaround: a module's own join names only kernels it has already evaluated, so a
+not-yet-compiled module has none, and both stages answer from the **process-global kernel registry** the
+compile is about to fill (the deferred branch in `automatic_tiling.rs` and `region_merge.rs`) — measured:
+the empty seed tiles and reports both stages on the device.
+
+**Open — a run's report does not reach a `lichen` user.** Every stage line, and a pack's own
+`pack "…" fired`, live in `module.extension_diagnostics`, which `render_build` prints **only when the
+program produced nothing**. So a `.lichen --pack` run says nothing about what the floor did: a machine
+cannot tell "my pack fired" from "my pack was inert". That is not new with `--pack` — it is true of
+every floor line — but `--pack` is what makes it user-facing, and a pack is exactly the artifact whose
+whole point is that its effect should be knowable. The change is a decision, not a repair: when does a
+run's report get printed, if not only on an empty program?
+
 The landed pack's plan is **the fused artifact's own spelling** — one `Plan`
 type, not a second one — so a pack and an artifact cannot disagree about what a
 staging entry is.
