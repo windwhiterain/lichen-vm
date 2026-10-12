@@ -251,23 +251,21 @@ answer out: `resolve_steps` returns an `Err` naming the step instead of guessing
 non-parameter case has no node to get wrong):
 
 - **A nested struct group under `.in`/`.out` is refused with the wrong reason.** The descent in
-  `resolve_steps` (`compute.rs:3921-3935`) does not move when the shape element carries no element slot
-  — `slot_type` answers the same node through `.unwrap_or(node)`, so the next named step sees no name
-  table and reports "that type's fields are `None`". `walk_role` walks to any depth; `param_path` reads
-  two names deep.
+  `resolve_steps` (`compute.rs:3921-3935`) kept the selected field's **type node** as the next level's
+  **field list**, so a step past the first level indexed the two-element `[shape, kind]` term instead of
+  the field list — measured: the node it carried had two elements where the field list had one. The
+  `slot_type`-then-`.unwrap_or(node)` step then answered the same node back, and the next named step saw
+  no name table and reported "that type's fields are `None`". `walk_role` walks to any depth;
+  `param_path` reads two names deep.
 - **`scalar_leaf_classes` assumes a scalar role is a direct field** — its comment says so at
   `compute.rs:1761-1762` — while `walk_role` emits paths of any depth. A `Float` scalar under a grouped
   `.in` is therefore forced to `Int` and refused at launch ("a parallel parameter's scalar leaf is Int
   here and the launch passes a Float for it"), which misnames the cause; the `Int` case runs correctly.
   The launch still compares the real class against the declared one, so this degrades to a refusal.
 
-**No test in the tree covers a struct constructed inside a kernel body** — every existing kernel body
-reads nothing but the parameter struct. Until the nested-group defect is fixed, an operator author
-should keep `.in`/`.out` **flat**: compute name-matches those two fields, and a nested group under them
-hits the false refusal above. The decisive file is the checker's `check_named_field`, which the
-field-naming work is actively changing; if its constant-versus-`TableGet` choice moves, the node-kind
-evidence above must be re-measured, though the behaviours would survive a shape change more readily than
-the refusal texts.
+**The decisive file is the checker's `check_named_field`**, which the field-naming work is actively
+changing; if its constant-versus-`TableGet` choice moves, the node-kind evidence above must be re-measured,
+though the behaviours would survive a shape change more readily than the refusal texts.
 
 
 ## The requirement: arbitrary struct nesting, with `.in`/`.out` the only special case
@@ -292,3 +290,22 @@ stopping where a shape element carries no element slot. The **everywhere-else ha
 in the body, in locals, in call results, to any depth — is the next slice, because both halves change
 the same walk and two slices in one function collide. **Nothing in the tree tests any of this**: the
 matrix above is the specification to grow into, and every case it gains wants a test of its own.
+
+**The parameter half is done, and measured.** The descent kept the field it selected as the next level's
+*field list*, but a field carries a *type*, and a type's own field list is a different node — measured:
+the node it carried had two elements where the field list had one. The step after that indexed the
+two-element `[shape, kind]` term instead of the fields, so `slot_type` answered the same node back through
+`.unwrap_or` and the next named step saw no name table. The walk now carries the `TypeRef` and reads each
+level from that type's own field list and name table. `scalar_leaf_classes` read a scalar's class from
+`path.first()`, assuming a direct field of the parameter; it now descends to the type at the leaf's own
+path. Both refusal sentences above are unreachable for these two shapes, which
+`crates/lichen-compute/tests/nested_role.rs` builds.
+
+**What the repair does not reach.** A group holding **both** a buffer and a scalar still refuses —
+"a kernel body's index cannot be placed: its target is a computation and its index is the constant 1" —
+and the refusal is **depth-independent**: it fires for `In = struct{.b (compute.Buf Float), .s Float}` at
+depth 1 just as it does for the grouped form. That is a separate limitation of `Lower::body`, not of the
+parameter-path walk, and it is the first thing to weigh against the everywhere-else half.
+
+**The repair is a temporary measure.** The name→position fold belongs after the apply clone, once for
+every reader, not in one reader at compile time — see `specialize-normalize.md`.

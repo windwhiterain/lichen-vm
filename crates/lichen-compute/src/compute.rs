@@ -1732,9 +1732,65 @@ where
     Some(
         items
             .iter()
-            .map(|item| slot_type(module, item.node).unwrap_or(item.node))
+            .map(|item| element_slot_type(module, item.node))
             .collect(),
     )
+}
+
+/// The type a field list's **element slot** names.
+///
+/// # Invariant
+/// A compound type's shape element is an element slot, so a field's type is its
+/// type position; an element that states none *is* the type. Both encodings are
+/// asked of every element, and the one that reads decides. See
+/// `docs/notes/compound-element-slots.md`.
+fn element_slot_type<P: Program>(module: &Module<P>, element: AnyNodeId) -> AnyNodeId
+where
+    P::Value: ValueType,
+{
+    slot_type(module, element).unwrap_or(element)
+}
+
+/// The type node of field `at` of `ty`.
+///
+/// # Invariant
+/// The field is read from the field list of `ty` itself, so this is the level
+/// below `ty` and not a depth counted from the parameter.
+fn field_type_at<P>(module: &Module<P>, ty: TypeRef, at: usize) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // SAFETY: `field_list` resolved `shape` from `ty`'s own term just above.
+    let element = (unsafe { array_items_any(module, field_list(module, ty)?) })?
+        .get(at)?
+        .node;
+    Some(element_slot_type(module, element))
+}
+
+/// The type node at `path` inside `ty` — a leaf's own type, read at the leaf's own
+/// path.
+///
+/// # Invariant
+/// Every step but the last is resolved against **the field it selected**, so a
+/// path of any depth ends at the leaf's own type rather than at the type one
+/// level above it. `None` is "no type reads this path", never a wrong level's.
+fn type_node_at_path<P>(module: &Module<P>, ty: TypeRef, path: &[usize]) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut at_path = ty;
+    for (depth, &at) in path.iter().enumerate() {
+        let node = field_type_at(module, at_path, at)?;
+        if depth + 1 == path.len() {
+            return Some(node);
+        }
+        at_path = parameter_type_ref(module, node)?;
+    }
+    None
 }
 
 /// The class of every scalar leaf of a parallel parameter, in signature order.
@@ -1758,12 +1814,10 @@ where
     let ty = unsafe { module.array_items(cfg_pair) }
         .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
         .and_then(|slot| parameter_type_ref(module, slot));
-    // A scalar role is a **direct** field (`[field]`), so its one position is the
-    // field the class is read from.
+    // A scalar role is a leaf at its own path: `[field]`, or `[in, g, s]`.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
-        path.first()
-            .and_then(|&at| field_type(module, ty?, at))
-            .map(|field| scalar_class_of(&low_type_of_slot(module, field)))
+        ty.and_then(|ty| type_node_at_path(module, ty, path))
+            .map(|leaf| scalar_class_of(&low_type_of_slot(module, leaf)))
             .unwrap_or(ScalarClass::Int)
     };
     let classes: Vec<ScalarClass> = roles
@@ -3889,18 +3943,17 @@ where
         // empty path.
         return resolve_without_type(steps);
     };
-    // One level per step, each carrying two parallel lists: the field types and
-    // the field names.
+    // One level per step, each named by the type the step before it selected.
 
-    // Keeping them together stops a name being looked for in the wrong list.
-    let (mut names, mut types) = struct_fields_of_slot(module, type_slot)
-        .map(|(names, shape)| (Some(names), Some(shape)))
-        .unwrap_or_default();
+    // A name is looked for in that type's own name table.
+    let mut ty = parameter_type_ref(module, type_slot);
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
         let at = match step {
+            // A position is its own answer, so it is taken where no type reads.
             IndexStep::Position(position) => *position,
             IndexStep::Named(name) => {
+                let names = ty.and_then(|ty| field_names(module, ty));
                 match names
                     .as_ref()
                     .and_then(|names| names.iter().position(|field| *field == Some(*name)))
@@ -3916,17 +3969,9 @@ where
             }
         };
         path.push(at);
-        // The level below: the entry this step selected — a slot, so its type
-        // position is the field's type.
-        let entry = types
-            .and_then(|types| unsafe { array_items_any(module, types) })
-            .and_then(|entries| entries.get(at))
-            .map(|entry| entry.node)
-            .map(|node| slot_type(module, node).unwrap_or(node));
-        types = entry;
-        names = entry
-            .and_then(|entry| parameter_type_ref(module, entry))
-            .and_then(|ty| field_names(module, ty));
+        ty = ty
+            .and_then(|ty| field_type_at(module, ty, at))
+            .and_then(|node| parameter_type_ref(module, node));
     }
     Ok(Some(path))
 }
