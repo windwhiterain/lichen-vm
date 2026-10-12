@@ -648,13 +648,25 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   move. Measured: recorded `([3,5,…,17], [3,5,…,17])`, merged identical on **both** ordinals, and
   moving only the **second** consumer's `+ 1.0` to `+ 10.0` answers `([3,5,…,17], [12,14,…,26])` —
   before the fix that same test read `([3,5,…,17], [0,0,0,0,0,0,0,0])`.
-  **And a pre-existing recording bug, out of that slice's reach**: a graph's function cannot return
-  two **different** kernels' results when their output types are the **same** struct. Measured matrix:
-  the same kernel twice records (and returns `[3,4]`); different kernels with **different** output
-  types record; different kernels with the **same** output type are refused — *"this function's return
-  is not a value a graph can hand back"*, because `returned_value_ids` finds the first return's node
-  holds no value. So two ordinals of one kernel are distinguishable, two kernels of one output type
-  are not, and that wants its own slice.
+  **And a defect the next slice diagnosed and stopped on** — its correction of this note's first
+  account is the point. A graph step performing two dispatches of **two distinct kernels with an
+  identical parameter type** records **nothing**: `record_dispatch` is called **zero** times, the
+  `ParLaunch` node holds no value and `evaluated_deep` is `None` — it never ran — because its
+  **kernel-name lookup** (a `LowOperator::Index` clone into the module's static table) answers
+  *undecided* where the same template origin node resolves in a working program.
+  `evaluate_node_deep` forces **value** edges only, never an operation's operand edges, so when that
+  `Index` answers undecided nothing below it is forced and the walk meets a node with no value.
+  **Both** return nodes are unnamed, not the first — the walk merely aborts on the first `?` — and
+  `returned_value_ids` itself is **innocent**: it walks by tuple **position** and never by type or
+  identity, which every successful recording shows as `[Value(0), Value(1)]`. The trigger is exact
+  and narrower than "the same output type": same `.I` **and** same `.O` fails; same `.O` with a
+  different `.I` records; and a third, differently shaped dispatch *repairs* it (no mechanism yet
+  explains that, so it is a correlation). Two more facts worth carrying: the refusal rides
+  `record_extension_diagnostic`, a **note** that does **not** fail the build, so a root that still
+  produces a value answers `Ok` and the graph is silently undecided; and the honest fix is
+  **upstream** of the recording — the clone/carry rule in the apply
+  ([apply-clone-ownership](apply-clone-ownership.md)) — while every route to it is a contract change,
+  which is why it was reported rather than patched.
   [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
