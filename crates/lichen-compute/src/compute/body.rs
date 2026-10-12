@@ -501,6 +501,13 @@ where
         // **The slot is the path flattened**, summing each skipped element's arity;
         // the steps are reversed first.
         positions.reverse();
+        // **A buffer field is elided from `shape` but not from the path**, so the roles answer it.
+        if let Some(slot) = self.params.first()
+            && let Some(roles) = &slot.roles
+            && let Some(ordinal) = roles.scalar_offset(&positions)
+        {
+            return Ok(Some(slot.base + ordinal));
+        }
         let mut offset = 0usize;
         let mut shape = match self.params.first() {
             Some(slot) => slot.shape.clone(),
