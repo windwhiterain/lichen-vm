@@ -372,7 +372,7 @@ apart, so nothing else in the tree can say whether they agree. The comparison is
 therefore over **values**, never over `installed_backend_name()` — the weaker claim
 a silently-fallen-back run would also satisfy — and the CPU run goes first and
 always happens, before the install, so a `"cpu"` run cannot be a `"gpu"` run's
-leftovers (`crates/lichen-language/examples/crossbackend.rs` is the probe for
+leftovers (`crates/lichen-compute/examples/crossbackend.rs` is the probe for
 that).
 
 - **The layout**, which is what the two halves once disagreed about:
@@ -564,7 +564,7 @@ infinity alone and Newton's iteration then divides it by itself.
 **What `floor` measures.** **Zero differences** from the host's `floor` over the same
 sweep, both signs, the subnormals and the infinities included. The definition is
 exact rather than accurate: every operation in it is one the class performs exactly,
-and `crates/lichen-language/examples/math_operators.rs` is where both tables print.
+and `crates/lichen-compute/examples/math_operators.rs` is where both tables print.
 
 **The device's division is not correctly rounded, and that is a measured fact.** A
 probe of 256 quotients through one kernel: **85 of them differ from the correctly

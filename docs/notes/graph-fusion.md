@@ -233,14 +233,14 @@ The ordering constraint the measurement establishes, with the code path:
    `RoleNotMarked { interface, role }` names. The `combine` mark failed for a **second, different**
    cause, found later and fixed at `cfea0d6b`: it published against the **first claimant among the
    nodes the anchor's walk reaches** rather than the expression it was written on (the paragraph below
-   traces it), so in `crates/lichen-language/examples/reduction_algebra.rs` the literal-count `combine`
+   traces it), so in `crates/lichen-compute/examples/reduction_algebra.rs` the literal-count `combine`
    bridged to the seed — `0` for the seed `0.0`, **`3.5`** for a distinctive seed. **Corrected by that
    fix**: the literal-count `combine` now bridges to the fold's own `Bin(Float, Add)`, canonical
    `0 + d + d + …` — the fold's own `Bin(Float, Add)` chain, the seed included, verified by running
 `reduction_algebra` — so the two halves no longer fail for one cause: `combine` reads as `+` and only
    `identity` is still missing (passage 4's scheduling constraint). The two acceptance tests that
    hard-code `Reduction { combine: Add, identity: 0.0 }`
-   (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) were accurate when written
+   (`crates/lichen-compute/tests/tiled_reduction.rs`, `plan_staging.rs`) were accurate when written
    and are now only *conservative*: the algebra they state is what the program means.
 
 **And a mark on a top-level *routed operator* anchored to the wrong value — measured at `afc116dc`,
@@ -273,7 +273,7 @@ datum `d` — to the `Bin(Int, Mul)` it computes, which the bridge then refuses 
 `examples/fusion_schema.rs` is byte-identical — all four schema hashes and fragment digests unchanged —
 because its marks sit in loops the *emitter* converts rather than in expanded prelude clones. No test
 pinned a moved value. The regression test
-(`crates/lichen-language/tests/mark_anchor.rs`) compares canonical `Expr` trees and **fails on the
+(`crates/lichen-compute/tests/mark_anchor.rs`) compares canonical `Expr` trees and **fails on the
 parent commit**, which is what says it catches the defect rather than describing the fix. What is still
 wrong on this path: the literal-count `identity` (passage 4), and a mark on a value `define_in`
 redirects through a **view** rather than through a frozen apply's residual is unmeasured.
@@ -283,7 +283,7 @@ the checker leaves the loop *undecided* — when the entering state is a run-tim
 `loop_iteration` reports `Undecided` and `apply_loop` writes no value, leaving
 `value_of_node` nothing to peel. Instrumenting `Lower::apply` and `Lower::lower_loop` and
 running both programs: `a_kernel_loop_nest_carries_a_runtime_state`
-(`crates/lichen-language/tests/compute.rs`, whose seed is a buffer read) reaches each
+(`crates/lichen-compute/tests/compute.rs`, whose seed is a buffer read) reaches each
 **twice**, while `reduction_interface` (whose seed was the literal `0.0` when this was
 measured — it is the runtime extent now, and reaches each twice for that reason) reached
 each **zero times**. So the constraint is exactly: *the emitter converts a kernel body's
@@ -356,7 +356,7 @@ still what would close it, and nothing here patches around it.
 
 The chain the spike *does* demonstrate end to end: a kernel's claim is read from the
 registry the compile filled and its roles from the fragment beside it
-(`crates/lichen-language/src/fusion_claim`), the fragment is the one the **dispatcher**
+(`crates/lichen-compute/src/fusion_claim`), the fragment is the one the **dispatcher**
 compiled, and a marked subexpression is bridged to `lichen_fusion::Expr` over
 `Variable::DATUM`, `Variable::PRODUCER` and `Variable::CONSUMER_STATE` by
 `crates/lichen-fusion-bridge` (`cargo run -p lichen-language --example
@@ -367,7 +367,7 @@ reduction_interface` prints each step and each refusal).
 A schema is computed per **fusible region** of the recorded graph: a maximal
 connected run of kernel nodes whose registry entries carry claims. A node with no
 claim is a boundary. It is plain data, content-hashed, storable in the artifact
-store. The types are `crates/lichen-language/src/fusion_claim/schema.rs`, and
+store. The types are `crates/lichen-compute/src/fusion_claim/schema.rs`, and
 `derive_regions` is the entry point:
 
 ```rust
@@ -517,7 +517,7 @@ A pack is an ordinary artifact installed on the runner's machine (via the packag
 manager into Lichen Home, beside the toolchain), and it binds by schema, not
 by name and not by the logic author's say-so. **What has landed is the binding
 and one field of it** — a **placement pack** matched to a node's schema, whose
-plan steers the tiling (`crates/lichen-language/src/placement_pack.rs`, at
+plan steers the tiling (`crates/lichen-compute/src/placement_pack.rs`, at
 `e302ade`); nothing installs one yet, so a host hands its packs in as read data,
 and the installation path is still a `missing` row below. The rest of the block
 is the interface the other fields are owed in:
@@ -551,7 +551,7 @@ already name it), so a pack never has a composed node's claim to match against.
 
 **And the runner is real now** (`288612e1`): `--pack <path>`, repeatable and **global** in the compiler's
 own arguments (`crates/lichen-compiler/src/cli.rs`), so one option serves the bare `lichen <file>` form
-and `run`/`build` alike; `lichen_compiler::packs::load_packs` reads each path and hands the text to
+and `run`/`build` alike; `lichen_compute::packs::load_packs` reads each path and hands the text to
 `read_placement_pack`, all-or-nothing, and a bad pack prints the reader's own sentence, prefixed with
 the path, on stderr with a non-zero exit — **before anything runs**. A **pack can fire and the user
 never see it**, though: the stage lines live in `module.extension_diagnostics`, which `render_build`
@@ -564,7 +564,7 @@ dispatched *during* compilation, the consult happens inside the compile and `eva
 afterwards finds the node already decided, so a pass installed in between is **never consulted at all**
 (marker pass: zero lines installed after the compile, consulted when installed before it). The packs are
 therefore installed **before dispatch** (`main_with_native_packages`), through
-`floor::install_floor_for_run(&packs)` (`crates/lichen-language/src/floor.rs`) on an **empty** module.
+`lichen_compute::floor::install_floor_for_run(&packs)` (`crates/lichen-compute/src/floor.rs`) on an **empty** module.
 That is not a workaround: a module's own join names only kernels it has already evaluated, so a
 not-yet-compiled module has none, and both stages answer from the **process-global kernel registry** the
 compile is about to fill (the deferred branch in `automatic_tiling.rs` and `region_merge.rs`) — measured:
@@ -748,7 +748,7 @@ straight block splice earns, so the entry-block inlining is evidenced only by th
 two of the refusals are the function's own gates rather than decisions; and the compaction path that
 would drop an unread `SliceWriteCall`'s version is unreached, because two slice lists are refused.
 
-**And the composition got its caller** (`98761ae4`): `crates/lichen-language/src/region_merge.rs` is a
+**And the composition got its caller** (`98761ae4`): `crates/lichen-compute/src/region_merge.rs` is a
 graph pass that **derives the regions** (`derive_regions`, its first production caller), checks what it
 may merge, composes, and **rebuilds the graph** — the region becomes one node at the region's last
 position, the absorbed node is gone, later values are renumbered and `returns()` repointed. Measured on
@@ -1218,13 +1218,13 @@ record (today)  →  collect interface instances, cut fusible regions  →  per 
 (`crates/lichen-compute/src/compute/graph_pass.rs`), consulted **once per run, immediately before the
 dispatcher**, on the graph that will run, with its lines going to the run report's own channel so a
 refusal is visible rather than swallowed. `lichen-compute` names no fusion crate: the host that reads
-a claim installs the pass (`crates/lichen-language/src/automatic_tiling.rs`), which is the direction
+a claim installs the pass (`crates/lichen-compute/src/automatic_tiling.rs`), which is the direction
 the bridge's manifest already stated. The seam's own properties:
 
 - **One pass, so several transforms need a chain.** The seam stores a **single** pass and every
   installer replaces it, so a host that installs the merge pass gets no tiling and one that installs the
   tiling pass gets no merge — while a pack may carry **both** a `plan` and a `fuse`, and could therefore
-  only half apply, silently. The **floor** (`crates/lichen-language/src/floor.rs`,
+  only half apply, silently. The **floor** (`crates/lichen-compute/src/floor.rs`,
   `install_floor`/`install_floor_with_packs`, and the wrap-able `floor_pass_with_packs`) is the chain
   that honours both: **[region merge, then tiling]** in one `set_graph_pass`, merge first because it
   leaves fewer nodes for the tiling pass to look at, both stages' lines in the one report in stage order.
@@ -1311,18 +1311,18 @@ about shrinks exactly where fusion fires.
 | dynamic loop in a kernel body | **in** ([loop-conversion](loop-conversion.md)) | the fused reduction's inner loop |
 | fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of, and where an in-body mark is published (`KernelFragment::marks`) |
 | symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; `crates/lichen-fusion-bridge` carries a *marked subexpression* of a `KernelFragment` to it, for the arithmetic subset and the three slots a projection reads |
-| **region schema derivation** | **in** (`crates/lichen-language/src/fusion_claim/schema.rs`) | §4's per-region `RegionSchema`: the instances and their bridged projections, the between code, the boundary ports and the `sha256` content hash, with a refusal naming every way a region fails to assemble. The input is the recorded graph **plus** the registry instances, joined on the fragment, because a graph node holds no kernel id. `crates/lichen-language/examples/fusion_schema.rs` derives the reference sum/max chain and §7's max → `exp(d − r)` → sum chain, prints both canonical forms and hashes, shows a re-spelling keeping the hash and a changed `g` moving it, and hands the schema's own projections to `derive` |
+| **region schema derivation** | **in** (`crates/lichen-compute/src/fusion_claim/schema.rs`) | §4's per-region `RegionSchema`: the instances and their bridged projections, the between code, the boundary ports and the `sha256` content hash, with a refusal naming every way a region fails to assemble. The input is the recorded graph **plus** the registry instances, joined on the fragment, because a graph node holds no kernel id. `crates/lichen-compute/examples/fusion_schema.rs` derives the reference sum/max chain and §7's max → `exp(d − r)` → sum chain, prints both canonical forms and hashes, shows a re-spelling keeping the hash and a changed `g` moving it, and hands the schema's own projections to `derive` |
 | reading a marked transcendental back | **in** (`lichen_kernel_ir::inlined_exp_operand`, `crates/lichen-fusion-bridge`) | `compile_fragment` expands `exp` into the IR's primitive sequence **before** the fragment is registered, so a mark on one anchors the expanded polynomial and the walk meets its `Select`: the definition's other half reads that sequence back, so §7's `g = exp(d − r)` bridges. The expansion still rewrites the marked value in place, which is the one body mark lowering does not preserve |
-| a **numeric** validation of the engine over real data | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance (producer `sum`, `g = d - r`, consumer `max`) derives, and the emitted rolling update agrees with the two-pass form over fixed seeds and lengths; the per-element identity is checked numerically beside it |
+| a **numeric** validation of the engine over real data | **in** (`crates/lichen-compute/examples/fusion_numbers.rs`) | the reference instance (producer `sum`, `g = d - r`, consumer `max`) derives, and the emitted rolling update agrees with the two-pass form over fixed seeds and lengths; the per-element identity is checked numerically beside it |
 | buffer ingress for the fused chain (roadmap axis A) | **in** (`compute.buffer`) | a program array as a kernel input, so a chain has data the device did not itself compute |
-| a **kernel** column for the numeric comparison | **in** (`crates/lichen-language/examples/fusion_numbers.rs`) | the reference instance's consumer is a maximum, and the language can write one now: `max a b` lowers to `KernelBin::Max` in both backends and the fusion bridge maps it to `BinaryOp::Max`. The example writes the producer (a sum) and the consumer (a `max` over `d - r`) as `compute.parallel` kernels over `compute.buffer` inputs, runs them unfused on the cpu backend, and prints all three columns — the two host forms and the kernels — with a class-appropriate tolerance. Two emission defects had to fall first: a value's class was filed under the wrong node, and a buffer's element class came from the body rather than from the parameter ([operators](operators.md) §11, [compute-buffer-wrapper](compute-buffer-wrapper.md)) |
-| the identity's mark on a `@loop` seed | **in** (`crates/lichen-language/examples/reduction_interface.rs`) | §3's open measurement, **resolved**: a fold that seeds from a *literal* count is decided by the definition pass before the emitter reaches the loop, so the seed's mark is never lowered; a fold that seeds from the buffer's **runtime** length (`fold (k.n, …)`, with the input arriving through `compute.buffer`) stays undecided through that pass, the emitter reaches the loop, and the marked seed is lowered — `reduction_interface` prints `identity` published for both kernels and `combine + identity 0` for the producer's declared reduction |
+| a **kernel** column for the numeric comparison | **in** (`crates/lichen-compute/examples/fusion_numbers.rs`) | the reference instance's consumer is a maximum, and the language can write one now: `max a b` lowers to `KernelBin::Max` in both backends and the fusion bridge maps it to `BinaryOp::Max`. The example writes the producer (a sum) and the consumer (a `max` over `d - r`) as `compute.parallel` kernels over `compute.buffer` inputs, runs them unfused on the cpu backend, and prints all three columns — the two host forms and the kernels — with a class-appropriate tolerance. Two emission defects had to fall first: a value's class was filed under the wrong node, and a buffer's element class came from the body rather than from the parameter ([operators](operators.md) §11, [compute-buffer-wrapper](compute-buffer-wrapper.md)) |
+| the identity's mark on a `@loop` seed | **in** (`crates/lichen-compute/examples/reduction_interface.rs`) | §3's open measurement, **resolved**: a fold that seeds from a *literal* count is decided by the definition pass before the emitter reaches the loop, so the seed's mark is never lowered; a fold that seeds from the buffer's **runtime** length (`fold (k.n, …)`, with the input arriving through `compute.buffer`) stays undecided through that pass, the emitter reaches the loop, and the marked seed is lowered — `reduction_interface` prints `identity` published for both kernels and `combine + identity 0` for the producer's declared reduction |
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
-| the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
+| the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-compute/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-compute/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
 | the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs, a pack can ask for one, and the general shapes are what remain** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: the merged node's **registration** (it is unregistered, and both passes now *say* so — the merge's own line, and `NotClaimed` from the tiling stage — but whether it should carry the consumer's claim stays declined for §5's reasons), and the shapes that genuinely need **staging** (`SliceReadCall` in a producer's cone, which is the plan's business). **A consumer that reads only the absorbed buffer is no longer one of them**: the union (`b6e0c126`) made that shape merge, and `PortsDoNotCorrespond` now guards a genuine ordinal disagreement instead. **And the merge pass's own silence is closed at `f2192d7b`**: `region_positions` still skips a node no row of the join matches, and such a node still forms no region — but it is no longer unmentioned, because the pass now refuses it **by name** (`NotClaimed`) in the pass's own voice, which names the check (`node N: refused: NotClaimed: …`). That naming is what tells the two passes' node lines apart, since the tiling pass states the sentence alone, and it is the voice the merge pass's **region** refusals already spoke (`region N (nodes …): refused: <check>: …`, pinned by five test files). **And a fan-out region merges under a pack's `fuse`** (`52e6a0a8`): the derivation keeps the one-consumer rule and drops the one-producer one, so a producer feeding two consumers derives a schema a pack can name, while `Licence::Floor` additionally requires `off_chain_node().is_none()` — the floor still will not attempt it, because a pack changes which regions are attempted and never what must hold. `compose_fan_out` builds **one** cone and copies it at each consumer's read; composing twice would hand the second consumer the first consumer's value, since the first call removed the producer's store and no port names the producer's edge. Still refused: a fan-out with no pack, a fan-in, a three-node *chain* (`RegionIsNotAPair`), and a non-last consumer whose entry block branches |
@@ -1403,10 +1403,10 @@ Still open, cheapest to settle before the interface syntax is written:
     mini-language; only the first two keep `RoleNotMarked` and the undeclared-name refusal
     reachable.
   - **Two families of existing marks are what any of the three has to answer for.** The
-    `accumulator` marks (`crates/lichen-language/examples/reduction_interface.rs`,
-    `crates/lichen-language/examples/fusion_numbers.rs`) are not roles of `Reduction` and are
+    `accumulator` marks (`crates/lichen-compute/examples/reduction_interface.rs`,
+    `crates/lichen-compute/examples/fusion_numbers.rs`) are not roles of `Reduction` and are
     read today as roles no claim requires; and `element` in all four chains of
-    `crates/lichen-language/examples/fusion_schema.rs` sits *inside* the `combine` mark, because
+    `crates/lichen-compute/examples/fusion_schema.rs` sits *inside* the `combine` mark, because
     a consumer's per-element function is used inside its own combine, so a path reads
     `Reduction/combine/element` where the interface declares `element`. Resolving a role by the
     mark's own segment rather than by its whole path is the reading that keeps that example as

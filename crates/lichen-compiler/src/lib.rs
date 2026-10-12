@@ -2,4 +2,3 @@
 //! need not link `clap`.
 
 pub mod cli;
-pub mod packs;

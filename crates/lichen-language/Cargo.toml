@@ -3,18 +3,10 @@ name = "lichen-language"
 version.workspace = true
 edition.workspace = true
 
+# This crate composes no native plugin: a vocabulary is named by the host that
+# drives it, and the compute plugin names its own in `lichen-compute/src/language.rs`.
 [dependencies]
 stacksafe.workspace = true
-lichen-compute.workspace = true
-# The interface claim's carrier: reading a claim needs the fragment it rides on and the
-# kernel registry that holds it. See docs/notes/graph-fusion.md §3.
-lichen-kernel-ir.workspace = true
-# The interface graph a schema is derived over. See docs/notes/graph-fusion.md §4.
-lichen-graph-ir.workspace = true
-# The symbolic core and its bridge: a schema's projections are `lichen_fusion::Expr`, so
-# deriving one is library work and not an example's. See docs/notes/graph-fusion.md §4.
-lichen-fusion.workspace = true
-lichen-fusion-bridge.workspace = true
 lichen-doc.workspace = true
 lichen-highlevel.workspace = true
 lichen-language-lex.workspace = true
@@ -25,25 +17,9 @@ lichen-preprocess.workspace = true
 lichen-registry.workspace = true
 lichen-render.workspace = true
 lichen-utils.workspace = true
-# A placement pack is text a human writes, so the schema derives `Facet` and the
-# text is JSON rather than a hand-written codec. See docs/notes/graph-fusion.md §5.
-facet.workspace = true
-# The pack's reader, which refuses a hand-edited text with the field and the byte
-# offset it failed at rather than a message saying only that it failed.
-facet-json.workspace = true
 
 [dev-dependencies]
-# The seam test: a real lichen program dispatching to a real device.  This is a
-# **dev**-dependency on purpose and not a cycle — `lichen-compute` does not depend
-# on `lichen-compute-gpu` and the GPU crate does not depend on `lichen-compute`,
-# so the two can be brought together in a test without this crate's library half
-# ever linking a GPU loader.
-lichen-compute-gpu.workspace = true
 # Only `tests/persist.rs` uses this: the compiler-slot contract test compares
 # the slot this crate reads with the one the package manager installs into.
 lichen-package.workspace = true
 lichen-std-native.workspace = true
-# `tests/readme.rs` and `tests/examples.rs` drive the README tooling, which
-# moved to its own crate (`P2-6`); a dev-dependency keeps them here without
-# putting the generator back in the library.
-lichen-tools.workspace = true

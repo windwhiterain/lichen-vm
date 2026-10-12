@@ -50,7 +50,7 @@ type TaggedProgram = ProgramImpl<HighProgramValue, HighProgramOperator, Tag, Hig
 
 /// `5 # tag` — an annotated int whose schema tail carries `Tag`.
 fn annotated_int() -> lichen_testkit::Program<Tag, HighProgramLiteral> {
-    let mut w: Writer<Tag> = Writer::new();
+    let w: Writer<Tag> = Writer::new();
     let five = w.int("five", 5);
     let tag_value = w.int("tag_value", 4);
     let annotation = w.annotate_with("annotation", five, None, &[tag_value]);
@@ -104,7 +104,7 @@ fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
 fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
     // One build, one missing extension, one diagnostic: the apply's slot
     // check is skipped rather than reported again.
-    let mut w: Writer<Tag> = Writer::new();
+    let w: Writer<Tag> = Writer::new();
     let f = w.binding("f");
     let x = w.param("x");
     w.ir_mut().set_schema(x, Schema { tail: vec![Tag] });
@@ -157,7 +157,7 @@ fn an_attribute_aware_build_lowers_the_annotation() {
 
 #[test]
 fn a_schema_without_an_attribute_is_unaffected_by_the_missing_extension() {
-    let mut w: Writer<NoAttr> = Writer::new();
+    let w: Writer<NoAttr> = Writer::new();
     let five = w.int("five", 5);
     let build = Checker::<ProgramImpl>::build(w.finish(five).ir);
     assert!(build.ok, "an unannotated program must check");

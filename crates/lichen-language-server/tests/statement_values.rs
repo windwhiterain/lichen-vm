@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use lichen_language::program::LangProgram;
+use lichen_compute::language::{LangProgram, native_packages};
 use lichen_language_server::Doc;
 use lichen_language_server::lsp::Position;
 
@@ -88,7 +88,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // (`docs/notes/compute-kernel-struct.md`).
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
-    let doc = ShipsDoc::new_with_base(source, Some(&dir));
+    let doc = ShipsDoc::new_with_cache(source, Some(&dir), None, &native_packages());
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
@@ -158,7 +158,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     // render named `?a`/`?b`, not an opaque `? -> ?`.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
-    let doc = ShipsDoc::new_with_base(source, Some(&dir));
+    let doc = ShipsDoc::new_with_cache(source, Some(&dir), None, &native_packages());
 
     // `jit` at line 5 (0-based): "k_double = compute.jit (y : Int => y + y)" —
     // char 19.

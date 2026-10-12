@@ -85,12 +85,12 @@ authority, and this table only names the state.
 | [README example sync](notes/readme-sync.md) | `lichen-tools`, `lichen-language` (`tests/readme.rs`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current |
 | [The plugin taxonomy](notes/plugin-taxonomy.md) | `lichen-highlevel` (`plugin`), `lichen-compute`, `lichen-std-native`, `lichen-perspective`, `lichen-language` | current |
-| [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-language`, `lichen-highlevel` (`native`) | current |
-| [Kernels as `.native`/`.I`/`.O` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-language` (`program`) | current — includes the SSA body model |
-| [A buffer is a struct wrapper, and a parallel result is the parameter's `.out`](notes/compute-buffer-wrapper.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-language` (`tests`) | current — the host read's result class is open |
+| [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-highlevel` (`native`) | current |
+| [Kernels as `.native`/`.I`/`.O` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`language`) | current — includes the SSA body model |
+| [A buffer is a struct wrapper, and a parallel result is the parameter's `.out`](notes/compute-buffer-wrapper.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`tests`) | current — the host read's result class is open |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
 | [The kernel parameter's class](notes/kernel-parameter-class.md) | `lichen-highlevel`, `lichen-lowlevel`, `lichen-compute`, `lichen-render` | current — both original defects fixed; residue open |
-| [Per-value class semantics](notes/kernel-class-crossing-fixes.md) | `lichen-compute`, `lichen-compute-gpu`, `lichen-language` (`tests`) | current |
+| [Per-value class semantics](notes/kernel-class-crossing-fixes.md) | `lichen-compute`, `lichen-compute-gpu`, `lichen-compute` (`tests`) | current |
 | [Runtime scalars in a parallel kernel](notes/compute-runtime-scalars.md) | `lichen-compute`, `lichen-compute-gpu` | current — the device path is refused until built |
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current — a whole graph in one submission, per backend |
 | [Taking a kernel to a server](notes/taking-a-kernel-to-a-server.md) | `lichen-compute` (the fused artifact), `lichen-registry` (the frozen one) | current — the deployment unit is partly unbuilt, and the two artifacts are told apart |

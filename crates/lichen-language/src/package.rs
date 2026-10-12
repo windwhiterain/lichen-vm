@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use lichen_compute::WRAPPER_SOURCE;
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{HighPackageMeta, PackageSource, TypeOperator, ValueType};
@@ -21,9 +20,6 @@ use crate::program::GcdOp;
 
 mod vendored;
 use vendored::{vendored_alias, vendored_entry_file};
-
-/// The virtual path of the `lichen-compute` native package.
-pub(crate) const COMPUTE_PATH: &str = "compute.lichen";
 
 /// The virtual path of the built-in `core` module — the language's prelude.
 pub(crate) const CORE_PATH: &str = "core.lichen";
@@ -147,20 +143,47 @@ fn core_direct(
         .collect()
 }
 
-/// The `lichen-compute` plugin's private native registry.
+/// One native plugin package for a host's store: `(virtual_path,
+/// embedded_source, private_native_ops)`.
 ///
 /// # Invariant
 ///
-/// Attached only to the compilation of `compute.lichen`, so `$jit`/`$launch`
-/// resolve privately and a second plugin registering its own `$jit` never
-/// collides.
-fn compute_native_ops<P>() -> NativeOps<P>
-where
-    P: LangProgramShape,
-    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
-{
-    lichen_compute::compute_native_ops!(P)
+/// A host hands its store the whole set once, before any program is compiled:
+/// the private ops resolve only for the wrapper they compile, so a store that
+/// lacks them reports an unresolved native operator rather than silently
+/// evaluating without it.
+pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
+
+/// What a host installs before a run compiles, and what that run reports.
+///
+/// # Invariant
+///
+/// Both halves are the host's, because neither belongs to the language: it
+/// composes no pass and names no diagnostic category. [`Wiring::default`]
+/// refuses a named pack rather than ignoring it, so a host with no plugin set
+/// says so instead of running without what was asked for.
+pub struct Wiring<'a> {
+    /// Installs the packs this invocation named, or refuses the run.
+    pub install: &'a dyn Fn(&[PathBuf]) -> Result<(), String>,
+    /// The diagnostic categories a run reports as stage lines.
+    pub pass_categories: &'a [&'static str],
+}
+
+impl Default for Wiring<'_> {
+    /// A host with no plugin set: a named pack is a refusal, not a no-op.
+    fn default() -> Self {
+        fn refuse(paths: &[PathBuf]) -> Result<(), String> {
+            if paths.is_empty() {
+                Ok(())
+            } else {
+                Err("this compiler composes no placement packs".to_string())
+            }
+        }
+        Wiring {
+            install: &refuse,
+            pass_categories: &[],
+        }
+    }
 }
 
 /// A loaded package: the path, its registry key, and the export's static ref.
@@ -317,12 +340,12 @@ impl<P: ProgramCodecOf> PackageStore<P> {
     }
 }
 
-// The compute-bounds impl: load, compile, freeze and serialize.
+// The load, compile, freeze and serialize impl.
 impl<P> PackageStore<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     /// Load (or cache-fetch) the package at `path`, resolving its imports first.
     ///
@@ -336,13 +359,6 @@ where
             && let Some(handle) = self.native.get(Path::new(file_name))
         {
             return Ok(handle.clone());
-        }
-        // The `lichen-compute` native package self-registers on first import.
-        if path.file_name().is_some_and(|n| n == "compute.lichen") {
-            let handle = self
-                .register_compute()
-                .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
-            return Ok(handle);
         }
         // The built-in `core` module, self-registering the same way.
         if path.file_name().is_some_and(|n| n == CORE_PATH) {
@@ -390,93 +406,7 @@ where
         Ok(handle)
     }
 
-    /// Register the `lichen-compute` native package from its embedded wrapper.
-    ///
-    /// # Invariant
-    ///
-    /// It is compiled against the plugin's private native registry and always
-    /// fresh in memory: its `Kernel` values are runtime-only, so the artifact
-    /// format cannot serialize it.
-    fn register_compute(&mut self) -> Result<PackageHandle, String> {
-        // Reuse an already-registered module, so one registry holds it once.
-        if let Some(handle) = self.registered_builtin(COMPUTE_PATH) {
-            self.native
-                .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
-            return Ok(handle);
-        }
-        let source = WRAPPER_SOURCE;
-        let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
-        if !diags.is_empty() {
-            return Err(diags
-                .drain(..)
-                .map(|d| d.message)
-                .collect::<Vec<_>>()
-                .join("\n"));
-        }
-        let line_starts = crate::lex::line_starts(preprocessed.code);
-        let report = crate::compile_with_imports_at::<P>(
-            preprocessed.code,
-            &preprocessed.imports,
-            Some(self.registry()),
-            preprocessed.code_base,
-            &line_starts,
-            compute_native_ops::<P>(),
-        );
-        if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
-            return Err(report
-                .diagnostics
-                .into_iter()
-                .map(|d| d.message)
-                .collect::<Vec<_>>()
-                .join("\n"));
-        }
-        let build = report.build.unwrap();
-
-        // The nodes' positions, read before the module moves into the freeze.
-        let located = located_nodes(&build, report.span_index.as_ref());
-        // Fully evaluate the exported value and type before freezing.
-        let mut module = build.module;
-        module.evaluate_node_deep(build.root_val, None);
-        module.evaluate_node_deep(build.root_ty, None);
-
-        // The embedded compute package has no imports, so its identity is its
-        // own source hash alone.
-        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
-        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(COMPUTE_PATH));
-        let freeze = self
-            .registry
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .freeze_mapped(&module, key, hash);
-        let export = StaticNodeId {
-            module: freeze.key,
-            index: freeze.node_map[&build.root_term],
-        };
-        let package_source = self.builtin_source(COMPUTE_PATH, source, &located, &freeze.node_map);
-        self.registry
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .set_package_meta(
-                freeze.key,
-                HighPackageMeta {
-                    export: Some(export),
-                    source: Some(package_source),
-                    ..Default::default()
-                },
-            );
-        let handle = PackageHandle {
-            path: PathBuf::from(COMPUTE_PATH),
-            key: freeze.key,
-            export,
-            direct: Vec::new(),
-        };
-        self.native
-            .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
-        self.compiled += 1;
-        Ok(handle)
-    }
-
-    /// The path a built-in module's source is exposed at.
+    /// The path an embedded source is exposed at.
     fn builtin_path(&self, name: &str) -> PathBuf {
         match &self.cache_dir {
             Some(root) => root.join("builtin").join(name),
@@ -980,13 +910,19 @@ where
     ///
     /// The embedded source is a complete package (no block, no imports), so it
     /// compiles directly against the registry rather than through the
-    /// compute-bounded preprocessor.
+    /// preprocessor, and it is compiled fresh in memory: a plugin's values are
+    /// runtime-only, so the artifact format cannot serialize it. Its source is
+    /// recorded either way, so a diagnostic inside it is reported against it.
     pub fn register_native(
         &mut self,
         virtual_path: &str,
         source: &str,
         native_ops: NativeOps<P>,
     ) -> Result<PackageHandle, String> {
+        // Reuse an already-registered module, so one registry holds it once.
+        if let Some(handle) = self.registered_builtin(virtual_path) {
+            return Ok(handle);
+        }
         let line_starts = crate::lex::line_starts(source);
         let report = crate::compile_with_imports_at::<P>(
             source,
@@ -1006,6 +942,8 @@ where
         }
         let build = report.build.unwrap();
 
+        // The nodes' positions, read before the module moves into the freeze.
+        let located = located_nodes(&build, report.span_index.as_ref());
         // Fully evaluate the exported value and type before freezing.
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
@@ -1023,6 +961,7 @@ where
             module: freeze.key,
             index: freeze.node_map[&build.root_term],
         };
+        let package_source = self.builtin_source(virtual_path, source, &located, &freeze.node_map);
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1030,6 +969,7 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    source: Some(package_source),
                     ..Default::default()
                 },
             );
@@ -1053,8 +993,8 @@ where
 impl<P> ImportResolver<StaticNodeId> for PackageStore<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     fn resolve_import(
         &mut self,

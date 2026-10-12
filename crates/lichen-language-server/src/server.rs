@@ -14,18 +14,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_language::LangProgramShape;
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
-use lichen_language::package::PackageStore;
+use lichen_language::package::{NativePackage, PackageStore};
 use lichen_language::persist::{ArtifactCodec, DeviceRegistry, Hash, sha256};
 use lichen_language::preprocess;
 use lichen_language::program::GcdOp;
 use lichen_language::session::{BufferSession, CellEvents};
 use lichen_lowlevel::Registry;
-use lichen_utils::extend::AsEnum;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -138,17 +136,17 @@ impl tower_lsp::lsp_types::notification::Notification for AnalysisNotification {
 impl Worker {
     /// Spawn the worker thread; everything it needs is built *on* it, so the
     /// closure captures only `Send` values.
-    fn spawn<P>(cache_root: PathBuf) -> Worker
+    fn spawn<P>(cache_root: PathBuf, native: Vec<NativePackage<P>>) -> Worker
     where
         P: LangProgramShape,
-        P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-        P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+        P::Value: ValueType + 'static,
+        P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
     {
         let (jobs, mut queued) = tokio::sync::mpsc::unbounded_channel();
         std::thread::Builder::new()
             .name("lichen-lsp-compile".to_string())
             .spawn(move || {
-                let mut state = WorkerState::<P>::new(cache_root);
+                let mut state = WorkerState::<P>::new(cache_root, native);
                 while let Some(job) = queued.blocking_recv() {
                     state.run(job);
                 }
@@ -179,6 +177,12 @@ where
     P::Value: ValueType,
 {
     cache_root: PathBuf,
+    /// The native plugin packages every store this worker opens carries.
+    ///
+    /// # Invariant
+    /// The set is the host's, fixed at spawn: a document's import resolves
+    /// against the same vocabulary whatever order the documents arrive in.
+    native: Vec<NativePackage<P>>,
     /// The device handle, taken for one run and handed back.
     ///
     /// # Invariant
@@ -209,14 +213,15 @@ where
 impl<P> WorkerState<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    fn new(cache_root: PathBuf) -> Self {
+    fn new(cache_root: PathBuf, native: Vec<NativePackage<P>>) -> Self {
         // A codec that cannot persist has no device; in-memory is the intended mode.
         let device = P::Codec::PERSISTENT.then(|| DeviceRegistry::open(cache_root.clone()));
         WorkerState {
             cache_root,
+            native,
             device,
             registry: Arc::new(RwLock::new(Registry::new())),
             sessions: HashMap::new(),
@@ -334,7 +339,7 @@ where
     /// The registry is the shared one: the imports a store resolves must be
     /// registered where the sessions' cells are filed.
     fn store(&mut self) -> PackageStore<P> {
-        let mut store = open_store::<P>(self.device.take(), self.cache_root.clone());
+        let mut store = open_store::<P>(self.device.take(), self.cache_root.clone(), &self.native);
         store.registry = Arc::clone(&self.registry);
         store
     }
@@ -363,8 +368,8 @@ struct CachedIndex {
 impl<P> Inner<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     /// The document's current text with its hash and generation.
     fn current(&self, uri: &Url) -> Option<(String, Hash, u64)> {
@@ -534,10 +539,10 @@ where
 impl<P> Backend<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    fn new(client: Client, cache_root: PathBuf) -> Self {
+    fn new(client: Client, cache_root: PathBuf, native: Vec<NativePackage<P>>) -> Self {
         // This vocabulary's `compilers/<plugin-set-key>` slot, opened on
         // the compile worker: `docs/notes/liche-lsp-home.md` §3.
         let home = LichenHome::at(cache_root);
@@ -548,7 +553,7 @@ where
                 documents: Mutex::new(HashMap::new()),
                 indexes: Mutex::new(HashMap::new()),
                 published_files: Mutex::new(HashMap::new()),
-                worker: Worker::spawn::<P>(home.cache_root().to_path_buf()),
+                worker: Worker::spawn::<P>(home.cache_root().to_path_buf(), native),
                 generations: AtomicU64::new(0),
                 _program: std::marker::PhantomData,
             }),
@@ -584,19 +589,32 @@ where
 /// # Invariant
 /// In-memory only when intended — the codec cannot persist — the same rule
 /// [`Doc::new_with_cache`] applies.
-fn open_store<P>(device: Option<DeviceRegistry>, cache_root: PathBuf) -> PackageStore<P>
+fn open_store<P>(
+    device: Option<DeviceRegistry>,
+    cache_root: PathBuf,
+    native: &[NativePackage<P>],
+) -> PackageStore<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    if !P::Codec::PERSISTENT {
-        return PackageStore::new();
+    let mut store = if !P::Codec::PERSISTENT {
+        PackageStore::new()
+    } else {
+        match device {
+            Some(device) => PackageStore::with_device(cache_root, device),
+            None => PackageStore::with_cache_dir(cache_root),
+        }
+    };
+    // A package that will not compile is a refusal the editor sees, not a
+    // silent gap in the vocabulary.
+    for &(virtual_path, source, native_ops) in native {
+        store
+            .register_native(virtual_path, source, native_ops)
+            .expect("a host's native plugin package compiles against its own ops");
     }
-    match device {
-        Some(device) => PackageStore::with_device(cache_root, device),
-        None => PackageStore::with_cache_dir(cache_root),
-    }
+    store
 }
 
 /// Whether an analysis may be cached.
@@ -644,8 +662,8 @@ fn dependencies_unchanged(dependencies: &[(PathBuf, Hash)]) -> bool {
 impl<P> LanguageServer for Backend<P>
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
@@ -795,18 +813,18 @@ where
     }
 }
 
-/// Run the stdio LSP server for the composed program `P`, caching the settled
-/// imported packages under `cache_root`.
+/// Run the stdio LSP server for the composed program `P`, caching
+/// under `cache_root` and resolving `native` per store.
 ///
 /// # Invariant
 /// This builds the runtime itself so the generated crate's `main` needs no
 /// `#[tokio::main]`; requests are serialized via `concurrency_level(1)`, so an
 /// analysis is either cached or run once per document text.
-pub fn main<P>(cache_root: &Path)
+pub fn main<P>(cache_root: &Path, native: Vec<NativePackage<P>>)
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -817,8 +835,10 @@ where
         let stdout = tokio::io::stdout();
 
         let cache_root = cache_root.to_path_buf();
-        let (service, socket) =
-            LspService::new(move |client| Backend::<P>::new(client, cache_root.clone()));
+        let native = Arc::new(native);
+        let (service, socket) = LspService::new(move |client| {
+            Backend::<P>::new(client, cache_root.clone(), (*native).clone())
+        });
         Server::new(stdin, stdout, socket)
             .concurrency_level(1)
             .serve(service)

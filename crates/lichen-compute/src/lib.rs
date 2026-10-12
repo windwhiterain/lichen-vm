@@ -1,6 +1,14 @@
-//! The `lichen-compute` native plugin. See docs/notes/lichen-compute.md.
+//! The `lichen-compute` native plugin and the sub-language it composes.
+//! See docs/notes/plugin-taxonomy.md §5.
 
+pub mod automatic_tiling;
 pub mod compute;
+pub mod floor;
+pub mod fusion_claim;
+pub mod language;
+pub mod packs;
+pub mod placement_pack;
+pub mod region_merge;
 
 #[cfg(test)]
 mod waffle_spike;
@@ -26,13 +34,13 @@ pub use compute::{
 /// verbatim so the composition continues past this plugin.
 #[macro_export]
 macro_rules! lichen_compute_leaves {
-    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
+    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ][ $($rn:tt)* ] ; [ $($rest:tt)* ] ;) => {
         $next! {
             @absorb (
                 operators: [ lichen_compute::ComputeOperator as ComputeOperator; ];
                 values: [ lichen_compute::ComputeValue as ComputeValue; ];
                 attrs: [ ];
-                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ] ; [ $($rest)* ] ;
+                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ][ $($rn)* ] ; [ $($rest)* ] ;
             )
         }
     };

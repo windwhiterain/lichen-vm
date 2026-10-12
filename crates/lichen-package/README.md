@@ -76,8 +76,9 @@ extends the compiler's value/operator vocabulary at compile time.  It is a
 `depend` that is always a plugin (`plugin = true`), so it is fetched into the
 source cache the same way.  A `plug` plugin has **no virtual import path** (it
 is a Rust crate, not a `.lichen` module); the builtin `lichen-compute` plugin
-is the exception — it keeps its `compute.lichen` virtual path served by the
-shipping compiler.
+is the exception — it is the shipping compiler's own sub-language
+(`crates/lichen-compute/src/language.rs`), which keeps its `compute.lichen`
+virtual path served by the compiler it composes.
 
 `lichen fetch` clones each dependency into a **source cache under the lichen
 home** — `$LICHEN_HOME` or `~/.lichen` (the same root as the compiler's

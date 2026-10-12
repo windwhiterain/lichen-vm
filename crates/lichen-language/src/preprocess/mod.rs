@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_lowlevel::StaticNodeId;
 
@@ -37,15 +36,14 @@ pub fn preprocess<'a, P>(
 ) -> (Preprocessed<'a>, Vec<Diag<P>>)
 where
     P: LangProgramShape,
-    P::Value: ValueType + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let (mut pre, diags) = lichen_preprocess::preprocess::<StaticNodeId, _>(raw, base, store);
     let mut out: Vec<Diag<P>> = diags.into_iter().map(Diag::from_preprocess).collect();
     // The prelude goes in first, so a program's own name wins: it is shadowable.
 
-    // The built-in modules are exempt: `core` cannot be its own prelude, and
-    // `compute.lichen` must not depend on one.
+    // The built-in module is exempt: `core` cannot be its own prelude.
     if !is_builtin_source(base) {
         match store.prelude_import() {
             Ok(import) => pre.imports.insert(0, import),
@@ -57,9 +55,8 @@ where
 
 /// Whether `base` names a module the language compiles itself.
 fn is_builtin_source(base: Option<&Path>) -> bool {
-    base.and_then(|path| path.file_name()).is_some_and(|name| {
-        name == crate::package::CORE_PATH || name == crate::package::COMPUTE_PATH
-    })
+    base.and_then(|path| path.file_name())
+        .is_some_and(|name| name == crate::package::CORE_PATH)
 }
 
 /// Stage a source's `depend`/`plug` directives onto `store` as vendored aliases.
@@ -71,8 +68,8 @@ fn is_builtin_source(base: Option<&Path>) -> bool {
 pub fn stage_depends<P>(store: &mut PackageStore<P>, source: &str) -> Vec<Diag<P>>
 where
     P: LangProgramShape,
-    P::Value: ValueType + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     lichen_preprocess::stage_depends::<StaticNodeId, _>(store, source)
         .into_iter()

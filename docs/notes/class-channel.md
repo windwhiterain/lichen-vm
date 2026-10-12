@@ -942,11 +942,11 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 §5's own acceptance is the two targets
 [operator-polymorphism](operator-polymorphism.md) §8.8 recorded as red:
 
-- `a_kernel_value_and_type_render_by_name` (`crates/lichen-language/tests/compute.rs:466`)
+- `a_kernel_value_and_type_render_by_name` (`crates/lichen-compute/tests/compute.rs:466`)
   — the open `.sig ?c -> ?c` this test recorded then had to become the decided
   `.I`/`.O` the struct carries now;
 - `an_imported_package_that_jits_at_its_top_level_still_runs`
-  (`crates/lichen-language/tests/runtime_only_package.rs:41`) — the `launch` gate
+  (`crates/lichen-compute/tests/runtime_only_package.rs:41`) — the `launch` gate
   must resolve the domain of an open kernel signature.
 
 **Where the tree stands after §5.1 and §5.1.1** (`--test compute`, 60 cases): 58
@@ -971,7 +971,7 @@ The probes that pin the rest (scratch files, not committed):
   `array{?a, ?b}` on the array API and on every other spelling.
 - **§4's own assertion, measured and corrected**:
   `a_gpu_program_chains_two_kernels_on_a_device`
-  (`crates/lichen-language/tests/compute.rs:1308-1345`) does **not** keep its
+  (`crates/lichen-compute/tests/compute.rs:1308-1345`) does **not** keep its
   `array{Int, ?d}` under the struct spelling — it renders `array{?d, ?e}` with the
   same values, which is the element cell §5.2 states and the same commit path
   measured above.  The earlier

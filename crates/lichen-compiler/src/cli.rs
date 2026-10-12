@@ -7,22 +7,15 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{TypeOperator, ValueType};
-use lichen_utils::extend::AsEnum;
-
 use lichen_language::LangProgramShape;
-use lichen_language::package::PackageStore;
+use lichen_language::package::{PackageStore, Wiring};
 use lichen_language::persist::{self, ArtifactCodec};
 use lichen_language::preprocess::stage_depends;
 use lichen_language::program::GcdOp;
 use lichen_language::run::{PassReport, RunOutput};
 
-use crate::packs;
-
-/// One native plugin package for a compiler's store: `(virtual_path,
-/// embedded_source, private_native_ops)`.
-pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
+pub use lichen_language::package::NativePackage;
 
 /// The compiler CLI surface: a positional program path, or an explicit
 /// `run`/`build` subcommand.
@@ -59,13 +52,10 @@ enum Command {
 pub fn main<P>() -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    main_with_cache_dir::<P>(&persist::shipping_cache_root())
+    main_with_wiring::<P>(&persist::shipping_cache_root(), &[], Wiring::default())
 }
 
 /// [`Self::main`] with an explicit artifact cache root, selecting the plugin
@@ -73,25 +63,38 @@ where
 pub fn main_with_cache_dir<P>(cache_root: &Path) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    main_with_native_packages::<P>(cache_root, &[])
+    main_with_native_packages::<P>(cache_root, &[], Wiring::default())
 }
 
 /// [`Self::main_with_cache_dir`] plus native plugin packages for the store each
 /// program is evaluated against.
-pub fn main_with_native_packages<P>(cache_root: &Path, native: &[NativePackage<P>]) -> ExitCode
+pub fn main_with_native_packages<P>(
+    cache_root: &Path,
+    native: &[NativePackage<P>],
+    wiring: Wiring<'_>,
+) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+{
+    main_with_wiring::<P>(cache_root, native, wiring)
+}
+
+/// The one entry every other reaches: the CLI over a composed program,
+/// its native packages, and the host's pack wiring.
+pub fn main_with_wiring<P>(
+    cache_root: &Path,
+    native: &[NativePackage<P>],
+    wiring: Wiring<'_>,
+) -> ExitCode
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     // clap's `Command::name` wants a `'static` string, so the name is leaked;
     // the short-lived process makes that harmless.
@@ -113,22 +116,17 @@ where
         Err(e) => e.exit(),
     };
     // A pack that is not one stops the run here, before anything is installed or run.
-    let packs = match packs::load_packs(&cli.pack) {
-        Ok(packs) => packs,
-        Err(refusal) => {
-            eprintln!("{refusal}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // The floor goes in before the compile, because that is when a graph is consulted.
-    if !packs.is_empty() {
-        lichen_language::floor::install_floor_for_run(&packs);
+    if !cli.pack.is_empty()
+        && let Err(refusal) = (wiring.install)(&cli.pack)
+    {
+        eprintln!("{refusal}");
+        return ExitCode::FAILURE;
     }
     // The one value every run below reads: this invocation named packs, or it named none.
     let report = if cli.pack.is_empty() {
         PassReport::Silent
     } else {
-        PassReport::Reported
+        PassReport::Reported(wiring.pass_categories)
     };
     match cli.command {
         Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native, report),
@@ -165,11 +163,8 @@ fn run_path<P>(
 ) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     if path.is_dir() {
         run_directory::<P>(cache_root, path, native, report)
@@ -187,11 +182,8 @@ fn staged_store<P>(
 ) -> (PackageStore<P>, Vec<lichen_language::diag::Diag<P>>)
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     // A non-persistent codec never serializes, so the store stays in memory
     // and no artifact is written.
@@ -220,11 +212,8 @@ fn run_file<P>(
 ) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
@@ -260,11 +249,8 @@ fn run_directory<P>(
 ) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
@@ -331,11 +317,8 @@ fn build_file<P>(
 ) -> ExitCode
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let source = std::fs::read_to_string(path).unwrap_or_default();
     let (mut store, diags) = staged_store::<P>(&source, cache_root, native);

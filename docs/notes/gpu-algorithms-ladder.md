@@ -6,7 +6,7 @@
 > is refused *silently*. Nothing here is a proposal; the proposal is written
 > against these facts.
 >
-> The ladder is `crates/lichen-language/examples/algorithms.rs` (run it with
+> The ladder is `crates/lichen-compute/examples/algorithms.rs` (run it with
 > `-- cpu gpu`); the timings are `examples/bench.rs`; the cross-backend defect is
 > `examples/crossbackend.rs`.
 >
@@ -380,7 +380,7 @@ call left to expand. The `// Style 1 … deferred` comment in `emit_node` names
 the *unreduced* case, and reading it as "the feature is missing" is what the
 first version of this note did.
 
-**The probe.** `crates/lichen-language/examples/recursion.rs`, run with no
+**The probe.** `crates/lichen-compute/examples/recursion.rs`, run with no
 arguments. It asks the questions in order — is a same-module call expressible,
 with a decidable and with an index-dependent argument; is recursion expressible;
 is a call expressible in each body shape; what does an un-expanded `CallKernel`

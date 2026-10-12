@@ -5,16 +5,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard};
 
-use lichen_compiler::packs::{PackLoadRefusal, load_packs};
 use lichen_compute::compute::clear_graph_pass;
+use lichen_compute::floor::install_floor_for_run;
+use lichen_compute::language::{LangProgram, LangValue, new_store};
+use lichen_compute::packs::{PackLoadRefusal, load_packs};
+use lichen_compute::placement_pack::{PackRefusal, PlacementPack};
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
 use lichen_highlevel::no_native_ops;
-use lichen_language::floor::install_floor_for_run;
 use lichen_language::lex;
-use lichen_language::package::PackageStore;
-use lichen_language::placement_pack::{PackRefusal, PlacementPack};
 use lichen_language::preprocess::preprocess;
-use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::{compile_with_imports_at, run};
 use lichen_lowlevel::{LowValue, Module};
 
@@ -147,7 +146,7 @@ fn reported(source: &str, packs: Option<&[PlacementPack]>) -> (f32, Vec<String>)
     if let Some(packs) = packs {
         install_floor_for_run(packs);
     }
-    let mut store = PackageStore::<LangProgram>::new();
+    let mut store = new_store(None).expect("the embedded compute package registers");
     let (preprocessed, diags) = preprocess(source, None, &mut store);
     assert!(diags.is_empty(), "the imports resolved: {diags:?}");
     let line_starts = lex::line_starts(source);
@@ -314,16 +313,24 @@ fn the_run_the_compiler_makes_answers_through_the_pack() {
     let schema = reported_schema(&report);
 
     clear_graph_pass();
-    let unpacked = run::evaluate_raw::<LangProgram>(&source, None, &mut PackageStore::new())
-        .expect("the unpacked run produced a value");
+    let unpacked = run::evaluate_raw::<LangProgram>(
+        &source,
+        None,
+        &mut new_store(None).expect("the embedded compute package registers"),
+    )
+    .expect("the unpacked run produced a value");
 
     clear_graph_pass();
     install_floor_for_run(
         &load_packs(&[written("compiler-run.pack", &pack_text(&schema))])
             .expect("the pack a human wrote is read"),
     );
-    let packed = run::evaluate_raw::<LangProgram>(&source, None, &mut PackageStore::new())
-        .expect("the packed run produced a value");
+    let packed = run::evaluate_raw::<LangProgram>(
+        &source,
+        None,
+        &mut new_store(None).expect("the embedded compute package registers"),
+    )
+    .expect("the packed run produced a value");
     assert_ne!(
         packed, unpacked,
         "the pack a command line named steered the run the compiler makes"

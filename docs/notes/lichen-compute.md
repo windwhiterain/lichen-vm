@@ -1,12 +1,14 @@
 # lichen-compute: the JIT package (compile functions to wasm, launch them)
 
 > Status: current — a **native plugin** (see [plugin-taxonomy](plugin-taxonomy.md)):
-> program-generic, host-agnostic, added no syntax.
+> program-generic leaves, added no syntax, and the host that composes them into
+> the compute sub-language.
 > Points at: `crates/lichen-compute/src/compute.rs` (the native core),
-> `crates/lichen-language/src/program.rs` (`LangValue`/`LangOperator`/`LangProgram` composition),
+> `crates/lichen-compute/src/language.rs` (the sub-language: the
+> `LangValue`/`LangOperator`/`LangProgram` composition and the virtual
+> `compute.lichen`),
 > `crates/lichen-highlevel/src/native.rs` (the `NativeOp`/`NativeOps` extension point),
-> `crates/lichen-language/src/package.rs` (`register_compute`, the virtual `compute.lichen`),
-> and `crates/lichen-language/tests/compute.rs` (the end-to-end suite).
+> and `crates/lichen-compute/tests/compute.rs` (the end-to-end suite).
 
 `lichen-compute` is a compiler plugin — a native wrapper package (think `numpy`)
 that jit-compiles a lichen function to a **wasm kernel** and runs it. The user-facing
@@ -72,7 +74,8 @@ not callee-type dispatch:
 
 - The plugin registers a private `NativeOps` table (`native_ops()`), a name→`NativeOp`
   `&'static` slice. Only the compilation of the plugin's own embedded `compute.lichen`
-  is run against it (`register_compute`), so a `$jit`/`$launch` is **private** to that
+  is run against it (`language::native_packages`, handed to
+  `PackageStore::register_native`), so a `$jit`/`$launch` is **private** to that
   module — two plugins each registering `$jit` never collide.
 - `$jit(f)` / `$launch(native, a)` parse to a `NativeCall`; the checker delegates to
   the matching `NativeOp::build` and adopts whatever `[value, type]` pair it returns. The

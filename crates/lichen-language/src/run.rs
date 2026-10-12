@@ -19,24 +19,26 @@ pub use crate::render::print_value;
 use crate::render::{print_type_lang, print_value_lang, render_attributes, value_label};
 
 use lichen_highlevel::checker::Build;
-use lichen_highlevel::program::ValueType;
+use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_lowlevel::Module;
 use lichen_utils::extend::AsEnum;
 
 /// Whether a run says what the passes it dispatched did.
 ///
 /// # Invariant
-/// **Naming a pack is the whole trigger**: an invocation that named none collects nothing and
-/// prints the run it printed before packs existed, while an invocation that named one reports the
-/// stage lines verbatim. There is no third state and no second trigger, so what a run reports is
-/// decided by the command line alone and never by what the program turned out to be.
+/// **The caller names the pass channel**: an invocation that names none
+/// collects nothing and prints the run it printed before passes existed,
+/// while one that names the categories its passes write under reports those
+/// lines verbatim. What a run reports is decided by the invocation alone,
+/// never by what the program turned out to be, and by no vocabulary it was
+/// not composed over.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PassReport {
-    /// The invocation named no pack: the program's own output is the whole of what the run says.
+pub enum PassReport<'a> {
+    /// The invocation named no pass: the program's own output is the whole of what the run says.
     #[default]
     Silent,
-    /// The invocation named packs: the passes' own stage lines are reported beside that output.
-    Reported,
+    /// The invocation named its pass channel: those stage lines are reported beside that output.
+    Reported(&'a [&'a str]),
 }
 
 /// A run that produced a value: the program's output line, and the stage lines reported with it.
@@ -52,18 +54,19 @@ pub struct RunOutput {
     pub pass_lines: Vec<String>,
 }
 
-/// The stage lines a run's passes recorded, verbatim.
+/// The stage lines a run's passes recorded, verbatim, under the named categories.
 ///
 /// # Invariant
-/// **Only the pass channel is read**: every other extension diagnostic is a refusal whose gate is
-/// [`render_build`]'s own, and a run that produced a value drops those on purpose — reporting one
-/// here would publish an explanation the run already decided against. A line is self-describing
-/// (`region N: …`, `node N: …`, `pack "…" fired`), so it is carried as the pass wrote it.
-fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>) -> Vec<String> {
+/// **Only the named categories are read**: every other extension diagnostic is a
+/// refusal whose gate is [`render_build`]'s own, and a run that produced a value
+/// drops those on purpose — reporting one here would publish an explanation the
+/// run already decided against. A line is self-describing (`region N: …`,
+/// `node N: …`, `pack "…" fired`), so it is carried as the pass wrote it.
+fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>, categories: &[&str]) -> Vec<String> {
     module
         .extension_diagnostics
         .iter()
-        .filter(|entry| entry.category == lichen_compute::LANDING_DIAGNOSTIC)
+        .filter(|entry| categories.contains(&entry.category))
         .map(|entry| entry.message.clone())
         .collect()
 }
@@ -79,17 +82,11 @@ fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>) -> Vec<String> {
 ///
 /// A stage line is **not a refusal**: the run reports it beside the value, so
 /// naming a pack still says whether the pack fired.
-fn render_build<P>(build: Build<P>, pass_report: PassReport) -> Result<RunOutput, Vec<Diag<P>>>
+fn render_build<P>(build: Build<P>, pass_report: PassReport<'_>) -> Result<RunOutput, Vec<Diag<P>>>
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp>
-        + From<lichen_highlevel::program::TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
@@ -119,7 +116,7 @@ where
     // Read after the root is evaluated, because the consultation happens in there.
     let pass_lines = match pass_report {
         PassReport::Silent => Vec::new(),
-        PassReport::Reported => pass_lines(&module),
+        PassReport::Reported(categories) => pass_lines(&module, categories),
     };
     // Render only the attributes the root expression actually carries.
     let attr_ext = lang_attr_ext::<P>();
@@ -171,14 +168,8 @@ pub fn evaluate_raw<P>(
 ) -> Result<String, Vec<Diag<P>>>
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp>
-        + From<lichen_highlevel::program::TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     evaluate_raw_reporting(source, base, store, PassReport::Silent).map(|run| run.output)
 }
@@ -192,18 +183,12 @@ pub fn evaluate_raw_reporting<P>(
     source: &str,
     base: Option<&Path>,
     store: &mut PackageStore<P>,
-    pass_report: PassReport,
+    pass_report: PassReport<'_>,
 ) -> Result<RunOutput, Vec<Diag<P>>>
 where
     P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp>
-        + From<lichen_highlevel::program::TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let (preprocessed, diags) = preprocess(source, base, store);
     if !diags.is_empty() {

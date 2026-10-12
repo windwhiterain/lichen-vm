@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use stacksafe::stacksafe;
 
-use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
 use lichen_highlevel::program::{PackageSource, TypeOperator, ValueType};
@@ -18,7 +17,7 @@ use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
 use lichen_language::lex::Span;
 use lichen_language::lex::{Token, TokenKind};
-use lichen_language::package::PackageStore;
+use lichen_language::package::{NativePackage, PackageStore};
 use lichen_language::parse;
 use lichen_language::persist::ArtifactCodec;
 use lichen_language::preprocess;
@@ -27,7 +26,6 @@ use lichen_language::program::GcdOp;
 use lichen_language::render::{print_type_lang, print_value_lang, struct_type_named_fields};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::AnyNodeId;
-use lichen_utils::extend::AsEnum;
 
 use crate::lsp::{
     self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData,
@@ -212,8 +210,8 @@ impl<P: LangProgramShape> Deref for Doc<P> {
 
 impl<P: LangProgramShape> Doc<P>
 where
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     /// Parse, lower and check `source`, keeping the frontend artifacts and
     /// indexing name resolution.
@@ -230,7 +228,7 @@ where
     /// [`Doc::new`] with an explicit base path: `@import` paths resolve
     /// against it; `None` means the current directory.
     pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc<P> {
-        Doc::new_with_cache(source, base, None)
+        Doc::new_with_cache(source, base, None, &[])
     }
 
     /// [`Doc::new_with_base`] with a persistent cache root:
@@ -244,11 +242,17 @@ where
         source: impl Into<String>,
         base: Option<&Path>,
         cache_root: Option<&Path>,
+        native: &[NativePackage<P>],
     ) -> Doc<P> {
         let mut store: PackageStore<P> = match cache_root {
             Some(root) if P::Codec::PERSISTENT => PackageStore::with_cache_dir(root.to_path_buf()),
             _ => PackageStore::new(),
         };
+        for &(virtual_path, source, native_ops) in native {
+            store
+                .register_native(virtual_path, source, native_ops)
+                .expect("a host's native plugin package compiles against its own ops");
+        }
         Doc::new_with_store(source, base, &mut store)
     }
 
@@ -306,8 +310,8 @@ pub(crate) fn analyze<P>(
 ) -> (DocIndex, Vec<Diag<P>>)
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let source = source.into();
     let line_starts = lex::line_starts(&source);
@@ -364,8 +368,8 @@ pub fn index<P>(
 ) -> (DocIndex, Vec<Diag<P>>)
 where
     P: LangProgramShape,
-    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let Artifacts {
         tokens,
@@ -667,8 +671,8 @@ where
 fn builtin_names<P>(imports: &[ResolvedImport], store: &PackageStore<P>) -> Vec<BuiltinName>
 where
     P: LangProgramShape,
-    P::Value: ValueType + From<ComputeValue> + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let mut names = Vec::new();
     for import in imports {
@@ -2931,6 +2935,7 @@ mod tests {
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
             Some(cache.as_path()),
+            &[],
         );
         assert!(
             d.diagnostics.is_empty(),

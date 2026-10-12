@@ -48,23 +48,25 @@ macro_rules! lang_compose_vocabulary {
         values = [ $( $value:path as $value_name:ident ; )* ];
         operators = [ $( $operator:path as $operator_name:ident ; )* ];
         plugins = [ $( $plugin:ident as $leaves:ident ; )* ];
+        $( render = [ $render:path ; ]; )?
     ) => {
         $crate::lang_compose_vocabulary! {
             @run
-            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ];
+            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ] [ $( $render ; )? ];
             [ $( $plugin as $leaves ; )* ];
         }
     };
 
-    // Without a plugin set (the shipping compiler): `plugins = []`.
+    // Without a plugin set (the bare language): `plugins = []`.
     (
         attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         values = [ $( $value:path as $value_name:ident ; )* ];
         operators = [ $( $operator:path as $operator_name:ident ; )* ];
+        $( render = [ $render:path ; ]; )?
     ) => {
         $crate::lang_compose_vocabulary! {
             @run
-            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ];
+            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ] [ $( $render ; )? ];
             [ ];
         }
     };
@@ -74,7 +76,7 @@ macro_rules! lang_compose_vocabulary {
         @run
         [ $lowop:path as $lowop_name:ident ; $tyop:path as $tyop_name:ident ; $( $extra_op:path as $extra_op_name:ident ; )* ]
         [ $low:path as $low_name:ident ; $tyv:path as $tyv_name:ident ; $( $extra_v:path as $extra_v_name:ident ; )* ]
-        [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
+        [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ] [ $( $render:tt )* ];
         [ ] ;
     ) => {
         ::lichen_utils::enum_ext! {
@@ -181,6 +183,10 @@ macro_rules! lang_compose_vocabulary {
             type Attr = $crate::program::LangAttr;
             type Literal = ::lichen_highlevel::program::HighProgramLiteral;
         }
+
+        // The composition knows this vocabulary, so it binds the marker to the
+        // language's tooling shapes.
+        $crate::lang_compose_vocabulary! { @naming [ $( $render )* ] }
 
         // ── The runtime wiring: `ValueExt` on the union, `OperatorExt` on operators.
 
@@ -493,12 +499,12 @@ macro_rules! lang_compose_vocabulary {
     // Thread the next plugin's leaf macro, passing the accumulator.
     (
         @run
-        [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ];
+        [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ] [ $( $rn:tt )* ];
         [ $plugin:ident as $leaves:ident ; $( $rest:tt )* ];
     ) => {
         $plugin::$leaves! {
             $crate::lang_compose_vocabulary,
-            [ $( $oa )* ] [ $( $va )* ] [ $( $aa )* ] [ $( $b )* ] ; [ $( $rest )* ] ;
+            [ $( $oa )* ] [ $( $va )* ] [ $( $aa )* ] [ $( $b )* ] [ $( $rn )* ] ; [ $( $rest )* ] ;
         }
     };
 
@@ -506,18 +512,32 @@ macro_rules! lang_compose_vocabulary {
     (
         @absorb
         ( operators: [ $( $o:path as $on:ident ; )* ]; values: [ $( $v:path as $vn:ident ; )* ]; attrs: [ $( $a:path as $an:ident ; )* ];
-          [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ] ; [ $( $rest:tt )* ] ; )
+          [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ] [ $( $rn:tt )* ] ; [ $( $rest:tt )* ] ; )
     ) => {
         $crate::lang_compose_vocabulary! {
             @run
-            [ $( $oa )* $( $o as $on ; )* ] [ $( $va )* $( $v as $vn ; )* ] [ $( $aa )* $( $a as $an ; )* ] [ $( $b )* ] ;
+            [ $( $oa )* $( $o as $on ; )* ] [ $( $va )* $( $v as $vn ; )* ] [ $( $aa )* $( $a as $an ; )* ] [ $( $b )* ] [ $( $rn )* ] ;
             [ $( $rest )* ] ;
         }
     };
 
+    // The tooling-shape impl: a `render` hook spells this vocabulary's
+    // own value names; without one it names nothing.
+    ( @naming [ $render:path ; ] ) => {
+        impl $crate::LangProgramShape for LangProgram {
+            fn value_name(value: &LangValue) -> Option<String> {
+                $render(value)
+            }
+        }
+    };
+    ( @naming [ ] ) => {
+        impl $crate::LangProgramShape for LangProgram {}
+    };
+
 }
 
-// The shipping compiler's plugin set: the one manifest that fixes it.
+// The bare language's own composition: the vocabulary a host
+// starts from, carrying no plugin's leaves.
 crate::lang_compose_vocabulary! {
     attrs = [
         Perspective as Perspective;
@@ -529,13 +549,11 @@ crate::lang_compose_vocabulary! {
     values = [
         LowValue as LowValue;
         TypeValue as TypeValue;
-        lichen_compute::ComputeValue as ComputeValue;
     ];
     operators = [
         LowOperator as LowOperator;
         TypeOperator as TypeOperator;
         GcdOp as GcdOp;
-        lichen_compute::ComputeOperator as ComputeOperator;
     ];
 }
 
@@ -547,13 +565,13 @@ mod tests;
 #[cfg(test)]
 #[macro_export]
 macro_rules! ic_probe_leaves {
-    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
+    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ][ $($rn:tt)* ] ; [ $($rest:tt)* ] ;) => {
         $next! {
             @absorb (
                 operators: [ ];
                 values: [ ];
                 attrs: [ ];
-                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ] ; [ $($rest)* ] ;
+                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ][ $($rn)* ] ; [ $($rest)* ] ;
             )
         }
     };

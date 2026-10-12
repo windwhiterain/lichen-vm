@@ -14,25 +14,21 @@ pub use lichen_language_parser::ast;
 pub use lichen_language_parser::path;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
-pub mod automatic_tiling;
 pub mod cells;
 pub mod compile;
 pub mod diag;
 mod dirty;
-pub mod floor;
-pub mod fusion_claim;
 pub mod package;
 pub mod persist;
-pub mod placement_pack;
 pub mod preprocess;
 pub mod program;
-pub mod region_merge;
 pub mod render;
 pub mod resolve;
 pub mod run;
 pub mod session;
 mod spans;
 pub mod suggest;
+pub mod testing;
 
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -52,6 +48,14 @@ use preprocess::ResolvedImport;
 use program::{GcdOp, LangProgram, lang_attr_ext};
 
 /// A program the tooling drives: `ProgramCodecOf` plus the language's shapes.
+///
+/// # Invariant
+///
+/// Only a composition states this, because only a composition knows the
+/// vocabulary: [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) emits
+/// it for every marker it builds, and a host that writes its own vocabulary by
+/// hand writes its own `impl`. That is also where a host whose leaves the
+/// lowlevel printer cannot name replaces [`Self::value_name`].
 pub trait LangProgramShape:
     ProgramCodecOf
     + ::lichen_highlevel::program::HighProgram<
@@ -60,18 +64,17 @@ pub trait LangProgramShape:
     > + ::lichen_lowlevel::Program<PackageMeta = ::lichen_highlevel::program::HighPackageMeta>
     + 'static
 {
-}
-
-impl<T> LangProgramShape for T
-where
-    T: ProgramCodecOf,
-    T: ::lichen_highlevel::program::HighProgram<
-            Attr = program::LangAttr,
-            Literal = ::lichen_highlevel::program::HighProgramLiteral,
-        >,
-    T: ::lichen_lowlevel::Program<PackageMeta = ::lichen_highlevel::program::HighPackageMeta>,
-    T: 'static,
-{
+    /// How this vocabulary spells `value`, for a value the lowlevel printer
+    /// cannot name on its own.
+    ///
+    /// # Invariant
+    ///
+    /// `None` names nothing, and the printer then reads the value as its own
+    /// `?`; a name is the value's kind, never its layout.
+    fn value_name(value: &<Self as ::lichen_lowlevel::Program>::Value) -> Option<String> {
+        let _ = value;
+        None
+    }
 }
 
 /// The inner program shape `LangProgram` wraps: `LangAttr` fixed, `V`/`O` varying.

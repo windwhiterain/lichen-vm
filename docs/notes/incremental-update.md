@@ -17,7 +17,8 @@
 > `crates/lichen-language-lex/src/lib.rs` (`lex_resume`),
 > `crates/lichen-lowlevel/src/{lib,registry}.rs` + `static_module/{freeze,apply}.rs`,
 > `crates/lichen-compute/src/compute.rs`, `crates/lichen-language/src/program.rs` (the
-> composition macro), `crates/lichen-language-server/src/{server,analysis}.rs` (the
+> composition macro) and `crates/lichen-compute/src/language.rs` (a host's
+> composition), `crates/lichen-language-server/src/{server,analysis}.rs` (the
 > caller), and the notes [incremental-parse-compile](incremental-parse-compile.md),
 > [artifact-cache](artifact-cache.md), [static-modules](static-modules.md),
 > [attributes](attributes.md) and [liche-lsp-home](liche-lsp-home.md).

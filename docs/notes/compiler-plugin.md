@@ -127,7 +127,8 @@ pub struct NativeApply { pub value: NodeId, pub decided: bool }
   file compiles with `no_native_ops()`.
 
 The plugin's own source is an embedded `&str`, compiled at registration (e.g.
-`register_compute` in `package.rs`) into a frozen module that `import "…"` resolves to.
+`PackageStore::register_native`, which the compute sub-language reaches through
+`language::native_packages`) into a frozen module that `import "…"` resolves to.
 
 ## Extension point 3: runtime dispatch (`OperatorExt::run`)
 
@@ -305,10 +306,11 @@ it is program-generic, so it never names a concrete host `Program`.  Its pieces:
   the virtual `compute.lichen` package;
 - no `GlobalExt` (registry is process-global).
 
-Then a host composes it: `lichen-language`'s `program.rs` composes
-`ComputeValue`/`ComputeOperator` into `LangValue`/`LangOperator`, and `package.rs` builds the
-plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
-`compute.lichen` import.
+Then a host composes it: `lichen-compute`'s own `language.rs` composes
+`ComputeValue`/`ComputeOperator` into its `LangValue`/`LangOperator`, builds the
+plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp`, and
+serves the `compute.lichen` import as a native virtual package.  A different host
+composes the same leaves its own way.
 
 ## Extension point 7: a compile-time attribute
 

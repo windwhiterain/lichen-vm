@@ -6,7 +6,7 @@
 > `crates/lichen-compute/src/compute.rs` (`JitOp`/`LaunchOp`/`CallOp`/`ParallelOp`/
 > `ParLaunchOp`/`ReadOp`/`WriteOp`/`BufferCollectOp`, `kernel_id_of`, `native_ops`),
 > `crates/lichen-compute/src/lib.rs` (`compute_native_ops!`),
-> `crates/lichen-language/src/program.rs`, `crates/lichen-language/tests/compute.rs`.
+> `crates/lichen-compute/src/language.rs`, `crates/lichen-compute/tests/compute.rs`.
 
 ## Problem
 

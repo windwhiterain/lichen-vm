@@ -14,7 +14,7 @@ use lichen_testkit::{Program, Writer};
 
 /// The recursion under test, written under `count` and applied to `argument`.
 fn countdown(marked: bool, argument: Option<usize>) -> Program {
-    let mut w = Writer::new();
+    let w = Writer::new();
     // A block-wide binding reserves its id before its value compiles, so the
     // recursive call resolves to it.
     let count = w.binding("count");
@@ -39,7 +39,7 @@ fn countdown(marked: bool, argument: Option<usize>) -> Program {
 /// `count n = if n == 0 then 0 else count (n - 1) + 1`: the call sits in an
 /// operand, not in the return spine.
 fn non_tail(marked: bool) -> Program {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let count = w.binding("count");
     let n = w.param("n");
     let zero = w.int("zero", 0);
@@ -60,7 +60,7 @@ fn non_tail(marked: bool) -> Program {
 /// `sum_to s = if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)`: a
 /// tuple carried state, one slot per element.
 fn tuple_state(marked: bool) -> Program {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let sum_to = w.binding("sum_to");
     let s = w.param("s");
     let zero = w.int("zero", 0);

@@ -42,7 +42,7 @@ where
 
 /// `$probe(5)` — one native call whose single argument is an int literal.
 fn probe_call() -> Program {
-    let mut w: Writer = Writer::new();
+    let w: Writer = Writer::new();
     let five = w.int("five", 5);
     let call = w.native_call("call", "probe", &[five]);
     w.finish(call)

@@ -4,9 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lichen_language::package::PackageStore;
+use lichen_compute::language::new_store;
 use lichen_language::preprocess::{Directive, block_directives, block_metadata, split_block};
-use lichen_language::program::LangProgram;
 use lichen_language::render::render_all;
 use lichen_language::run::evaluate_raw;
 
@@ -147,7 +146,7 @@ pub fn declared_output(source: &str) -> Option<String> {
 /// The program's actual output, or a panic showing its diagnostics.  The file's
 /// own path is the import base.
 pub fn program_output(file: &Path, source: &str) -> String {
-    let mut store = PackageStore::<LangProgram>::new();
+    let mut store = new_store(None).expect("the embedded compute package registers");
     evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!("{}: failed\n{}", file.display(), render_all(source, &diags))
     })

@@ -13,4 +13,7 @@ name = "sync-readme"
 path = "src/bin/sync-readme.rs"
 
 [dependencies]
+# The README examples are compute programs, so the generator drives the compute
+# sub-language rather than the bare language the composer alone composes.
+lichen-compute.workspace = true
 lichen-language.workspace = true

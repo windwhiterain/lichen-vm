@@ -67,13 +67,13 @@ the prelude adds, not a second module).
   build** and `core_direct` maps it through the freeze. A name/binding count
   mismatch is an error, not a truncation, so an edit to `core.lichen` cannot
   silently lose a name.
-- **The built-in modules are exempt from the prelude.** `core` cannot be its own
-  prelude (the load would re-enter itself) and `compute.lichen` is a plugin's
-  private source compiled against that plugin's own native registry — it spells
-  the read it needs and must not depend on a prelude. Both are recognised by
-  their virtual path (`is_builtin_source`).
+- **The built-in `core` module is exempt from the prelude.** It cannot be its own
+  prelude (the load would re-enter itself), recognised by its virtual path
+  (`is_builtin_source`). A plugin's own package needs no exemption: an embedded
+  wrapper is compiled by `register_native`, which passes no imports at all, so
+  the prelude is never in scope for it.
 - **An embedded dependency contributes the all-zero sentinel.** The prelude is
-  never published to the device store (like `compute`), and
+  never published to the device store (like any native plugin's package), and
   `DeviceRegistry::artifact_identity` already folds an unpublished dependency as
   zeros *on both sides*, so a dependent's cache still hits. A package's artifact
   therefore records the prelude among its dependencies and re-keys when the
@@ -90,7 +90,8 @@ the prelude adds, not a second module).
 ## 4. The built-in's own file
 
 A built-in is a **file**: the store materializes its source under the cache root
-(`<cache>/builtin/core.lichen`, `…/compute.lichen`) and keeps a **source record**
+(`<cache>/builtin/core.lichen`, and `<cache>/builtin/compute.lichen` for a host
+that composes the compute sub-language) and keeps a **source record**
 in the package meta — the path, the text, and the position of every frozen node
 (`HighPackageMeta::source`, built by `located_nodes` + `builtin_source` from the
 build's `node_edges` and the frontend's `span_index`). Two things follow:
@@ -179,7 +180,7 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   it is the body's own result, on a call's result, or inside an inlined helper —
   but an operator inside a cross-kernel call's argument (`k0 (x + 1)`) or inside
   `compute.launch`'s argument has no machine node behind it and is **refused by
-  name**, which `crates/lichen-language/tests/compute.rs` pins. Widening the
+  name**, which `crates/lichen-compute/tests/compute.rs` pins. Widening the
   boundary is the kernel workstream's specialize-before-JIT pass, which folds the
   apply back to a machine leaf.
 

@@ -265,7 +265,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 `a_jit_kernel_crosses_the_two_classes_both_ways`,
 `a_body_may_compute_in_one_class_and_cross` and
 `a_varying_float_element_is_seeded_from_the_index`
-(`crates/lichen-language/tests/compute.rs`).
+(`crates/lichen-compute/tests/compute.rs`).
 
 ## 8. What is deliberately not here
 
@@ -320,10 +320,10 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   `an_at_in_membership_test_parses_at_the_comparison_level`
   (`crates/lichen-language-parser/src/tests/parse_tests.rs`).
 - wasm JIT: `jit_lowers_the_arithmetic_comparison_and_bitwise_operators`
-  (`crates/lichen-language/tests/compute.rs`) — one kernel per operator, so each
+  (`crates/lichen-compute/tests/compute.rs`) — one kernel per operator, so each
   is on the lowering path.
 - The prefix scalar operators: `fusion_numbers`
-  (`crates/lichen-language/examples/fusion_numbers.rs`), whose kernel column writes a
+  (`crates/lichen-compute/examples/fusion_numbers.rs`), whose kernel column writes a
   `Float` consumer with `max` over `d - r` and a `Float` producer with a sum, runs
   them unfused on the cpu backend, and compares them against the two host forms;
   `reduction_interface` (same directory) is the same for a marked `max`-shaped
@@ -490,7 +490,7 @@ both are `lichen-compute`'s rather than the operator's:
 
 ### What `sqrt` and `floor` cost, measured
 
-`crates/lichen-language/examples/math_operators.rs` sweeps each definition over every
+`crates/lichen-compute/examples/math_operators.rs` sweeps each definition over every
 exponent of the class and prints the numbers, and runs each as a kernel on both
 backends over one fixed sample set. The measurements:
 

@@ -76,7 +76,9 @@ crates/
                              vocabulary.
   lichen-language/           the frontend + semantics, re-exporting the three
                              crates above (this crate is the single home of
-                             compile / diag / session / the pipelines).
+                             compile / diag / session / the pipelines). It
+                             composes no native plugin: a vocabulary is named
+                             by the host that drives it.
   lichen-language-server/    the TOOLING crate: lib.rs = the shared editor-view
                              (span↔position, node index, diagnostics→LSP), and
                              the LSP server as a [[bin]].

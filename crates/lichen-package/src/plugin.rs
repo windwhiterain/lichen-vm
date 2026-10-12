@@ -417,8 +417,8 @@ pub type Program = LangProgram;
     ))
 }
 
-/// The native-package tuples a generated compiler registers, one per plugin, at
-/// `<alias>.lichen`.
+/// The native-package tuples a generated compiler or server registers, one per
+/// plugin, at `<alias>.lichen`.
 ///
 /// # Invariant
 ///
@@ -470,10 +470,11 @@ fn main() -> std::process::ExitCode {{
     let cache_root = lichen_language::persist::lichendir()
         .join("compilers")
         .join("{key}");
-    lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(
+    lichen_compiler::cli::main_with_wiring::<crate::LangProgram>(
         &cache_root,
         &[
 {native}        ],
+        lichen_compute::language::wiring(),
     )
 }}
 "#,
@@ -508,11 +509,16 @@ fn main() {{
     let cache_root = lichen_language::persist::lichendir()
         .join("compilers")
         .join("{key}");
-    lichen_language_server::server::main::<crate::LangProgram>(&cache_root);
+    lichen_language_server::server::main::<crate::LangProgram>(
+        &cache_root,
+        vec![
+{native}        ],
+    );
 }}
 "#,
         compose = compose_source(plugins, leaves)?,
         key = key,
+        native = native_package_lines(plugins)?,
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
@@ -542,9 +548,13 @@ mod generated_main_tests {
         write_compiler_main_rs(&slot, &[], &Leaves::shipping()).expect("write the generated main");
         let main = std::fs::read_to_string(slot.join("src/main.rs")).unwrap();
         assert!(
-            main.contains("lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>("),
+            main.contains("lichen_compiler::cli::main_with_wiring::<crate::LangProgram>("),
             "the generated compiler must drive the CLI crate's entry point over its composed \
              program:\n{main}"
+        );
+        assert!(
+            main.contains("lichen_compute::language::wiring()"),
+            "the generated compiler must install the packs its plugin set names:\n{main}"
         );
         assert!(
             main.contains(&format!(".join(\"{key}\")")),
@@ -574,7 +584,7 @@ mod generated_main_tests {
             "the generated server must root its cache at its own slot:\n{main}"
         );
         assert!(
-            main.contains("server::main::<crate::LangProgram>(&cache_root)"),
+            main.contains("server::main::<crate::LangProgram>("),
             "the generated server must pass its cache root to server::main:\n{main}"
         );
         assert!(

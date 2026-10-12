@@ -71,7 +71,7 @@
 > `crates/lichen-compute-gpu/src/spirv.rs` (the write-reachability invariant) and
 > `dispatch.rs` (the uninitialised-output-buffer claim it underwrites),
 > `crates/lichen-lowlevel/src/lib.rs` (`LowShape`),
-> `crates/lichen-language/examples/recursion.rs` (the probe).
+> `crates/lichen-compute/examples/recursion.rs` (the probe).
 > Decided elsewhere: [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md) (the
 > `loop`-operator argument, the two measured ceilings), its §7 (the fork this
 > answers), [compute-jit-low-types](compute-jit-low-types.md) (kernels compile
@@ -108,7 +108,7 @@ compile time per iteration.
 **The walk's depth is the trip count, and the constant is measured rather than
 guessed.** Each copy nests in the previous one's else arm, so the graph is a
 chain whose depth is linear in the trips: on
-`crates/lichen-language/examples/recursion.rs`, ~3.1 levels per expanded step, so
+`crates/lichen-compute/examples/recursion.rs`, ~3.1 levels per expanded step, so
 `depth ≈ 18 + 3.1 × trip` (trip 1 → 21, trip 10 → 49, trip 400 → ~1260).
 `compile.rs` is `#[stacksafe]`, but `stacksafe` only tests for room at an
 annotated frame, so everything below shares that frame's segment — on a 1 MiB
@@ -977,7 +977,7 @@ done** — the acceptance case at item 5 runs on both backends:
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant. **Landed: `a_kernel_loop_reduces_a_runtime_buffer_length`**
-   (`crates/lichen-language/tests/compute.rs`) answers `10` at a length of four,
+   (`crates/lichen-compute/tests/compute.rs`) answers `10` at a length of four,
    `28` at seven and `180_300` at six hundred, on **both** backends, against the
    hand-derived triangle number `length(length + 1)/2`.
 
@@ -1194,7 +1194,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      `lichen-language`'s `loop_run.rs` said so in its first line, and no
      `compute.jit` / `compute.parallel` program in any test was marked. The walk
      and its case landed together: `a_kernel_loop_nest_carries_a_runtime_state`
-     (`crates/lichen-language/tests/compute.rs`) is a `@loop` inside a
+     (`crates/lichen-compute/tests/compute.rs`) is a `@loop` inside a
      `compute.parallel` body whose carried state is a **run-time buffer read**, so
      the checker cannot expand it and the kernel reader must; it runs on both
      backends.
@@ -1457,7 +1457,7 @@ device-side defects that shaped it.
 **Stage 2 — the conversion.** Cycle extraction, defunctionalisation, nest
 construction, and rules 1, 2, 3, 5, 6. The probe grows two cases:
 `RECURSIVE_INLINE` and `LOOP_RUNTIME_COUNT` in
-`crates/lichen-language/examples/recursion.rs` are the programs this has to move
+`crates/lichen-compute/examples/recursion.rs` are the programs this has to move
 from REFUSED to a number, on **both** backends.
 
 **Stage 3 — the write rules.** With §6 settled, the only remaining work is the

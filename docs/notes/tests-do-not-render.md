@@ -3,6 +3,7 @@
 > Status: current — a rule from the maintainer.
 > Points at: every test that
 > renders a `TypePrinter`/`ValuePrinter` result — `crates/lichen-language/tests/`
+> and `crates/lichen-compute/tests/`
 > (`*_render_*`, the kernel value/type assertions), `crates/lichen-language-server`
 > (hovers, statement values), `crates/lichen-render`'s own renderer tests.
 

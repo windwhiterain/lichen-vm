@@ -94,9 +94,10 @@ source, never as a compile dependency.
   ([operator-polymorphism](operator-polymorphism.md) §9 Phase 3,
   [core-prelude](core-prelude.md)). It is seeded **first**, so a program's own
   `import` or binding of one of those names resolves later and wins: the prelude
-  is *shadowable*, not reserved. The built-in modules are exempt — `core` cannot
-  be its own prelude (the load would re-enter itself) and `compute.lichen` is a
-  plugin's private source compiled against that plugin's own registry. This is
+  is *shadowable*, not reserved. The built-in `core` module is exempt — it cannot
+  be its own prelude (the load would re-enter itself); a plugin's own package
+  needs no exemption, because `register_native` compiles it with no imports at
+  all. This is
   the one thing the language crate adds on top of the pure preprocessor, and it
   stays on the `ImportResolver` seam: `PackageStore` implements the trait, and
   `lichen-language`'s two orchestrators keep their generic-over-`P` signatures

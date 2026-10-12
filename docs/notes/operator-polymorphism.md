@@ -484,7 +484,7 @@ was always about.
    callee's body (`Module::static_function_compute_operator`) when the residual is
    missing — pinned green by
    `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
-   (`crates/lichen-language/tests/compute.rs`), and see
+   (`crates/lichen-compute/tests/compute.rs`), and see
    [loop-conversion §8.5](loop-conversion.md) item 4 for the measurement and for
    what it did not fix.  One inside `compute.launch`'s argument is still refused,
    and this note does not claim a test for it — no such test exists on `dev`.

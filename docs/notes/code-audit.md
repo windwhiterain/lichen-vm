@@ -339,7 +339,7 @@ guard itself is this item.
 ### P1-39 — A `compute.call` in a parallel kernel body is refused with a `NodeId` `verified`
 
 `verified` at `dev@1fe580c`, first-hand at the cited lines. Found by
-`crates/lichen-language/examples/recursion.rs`.
+`crates/lichen-compute/examples/recursion.rs`.
 
 ```text
 k0 = compute.jit (v : Int => v + 1)
@@ -400,7 +400,7 @@ looking at together. Recorded in
 
 ### P1-40 — The apply budget refuses a long *terminating* loop as non-terminating `verified`
 
-`verified` at `dev@cd1ddeb`, first-hand, via `crates/lichen-language/examples/recursion.rs`.
+`verified` at `dev@cd1ddeb`, first-hand, via `crates/lichen-compute/examples/recursion.rs`.
 
 The VM's budget is a real and good thing — it is how a runaway recursion is caught
 rather than hung. But it reports one verdict for two different situations, and the
@@ -426,7 +426,7 @@ stack between 400 and 1000 iterations with no diagnostic at all** — a crash
 rather than a refusal. Measured: 100 iterations 4.4 ms, 400 iterations 11.6 ms
 for a four-element kernel (about 29 µs of compile time per iteration), and a hard
 overflow at 1000. **Re-measured first-hand on this machine at 100**, on the main
-thread of a debug build, via `crates/lichen-language/examples/recursion.rs` — the
+thread of a debug build, via `crates/lichen-compute/examples/recursion.rs` — the
 probe completes trips 1 and 10 and overflows on 100. So the figure above is the
 low end on a thread with a larger stack, and the low end is a property of the
 thread as much as of the walk.
@@ -983,7 +983,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   measurement for the same reason the package store's `compiled`/
   `loaded_from_cache` are.
 
-  Pinned by `lichen-language/tests/buffer_payload.rs` (a pointer comparison, not
+  Pinned by `lichen-compute/tests/buffer_payload.rs` (a pointer comparison, not
   a content read — a dangling bump payload frequently still *reads* correctly,
   so a content-only test would pass on a broken relocation) and by the two
   `kernel_intern_tests` in `compute.rs`.  All three were watched to go red: with

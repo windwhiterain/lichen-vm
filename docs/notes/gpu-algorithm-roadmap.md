@@ -274,7 +274,7 @@ names itself. Measured first-hand on this machine: the overflow was in
 `emit_node`, not in the backend, and the walk's depth *is* the trip count — an
 unmarked recursion is expanded and every copy nests inside the last one's else
 arm, so the graph is a chain (`depth ≈ 18 + 3.1 × trip`, measured on
-`crates/lichen-language/examples/recursion.rs`). On a 1 MiB main thread of a
+`crates/lichen-compute/examples/recursion.rs`). On a 1 MiB main thread of a
 debug build it died at **level ~175**, which is why the same program was
 "between 400 and 1000" on a thread with more stack. `emit_node` is now
 `#[stacksafe]` — it was the one walk on that path with no annotation in front of
@@ -742,7 +742,7 @@ lichen program could provoke**.
 launch set the caller supplies, so a `compute.call` inside a parallel body runs
 on the CPU and on a device — see
 [lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module)
-and the cross-backend test in `crates/lichen-language/tests/compute.rs`. What
+and the cross-backend test in `crates/lichen-compute/tests/compute.rs`. What
 closed it was not the message: the fragment alone cannot name a callee, so the
 *set* had to reach both backends. The other two rows are still open.
 

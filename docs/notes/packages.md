@@ -83,4 +83,4 @@ manager took the name).  The git-dependency workflow that drives this CLI is
 
 `order` / `output` / prose in the block feed the README example sync
 (`crates/lichen-tools/src/readme.rs`, `crates/lichen-tools/src/bin/sync-readme.rs`,
-enforced by `crates/lichen-language/tests/readme.rs`).
+enforced by `crates/lichen-compute/tests/readme.rs`).

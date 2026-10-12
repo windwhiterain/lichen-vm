@@ -4,52 +4,38 @@ use lichen_highlevel::diagnostic::{AssertSpelling, Diag as CheckerDiag, DiagKind
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId};
 
-use lichen_compute::ComputeValue;
-use lichen_utils::extend::AsEnum;
-
+use crate::LangProgramShape;
 use crate::diag::Diag;
 use crate::lang_attr_ext;
+use lichen_utils::extend::AsEnum;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
     render_struct_fields_named, struct_type_named_fields, value_label,
 };
 
-// --- the extension-vocabulary render hooks ---------------------------------
-
-// The shared printer cannot know the compute values, so these
-// hooks spell them by name instead of `?`.
-
-/// The compute plugin's value-variant spelling: `Kernel`/`ParKernel`/`Buffer`.
-fn lang_value_render<P>(value: &P::Value) -> Option<String>
-where
-    P: HighProgram,
-    P::Value: AsEnum<ComputeValue>,
-{
-    match value.as_enum() {
-        Some(ComputeValue::Kernel(_)) => Some("Kernel".to_string()),
-        // A value's name is its kind, not the backend it is dispatched to.
-        Some(ComputeValue::ParKernel(..)) => Some("ParKernel".to_string()),
-        Some(ComputeValue::Buffer(..)) => Some("Buffer".to_string()),
-        _ => None,
-    }
-}
+// --- the extension-vocabulary render hook -----------------------------------
 
 /// The `&'static` hook injected into the shared printers for this vocabulary.
+///
+/// # Invariant
+///
+/// The hook is the program's own [`LangProgramShape::value_name`], so the
+/// language never names a leaf it was not composed over and a host's spelling
+/// reaches every printer without a call site naming it.
 pub fn lang_render_ext<P>() -> &'static dyn Fn(&P::Value) -> Option<String>
 where
-    P: HighProgram + 'static,
-    P::Value: AsEnum<ComputeValue> + 'static,
+    P: LangProgramShape,
 {
-    &lang_value_render::<P>
+    &P::value_name
 }
 
 /// [`print_type`] with the language's extension vocabulary.
 pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
 where
-    P: crate::LangProgramShape + 'static,
-    P::Value: ValueType + AsEnum<ComputeValue> + 'static,
-    P::Operator: From<crate::program::GcdOp>,
+    P: LangProgramShape,
+    P::Value: ValueType,
+    P::Operator: From<crate::program::GcdOp> + From<lichen_lowlevel::LowOperator>,
 {
     let attrs = lang_attr_ext::<P>();
     let mut printer = TypePrinter::new_with_ext(module, Some(lang_render_ext::<P>()));
@@ -60,9 +46,9 @@ where
 /// [`print_value`] with the language's extension vocabulary.
 pub fn print_value_lang<P>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
-    P: crate::LangProgramShape + 'static,
-    P::Value: ValueType + AsEnum<ComputeValue> + 'static,
-    P::Operator: From<crate::program::GcdOp>,
+    P: LangProgramShape,
+    P::Value: ValueType,
+    P::Operator: From<crate::program::GcdOp> + From<lichen_lowlevel::LowOperator>,
 {
     let attrs = lang_attr_ext::<P>();
     let mut printer = ValuePrinter::new_with_ext(module, Some(lang_render_ext::<P>()));

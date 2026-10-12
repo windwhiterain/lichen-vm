@@ -136,13 +136,13 @@ macro_rules! lichen_std_native_ops {
 /// [`lichen_language::lang_compose_vocabulary!`] composition.
 #[macro_export]
 macro_rules! lichen_std_native_leaves {
-    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
+    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ][ $($rn:tt)* ] ; [ $($rest:tt)* ] ;) => {
         $next! {
             @absorb (
                 operators: [ lichen_std_native::SortOp as SortOp; ];
                 values: [ ];
                 attrs: [ ];
-                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ] ; [ $($rest)* ] ;
+                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ][ $($rn)* ] ; [ $($rest)* ] ;
             )
         }
     };

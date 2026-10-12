@@ -5,8 +5,8 @@
 > `crates/lichen-compute` and `lichen-std-native` (the reference native plugins),
 > `crates/lichen-perspective` (the established compiler plugin),
 > `crates/lichen-language/src/program.rs` (`lang_compose_vocabulary!`),
-> and `crates/lichen-language/src/package.rs` (`compute_native_ops!` /
-> `register_native`).
+> `crates/lichen-language/src/package.rs` (`register_native`), and
+> `crates/lichen-compute/src/language.rs` (the compute sub-language).
 
 The lichen system extends itself through a compile-time composition, not a
 loadable ABI. There are **two kinds of extension**, split by one question:
@@ -43,37 +43,53 @@ persist discriminator.
 
 `lichen-compute` is the reference native plugin: it contributes
 `ComputeValue`/`ComputeOperator` leaves, an `OperatorExt<P>`/`NativeOp<P>`
-impls, and a `compute_native_ops!` macro. It is host-agnostic.
+impls, and a `compute_native_ops!` macro. Those leaves, operators and ops stay
+program-generic; the crate is also the one that **composes them into a
+sub-language** (§ 5).
 
 **The "fixed slot".** Because enum composition is a compile-time expansion, a
 native plugin set is fixed at **build** time, not runtime. The language layer
 exposes a single manifest — `lang_compose_vocabulary!` (in `lichen-language`)
-— that declares the whole plugin set. A host (now, or a package manager later)
-composes:
+— that declares the whole plugin set. Its own manifest
+(`crates/lichen-language/src/program.rs`) composes the language's leaves and
+**no plugin's**: the bare layer is a program on its own, so it can be built and
+tested without any plugin linked in. A host composes on top of it:
 
 ```
 lang_compose_vocabulary! {
-    attr = Perspective;
+    attrs = [ Perspective as Perspective; Doc as Doc; ];
+    [ P::Operator: From<GcdOp> + From<LowOperator> ];
     values = [ LowValue as LowValue; TypeValue as TypeValue;
                lichen_compute::ComputeValue as ComputeValue; ];
     operators = [ LowOperator as LowOperator; TypeOperator as TypeOperator;
                   GcdOp as GcdOp;
                   lichen_compute::ComputeOperator as ComputeOperator; ];
+    render = [ lichen_compute::language::value_name ; ];
 }
 ```
 
 and assembles each plugin's private per-module registry with its
-`<name>_native_ops!` macro (`licher_compute::compute_native_ops!(LangProgram)`).
-The frontend, checker, and VM are reused unchanged. **Adding a native plugin is
-one manifest line** (and one op-registry line).
+`<name>_native_ops!` macro (`licher_compute::compute_native_ops!(LangProgram)`),
+handing the store the plugin's embedded package as a `NativePackage`
+(`lichen_language::package`). The frontend, checker, and VM are reused
+unchanged. **Adding a native plugin is one manifest line** (and one
+op-registry line).
 
 `lang_compose_vocabulary!` generates the *whole* composed program, not just the
 enums: for a plugin set it also emits the `ValueExt` / `ValueType` /
 `OperatorExt` impls (the type-constant markers delegated to the core
 `TypeValue` leaf and the
-operator union's `run` dispatching every leaf).  So a composed program marker is
-a live, executable `Program` — its operators actually run, and a plugin compiler
-can be driven over it.
+operator union's `run` dispatching every leaf), the per-leaf artifact codec, and
+the `LangProgramShape` impl that binds the marker to the language's tooling.
+So a composed program marker is a live, executable `Program` — its operators
+actually run, and a plugin compiler can be driven over it.
+
+The `render = [...]` slot is where a composition states the value spellings only
+it knows. It reaches the printers through
+`LangProgramShape::value_name`, so `render::print_type_lang` /
+`print_value_lang` name a plugin's leaves without the language naming them: a
+manifest that declares no `render` takes the shape's default, which names
+nothing and leaves the printer to write `?`.
 
 The composed marker it emits is a fresh **nominal type** around
 `ProgramImpl<LangValue, LangOperator, LangAttr>`, deliberately not a type alias. A
@@ -132,17 +148,45 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
 ## Why the split matters
 
 - A native plugin is **reusable by any host**: a test harness, a different
-  frontend, a future compiler, all compose `lichen-compute` unchanged. It never
-  depends on a specific language crate.
+  frontend, a future compiler, all compose the same leaves unchanged. The
+  *leaves* depend on no language crate; only the composition that names them
+  does.
 - The **language layer** shrinks: it owns the grammar/IR/persist, the
-  composition manifest, and the checker wiring — not whole subsystems.
+  composition manifest, and the checker wiring — not whole subsystems, and not
+  any plugin's vocabulary.
 - The **plugin boundary is checkable**: "program-generic + no syntax" is an
   objective test, so a crate either is or is not a native plugin.
+
+## 5. The compute sub-language
+
+A native plugin's leaves become a language only where someone composes them.
+`lichen-compute` composes its own, in `crates/lichen-compute/src/language.rs`:
+the bare language's leaves plus `ComputeValue`/`ComputeOperator`, the `render`
+slot that names the compute values, and the embedded `compute.lichen` served as
+a native virtual package (`native_packages`, `new_store`, `register_compute`).
+`lichen-compiler`, `lichen-language-server` and `lichen-tools` drive that
+composition; `lichen-language` does not name it.
+
+**What else moved with it.** A plugin's leaves and the passes that read them are
+one thing, so the graph-fusion machinery — `region_merge`, `automatic_tiling`,
+`fusion_claim`, `placement_pack`, `floor` and the pack loader `packs` — is in
+`lichen-compute` beside the leaves it consumes, not in the language layer beside
+the vocabulary it composes. The pass channel a run reports travels with them:
+`run::PassReport::Reported` carries the **categories** the host named, and
+`package::Wiring` carries what a command line's `--pack` installs, so the CLI
+names no pass and the language names no diagnostic category.
+
+**The invariant this buys.** `lichen-language` links no plugin, so its own
+build, tests and examples run against the language alone — the frontend,
+checker, session and artifact cache with no compute vocabulary present at all.
+A program that imports `compute.lichen` is a *host* decision, and the boundary
+is one manifest line per plugin.
 
 ## Current state
 
 - `lichen-compute` is a native plugin (its own crate; `NativePlugin` marker +
-  `compute_native_ops!`).
+  `compute_native_ops!`) **and** the host that composes its own leaves into the
+  compute sub-language (§ 5).
 - `lichen-std-native` is a native plugin (its own crate; `NativePlugin` marker +
   `SortOp` leaf, `native-op` impl, `lichen_std_native_ops!`, and an embedded
   `std.lichen` wrapper source served through a native virtual package).  It is
@@ -160,14 +204,17 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   generic core.  A plugin that spells its own attribute slot in a host's
   syntax (e.g. `lichen-doc`'s `? name = "…"`) reuses it instead of carrying
   its own printer.
-- `lichen-language` composes the plugins: the native plugin's leaves and op
-  registry via `lang_compose_vocabulary!` / `compute_native_ops!`, and the
-  compiler plugins' leaves (`Perspective` + `GcdOp`, `Doc`) via
-  `lang_compose_vocabulary!`.  Its `render` module re-exports `lichen-render`
+- `lichen-language` composes **no plugin at all**: its manifest in
+  `program.rs` is the language's own leaves, and `LangProgramShape` is the impl
+  that composition emits, so a plugin's leaves reach the tooling only through a
+  host that names them.  The compiler plugins' leaves (`Perspective` + `GcdOp`,
+  `Doc`, `Refinement`) are the language's own codesign sites, so they are in
+  that manifest.  Its `render` module re-exports `lichen-render`
   and layers the host-specific shells (the caret diagnostic, the
   checker-message wording) on top.
 - **The language layer's tooling is generic over the program**: the package
-  store, run, session and render are parameterized by the program shape
+  store, run, session, render and the end-to-end `testing` helpers are
+  parameterized by the program shape
   (`lichen_language::LangProgramShape`), whose value/operator vocabularies vary
   (`CompiledProgram<V, O>`) while the attr type is fixed to the language's
   `LangAttr`.  So a compiler over an additional native plugin has the generic

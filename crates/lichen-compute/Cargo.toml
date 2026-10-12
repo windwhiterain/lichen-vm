@@ -22,6 +22,11 @@ lichen-graph-ir.workspace = true
 lichen-highlevel.workspace = true
 lichen-lowlevel.workspace = true
 lichen-utils.workspace = true
+# The sub-language in `language.rs`: the bare language this plugin composes over,
+# plus the two compiler plugins whose attributes its vocabulary carries.
+lichen-language.workspace = true
+lichen-doc.workspace = true
+lichen-perspective.workspace = true
 waffle = { version = "0.3.2", default-features = false }
 # The fused-kernel artifact is text a human edits, so the schema derives
 # `Facet` and the text is JSON rather than a hand-written codec.
@@ -29,3 +34,17 @@ facet.workspace = true
 # The reader, which refuses a hand-edited text with the field and the byte
 # offset it failed at rather than a message saying only that it failed.
 facet-json.workspace = true
+# The symbolic core and its bridge: a schema's projections are `lichen_fusion::Expr`,
+# so deriving one is library work and not an example's. See docs/notes/graph-fusion.md §4.
+lichen-fusion.workspace = true
+lichen-fusion-bridge.workspace = true
+
+[dev-dependencies]
+# The seam test: a real lichen program dispatching to a real device. This crate
+# depends on the GPU backend only for its tests, so no library half of it — and
+# no host that composes the sub-language — links a GPU loader.
+lichen-compute-gpu.workspace = true
+# `tests/readme.rs` and `tests/examples.rs` drive the README tooling, which
+# lives in its own crate; a dev-dependency keeps them here without putting the
+# generator in the library.
+lichen-tools.workspace = true

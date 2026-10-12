@@ -112,7 +112,7 @@ fn is_int_type_value(
 
 #[test]
 fn int_literal_checks() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let b = build(five, w);
     assert!(b.ok, "5 should check");
@@ -133,7 +133,7 @@ fn int_literal_checks() {
 #[test]
 fn annotated_literal_checks() {
     // 5 : int
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let t = w.int_type("t");
     let a = w.annotate("a", five, t);
@@ -146,7 +146,7 @@ fn annotated_literal_checks() {
 fn the_type_universe_is_self_referential() {
     // `Type` compiles to the canonical node K = [Type, K] — Type : Type via
     // a self-cycle, closing every type spine.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t = w.universe("t");
     let b = build(t, w);
     assert!(b.ok);
@@ -168,7 +168,7 @@ fn the_type_universe_is_self_referential() {
 fn an_error_block_is_skipped_and_never_cascades() {
     // A recovered-error region is a pair of fresh cells: it carries no
     // grammar, so nothing inside it is checked.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e = w.error_block("e");
     let b = build(e, w);
     assert!(b.ok, "a masked error region is not a check failure");
@@ -194,7 +194,7 @@ fn an_error_block_is_skipped_and_never_cascades() {
 fn an_error_block_as_a_child_does_not_cascade() {
     // An error block in real code must not poison it: its fresh type cell
     // binds quietly to the int sibling.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let e = w.error_block("e");
     let b = build(w.array("array", &[e, five]), w);
@@ -202,7 +202,7 @@ fn an_error_block_as_a_child_does_not_cascade() {
 
     // A heterogeneous tuple does not unify elements at all; the error block
     // rides along and the whole thing checks.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let e = w.error_block("e");
     let b = build(w.tuple("tuple", &[e, five]), w);
@@ -216,7 +216,7 @@ fn an_error_block_as_a_child_does_not_cascade() {
 #[test]
 fn literal_against_type_fails() {
     // 5 : Type
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let t = w.universe("t");
     let a = w.annotate("a", five, t);
@@ -227,7 +227,7 @@ fn literal_against_type_fails() {
 
 #[test]
 fn lambda_has_arrow_type() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -251,7 +251,7 @@ fn lambda_has_arrow_type() {
 #[test]
 fn lambda_checks_against_arrow_annotation() {
     // (\x. x) : int → int
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -267,7 +267,7 @@ fn lambda_checks_against_arrow_annotation() {
 fn annotating_a_lambda_with_a_tuple_type_fails() {
     // (\x. x) : [int, int] — a tuple type, not a function type: the kind
     // markers now distinguish the two, so this must fail.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -285,7 +285,7 @@ fn annotating_a_lambda_with_a_tuple_type_fails() {
 #[test]
 fn typed_tuple_is_a_kinded_tuple() {
     // [1, 2] — the pair [[1, 2], [[int, int], [TupleType, Type]]].
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
@@ -320,7 +320,7 @@ fn typed_tuple_is_a_kinded_tuple() {
 fn real_array_type_is_type_and_length() {
     // Array(int, 3) is [[int, 3], [ArrayType, Type]]: the element type and the
     // length.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t = w.int_type("t");
     let n = w.int("n", 3);
     let arr = w.type_array("arr", t, n);
@@ -363,7 +363,7 @@ fn real_array_type_is_type_and_length() {
 fn the_array_type_has_a_kind_not_a_type() {
     // Array(int, 3) : Type — the array type's own type is the kind
     // [ArrayType, Type], not the universe.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t = w.int_type("t");
     let n = w.int("n", 3);
     let arr = w.type_array("arr", t, n);
@@ -387,7 +387,7 @@ fn the_array_type_has_a_kind_not_a_type() {
 #[test]
 fn lambda_against_an_array_type_conflicts_on_the_length() {
     // (\x. x) : Array(int, 3) — a function's type is not an array type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let l = w.lam("l", x, x);
     let t = w.int_type("t");
@@ -409,7 +409,7 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
 fn array_literal_is_homogeneous() {
     // [1, 2] — one type slot shared by all elements, the length the element
     // count.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let arr = w.array("arr", &[e1, e2]);
@@ -448,7 +448,7 @@ fn array_literal_is_homogeneous() {
 #[test]
 fn array_literal_typechecks_against_an_array_type() {
     // [1, 2] : Array(int, 2)
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let arr = w.array("arr", &[e1, e2]);
@@ -464,7 +464,7 @@ fn array_literal_typechecks_against_an_array_type() {
 #[test]
 fn array_literal_length_mismatch_fails() {
     // [1, 2] : Array(int, 3)
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let arr = w.array("arr", &[e1, e2]);
@@ -491,7 +491,7 @@ fn array_literal_length_mismatch_fails() {
 fn heterogeneous_array_literal_fails() {
     // [1, int] — the second element's type is Type; the first fixed the
     // shared element type to int.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int_type("e2"); // `int` as a value — its type is Type
     let arr = w.array("arr", &[e1, e2]);
@@ -517,7 +517,7 @@ fn heterogeneous_array_literal_fails() {
 fn let_bound_functions_are_polymorphic() {
     // `let` is desugared by the frontend into an applied binding; polymorphism
     // is the apply's fresh clones.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
     let b1 = w.param("b1");
@@ -555,7 +555,7 @@ fn let_bound_functions_are_polymorphic() {
 
 #[test]
 fn applying_a_non_function_fails() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let six = w.int("six", 6);
     let a = w.app("a", five, six);
@@ -567,7 +567,7 @@ fn applying_a_non_function_fails() {
 #[test]
 fn tuple_typechecks_elementwise() {
     // [1, 2] : [int, int]
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
@@ -581,7 +581,7 @@ fn tuple_typechecks_elementwise() {
 
 #[test]
 fn tuple_length_mismatch_fails() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
@@ -595,7 +595,7 @@ fn tuple_length_mismatch_fails() {
 #[test]
 fn types_are_first_class() {
     // let T = int in \x. (x : T) → (\T. \x. (x : T)) int
-    let mut w = Writer::new();
+    let w = Writer::new();
     let bt = w.param("bt");
     let tval = w.int_type("tval");
     let bx = w.param("bx");
@@ -611,7 +611,7 @@ fn types_are_first_class() {
 #[test]
 fn built_program_runs_to_a_value() {
     // (\id. id 5) (\x. x)  ==  5
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
     let b1 = w.param("b1");
@@ -632,7 +632,7 @@ fn built_program_runs_to_a_value() {
 #[test]
 fn inline_lambda_applies() {
     // (\x. x) 5  ==  5
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -666,7 +666,7 @@ fn inline_lambda_applies() {
 #[test]
 fn nested_polymorphic_applies_run() {
     // (\id. id (id 5)) (\x. x)  ==  5
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
     let b1 = w.param("b1");
@@ -690,7 +690,7 @@ fn nested_polymorphic_applies_run() {
 #[test]
 fn annotation_mismatch_reports_expected_found() {
     // 5 : Type  →  expected TypeType, found TypeInt
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let t = w.universe("t");
     let a = w.annotate("a", five, t);
@@ -714,7 +714,7 @@ fn annotation_mismatch_reports_expected_found() {
 fn applying_a_non_function_reports_expected_function() {
     // 5 6 — the function-ness guard, with the flow showing where `int` came
     // from
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let six = w.int("six", 6);
     let call = w.app("call", five, six);
@@ -739,7 +739,7 @@ fn applying_a_non_function_reports_expected_function() {
 #[test]
 fn indexing_a_function_reports_expected_tuple_or_array() {
     // (\x. x)[0] — the index-target guard: a function type is not indexable.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let l = w.lam("l", x, x);
     let zero = w.int("zero", 0);
@@ -766,7 +766,7 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
 #[test]
 fn indexing_an_int_reports_expected_tuple_or_array() {
     // 5[0] — an atomic type is not indexable either.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let zero = w.int("zero", 0);
     let idx = w.index("idx", five, zero);
@@ -780,7 +780,7 @@ fn indexing_an_int_reports_expected_tuple_or_array() {
 #[test]
 fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     // (\x. (x : Type)) 5 — the parameter's type is Type, the argument's int.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let t = w.universe("t");
     let body = w.annotate("body", x, t);
@@ -808,7 +808,7 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 #[test]
 fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
     // (\x. x) : tuple{Type, Int} — a function's type is not a tuple type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -827,7 +827,7 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
 fn an_unannotated_lambda_has_an_undecided_arrow_type() {
     // (\x. x) : Type — a function's type is not Type, so the annotation
     // conflicts.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -849,7 +849,7 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
 fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
     // (\id. id 5) (\x. x) — the call's result cell is a lazy record, synced
     // to the return pair by the apply's evaluation.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
     let b1 = w.param("b1");
@@ -870,7 +870,7 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
 fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     // a = \x. (1, Int)[x]; (a 0, a 1) — the element types are the calls'
     // lazy result cells, synced with their return pairs.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let one = w.int("one", 1);
     let tval = w.universe("tval");
@@ -903,7 +903,7 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
 #[test]
 fn tuple_length_mismatch_reports_both_sides() {
     // [1, 2] : [int]
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let tup = w.tuple("tup", &[e1, e2]);
@@ -932,7 +932,7 @@ fn tuple_length_mismatch_reports_both_sides() {
 fn a_call_result_annotation_is_checked_against_the_return_type() {
     // (\f. (f 5 : int)) (\x. Type) — f returns Type, so the annotation's int
     // is refused when the apply syncs the cell.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let tval = w.universe("tval");
     let f = w.lam("f", x, tval);
@@ -955,7 +955,7 @@ fn a_call_result_annotation_is_checked_against_the_return_type() {
 fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
     // (\x. x) 5 : Type — the identity returns int, so the annotation is
     // refused when the apply syncs the result cell.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     // The return expression uses the parameter's id directly.
     let l = w.lam("l", x, x);
@@ -978,7 +978,7 @@ fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
 fn a_nested_function_value_captures_the_applied_outer_parameter() {
     // A closure capturing its enclosing parameter: `f1 3 4` yields
     // [1, 2, 3, 4], not the leaked template.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let a = w.int("a", 1);
     let b = w.int("b", 2);
     let x = w.param("x");
@@ -1021,7 +1021,7 @@ fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> 
 fn a_nested_lambda_hangs_under_its_enclosing_function() {
     // The nesting half of the parent rule: a body closure joins the enclosing
     // template and clones with it.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let a = w.int("a", 1);
     let x = w.param("x");
     let y = w.param("y");
@@ -1041,7 +1041,7 @@ fn a_nested_lambda_hangs_under_its_enclosing_function() {
 fn a_sibling_lambda_hangs_under_nothing() {
     // The sibling half: two same-level lambdas hang under nothing, so neither
     // template absorbs the other.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let sibling = w.lam("sibling", x, x);
     let other = w.lam("other", x, sibling);
@@ -1064,7 +1064,7 @@ fn a_sibling_lambda_hangs_under_nothing() {
 #[test]
 fn tuple_index_selects_value_and_type() {
     // (1, 2)[0] — the tuple's element-type list is structural, a plain Index.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let tup = w.tuple("tup", &[one, two]);
@@ -1095,7 +1095,7 @@ fn tuple_index_selects_value_and_type() {
 fn array_index_selects_value_and_type() {
     // [1, 2, 3][1] — the shape holds the length as data, so the type
     // evaluation dispatches on the kind.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let e3 = w.int("e3", 3);
@@ -1127,7 +1127,7 @@ fn array_index_selects_value_and_type() {
 fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     // (1, 2)[5] — both evaluations hit the bounds check, collapsing to one
     // diagnostic.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let tup = w.tuple("tup", &[one, two]);
@@ -1155,7 +1155,7 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
 fn array_index_out_of_bounds_renders_a_diagnostic() {
     // [1, 2, 3][5] — the type side checks the index against the ArrayType's
     // length (3), not the shape's structural size (2).
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let e3 = w.int("e3", 3);
@@ -1183,7 +1183,7 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
 #[test]
 fn array_index_out_of_bounds_against_a_bound_length() {
     // (\x. x[3])([1, 2]) — the type is known only once the apply binds it.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let three = w.int("three", 3);
     let body = w.index("body", x, three);
@@ -1211,7 +1211,7 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     // struct{.f Int, .t Type} — the pair [[int, Type], [[TypeId(0), names,
     // names_in_order], TypeStruct]].
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t1 = w.int_type("t1");
     let t2 = w.universe("t2");
     let s = w.struct_type("s", &[(t1, Some("f")), (t2, Some("t"))]);
@@ -1315,7 +1315,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
     // struct{.a Int, .b Type} — the names slot maps each name to its index.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t1 = w.int_type("t1");
     let t2 = w.universe("t2");
     let s = w.struct_type("s", &[(t1, Some("a")), (t2, Some("b"))]);
@@ -1373,7 +1373,7 @@ fn a_named_struct_carries_a_name_to_index_table() {
 
 #[test]
 fn each_struct_type_occurrence_allocates_a_distinct_id() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s1 = w.struct_type("s1", &[(f, Some("f"))]);
     let s2 = w.struct_type("s2", &[(f, Some("f"))]);
@@ -1406,7 +1406,7 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
     // same fields, different occurrences → different ids → nominal conflict
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s1 = w.struct_type("s1", &[(f, Some("f"))]);
     let s2 = w.struct_type("s2", &[(f, Some("f"))]);
@@ -1429,7 +1429,7 @@ fn two_struct_type_occurrences_do_not_unify() {
 
 #[test]
 fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
     let t = w.type_tuple("t", &[f]);
@@ -1460,7 +1460,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
 
 #[test]
 fn a_struct_type_unifies_with_itself() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
     let b = build(s, w);
@@ -1476,7 +1476,7 @@ fn a_struct_type_unifies_with_itself() {
 #[test]
 fn an_annotation_against_a_struct_type_reports_the_conflict() {
     // 5 : struct{.f Int} — the literal's int type conflicts with the struct type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
@@ -1501,7 +1501,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
 #[test]
 fn two_struct_types_conflict_reports_the_nominal_ids() {
     // The argument's struct type has a different fresh id than the annotation's.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f1 = w.int_type("f1");
     let s1 = w.struct_type("s1", &[(f1, Some("f"))]);
     let f2 = w.int_type("f2");
@@ -1522,7 +1522,7 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
 #[test]
 fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     // (\x. (x : struct{.f Int})) 5 — the apply-time unify checks the argument.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
     let x = w.param("x");
@@ -1551,7 +1551,7 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
 fn a_shared_expression_compiles_once_with_one_nominal_id() {
     // The IR is a graph: the same expression may have several parents, so it
     // compiles once, keeping one nominal id.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
     let a = w.array("a", &[s, s]);
@@ -1572,7 +1572,7 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
 
 #[test]
 fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1593,7 +1593,7 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
 #[test]
 fn a_struct_instantiation_checks_its_fields() {
     // arity: two fields, one value
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1606,7 +1606,7 @@ fn a_struct_instantiation_checks_its_fields() {
         "s(1, 2) against a one-field struct must fail (arity)"
     );
     // field type: the tuple's Ints are not Type
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1620,7 +1620,7 @@ fn a_struct_instantiation_checks_its_fields() {
         "s(1, 2) against struct{{.f Type, .t Type}} must fail (fields)"
     );
     // a literal is not a positional value
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let f = w.int_type("f");
     let s = w.struct_type("s", &[(f, Some("f"))]);
@@ -1632,7 +1632,7 @@ fn a_struct_instantiation_checks_its_fields() {
 #[test]
 fn instances_of_different_struct_occurrences_conflict() {
     // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1670,7 +1670,7 @@ fn instances_of_different_struct_occurrences_conflict() {
 fn an_instantiation_through_a_call_result_callee_checks() {
     // `(mk (Int))(1, 2)` with `mk = u => struct{...}` — the callee is an
     // unevaluated apply the checker forces first.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let f1 = w.int_type("f1");
     let f2 = w.int_type("f2");
@@ -1697,7 +1697,7 @@ fn an_instantiation_through_a_call_result_callee_checks() {
 #[test]
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
     // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is not a struct.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let intt = w.int_type("intt");
     let mk = w.lam("mk", p, intt);
@@ -1722,7 +1722,7 @@ fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
 #[test]
 fn an_instantiation_requires_a_struct_type_callee() {
     // Nominality: a tuple type is not a struct — it cannot instantiate.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1741,7 +1741,7 @@ fn an_instantiation_requires_a_struct_type_callee() {
         "the not-a-struct error points at the callee"
     );
     // Nor can a function type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let v = w.tuple("v", &[one, two]);
@@ -1760,7 +1760,7 @@ fn an_instantiation_requires_a_struct_type_callee() {
 fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
     // `f = s => s(1, 2); f (Int)` — the undecided callee is pinned to a struct
     // kind; a non-struct argument fails the check.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let one = w.int("one", 1);
     let two = w.int("two", 2);
@@ -1782,7 +1782,7 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
         "the refusal names the instantiation whose callee is not a struct"
     );
     // The pin rejects a tuple type too (nominality through the deferral).
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let one = w.int("one", 1);
     let two = w.int("two", 2);
@@ -1804,7 +1804,7 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
 fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
     // `f = s => s(.x 1, .y Int)` — the name table is not known through a
     // parameter, so the reorder stays a lazy read.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let one = w.int("one", 1);
     let t = w.universe("t");
@@ -1849,7 +1849,7 @@ fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
 fn an_underscore_annotation_infers_the_type() {
     // 5 : _ — the placeholder's value slot binds to the int marker, its
     // kind slot to the universe.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let h = w.hole("h");
     let a = w.annotate("a", five, h);
@@ -1873,7 +1873,7 @@ fn an_underscore_annotation_infers_the_type() {
 fn an_underscore_annotation_binds_a_function_type() {
     // (\x. x) : _ — the placeholder binds to the whole function-type node:
     // clone-on-unify never fires without a signature.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let l = w.lam("l", x, x);
     let h = w.hole("h");
@@ -1903,7 +1903,7 @@ fn partial_inference_in_an_arrow_type() {
 
     // The identity is monomorphic at this type; the cost is deliberate
     // (`docs/notes/function-type-merge.md`).
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let l = w.lam("l", x, x);
     let it = w.int_type("it");
@@ -1932,7 +1932,7 @@ fn partial_inference_in_an_arrow_type() {
 fn an_underscore_in_the_array_length_position() {
     // [1, 2, 3] : array{Int, _} — the placeholder length binds to the
     // element count.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let e3 = w.int("e3", 3);
@@ -1963,7 +1963,7 @@ fn an_underscore_in_the_array_length_position() {
 fn a_mismatch_against_a_partial_type_is_still_an_error() {
     // 5 : (Int -> _) — the placeholder does not mask the mismatch between
     // the literal and the function type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let five = w.int("five", 5);
     let it = w.int_type("it");
     let h = w.hole("h");
@@ -1980,7 +1980,7 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 fn shallow_array_is_masked_and_typed_like_a_tuple() {
     // [1, @shallow(2)] — the marker marks position 1; the type is a tuple, not an
     // array type.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let arr = w.shallow_array("arr", &[(one, 0), (two, usize::MAX)]);
@@ -2029,7 +2029,7 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
 fn shallow_marked_position_stays_lazy_until_a_read() {
     // [1, @shallow(x => x + 1) 5] — the apply sits at the bare-`@shallow` position, so the
     // deep pass skips it.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
     let x = w.param("x");
@@ -2052,7 +2052,7 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
 fn a_read_of_a_shallow_position_forces_the_element() {
     // [1, @shallow(x => x + 1) 5][1] — the read runs the apply that the deep pass
     // deliberately skipped.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let five = w.int("five", 5);
     let x = w.param("x");
@@ -2079,7 +2079,7 @@ fn a_read_of_a_shallow_position_forces_the_element() {
 #[test]
 fn top_level_assert_passes_when_the_condition_is_one() {
     // assert(1 == 1) — the condition resolves to 1 at check time.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let one2 = w.int("one2", 1);
     let cond = w.binop("cond", BinOp::Eq, one, one2);
@@ -2093,7 +2093,7 @@ fn top_level_assert_passes_when_the_condition_is_one() {
 fn top_level_assert_fails_when_the_condition_is_not_one() {
     // assert(1 == 2) — the condition resolves to 0: a failed assert, not a
     // unification failure.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let cond = w.binop("cond", BinOp::Eq, one, two);
@@ -2112,7 +2112,7 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
 fn in_function_assert_passes_for_a_satisfying_argument() {
     // f = n => assert(n == 1); f 1 — the apply clones the undecided assert and
     // re-checks it.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let n = w.param("n");
     let one = w.int("one", 1);
     let cond = w.binop("cond", BinOp::Eq, n, one);
@@ -2133,7 +2133,7 @@ fn in_function_assert_passes_for_a_satisfying_argument() {
 #[test]
 fn in_function_assert_fails_for_a_violating_argument() {
     // f 2 — the clone's condition resolves to 0.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let n = w.param("n");
     let one = w.int("one", 1);
     let cond = w.binop("cond", BinOp::Eq, n, one);
@@ -2158,7 +2158,7 @@ fn in_function_assert_fails_for_a_violating_argument() {
 #[test]
 fn never_called_function_assert_is_not_triggered() {
     // f = n => assert(n == 1), never applied: the assert stays pending.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let n = w.param("n");
     let one = w.int("one", 1);
     let cond = w.binop("cond", BinOp::Eq, n, one);
@@ -2174,7 +2174,7 @@ fn never_called_function_assert_is_not_triggered() {
 fn assert_on_a_literal_checks_the_value_itself() {
     // assert(3) — the condition is the literal's value: it resolves to 3,
     // not 1, so the assert fails.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let three = w.int("three", 3);
     let asserted = w.assert("asserted", three);
     let b = build(asserted, w);
@@ -2192,7 +2192,7 @@ fn assert_on_a_literal_checks_the_value_itself() {
 fn an_out_of_bounds_array_index_fails_a_generated_assert() {
     // [1, 2, 3][3] — the generated `i < len` constraint is what fails; the
     // read stays in-bounds for the runtime.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let a = w.int("a", 1);
     let b2 = w.int("b2", 2);
     let c = w.int("c", 3);
@@ -2217,7 +2217,7 @@ fn an_out_of_bounds_array_index_fails_a_generated_assert() {
 fn an_in_bounds_generated_constraint_is_drained() {
     // [1, 2][1] — `1 < 2` holds, so the constraint is consumed like a passing
     // assert.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let a = w.int("a", 1);
     let b2 = w.int("b2", 2);
     let arr = w.array("arr", &[a, b2]);
@@ -2236,7 +2236,7 @@ fn an_in_bounds_generated_constraint_is_drained() {
 fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
     // f = i => [7, 8, 9][i] — the body's `i < 3` constraint stays pending; it
     // is cloned and decided per apply.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let i = w.param("i");
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
@@ -2260,7 +2260,7 @@ fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
 fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
     // f = i => [7, 8, 9][i]; f 3 — the generated `i < 3` constraint is not
     // reachable from the return; the clone fails.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let i = w.param("i");
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
@@ -2288,7 +2288,7 @@ fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
 #[test]
 fn a_body_index_fails_at_the_violating_argument() {
     // f = i => [7, 8, 9][i]; f 5 — the instantiated clone's `5 < 3` fails.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let i = w.param("i");
     let a = w.int("a", 7);
     let b2 = w.int("b2", 8);
@@ -2315,7 +2315,7 @@ fn a_body_index_fails_at_the_violating_argument() {
 #[test]
 fn an_annotated_struct_parameter_function_reads_a_named_field() {
     // `f = (p : struct{.x Int, .y Int} => p.x)`; `f (struct{.x 1, .y 2})`.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let int_x = w.int_type("int_x");
     let int_y = w.int_type("int_y");
@@ -2340,7 +2340,7 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
 /// type expression is what makes an annotation and an instance agree.
 #[test]
 fn two_written_struct_types_are_distinct_nominal_types() {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let int_a = w.int_type("int_a");
     let written_in_annotation = w.struct_type("written_in_annotation", &[(int_a, Some("x"))]);
@@ -2372,7 +2372,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 
     // So the body's `T.I` reads a field the annotation already named, and
     // applying `F` to a struct type closes it.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let t = w.param("t");
     let open_i = w.hole("open_i");
     let open_o = w.hole("open_o");
@@ -2421,7 +2421,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 fn an_annotated_tuple_parameter_function_reads_an_element() {
     // The regression `f = p : tuple{Int, Int} => p(0)`; `f (1, 2)` failed with
     // `expected raw[?a, Int], found raw[?a, Int]`.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let int1 = w.int_type("int1");
     let int2 = w.int_type("int2");
@@ -2472,7 +2472,7 @@ fn common_value(value: &HighProgramValue) -> u64 {
 #[test]
 fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
     // `f = (p : struct{.x Int, .y Int} => p)`; `g = (a => f a)`.
-    let mut w = Writer::new();
+    let w = Writer::new();
     let p = w.param("p");
     let int_x = w.int_type("int_x");
     let int_y = w.int_type("int_y");

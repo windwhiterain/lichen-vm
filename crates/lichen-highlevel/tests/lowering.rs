@@ -8,7 +8,7 @@ use lichen_testkit::{Probe, Writer};
 /// `(\x. x) 5` — the smallest program with a named value, a named type, and a
 /// named apply.
 fn identity_applied() -> Probe<ProgramImpl> {
-    let mut w = Writer::new();
+    let w = Writer::new();
     let x = w.param("x");
     let id = w.lam("id", x, x);
     let five = w.int("five", 5);
@@ -102,7 +102,7 @@ fn a_node_nothing_attributed_reads_as_such() {
 #[test]
 fn an_unknown_name_panics_with_the_names_the_program_has() {
     let missing = std::panic::catch_unwind(|| {
-        let mut w: Writer = Writer::new();
+        let w: Writer = Writer::new();
         let five = w.int("five", 5);
         let mut probe: Probe<ProgramImpl> = Probe::build(w.finish(five));
         probe.usize_of("five_")
@@ -124,7 +124,7 @@ fn an_unknown_name_panics_with_the_names_the_program_has() {
 /// Its name comes back out of the graph, not out of the writer's table.
 #[test]
 fn a_node_read_out_of_an_array_names_its_expression() {
-    let mut w: Writer = Writer::new();
+    let w: Writer = Writer::new();
     let one = w.int("one", 1);
     let two = w.int("two", 2);
     let three = w.int("three", 3);

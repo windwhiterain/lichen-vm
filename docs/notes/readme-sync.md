@@ -3,7 +3,7 @@
 > Status: current
 > Points at: `crates/lichen-tools/src/readme.rs` (the renderer),
 > `crates/lichen-tools/src/bin/sync-readme.rs` (the on-demand command),
-> `crates/lichen-language/tests/readme.rs` (the self-healing check), and the
+> `crates/lichen-compute/tests/readme.rs` (the self-healing check), and the
 > `examples/` tree itself. The `---…---` block *syntax* is the spec's business:
 > [language-spec.md §2.2](../language-spec.md).
 

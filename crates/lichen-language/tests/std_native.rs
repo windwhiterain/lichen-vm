@@ -6,8 +6,7 @@ use lichen_language::persist::{NoPersist, ProgramCodecOf};
 use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
-/// The plugin-built compiler's vocabulary: the language's leaves plus the
-/// `lichen-std-native` plugin.
+/// A host over the bare language's leaves plus `lichen-std-native`.
 mod host {
     #![allow(dead_code)] // the composition's own LangProgram/ProgramCodec are
     // unused — see the module doc.
@@ -20,13 +19,11 @@ mod host {
         values = [
             lichen_lowlevel::LowValue as LowValue;
             lichen_highlevel::program::TypeValue as TypeValue;
-            lichen_compute::ComputeValue as ComputeValue;
         ];
         operators = [
             lichen_lowlevel::LowOperator as LowOperator;
             lichen_highlevel::program::TypeOperator as TypeOperator;
             lichen_perspective::GcdOp as GcdOp;
-            lichen_compute::ComputeOperator as ComputeOperator;
         ];
         plugins = [ lichen_std_native as lichen_std_native_leaves; ];
     }
@@ -69,7 +66,6 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
             LangOperator::LowOperator(op) => op.run(operand, block, module),
             LangOperator::TypeOperator(op) => op.run(operand, block, module),
             LangOperator::GcdOp(op) => op.run(operand, block, module),
-            LangOperator::ComputeOperator(op) => op.run(operand, block, module),
             LangOperator::SortOp(op) => op.run(operand, block, module),
         }
     }
@@ -79,6 +75,10 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
 impl ProgramCodecOf for HostProgram {
     type Codec = NoPersist;
 }
+
+// This host names no leaf the lowlevel printer cannot, so it takes the shape's
+// default naming.
+impl lichen_language::LangProgramShape for HostProgram {}
 
 type DStore = PackageStore<HostProgram>;
 

@@ -882,10 +882,17 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "facet-json",
+ "lichen-compute-gpu",
+ "lichen-doc",
+ "lichen-fusion",
+ "lichen-fusion-bridge",
  "lichen-graph-ir",
  "lichen-highlevel",
  "lichen-kernel-ir",
+ "lichen-language",
  "lichen-lowlevel",
+ "lichen-perspective",
+ "lichen-tools",
  "lichen-utils",
  "stacksafe",
  "waffle",
@@ -954,16 +961,8 @@ version = "0.1.0"
 name = "lichen-language"
 version = "0.1.0"
 dependencies = [
- "facet",
- "facet-json",
- "lichen-compute",
- "lichen-compute-gpu",
  "lichen-doc",
- "lichen-fusion",
- "lichen-fusion-bridge",
- "lichen-graph-ir",
  "lichen-highlevel",
- "lichen-kernel-ir",
  "lichen-language-lex",
  "lichen-language-parser",
  "lichen-lowlevel",
@@ -973,7 +972,6 @@ dependencies = [
  "lichen-registry",
  "lichen-render",
  "lichen-std-native",
- "lichen-tools",
  "lichen-utils",
  "stacksafe",
 ]
@@ -1105,6 +1103,7 @@ dependencies = [
 name = "lichen-tools"
 version = "0.1.0"
 dependencies = [
+ "lichen-compute",
  "lichen-language",
 ]
 

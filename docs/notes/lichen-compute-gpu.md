@@ -156,7 +156,7 @@ run in parallel.** It replaces the installed backend, and a device holds the
 buffers a dispatch left it; a second test that installs and dispatches while the
 first still holds a buffer has been measured to pull it — `the "gpu" backend
 declined to return input buffer 0 (buffer 6): buffer 6 is not one this device is
-holding`, once in `crates/lichen-language/tests/pack_placement.rs`, which now
+holding`, once in `crates/lichen-compute/tests/pack_placement.rs`, which now
 serialises its device tests behind a `static Mutex`. The other device test files
 share that latent hazard; a file that adds a second device test should take the
 lock rather than trusting the scheduler.
@@ -283,7 +283,7 @@ On top of that plan:
   module, so the body was refused by name (`MixedClasses`, or `UnsupportedFloatOperator` on a `%`).
   It stayed latent because every tiled or per-lane fold in the tree folded at `Int`, where the
   module's class *was* the right answer; the first program that put a `Float` fold on a device found
-  it (`crates/lichen-language/tests/reduction_chain.rs`).
+  it (`crates/lichen-compute/tests/reduction_chain.rs`).
 - **A constant is emitted once per (class, value)** — SPIR-V requires every id to be defined exactly
   once — and since `OpConstant` is module-scope the body's literals are collected in pass 1. The
   same `Const(0)` is a buffer position in one place and a float's bit pattern in another, so the
