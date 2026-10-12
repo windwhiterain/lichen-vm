@@ -570,13 +570,20 @@ not-yet-compiled module has none, and both stages answer from the **process-glob
 compile is about to fill (the deferred branch in `automatic_tiling.rs` and `region_merge.rs`) — measured:
 the empty seed tiles and reports both stages on the device.
 
-**Open — a run's report does not reach a `lichen` user.** Every stage line, and a pack's own
-`pack "…" fired`, live in `module.extension_diagnostics`, which `render_build` prints **only when the
-program produced nothing**. So a `.lichen --pack` run says nothing about what the floor did: a machine
-cannot tell "my pack fired" from "my pack was inert". That is not new with `--pack` — it is true of
-every floor line — but `--pack` is what makes it user-facing, and a pack is exactly the artifact whose
-whole point is that its effect should be knowable. The change is a decision, not a repair: when does a
-run's report get printed, if not only on an empty program?
+**And a run that named a pack says what the pack did** (`b01e46f0`). The decision is one value and one
+place: `PassReport::{Silent, Reported}` read off the invocation's own `--pack` list in
+`main_with_native_packages`, carried beside `native` down to `build_file` too — a **global** option is
+one decision, not one per subcommand. It is applied as a **third channel**, not by widening
+`render_build`'s refusal gate: that channel returns `Err(diags)`, which the CLI prints *instead of* the
+value and exits `FAILURE` on, so a run that answered would lose its answer to gain a report — a stage
+line is a fact (`region N: …`, `node N: …`, `pack "…" fired`), not an explanation for a value that never
+arrived (`compute-plugin.md`: a refusal is not a verdict). The lines go to **stderr, verbatim and
+unprefixed** — stdout is the program's output — and `Silent` collects nothing at all, so a run that
+named no pack is byte-for-byte the run it was. What a machine gains: it can now tell *fired* from
+*inert* — `pack "sum-in-shared" fired for schema sha256:b0545f…: its plan stages \`tile\` in Shared over
+64 lane(s)` versus `no pack matched its schema sha256:b0545f…, so the automatic floor tiled`. **Still
+unattributed**: a **directory** run prints every file's lines verbatim with no file name on them, so two
+programs' lines interleave; prefixing would make them no longer verbatim, which is a second decision.
 
 The landed pack's plan is **the fused artifact's own spelling** — one `Plan`
 type, not a second one — so a pack and an artifact cannot disagree about what a
