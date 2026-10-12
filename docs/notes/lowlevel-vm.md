@@ -249,15 +249,24 @@ Three rules decide what a class's members then hold.
    two sides are one value or one side is undecided — `unify` establishes that on every
    path reaching `add_equality` and returns on the conflicting arms. So the filled class is
    uniform either way, and "one class holds one value" follows from the precondition rather
-   than from writing over anybody. A merge of two decided-different classes is not a merge:
-   that is what `unify_function_types` stops doing, since two function types agree on their
-   signature cells while each names its own `Function`.
+   than from writing over anybody.
 
-**The one writer that does replace** is `write_node_answer`, and it has to: a propagated
-class value sits in an operation-bearing member's slot, and the answer must take its place,
-or a dependent codomain binds the concrete type over it and the operator never runs again.
-So "a slot is written once" holds for every *writer*; GC's relocation and an operator's own
-answer are the two paths that rewrite an occupied slot, and each says why.
+**Nothing writes over an occupied slot.** The two sites that are not `write_node_value` are
+gated rather than exempted. An operator's answer is **unified** against what the class holds:
+an empty class takes the answer whole, and a class holding a value is one value with the
+answer or is not — if it is, the answer fills this node's hole, and if it is not, the
+disagreement is recorded and nothing is written. An apply's result is written only into a
+class holding nothing; when the class already holds one, the `unify` that follows joins the
+node with the return, and the class that join makes is uniform.
+
+`unify_function_types` is the one place two classes holding **different** values merge: two
+function types agree on their signature cells while each names its own `Function`. Whether
+that makes them one type is [function-type-merge](function-type-merge.md)'s open
+sub-typing question, left there deliberately — the write rules do not decide it.
+
+**GC's `relocate_node_value` is the one rewrite.** Compaction re-allocates a payload from
+the same items into the surviving block, so the value is moved into a new home rather than
+replaced by another one.
 
 The consequence worth stating plainly: a class never holds two different values, because the
 only moment two classes could start doing so is a merge, and the merge does not do it. That

@@ -615,13 +615,8 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        // One signature does not make one value: each pair names its own function.
-        if self.function_identity_equal(
-            self.function_type_function(ra).expect("a function type"),
-            self.function_type_function(rb).expect("a function type"),
-        ) {
-            self.add_equality(ra, rb);
-        }
+        // The elements agree, so the types are one; no value is written back — both carry one.
+        self.add_equality(ra, rb);
         true
     }
 
