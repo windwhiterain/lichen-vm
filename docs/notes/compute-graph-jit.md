@@ -658,15 +658,32 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   `Index` answers undecided nothing below it is forced and the walk meets a node with no value.
   **Both** return nodes are unnamed, not the first — the walk merely aborts on the first `?` — and
   `returned_value_ids` itself is **innocent**: it walks by tuple **position** and never by type or
-  identity, which every successful recording shows as `[Value(0), Value(1)]`. The trigger is exact
-  and narrower than "the same output type": same `.I` **and** same `.O` fails; same `.O` with a
-  different `.I` records; and a third, differently shaped dispatch *repairs* it (no mechanism yet
-  explains that, so it is a correlation). Two more facts worth carrying: the refusal rides
-  `record_extension_diagnostic`, a **note** that does **not** fail the build, so a root that still
-  produces a value answers `Ok` and the graph is silently undecided; and the honest fix is
-  **upstream** of the recording — the clone/carry rule in the apply
-  ([apply-clone-ownership](apply-clone-ownership.md)) — while every route to it is a contract change,
-  which is why it was reported rather than patched.
+  identity, which every successful recording shows as `[Value(0), Value(1)]`.
+  **A diagnosis then measured the trigger, the mechanism, and that no non-contract fix exists.** The
+  trigger is **not** a type identity: two *distinct kernels* sharing `.I` **and** `.O` record fine,
+  and what fails is **two distinct bindings of the *same* kernel, both dispatched** — at the low level,
+  two name lookups into two distinct cells that hold **equal** values, both reached by the body, which
+  one equality class then answers for. Two rules produce it, and the note's first account blamed the
+  wrong one: the **carry** rule ([`function.rs`], a kernel-name `Index` is a *definition*, so its clone
+  carries no value — `apply-clone-ownership` §2, by design, and the copy must therefore re-run), and
+  the rule that **stops the re-run** (`evaluation.rs`: `alias_read` unifies the reader with its cell,
+  and the next line answers that same equality from **the class** instead of the cell — for a per-apply
+  clone the class holds the *template's* open cell, whose committed value is `None`, so the read
+  answers undecided **without ever evaluating**). It is a **self-answering loop, not a lazy one**, and
+  the copy the body sees can never be decided. So the "third dispatch repairs it" is really *whether
+  the third result is returned*: the deep walk descends **value** edges only, and a returned third value
+  forces the shared binding-array clone first, repopulating the class (measured; the last step is
+  inference). **No fix is a plain bug fix**: the one candidate that looked like it — falling through
+  when the class has no committed value — was implemented as a probe and changed **nothing**, while the
+  others each contradict a named invariant (the carry rule and its static mirror, `alias_read`'s
+  contract, or `evaluate_node_deep`'s "an operation's operand edge is not forced"). And the refusal
+  **cannot be narrowed into a build failure**: the tempting discriminator is `runned != 0` with
+  `evaluated_deep == Some(undecided)`, but that is the VM's ordinary lazy path — one small program
+  produced **151** such nodes — so failing on it would fail every legitimate deferred instantiation.
+  Two more facts worth carrying: the refusal rides `record_extension_diagnostic`, a **note** that does
+  **not** fail the build, so a root that still produces a value answers `Ok` and the graph is silently
+  undecided; and turning that note into a refusal would not record the graph either — it would only
+  stop pretending, which is why the diagnosis was reported rather than patched.
   [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
