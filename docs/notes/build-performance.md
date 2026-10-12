@@ -92,6 +92,8 @@ The boundary is reached with the **two** boxes above.
 - To go lower you would have to cut codegen itself: a workspace profile with
   `debug = 0` / `debug = "line-tables-only"` (dev builds) — or, deeper, replace the
   chumsky combinator grammar with a hand-written recursive-descent parser.
+- This note is about *build* time. The crate's *runtime* parse cost is a separate
+  problem and a separate note: [parse-clean-probe](parse-clean-probe.md).
 
 The lesson is one rule: box at the chokepoint where the type is *threaded*, not
 everywhere.
