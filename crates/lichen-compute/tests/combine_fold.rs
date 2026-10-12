@@ -3,10 +3,12 @@
 
 mod common;
 
+use common::device;
+
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
+use lichen_compute_gpu::LOCAL_SIZE_X;
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
@@ -20,23 +22,6 @@ const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
 /// index plus one, so lane zero folds `b[0]` — squared here, which is still `1.0` — and the tiled
 /// body would have put `1 + 2 + … + 192` there instead.
 const PER_LANE: f32 = 1.0;
-
-/// A context on a device, or `None` when there is none here.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in this
-/// tree reports one. `install_default` **replaces** the process's backend, so this case owns its
-/// test binary rather than sharing one: two contexts in one process hand each other buffers that
-/// were never issued (`tests-do-not-render.md`).
-fn device(test: &str) -> Option<GpuContext> {
-    match install_default() {
-        Ok(()) => Some(GpuContext::new().expect("a context was just installed")),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
-}
 
 /// A `Σ x²` program: the one of `automatic_tiling.rs` with the datum squared inside the combine.
 ///
@@ -94,7 +79,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// produced at all — and the line is what tells an operator author their claim is at fault.
 #[test]
 fn a_sum_of_squares_is_refused_by_name_and_the_weaker_sum_never_answers() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("a_sum_of_squares_is_refused_by_name_and_the_weaker_sum_never_answers")
     else {
         return;
