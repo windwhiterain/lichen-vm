@@ -712,7 +712,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                 fold_right(first, rest, |lhs, rhs| {
                     let span = lhs.span();
                     Expr::Arrow {
-                        parameter: Box::new(lhs),
+                        parameter_type: Box::new(lhs),
                         r#return: Box::new(rhs),
                         span,
                     }

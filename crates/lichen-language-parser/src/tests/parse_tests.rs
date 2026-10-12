@@ -304,14 +304,17 @@ fn application_is_left_associative() {
 #[test]
 fn arrows_are_right_associative() {
     let Expr::Arrow {
-        parameter,
+        parameter_type,
         r#return,
         ..
     } = parse_ok("Int -> Int -> Int")
     else {
         panic!("expected an arrow")
     };
-    assert!(matches!(*parameter, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(
+        *parameter_type,
+        Expr::TypeConst(TypeConst::Int, _)
+    ));
     assert!(matches!(*r#return, Expr::Arrow { .. }));
 }
 

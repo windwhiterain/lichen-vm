@@ -138,12 +138,12 @@ pub(crate) fn shift_expr(
             }
         }
         Expr::Arrow {
-            parameter,
+            parameter_type,
             r#return,
             span,
         } => {
             shift(span, old_starts, new_starts, delta);
-            shift_expr(parameter, old_starts, new_starts, delta);
+            shift_expr(parameter_type, old_starts, new_starts, delta);
             shift_expr(r#return, old_starts, new_starts, delta);
         }
         Expr::Tuple(elements, span)

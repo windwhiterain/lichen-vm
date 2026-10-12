@@ -766,11 +766,11 @@ impl Compiler {
                 self.alloc(ExprKind::NamedTypeAccess { container, name }, span)
             }
             Expr::Arrow {
-                parameter,
+                parameter_type,
                 r#return,
                 span,
             } => {
-                let parameter = self.compile_expr(parameter);
+                let parameter = self.compile_expr(parameter_type);
                 let r#return = self.compile_expr(r#return);
                 self.alloc(
                     ExprKind::TypeFunction {

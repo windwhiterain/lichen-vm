@@ -201,7 +201,7 @@ pub enum Expr {
     },
     /// `T1 -> T2` — a function type.
     Arrow {
-        parameter: Box<Expr>,
+        parameter_type: Box<Expr>,
         r#return: Box<Expr>,
         span: Span,
     },
