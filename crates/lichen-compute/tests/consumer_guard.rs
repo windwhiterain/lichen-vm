@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
+
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
@@ -22,14 +24,30 @@ const COUNT: usize = LOCAL_SIZE_X as usize;
 /// element does not have, and a consumer that read the value as a datum answers the element.
 const DATA: [f32; 3] = [2.0, 4.0, 6.0];
 
-/// A context on a device, or `None` when there is none here.
+/// The device, held for the whole of a test that runs on one.
+///
+/// # Invariant
+/// `install_default` replaces the process's backend, so a second test installing one while the
+/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
+/// tests here run one at a time.
+static DEVICE: Mutex<()> = Mutex::new(());
+
+/// A context on a device, or `None` when there is none here, with the device held for the run.
 ///
 /// # Invariant
 /// The skip is reported and never turned into a failure. The context is installed as the process's
-/// backend, because a graph run reaches a device only through `ParallelBackend`.
-fn device(test: &str) -> Option<GpuContext> {
+/// backend, because a graph run reaches a device only through `ParallelBackend`. The guard
+/// travels back with the context, so a caller that keeps both keeps the device for as long as it
+/// runs.
+fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
+    let guard = DEVICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match install_default() {
-        Ok(()) => Some(GpuContext::new().expect("a context was just installed")),
+        Ok(()) => Some((
+            GpuContext::new().expect("a context was just installed"),
+            guard,
+        )),
         Err(reason) => {
             eprintln!("SKIPPED {test}: no device to run on: {reason}");
             None
@@ -287,7 +305,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// refusal renders, so a reworded message fails rather than a substring that happens to survive.
 #[test]
 fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched")
     else {
         return;
@@ -354,7 +372,9 @@ fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
 /// a pass that tiled it would replace that read with a datum read and answer a different function.
 #[test]
 fn the_program_answers_the_same_with_the_pass_and_without_it() {
-    let Some(_context) = device("the_program_answers_the_same_with_the_pass_and_without_it") else {
+    let Some((_context, _device)) =
+        device("the_program_answers_the_same_with_the_pass_and_without_it")
+    else {
         return;
     };
     clear_graph_pass();
@@ -391,7 +411,7 @@ fn the_program_answers_the_same_with_the_pass_and_without_it() {
 /// producer's output. The digest is compared across the pass, which is what says nothing landed.
 #[test]
 fn a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds")
     else {
         return;

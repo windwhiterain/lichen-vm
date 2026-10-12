@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
+
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{GraphPass, LaunchExtent, clear_graph_pass, set_graph_pass};
 use lichen_compute::floor::{floor_pass_with_packs, install_floor};
@@ -117,15 +119,30 @@ fn literal() -> String {
         .replace("fold (i + 1, 0.0", "fold (0, 0.0")
 }
 
-/// A context on a device, or `None` when there is none here.
+/// The device, held for the whole of a test that runs on one.
 ///
 /// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in
-/// this tree reports one. The context is installed as the process's backend, because a graph run
-/// reaches a device only through `ParallelBackend` and nothing else in this process installs one.
-fn device(test: &str) -> Option<GpuContext> {
+/// `install_default` replaces the process's backend, so a second test installing one while the
+/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
+/// tests here run one at a time.
+static DEVICE: Mutex<()> = Mutex::new(());
+
+/// A context on a device, or `None` when there is none here, with the device held for the run.
+///
+/// # Invariant
+/// The skip is reported and never turned into a failure, the way every device-backed test in this
+/// tree reports one. The context is installed as the process's backend, because a graph run
+/// reaches a device only through `ParallelBackend`. The guard travels back with the context, so a
+/// caller that keeps both keeps the device for as long as it runs.
+fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
+    let guard = DEVICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match install_default() {
-        Ok(()) => Some(GpuContext::new().expect("a context was just installed")),
+        Ok(()) => Some((
+            GpuContext::new().expect("a context was just installed"),
+            guard,
+        )),
         Err(reason) => {
             eprintln!("SKIPPED {test}: no device to run on: {reason}");
             None
@@ -180,7 +197,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// is the proof that the pass's body is what ran, and it is a device run or a reported skip.
 #[test]
 fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers")
     else {
         return;
@@ -288,7 +305,7 @@ fn reports_a_tiling(lines: &[String]) -> bool {
 /// away — so the half the refusal names is the mark the lowering could not keep.
 #[test]
 fn a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands")
     else {
         return;
@@ -398,7 +415,8 @@ fn raise_seed(body: &mut KernelBody) {
 /// the per-lane partial.
 #[test]
 fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
-    let Some(_context) = device("the_floor_tiles_a_declared_reduction_the_merge_stage_declines")
+    let Some((_context, _device)) =
+        device("the_floor_tiles_a_declared_reduction_the_merge_stage_declines")
     else {
         return;
     };

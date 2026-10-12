@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
+
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
     GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, graph, set_graph_pass,
@@ -37,14 +39,30 @@ fn swapped_form() -> f32 {
     (COUNT * (COUNT + 1) / 2) as f32 - 1.0
 }
 
-/// A context on a device, or `None` when there is none here.
+/// The device, held for the whole of a test that runs on one.
+///
+/// # Invariant
+/// `install_default` replaces the process's backend, so a second test installing one while the
+/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
+/// tests here run one at a time.
+static DEVICE: Mutex<()> = Mutex::new(());
+
+/// A context on a device, or `None` when there is none here, with the device held for the run.
 ///
 /// # Invariant
 /// The skip is reported and never turned into a failure, and the context is installed as the
-/// process's backend because a graph run reaches a device only through `ParallelBackend`.
-fn device(test: &str) -> Option<GpuContext> {
+/// process's backend because a graph run reaches a device only through `ParallelBackend`. The
+/// guard travels back with the context, so a caller that keeps both keeps the device for as long
+/// as it runs.
+fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
+    let guard = DEVICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match install_default() {
-        Ok(()) => Some(GpuContext::new().expect("a context was just installed")),
+        Ok(()) => Some((
+            GpuContext::new().expect("a context was just installed"),
+            guard,
+        )),
         Err(reason) => {
             eprintln!("SKIPPED {test}: no device to run on: {reason}");
             None
@@ -430,7 +448,7 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         "the merged fragment names no parameter path, so no claim can be joined to it"
     );
 
-    let Some(_context) = device(
+    let Some((_context, _device)) = device(
         "the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fragment",
     ) else {
         return;
@@ -655,7 +673,7 @@ fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
 /// is that a dispatch under the floor reports both stages, which only a run can show.
 #[test]
 fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
-    let Some(_context) =
+    let Some((_context, _device)) =
         device("the_floor_run_reports_both_stages_and_answers_the_un_passed_program")
     else {
         return;
