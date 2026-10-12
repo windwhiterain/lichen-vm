@@ -3,8 +3,8 @@
 > Status: **current.** A written arrow lowers to a *function*, so a function's
 > type is the function itself (`f : f`) and there is only one representation of a
 > function type. Two functions unify the way two arrays do. A struct type's
-> nominal identity is pinned when the type expression is checked, so one written
-> occurrence is one type however many times it is evaluated.
+> nominal identity **is its written occurrence**, minted while the graph is built,
+> so one written occurrence is one type however many times it is evaluated.
 >
 > This note absorbs the still-true halves of *"A function's type is the function
 > itself"* (the `f : f` half; its arrow half is what this note replaces) and of
@@ -117,7 +117,7 @@ merge, not conflict. `Module::function_identity` follows `Function::static_origi
 `function_identity_equal` compares identities. Without it, a re-export unified
 against its original compared two `Function` values and conflicted.
 
-## A struct type's nominal identity is pinned per written occurrence
+## A struct type's nominal identity is its written occurrence
 
 A struct type expression compiles to the pair `[shape, kind]`, and its nominal
 identity is a marker of the form
@@ -130,25 +130,38 @@ marker  = [ payload, TypeStruct ]
 kind    = [ marker, K ]
 ```
 
-`Checker::struct_type_type` is the single construction point, and it
-**deep-evaluates the marker** while the occurrence is being checked. That is what
-makes one written occurrence one nominal type:
+`Checker::struct_type_type` is the single construction point, and the `id` is the
+**written occurrence itself** (`Checker::fresh_nominal_id` takes the
+[`ExprId`]): the checker writes `TypeId(occurrence)` into the node rather than
+allocating an operator to compute one. That is what makes one written occurrence
+one nominal type:
 
-- The `id` is a `Fresh` node allocated per emitting site
-  (`Checker::fresh_nominal_id`), and the name table is an arena payload. Both are
-  computations the apply clone walk would otherwise copy per application — and a
-  copied table is a *different* table that does not unify with the original. A
-  node the deep pass has proved concrete is referenced in place by every clone,
-  so the identity survives application; the same verdict freezes it
-  non-undecided in a static module, so a persisted artifact bakes the identity
-  rather than re-minting it per materialization.
+- The id is a **build-time value**, so a clone copies the identity instead of
+  re-minting it, and the checker never evaluates to establish it. It was a
+  `Fresh` operator that read and incremented `HighGlobal::type_id_counter` at
+  evaluation time, which made the identity depend on how far an evaluation
+  happened to reach and forced the build phase to force the marker to pin it.
+- The marker is still **deep-evaluated where it is constructed**, not in a later
+  phase. Its name table is a `TableGet` operation, and a table compares by
+  **identity**, so a cloned marker is a *different* table that does not unify with
+  the original — a node the deep pass has proved concrete is referenced in place
+  by every clone, and the same verdict freezes it non-undecided in a static
+  module, so a persisted artifact bakes the identity rather than re-minting it per
+  materialization. **Measured: the pin cannot be deferred.** Moving it to the
+  pre-definition phase — recording each marker during the build and pinning them
+  all afterwards, which is the shape a "build unifies, then evaluate" phase split
+  wants — makes two applications of one struct constructor unify their name tables
+  by identity and refuse a program that otherwise checks. The build's own
+  subsequent statements read the struct type, so what they see depends on the pin
+  having already run.
 - The **field types stay out of the identity** — they ride in the shape. An
   occurrence applied to two different arguments therefore stays one occurrence
   (`A Int` and `A Float` share the id and differ because their shapes differ),
   and two `struct{…}` written apart remain two declarations because each written
-  occurrence allocated its own id. Without the pin, `A In` written twice was two
-  nominal types, which made a type constructor that is not a function: a derived
-  type could not be named by writing its expression, only by binding it once.
+  occurrence is a different expression. Without that, `A In` written twice was
+  two nominal types, which made a type constructor that is not a function: a
+  derived type could not be named by writing its expression, only by binding it
+  once.
 
 The identity matters wherever a type is built by one layer and named by another —
 a kernel's JIT-built input type and the host's argument type are two evaluations
@@ -303,8 +316,7 @@ of one expression applied to one argument, and they must unify.
   of a backend, since the kernel domain walk refuses a `Float` leaf
   ([floating-point](floating-point.md) §3.8), while leaving an operand whose type is
   still undecided on the `USize` transfer a pre-apply template has always been
-  given. `Fresh` produces a nominal type id, which the low type vocabulary has no
-  shape for, so it declines.
+  given.
 - The two run-time refusals, and why only the interpreter refuses:
   `DIVIDE_BY_ZERO` and `OUT_OF_RANGE` are recorded through the lowlevel's general
   extension channel because `Module::eval_errors` is a closed enum of *structural*

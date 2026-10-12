@@ -3476,7 +3476,6 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::IsTupleType => return None,
         // The array read's container kind is the same reading.
         TypeOperator::IsArrayType => return None,
-        TypeOperator::Fresh => return None,
     })
 }
 

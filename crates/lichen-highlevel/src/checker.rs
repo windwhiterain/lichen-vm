@@ -939,29 +939,29 @@ where
         self.kind_expr(self.current_block, self.markers.array_type_marker)
     }
 
-    /// A struct type's nominal id node: the [`TypeOperator::Fresh`] call one
-    /// written struct type occurrence makes.
+    /// A struct type's nominal id node: one value per written struct type
+    /// occurrence, minted while the graph is built.
     ///
     /// # Invariant
-    /// The `Fresh` call per written occurrence is what makes one written
-    /// occurrence one nominal type. See docs/notes/function-type-merge.md.
-    fn fresh_nominal_id(&mut self) -> NodeId {
-        self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::Fresh),
-            None,
-        )
+    /// The id **is** the written occurrence, so one occurrence has one id however
+    /// far the type flows and two occurrences are two declarations by
+    /// construction. It is written into the node rather than computed by an
+    /// operator, so a clone copies the identity instead of re-minting it and the
+    /// build phase never evaluates. See docs/notes/function-type-merge.md.
+    fn fresh_nominal_id(&mut self, occurrence: ExprId) -> NodeId {
+        self.value_node(P::Value::type_id_value(occurrence.0 as usize))
     }
 
     /// The struct type's encoding — the one construction point for the layout
     /// [`crate::shape`] documents but never builds.
     ///
     /// # Invariant
-    /// The identity is decided once per written occurrence, and deep-evaluating
-    /// the marker is what pins it: a clone would otherwise re-run `Fresh` or copy
-    /// the name arena into a different table, so one type applied twice would not
-    /// unify. The field types stay out of the identity.
-    /// See docs/notes/function-type-merge.md.
+    /// The identity is a build-time value ([`Self::fresh_nominal_id`]). The marker
+    /// is deep-evaluated **here**, not in a later phase: the build's own later
+    /// statements read the struct type and see this pin's verdict. Deferring it
+    /// makes two applications of one constructor unify their name tables by
+    /// identity and refuse the program — measured. See
+    /// docs/notes/function-type-merge.md.
     fn struct_type_type(
         &mut self,
         id: NodeId,

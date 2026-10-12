@@ -169,7 +169,8 @@ is that note's open direction (a).
   once even when the function is never applied, so its apply-time checks fire. A
   body the pass never computed keeps every operation node undecided, so each
   application clones them all and silently re-runs per-application work — a
-  body-local struct's nominal-id `Fresh` is the sharpest example.
+  body-local struct type's name table is the sharpest example, because a table
+  compares by identity and a cloned one is a different table.
 - Two facts the function walk depends on: a body ending in a call resolves its
   result cell before the root pass walks the function's type spine, or the root
   pass reads a cell that is still undecided; and the walk's order against the root

@@ -659,7 +659,8 @@ extension-private operand route is taken, in `ParLaunchOp::build`):
   `[element, BufferKind]`, so writing the element type there would conflict);
 - a canonical type value is needed at that point (`Int`/`Float`), and one is
   reachable from `ctx` (`ctx.int_type()`) but **not** from a `Module` at run time:
-  the compute extension never touches `HighGlobal`, and the universe
+  the compute extension has no program-global state to read a canonical type out
+  of (`HighGlobalExt` is empty), and the universe
   `K = [Type, ↺]` is self-referential so `alloc_array` cannot build one;
 - `kernel_results_value` (`compute.rs:6200`) needs none of this for the scalar
   form: `add_node` already observes `USize`/`Float` from the scalar value

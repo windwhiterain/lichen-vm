@@ -203,8 +203,10 @@ matching renderer facts are in
 Statement bindings pre-resolve every use of a name to the value's own
 `ExprId`, so one expression can be referenced from several parents. Compiling
 it once and reusing the pair matters because a recompile allocates fresh state
-again — a struct type's nominal id comes from a per-compilation `Fresh` call —
-and that silently breaks the sharing the frontend relies on.
+again — and a struct type's nominal id **is** its written occurrence
+([function-type-merge](function-type-merge.md)), so recompiling one occurrence
+would mint a second identity and silently break the sharing the frontend
+relies on.
 
 ### Why the skeleton gate is a membership test
 

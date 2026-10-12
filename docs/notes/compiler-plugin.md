@@ -260,13 +260,16 @@ and by `lichen-lowlevel/tests/basic/compaction.rs`.
 
 A plugin can carry per-module, program-global state in the module's `global_ext` slot.
 `GlobalExt` is a marker over a host struct whose components are composed with
-`lichen_utils::compose_ext!` and read/mutated through `lichen_utils::compose::AsField` —
-the highlevel's `HighGlobal` (the fresh nominal-type-id counter) is the example. A plugin
-that needs no module-global state (like `lichen-compute`, whose kernel registry is
+`lichen_utils::compose_ext!` and read/mutated through `lichen_utils::compose::AsField`.
+A plugin that needs no module-global state (like `lichen-compute`, whose kernel registry is
 process-global `static`s) omits this.
 
 `HighGlobalExt` is the highlevel's global extension state, injected into the lowlevel
-`Module`'s `global_ext` slot and threaded through the extension operators. `compose_ext!`
+`Module`'s `global_ext` slot and threaded through the extension operators. It is
+**empty**, and that is a design statement rather than an omission: a struct type's
+nominal id is its written occurrence, minted while the checker builds the graph, so
+the highlevel keeps no program-global state at all (`HighGlobal`, the counter that
+once fed the `Fresh` operator, is gone). `compose_ext!`
 composes several extensions into one *tuple* host struct — a host field is a bare extension
 type, so there is no field name to collide — and generates `impl AsField<T>` per component;
 the host is read or mutated per extension by pulling that extension out through `AsField`
@@ -276,11 +279,8 @@ trait. `get`/`get_mut` are ambiguous when a host has several components, so qual
 
 A downstream composes more state by listing the upstream's components **flat** (by symbol)
 alongside its own — one `compose_ext!` invocation, no per-upstream wrapper. Flat is
-load-bearing, not cosmetic: per-type `AsField` access resolves only against a flat tuple, and
-the highlevel's own operators read `HighGlobal` that way (the fresh nominal-type-id counter
-`Fresh` uses), so nesting the upstream host would break them. `next_type_id` is the one
-stateful piece: it reads the counter, increments it, and returns the previous value, so each
-call yields a distinct id.
+load-bearing, not cosmetic: per-type `AsField` access resolves only against a flat tuple, so
+nesting the upstream host would break it.
 
 `ProgramImpl`'s `Debug`/`Clone`/`Copy`/`PartialEq` are structural: its single `PhantomData`
 field satisfies all four for *any* type argument, so the impls carry only the struct's own

@@ -1081,7 +1081,7 @@ fn two_struct_type_occurrences_do_not_unify() {
 
 #[test]
 fn a_struct_type_in_a_function_body_is_shared_across_applications() {
-    // The `Fresh` node does not read the parameter, so the deep pass
+    // The occurrence id does not read the parameter, so the deep pass
     // evaluates it to a concrete `TypeId`.
 
     // The apply clone therefore references the node in place: every
@@ -1096,7 +1096,7 @@ fn a_struct_type_in_a_function_body_is_shared_across_applications() {
 
 #[test]
 fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
-    // The `Fresh` id is per *occurrence* and is shared, so all applications
+    // The id is the written occurrence and is shared, so all applications
     // of `Box` resolve to one nominal kind.
 
     // The id lives in the kind slot, the field types in the value
@@ -1120,7 +1120,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     // A named-field struct type inside a function body; its identity
     // is decided when the occurrence is checked.
 
-    // Both halves matter — the nullary `Fresh` node and the name table
+    // Both halves matter — the occurrence id and the name table
     // (`function-type-merge.md`).
     let (module, root) = run("A = I => struct{.n Int, .I I}\n\
          In = struct{.x _, .y _}\n\
@@ -1440,7 +1440,7 @@ fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
 
 #[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
-    // Each body's `Fresh` node is its own, so the nominal ids stay
+    // Each body writes its own occurrence, so the nominal ids stay
     // distinct and `[f (Int), g (Int)]` is heterogeneous.
     let report = compile("f = t => struct{.f t}; g = t => struct{.f t}; [f (Int), g (Int)]");
     assert!(

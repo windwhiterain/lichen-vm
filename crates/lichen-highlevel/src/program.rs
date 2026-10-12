@@ -16,7 +16,6 @@ use lichen_lowlevel::{
     AnyNodeId, BlockId, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
     OperatorExt, Program, StaticModule, ValueExt,
 };
-use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
 use lichen_kernel_ir::{exp_value, floor_value, sqrt_value};
@@ -26,47 +25,15 @@ use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
 use crate::shape::for_each_kind_marker;
 
-/// The fresh-nominal-type-id state — one extension component of
-/// [`HighGlobalExt`].
+/// The highlevel's global extension state, in `Module`'s `global_ext` slot.
+///
+/// # Invariant
+/// It is **empty**, and deliberately so: a struct type's nominal id is its
+/// written occurrence, minted while the checker builds the graph, so the
+/// highlevel keeps no program-global state. A downstream that composes its own
+/// fields uses [`lichen_utils::compose_ext::AsField`] the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct HighGlobal {
-    /// The next nominal type id; `Fresh` reads and increments it, so each call
-    /// yields a distinct id.
-    pub type_id_counter: usize,
-}
-
-impl HighGlobal {
-    /// Consume the next nominal type id: read the counter, increment it, and
-    /// return the previous value.
-    pub fn next_type_id(&mut self) -> usize {
-        let id = self.type_id_counter;
-        self.type_id_counter += 1;
-        id
-    }
-}
-
-lichen_utils::compose_ext! {
-    /// The highlevel's global extension state, in `Module`'s `global_ext` slot.
-    ///
-    /// # Invariant
-    /// Read and mutated through `AsField`.
-    ///
-    /// ```
-    /// use lichen_highlevel::program::{HighGlobal, HighGlobalExt};
-    /// use lichen_utils::compose::AsField;
-    ///
-    /// let mut ext = HighGlobalExt::default();
-    /// for expected in [0, 1] {
-    ///     let id = AsField::<HighGlobal>::get_mut(&mut ext).next_type_id();
-    ///     assert_eq!(id, expected);
-    /// }
-    /// assert_eq!(AsField::<HighGlobal>::get(&ext).type_id_counter, 2);
-    /// ```
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct HighGlobalExt(
-        HighGlobal,
-    );
-}
+pub struct HighGlobalExt;
 impl GlobalExt for HighGlobalExt {}
 
 /// Per-package metadata for the highlevel `Program`: the exported pair ref and
@@ -533,7 +500,8 @@ pub trait ValueType:
     for_each_kind_marker!(define_value_type_marker_methods);
     /// The nominal id of a struct type value, if this is one.
     fn type_id(&self) -> Option<usize>;
-    /// A nominal type id value — what the checker's `Fresh` operator yields.
+    /// A nominal type id value — the identity of one written struct type
+    /// occurrence.
     fn type_id_value(n: usize) -> Self;
 }
 
@@ -553,14 +521,6 @@ impl ValueType for HighProgramValue {
 // structural operator form.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeOperator {
-    /// A fresh nominal type id: each call reads and increments
-    /// [`HighGlobal::next_type_id`].
-    ///
-    /// # Invariant
-    /// Nullary — the checker emits it with no operand, so it fires once per
-    /// source occurrence and the cached value is reused wherever the struct type
-    /// it tags is referenced.
-    Fresh,
     /// Binary operators over `[left, right]`. See
     /// `docs/notes/floating-point.md` §4.2.
     ///
@@ -738,8 +698,7 @@ for_each_kind_marker!(define_type_value_codec);
 // The one list of the type-level operators: the codec's two sides and
 // [`TypeOperator::ALL`] are generated from it.
 
-// Each tag is the persisted artifact tag — the same contract as the kind-marker
-// tags above.
+// Each tag is the persisted artifact tag. Tag 0 was `Fresh` and is not reused.
 
 // The write side is an exhaustive match, so a variant missing from this list
 // fails to compile.
@@ -768,7 +727,6 @@ macro_rules! define_type_operator_codec {
     };
 }
 define_type_operator_codec! {
-    Fresh = 0;
     Add = 1;
     Sub = 2;
     Leq = 3;
@@ -813,7 +771,7 @@ where
     V: ValueType,
     A: AttrSet,
     L: std::fmt::Debug + Copy + PartialEq,
-    G: GlobalExt + AsField<HighGlobal>,
+    G: GlobalExt,
 {
     fn run(
         &self,
@@ -851,23 +809,18 @@ where
 /// `docs/notes/operator-polymorphism.md`.
 ///
 /// # Invariant
-/// Dispatched by any program whose value vocabulary implements [`ValueType`] and
-/// whose global state carries [`HighGlobal`]; every such program shares this one
-/// impl and differs only in which union wraps the operator.
+/// Dispatched by any program whose value vocabulary implements [`ValueType`];
+/// every such program shares this one impl and differs only in which union wraps
+/// the operator.
 impl<P> OperatorExt<P> for TypeOperator
 where
     P: Program,
     P::Value: ValueType,
-    P::GlobalExt: AsField<HighGlobal>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
         // An undecided answer is `None` (see `OperatorExt::run`); the closure
         // gives every early `return` one return type.
         (|| match self {
-            TypeOperator::Fresh => {
-                let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                Some(P::Value::type_id_value(id))
-            }
             // The two class conversions: one operand, in a one-element array.
             TypeOperator::Int2Float | TypeOperator::Float2Int => {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
@@ -1067,7 +1020,6 @@ where
                     TypeOperator::Neq => Some(P::Value::from(LowValue::USize(
                         (!left.value_eq(&right)) as usize,
                     ))),
-                    TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                     TypeOperator::Int2Float
                     | TypeOperator::Float2Int
                     | TypeOperator::Exp
@@ -1124,8 +1076,7 @@ where
     /// machine scalar, so their transfer is `USize`. The arithmetic
     /// operators produce their operands' own class: `Float` when either operand's
     /// low type is a float, keeping a float-valued expression out of a
-    /// backend, else `USize`. `Fresh` is a nominal type id, which the
-    /// vocabulary has no shape for, so it declines.
+    /// backend, else `USize`.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             TypeOperator::Add
@@ -1164,7 +1115,6 @@ where
             TypeOperator::IsStructType => Some(LowShape::USize),
             TypeOperator::IsTupleType => Some(LowShape::USize),
             TypeOperator::IsArrayType => Some(LowShape::USize),
-            TypeOperator::Fresh => None,
         }
     }
 }
@@ -1178,7 +1128,6 @@ fn divide_by_zero<P>(module: &mut Module<P>, remainder: bool) -> Option<P::Value
 where
     P: Program,
     P::Value: ValueType,
-    P::GlobalExt: AsField<HighGlobal>,
 {
     let operation = if remainder { "remainder" } else { "division" };
     module.record_extension_diagnostic(
@@ -1199,7 +1148,6 @@ fn out_of_range<P>(module: &mut Module<P>, value: f32) -> Option<P::Value>
 where
     P: Program,
     P::Value: ValueType,
-    P::GlobalExt: AsField<HighGlobal>,
 {
     let reason = if value.is_nan() {
         "a NaN, which is a number nowhere"

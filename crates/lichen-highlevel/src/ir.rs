@@ -60,8 +60,7 @@ pub enum BinOp {
     In,
 }
 
-/// The [`TypeOperator`] each [`BinOp`] runs; `Fresh` mints a nominal struct id
-/// and has no [`BinOp`] spelling.
+/// The [`TypeOperator`] each [`BinOp`] runs.
 impl From<BinOp> for TypeOperator {
     fn from(operator: BinOp) -> Self {
         match operator {

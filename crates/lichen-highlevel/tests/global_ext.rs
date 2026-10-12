@@ -1,6 +1,6 @@
 //! Downstream `GlobalExt` composition; see docs/notes/compiler-plugin.md.
 
-use lichen_highlevel::program::{HighGlobal, HighProgramValue};
+use lichen_highlevel::program::HighProgramValue;
 use lichen_lowlevel::{BlockId, GlobalExt, Module, NodeId, Operation, OperatorExt, Program};
 use lichen_utils::compose::AsField;
 
@@ -18,10 +18,20 @@ impl MyState {
     }
 }
 
+/// A second component, so the composition is still exercised over more than one.
+///
+/// # Invariant
+/// The highlevel's own slot is empty — a struct type's id is its written
+/// occurrence, not a counter — so this stands in for the upstream half.
+#[derive(Debug, Default)]
+struct MyTag {
+    seen: bool,
+}
+
 lichen_utils::compose_ext! {
     #[derive(Debug, Default)]
     struct MyGlobalExt(
-        HighGlobal,
+        MyTag,
         MyState,
     );
 }
@@ -55,8 +65,8 @@ impl OperatorExt<MyProgram> for MyOperator {
     ) -> Option<HighProgramValue> {
         match self {
             MyOperator::Bump => {
-                // The upstream's component is reachable in the composed host.
-                let _counter = AsField::<HighGlobal>::get(&module.global_ext).type_id_counter;
+                // The other component is reachable in the composed host.
+                AsField::<MyTag>::get_mut(&mut module.global_ext).seen = true;
                 let n = AsField::<MyState>::get_mut(&mut module.global_ext).bump();
                 Some(HighProgramValue::LowValue(
                     lichen_lowlevel::LowValue::USize(n),
@@ -106,6 +116,6 @@ fn a_downstream_global_ext_composes_flat_and_reaches_both_components() {
         ))
     );
 
-    assert_eq!(AsField::<HighGlobal>::get(&m.global_ext).type_id_counter, 0);
+    assert!(AsField::<MyTag>::get(&m.global_ext).seen);
     assert_eq!(AsField::<MyState>::get(&m.global_ext).count, 2);
 }

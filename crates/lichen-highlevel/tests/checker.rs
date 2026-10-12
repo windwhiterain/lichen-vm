@@ -5,10 +5,9 @@ use lichen_highlevel::NoAttr;
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{BinOp, ExprId, ExprKind};
-use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeValue};
+use lichen_highlevel::program::{HighProgramValue, ProgramImpl, TypeValue};
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, FunctionId, LowValue, NodeId};
 use lichen_testkit::{Writer, dyn_node};
-use lichen_utils::compose::AsField;
 
 /// Check the program `w` built, rooted at `root`.
 ///
@@ -1245,10 +1244,13 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     ));
     let payload_ids = array_ids(&b, marker_ids[0]);
     assert_eq!(payload_ids.len(), 3);
-    assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
-    ));
+    assert!(
+        matches!(
+            b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
+            Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
+        ),
+        "the id is the written occurrence itself"
+    );
     // a named struct's payload carries a name table in its names slot.
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),
@@ -1305,11 +1307,11 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         ),
         "a type whose kind's marker lacks the TypeStruct tag is not a struct type"
     );
-    // one source occurrence consumed exactly one fresh id
-    assert_eq!(
-        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
-        1
-    );
+    // The identity is unaffected by the missing tag: it is the occurrence.
+    assert!(matches!(
+        b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
+    ));
 }
 
 #[test]
@@ -1380,10 +1382,6 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let pair = w.tuple("pair", &[s1, s2]);
     let b = build(pair, w);
     assert!(b.ok);
-    assert_eq!(
-        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
-        2
-    );
     // the nominal id is the marker payload's slot 0; see `lichen_highlevel::shape`.
     let id1 = array_ids(
         &b,
@@ -1395,11 +1393,11 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     )[0];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id1)),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s1.0 as usize
     ));
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id2)),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(1)))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s2.0 as usize
     ));
 }
 
@@ -1419,11 +1417,11 @@ fn two_struct_type_occurrences_do_not_unify() {
     let err = module.unify_errors[0].clone();
     assert!(matches!(
         err.value_a,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s1.0 as usize
     ));
     assert!(matches!(
         err.value_b,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeId(1)))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s2.0 as usize
     ));
 }
 
@@ -1558,11 +1556,15 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     let b = build(a, w);
     assert!(b.ok, "one shared occurrence is one nominal type");
     assert!(b.module.unify_errors.is_empty());
-    assert_eq!(
-        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
-        1,
-        "one expression compiles to exactly one Fresh call"
-    );
+    // The id is the written occurrence, so sharing the expression shares the type.
+    let id = array_ids(
+        &b,
+        array_ids(&b, array_ids(&b, b.state[s].ty.unwrap())[0])[0],
+    )[0];
+    assert!(matches!(
+        b.module.node_value(AnyNodeId::Dynamic(id)),
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(n))) if n == s.0 as usize
+    ));
 }
 
 // --- struct instantiation ----------------------------------------------------

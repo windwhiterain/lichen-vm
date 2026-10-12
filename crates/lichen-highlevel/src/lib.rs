@@ -21,7 +21,7 @@ pub use marks::{InterfaceInstance, Projection};
 pub use native::{NativeApply, NativeArg, NativeOp, NativeOps, no_native_ops};
 pub use plugin::NativePlugin;
 pub use program::{
-    Ctx, FloatLit, FloatTypeLit, HighGlobal, HighGlobalExt, HighProgram, HighProgramLiteral,
+    Ctx, FloatLit, FloatTypeLit, HighGlobalExt, HighProgram, HighProgramLiteral,
     HighProgramOperator, HighProgramValue, IntLit, IntTypeLit, LiteralBuild, LiteralExt,
     ProgramImpl, TypeOperator, TypeTypeLit, TypeValue, ValueType,
 };

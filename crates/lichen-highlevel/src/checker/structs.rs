@@ -369,7 +369,7 @@ where
             tys.push(self.element_slot(None, Some(self.state[el].ty.unwrap()), None));
             names.push(Some(name));
         }
-        let id = self.fresh_nominal_id();
+        let id = self.fresh_nominal_id(e);
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, &names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
@@ -940,7 +940,7 @@ where
         for &el in &elements {
             slots.push(self.element_slot_of(el));
         }
-        let id = self.fresh_nominal_id();
+        let id = self.fresh_nominal_id(e);
         let (shape, kind, pair) = self.struct_type_type(id, &slots, &names);
         self.require_struct_field_names(&names, &elements, pair);
         self.state[e].term = Some(pair);
