@@ -2,7 +2,8 @@
 
 > Status: current — the shapes are as they are; the deployment unit below is **partly unbuilt**,
 > and each unbuilt piece is named.
-> Points at: `crates/lichen-compute/src/compute/fused` (the fused artifact and its JSON),
+> Points at: `crates/lichen-runtime/src/fused` (the fused artifact and its JSON, since `a1aa17f1`;
+> `land_fused_kernel` stayed behind in `lichen-compute` with the recording),
 > `crates/lichen-language/src/persist.rs` and `crates/lichen-registry` (the frozen artifact store),
 > `crates/lichen-compute-gpu/src/spirv.rs` (what a target emits and refuses),
 > [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 and
@@ -13,24 +14,38 @@ question. The older one is the **frozen language artifact**: `lichen-registry`'s
 `ModuleKey`, the disk `DeviceRegistry`, and `StaticModule` — a package that has been loaded, compiled
 and **frozen**, so it "carries values, not spans" ([artifact-cache](artifact-cache.md),
 [static-modules](static-modules.md), [packages](packages.md) are its notes, and
-`persist::shipping_cache_root()` is its cache root). The newer one is `lichen-compute`'s
+`persist::shipping_cache_root()` is its cache root). The newer one is `lichen-runtime`'s
 **fused artifact**, `facet_json`'s `Artifact { fragment, claim, plan }`, keyed by `fragment_digest`.
 They live at different layers, have different keys, different cache roots, and **neither replaces the
 other**.
 
 ## The boundary that decides what a server depends on
 
-The dependency arrow points down from the language:
+The language does **not** sit above the compute layer: `lichen-language` is the front end and its
+runtime (lexer, parser, preprocessor, checker, VM, the package store) and it names no compute crate.
+`lichen-compute` is the **compute sub-language** — the surface, the native operators, the recording,
+the passes, the claims and the packs — and it depends on `lichen-highlevel` (the checker) and
+`lichen-lowlevel` (the VM), which is why it is the wrong thing for a server to depend on.
 
-```
-lichen-language  →  lichen-compute  →  { lichen-kernel-ir, lichen-graph-ir, lichen-highlevel, lichen-lowlevel }
-```
+Since `a1aa17f1` the artifact half lives in **`lichen-runtime`**, whose only internal dependency is
+`lichen-kernel-ir` — `cargo tree -p lichen-runtime` shows **no** `lichen-highlevel`, `lichen-lowlevel`,
+`lichen-language`, `lichen-language-parser` or `lichen-preprocess`. So a process that lands and runs
+kernels needs **`lichen-runtime` plus a backend**. A **frozen package**, by contrast, *is* the language
+layer's state: it is imported and registered by the language runtime, so shipping it puts that whole
+side back in the server. **The serving boundary cuts at `lichen-runtime`.** (This note first said
+`lichen-compute`, which was wrong for exactly the reason above.)
 
-`read_fused_kernel` and `land_fused_kernel` live in **`lichen-compute`**, so a process that only
-lands and runs kernels needs `lichen-compute` and a backend — **not** the parser, the checker, the
-preprocessor or the package store. A **frozen package**, by contrast, *is* the language layer's state:
-it is imported and registered by the language runtime, so shipping it puts that whole side back in the
-server. **The serving boundary cuts at `lichen-compute`, not at the frozen package.**
+The seam rule that produced that split, and which decides the next moves:
+
+> **Anything that takes a `Module` belongs to the language-integration side; anything that takes only
+> IR types (`Graph`, `KernelFragment`, `Artifact`) belongs to the runtime side.**
+
+**One honest edge case, found while applying it**: `land_fused_kernel` takes `&mut Graph` — an IR name —
+so the rule says it belongs in the runtime, yet it stayed in `lichen-compute` because it mutates a
+**recorded graph** and the recording is not extracted yet. So today `read_fused_kernel` is in
+`lichen-runtime` and `land_fused_kernel` is not, and a runtime that only *reads* an artifact is
+language-free while one that lands it is not. Moving the landing is a later slice, together with the
+recording that owns it.
 
 ## What the fused artifact carries, layer by layer
 
@@ -58,7 +73,7 @@ build-time half already resolved at home:
    and no refusal for a version that does not match. That pair is the clean form: one blob, one
    digest, one named refusal when it cannot be honoured.
 3. **The emitted module is not persisted.** `MODULES` is a process-wide `ModuleCache` with a miss
-   counter (`lichen-compute/src/compute.rs`), so every restart re-emits SPIR-V or wasm. Persisting the
+   counter (`lichen-runtime/src/module_cache.rs` since `a1aa17f1`), so every restart re-emits SPIR-V or wasm. Persisting the
    emitted module under its digest is the second missing piece, and it is what removes the emitter
    from a serving image altogether.
 
