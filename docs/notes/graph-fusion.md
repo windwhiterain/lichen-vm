@@ -758,6 +758,38 @@ device proves it end to end: `e[i] = d[i]·2` feeding `z[i] = e[i] + 1` merges u
 un-merged program element for element, and a **counterfactual** — `+ 1.0` moved to `+ 10.0` inside the
 composed body — moves the answer from `[3, 5, …]` to `[12, 14, …]`, which is what says the composed
 node is the one dispatched rather than a rewrite nobody ran.
+
+**And the general case landed at `8425d2f1`: recompute, never stage.** A producer whose written value is a
+function of the written address is **index-local**, and its consumer may read it at **any** address,
+because the merge copies that cone once per read with the address leaf rebound — no slice and no barrier.
+The predicate lives once, on the body (`KernelBody::index_local_cone`), and its refusals name what stops
+it: `WriteIsNotIndexed` (the write does not fill the invocation index), a `SliceReadCall` in the cone
+(another lane's value — that, and only that, is a staging need), a `CallKernel` (its own index), and a
+non-entry block parameter (loop-carried state cannot be re-derived from an address). The copy is sound
+because it answers at any address what the producer stored there, and it may be emitted anywhere that
+dominates the read site, which `KernelBody::validate` already decides. It is **one** mechanism: the walk
+carries a `Cone` whose values are `Live`, `Address` or `Rebuilt`, so a lane-invariant producer's cone is
+entirely `Live` and nothing is copied — the old binding falls out of the new rule instead of surviving
+beside it, and `78131b5a`'s parameter-only special case is gone. **An existing refusal was deleted with
+it**: `ReadAddressIsNotComputable` (and `check_addresses`, and the constant-versus-lane comparison) existed
+only because binding *one* value required the read to address what the producer wrote; recomputation
+subsumes it, and `region_merge.rs` shed 78 lines. One clause survives, as a classifier arm: an address the
+producer never wrote is still unservable (`WriteIsNotIndexed`). Device numbers, each with its
+counterfactual: `e[i] = d[i]·2` feeding a *reduction* consumer that reads `e` at a loop-carried address
+(recorded `80`, mutated `152`), `z[i] = e[i + 1] + 1` (recorded `5 7 9 …`, mutated `14 … 26`), and
+`78131b5a`'s pair.
+
+**Recomputation is a trade, and that is why the machine decides it.** Copies are made per **(address,
+block)**, not hoisted out of a consumer's loop body, so the growth is O(reads × cone size) per block where
+binding was O(1) — a real cost, and one nothing bounds. It is not paid at all when the cone is
+address-free. So the engine can always do it and a **pack's `fuse`** is where "is it worth it here" is
+answered; the note states the cost so a pack author weighs it rather than discovering it. Two findings
+from the measurement worth keeping: **the device differential is what caught a silently wrong
+classifier** — its first cut rebuilt an instruction only when an operand *was* the address leaf, so every
+address answered the producer's lane, and the kernel-IR tests alone could not see it; and a **wrapped**
+computed address (`if i < 7 then i + 1 else 0`) still cannot be device-verified, because the `Select` it
+lowers to is refused by the SPIR-V emitter as `MixedClasses` in the **unmerged** consumer too — a backend
+limit this work found rather than caused, and a candidate defect of its own.
 Two more facts a reader should carry: `returns() == None` forbids **every**
 merge (the runner then takes the whole value table, so a deleted value changes the answer, and the pass
 refuses rather than merging), and the surviving node is **anonymous** — a composed fragment is never
@@ -1211,7 +1243,7 @@ about shrinks exactly where fusion fires.
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
-| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs, a pack can ask for one, and the general shapes are what remain** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: the **general index-local shapes** (the accepted check is parameter-only, so a computed address — a write at `i + 1` read at `i + 1` — is still refused, and read-site recomputation is unwritten), an elementwise consumer that reads **only** the absorbed buffer (`PortsDoNotCorrespond`), and the merged node's **anonymity** (unregistered, so no later digest-keyed pass can name it) |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs, a pack can ask for one, and the general shapes are what remain** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: an elementwise consumer that reads **only** the absorbed buffer (`PortsDoNotCorrespond`), the merged node's **anonymity** (unregistered, so no later digest-keyed pass can name it), and the shapes that genuinely need **staging** (`SliceReadCall` in a producer's cone, which is the plan's business) |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
