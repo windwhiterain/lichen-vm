@@ -7,7 +7,7 @@
 //! pass; and the counts are not multiples of the workgroup size, so the surplus lanes of the last
 //! workgroup are covered. The reference here is this file's own third reading of the IR.
 
-mod common;
+use super::common;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
 use std::collections::HashMap;

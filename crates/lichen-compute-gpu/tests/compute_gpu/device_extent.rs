@@ -6,7 +6,7 @@
 //! and an element, and the backend hands the queue an indirect command. What the host knows
 //! about the answer is therefore evidence rather than input.
 
-mod common;
+use super::common;
 
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};

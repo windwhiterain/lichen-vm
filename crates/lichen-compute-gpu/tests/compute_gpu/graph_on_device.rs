@@ -6,7 +6,7 @@
 //! same fragments produce outside one. The graph is a chain, where the second dispatch records against
 //! a value the device may not be writing.
 
-mod common;
+use super::common;
 
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};

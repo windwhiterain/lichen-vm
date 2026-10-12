@@ -1,7 +1,7 @@
 //! A fused kernel's artifact, landed into a recorded graph node and run there.
 //! See `docs/notes/graph-fusion.md` §5.
 
-mod common;
+use super::common;
 
 use lichen_compute::{FusedKernel, LandingRefusal, land_fused_kernel, write_fused_kernel};
 use lichen_compute_gpu::GpuContext;

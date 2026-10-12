@@ -1,8 +1,11 @@
 //! A helper the device-backed tests in this directory share.
 //!
 //! # Invariant
-//! Cargo takes each `.rs` file directly in `tests/` as its own binary, so a shared
-//! module lives in a subdirectory.
+//! Cargo takes each `.rs` file directly in `tests/` as its own binary, so the shared
+//! module is named by the suite's `mod.rs` and every area reaches it the same way, as
+//! `super::common`. Each test opens its own context rather than sharing one: the recycling
+//! and id assertions read one context's pools, and a test running on it alongside would be
+//! what they saw.
 
 use lichen_compute_gpu::GpuContext;
 

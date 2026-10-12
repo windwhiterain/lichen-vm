@@ -7,7 +7,7 @@
 //! case names what a cross-warp read would have cost
 //! (`docs/notes/shared-memory-and-barriers.md` §5).
 
-mod common;
+use super::common;
 
 use std::collections::HashMap;
 use std::io::Write;
