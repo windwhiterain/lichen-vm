@@ -50,6 +50,34 @@ the language side, because a graph is where a recorded dispatch is being rewritt
 and what stays in `lichen-compute` is exactly the `Module`-taking half: the installers, the recording,
 and the registry's filling.
 
+**And the split is verified end to end, not asserted.** One slice more (`499ca9fc`) removed the last
+edge: the GPU backend's only use of the sub-language was a *test* reaching four runtime items through a
+language-side re-export, so the library edge is now
+
+```
+$ cargo tree -p lichen-compute-gpu --edges normal --prefix none
+lichen-compute-gpu v0.1.0
+ash v0.38.0+1.3.281
+libloading v0.8.9
+windows-link v0.2.1
+lichen-kernel-ir v0.1.0
+```
+
+— nothing else, and neither the plain tree nor `--all-targets` names `lichen-highlevel`,
+`lichen-lowlevel`, `lichen-language*`, `lichen-preprocess`, `lichen-perspective` or `lichen-registry`
+(all seven were present before, under dev-dependencies through `lichen-compute`, which also made that a
+dev-dependency *cycle*). So the closed, language-free path a server composes is
+
+```
+read_fused_kernel → land_fused_kernel (into a Graph) → GpuContext::new()
+  → install(context) or install_default() → Runner::new(&context, policy).run(graph, inputs)
+```
+
+with no `Module`, no checker and no sub-language reachable from it. **What is missing there is an API
+shape rather than a dependency**: the backend's entry points take a `&Graph`, so read-and-land is
+three lines the *host* writes instead of one call that says "run this artifact". A loader that owns
+that, plus the version and device-fact gates below, is the slice that makes this note's unit real.
+
 ## What the fused artifact carries, layer by layer
 
 | field | what it holds | which layer it is |
