@@ -1144,12 +1144,12 @@ where
             ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
             ExprKind::TypeFunction {
                 parameter,
-                r#return,
+                return_type,
             } => {
                 // Compile both sides in the enclosing scope, ahead of the
                 // signature's shell.
                 let parameter_ty = self.check_type_element(parameter);
-                let return_ty = self.check_type_element(r#return);
+                let return_ty = self.check_type_element(return_type);
                 self.check_signature(e, parameter_ty, return_ty)
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),

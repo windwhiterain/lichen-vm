@@ -300,12 +300,12 @@ impl KeyWriter {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 ..
             } => {
                 self.u(17);
                 self.expr(parameter_type);
-                self.expr(r#return);
+                self.expr(return_type);
             }
             Expr::Tuple(elems, _) => {
                 self.u(29);

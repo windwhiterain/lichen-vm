@@ -202,7 +202,7 @@ pub enum Expr {
     /// `T1 -> T2` — a function type.
     Arrow {
         parameter_type: Box<Expr>,
-        r#return: Box<Expr>,
+        return_type: Box<Expr>,
         span: Span,
     },
     /// `(e1, ..., en)` — a tuple value (always; no type/value mode).

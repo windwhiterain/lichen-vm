@@ -212,11 +212,11 @@ fn walk(expr: &Expr, deps: &mut Deps) {
         }
         Expr::Arrow {
             parameter_type,
-            r#return,
+            return_type,
             ..
         } => {
             walk(parameter_type, deps);
-            walk(r#return, deps);
+            walk(return_type, deps);
         }
         Expr::Tuple(elements, _)
         | Expr::TypeTuple(elements, _)

@@ -81,8 +81,8 @@ where
             } => vec![element_type, length],
             ExprKind::TypeFunction {
                 parameter,
-                r#return,
-            } => vec![parameter, r#return],
+                return_type,
+            } => vec![parameter, return_type],
             ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
             | ExprKind::TypeSet(_)

@@ -123,7 +123,7 @@ fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
 fn arrow(ir: &mut IR, d: ExprId, c: ExprId) -> ExprId {
     ir.alloc(ExprKind::TypeFunction {
         parameter: d,
-        r#return: c,
+        return_type: c,
     })
 }
 fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {

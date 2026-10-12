@@ -1676,11 +1676,11 @@ impl<'a> NameClass<'a> {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 ..
             } => {
                 self.expr(parameter_type);
-                self.expr(r#return);
+                self.expr(return_type);
             }
             Expr::Tuple(elems, _)
             | Expr::TypeTuple(elems, _)
@@ -1984,11 +1984,11 @@ impl Walk {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 ..
             } => {
                 self.expr(parameter_type);
-                self.expr(r#return);
+                self.expr(return_type);
             }
             Expr::Tuple(elems, _)
             | Expr::TypeTuple(elems, _)
@@ -2321,11 +2321,11 @@ impl<'a> ScopeCapture<'a> {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 ..
             } => {
                 self.expr(parameter_type);
-                self.expr(r#return);
+                self.expr(return_type);
             }
             Expr::Tuple(elems, _)
             | Expr::TypeTuple(elems, _)

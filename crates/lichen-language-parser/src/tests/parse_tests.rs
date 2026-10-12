@@ -305,7 +305,7 @@ fn application_is_left_associative() {
 fn arrows_are_right_associative() {
     let Expr::Arrow {
         parameter_type,
-        r#return,
+        return_type,
         ..
     } = parse_ok("Int -> Int -> Int")
     else {
@@ -315,7 +315,7 @@ fn arrows_are_right_associative() {
         *parameter_type,
         Expr::TypeConst(TypeConst::Int, _)
     ));
-    assert!(matches!(*r#return, Expr::Arrow { .. }));
+    assert!(matches!(*return_type, Expr::Arrow { .. }));
 }
 
 #[test]
@@ -754,10 +754,10 @@ fn an_underscore_is_a_placeholder_in_type_and_term_position() {
     let Expr::Annotation { r#type, .. } = parse_ok("x : Int -> _") else {
         panic!("expected an annotation")
     };
-    let Expr::Arrow { r#return, .. } = *r#type.expect("an arrow type") else {
+    let Expr::Arrow { return_type, .. } = *r#type.expect("an arrow type") else {
         panic!("expected an arrow type")
     };
-    assert!(matches!(*r#return, Expr::Placeholder(_)));
+    assert!(matches!(*return_type, Expr::Placeholder(_)));
     // In term position `_` is the same placeholder, not an ordinary name.
     assert!(matches!(parse_ok("_"), Expr::Placeholder(_)));
     // As an annotated *value*, `_` is the placeholder in the value slot.
@@ -1010,8 +1010,8 @@ fn dangling_operators_are_recovered() {
                 if matches!(**right, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
-            Expr::Arrow { r#return, .. }
-                if matches!(**r#return, Expr::Err { .. } | Expr::Placeholder(_))
+            Expr::Arrow { return_type, .. }
+                if matches!(**return_type, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
             Expr::Annotation { r#type, .. }
