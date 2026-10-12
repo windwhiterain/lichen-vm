@@ -12,12 +12,10 @@ use crate::{
 /// The fragment `producer` and `consumer` become, or the decision the merge cannot make.
 ///
 /// # Invariant
-/// **The merged inputs are the union: the producer's inputs in their order, then the consumer's
-/// surviving inputs in theirs**, the absorbed one left out — so a surviving consumer read moves
-/// up by the producer's input count, a producer read keeps its position, and `input_classes` is
-/// that union too. The producer's store and marks go and the consumer's entry block is inlined.
-/// `compose` never sees the graph, so a producer reading past its own ports is the mismatch it
-/// refuses, and the merge pass's `PortsDoNotCorrespond` is that check for the ports themselves.
+/// **The merged inputs are the union: the producer's inputs, then the consumer's surviving ones**,
+/// the absorbed one left out — so a surviving consumer read moves up by the producer's input
+/// count, a producer read keeps its place, and `input_classes` follows the same order. The
+/// producer's store and marks go, and the consumer's entry block is inlined.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
@@ -48,8 +46,7 @@ pub fn compose(
             inputs: consumer.inputs,
         });
     }
-    // **The merged inputs are the union**: the producer's inputs, then the consumer's but the
-    // absorbed one, because `compose` never sees the graph and so cannot name one buffer once.
+    // The union, the absorbed ordinal left out; a buffer both bodies name is listed twice.
     let inputs = producer.inputs + consumer.inputs - 1;
     if producer.input_classes.len() != producer.inputs {
         return Err(ComposeRefusal::ProducerIsNotWellFormed {
@@ -120,9 +117,7 @@ pub fn compose(
         return Err(ComposeRefusal::ConsumerEntryIsABranchTarget { block });
     }
     let producer_reads = buffer_reads(&producer.body, "producer")?;
-    // **The producer's reads keep their positions**, because the union puts the producer's inputs
-    // first; one past its own ports would land on a port the union hands the consumer, which is
-    // the single position where the two bodies' ordinals disagree about which buffer is there.
+    // Only there do the two bodies' ordinals disagree about which buffer a position names.
     if let Some(position) = producer_reads
         .iter()
         .map(|(_, position)| *position)

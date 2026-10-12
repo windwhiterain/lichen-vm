@@ -426,11 +426,10 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 ///
 /// # Invariant
 /// Every condition is checked before `compose` reads either body: a merge that slipped past one
-/// would be a node whose body reads a buffer the program never wired to it. The one check the
-/// union cannot make for itself is `PortsDoNotCorrespond`: the merged node's inputs **are** the
-/// union, so a buffer past the merged fragment's ports is a node whose ordinals name a different
-/// number of buffers than its body reads ports for, and wiring it would answer one buffer as
-/// another.
+/// would be a node reading a buffer the program never wired to it. The union cannot make one of
+/// them — `PortsDoNotCorrespond`: past the merged fragment's ports, a node's ordinals
+/// name a different number of buffers than its body reads, so wiring it would answer one buffer
+/// as another.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
@@ -499,9 +498,7 @@ fn merge_region(
             return Err(MergeRefusal::ClassIsNotStated { produced, expected });
         }
     }
-    // **The merged node's inputs are the union**: the producer's inputs in their order, then the
-    // consumer's surviving inputs in theirs, because the merged fragment's own ports are that
-    // union and a node is wired to the ports its body reads.
+    // The merged node's inputs are the union: the producer's, then the consumer's survivors.
     let inputs: Vec<GraphValueId> = producer_node
         .inputs
         .iter()
@@ -515,9 +512,7 @@ fn merge_region(
                 .map(|(_, value)| *value),
         )
         .collect();
-    // A buffer past the merged fragment's ports is one the merged node is handed at a position
-    // its body reads as the other body's: the ordinals name a different number of buffers than
-    // the bodies read ports for, which is the mismatch the union cannot paper over.
+    // Past the merged ports, a position names another body's buffer: the union cannot fix it.
     let ports = producer_node
         .fragment
         .inputs

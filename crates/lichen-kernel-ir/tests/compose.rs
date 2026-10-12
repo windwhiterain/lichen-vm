@@ -438,8 +438,8 @@ fn a_chain_composes_and_compacts() {
     );
 }
 
-/// A surviving read moves **up** by the producer's input count, and a read above the absorbed
-/// ordinal moves up by one less than that.
+/// A surviving read moves **up** by the producer's input count, one less for a read above the
+/// absorbed ordinal.
 ///
 /// # Invariant
 /// The union is the producer's inputs then the consumer's survivors, so ordinal 0 lands at
@@ -632,10 +632,9 @@ fn a_read_whose_position_is_not_a_constant_is_refused() {
 ///
 /// # Invariant
 /// The union puts the producer's inputs first, so its ordinal 1 and the consumer's absorbed
-/// ordinal 1 are two ports of one merged fragment: the guard that used to refuse this shape was
-/// `ProducerReadsTheAbsorbedInput`, which the union makes unreachable — the producer's read
-/// names its own port, and a producer reading the buffer it *produces* is the merge pass's
-/// `ProducedValueIsReadElsewhere`, which sees the graph `compose` never sees.
+/// ordinal 1 are two ports of one fragment — which makes `ProducerReadsTheAbsorbedInput`
+/// unreachable. A producer reading the buffer it *produces* is the merge pass's
+/// `ProducedValueIsReadElsewhere`.
 #[test]
 fn a_producer_reading_the_ordinal_the_consumer_absorbs_keeps_its_own_input() {
     let producer = fragment(
