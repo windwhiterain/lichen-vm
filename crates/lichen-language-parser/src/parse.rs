@@ -754,28 +754,29 @@ fn expression<'a, Er: GrammarError<'a>>(
                 }),
         ));
 
+        // `=>`, the loosest operator, right-associative: the body is a whole
+        // expression, so `x => y => z` nests in `x`'s body.
         term4
             .then(
                 token(TokenKind::FatArrow)
                     .ignore_then(operand(tokens, expr.clone()))
                     .repeated()
-                    .collect::<Vec<_>>(),
+                    // Only the first body is the lambda's; the repetition
+                    // consumes a malformed chain's extra arrows, still diagnosed.
+                    .fold(None, first_body),
             )
-            .map(|(first, rest)| match rest.into_iter().next() {
-                Some(rhs) => Pre::FatArrow(Box::new(first), Box::new(rhs)),
-                None => Pre::E(first),
-            })
-            .map(|pre| pre)
-            .validate(|pre, me, emit| match pre {
-                Pre::E(e) => e,
-                Pre::FatArrow(lhs, rhs) => match *lhs {
+            .validate(|(first, body), me, emit| {
+                let Some(body) = body else {
+                    return first;
+                };
+                match first {
                     Expr::Name(parameter, span, _) => Expr::Lambda {
                         parameter,
                         parameter_span: span,
                         parameter_binder: None,
                         parameter_type: None,
                         parameter_perspective: None,
-                        r#return: rhs,
+                        r#return: Box::new(body),
                         span,
                     },
                     Expr::Annotation {
@@ -790,7 +791,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                             // A parameter refinement desugars to `x => { x ! p; e }`
                             // (`docs/notes/operator-polymorphism.md` §3).
                             let r#return = match refinement {
-                                None => rhs,
+                                None => Box::new(body),
                                 Some(refinement) => {
                                     let parameter_value =
                                         Expr::Name(parameter.clone(), parameter_span, None);
@@ -804,7 +805,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                                             marks: Vec::new(),
                                             span: parameter_span,
                                         })],
-                                        expr: rhs,
+                                        expr: Box::new(body),
                                         span,
                                     })
                                 }
@@ -828,7 +829,7 @@ fn expression<'a, Er: GrammarError<'a>>(
                         emit.emit(Er::message(me.span(), "expected a name before '=>'"));
                         other
                     }
-                },
+                }
             })
             .boxed()
     })
@@ -860,6 +861,17 @@ where
         acc = combine(rhs, acc);
     }
     combine(first, acc)
+}
+
+/// Keep the first body of a `=>` chain and drop the rest.
+///
+/// # Invariant
+///
+/// The chain repeats because a malformed input's extra arrows must still be
+/// consumed here — that is where they are reported — but only the first body is
+/// the lambda's, so the grammar reads one body per lambda.
+fn first_body(first: Option<Expr>, body: Expr) -> Option<Expr> {
+    Some(first.unwrap_or(body))
 }
 
 /// A mark payload: a string literal, the only shape a mark takes.
@@ -918,13 +930,6 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
         marks,
         span,
     }
-}
-
-/// A `=>` chain before it is validated into a lambda.
-#[derive(Clone, Debug)]
-enum Pre {
-    E(Expr),
-    FatArrow(Box<Expr>, Box<Expr>),
 }
 
 /// The atoms, with their postfix forms: `e[i]`, `a(k)`, `X{n}`, `X::a`, and
