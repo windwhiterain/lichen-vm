@@ -3,13 +3,13 @@
 
 use super::common;
 
-use lichen_compute::{FusedKernel, LandingRefusal, land_fused_kernel, write_fused_kernel};
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelFragment, KernelRoles, KernelShape, LaneWidth, Plan, ScalarClass,
     ScalarData, Slice, Space, TargetFacts, fragment_digest,
 };
+use lichen_runtime::{FusedKernel, LandingRefusal, land_fused_kernel, write_fused_kernel};
 
 /// A one-node graph over `fragment`, whose return is that node's output.
 ///

@@ -27,10 +27,10 @@ lichen-kernel-ir.workspace = true
 [dev-dependencies]
 lichen-graph-ir = { path = "../lichen-graph-ir" }
 # The fused-kernel artifact: a device test lands one into a recorded node, and the
-# artifact's reader and lander live there. A **dev** dependency for the same reason
-# `lichen-graph-ir` above is one, and it keeps this crate out of the wasm backend's
-# own dependency graph.
-lichen-compute = { path = "../lichen-compute" }
+# artifact's reader and lander live in the runtime. A **dev** dependency for the same
+# reason `lichen-graph-ir` above is one, and naming the runtime rather than the
+# sub-language is what keeps every language crate out of this one, test or not.
+lichen-runtime = { path = "../lichen-runtime" }
 # The acceptance case's bodies: a declared reduction tiled across the workgroup, checked against
 # the emitter here and run on a device from `lichen-language`'s own tests.
 lichen-fusion = { path = "../lichen-fusion" }
