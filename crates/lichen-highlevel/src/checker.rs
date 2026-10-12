@@ -8,7 +8,7 @@
 //! the apply-time unify is the function-parameter check.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
@@ -347,6 +347,13 @@ where
     /// The top-level statements the definition pass found non-terminating.
     pub nonterminating: Vec<NonTerminating>,
     pub ok: bool,
+    /// The lowering map, built on the first read. See [`crate::lowering`].
+    ///
+    /// # Invariant
+    /// A `OnceLock` rather than a built field: attribution is read only when a
+    /// node has to be named — a diagnostic, a test — and paying an O(n) table
+    /// on every build to answer a question nobody asked is the wrong trade.
+    pub(crate) lowerings: OnceLock<HashMap<NodeId, Loc>>,
 }
 
 /// The compile work budget one [`Checker`] build runs under.
@@ -637,6 +644,7 @@ where
             assert_spellings: checker.assert_spellings,
             nonterminating: checker.nonterminating,
             ok,
+            lowerings: OnceLock::new(),
         }
     }
 

@@ -5,6 +5,7 @@ pub mod attr;
 pub mod checker;
 pub mod diagnostic;
 pub mod ir;
+pub mod lowering;
 pub mod marks;
 pub mod native;
 pub mod plugin;
