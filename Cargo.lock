@@ -880,8 +880,6 @@ dependencies = [
 name = "lichen-compute"
 version = "0.1.0"
 dependencies = [
- "facet",
- "facet-json",
  "lichen-compute-gpu",
  "lichen-doc",
  "lichen-fusion",
@@ -1084,7 +1082,11 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "facet-json",
+ "lichen-fusion",
+ "lichen-fusion-bridge",
+ "lichen-graph-ir",
  "lichen-kernel-ir",
+ "lichen-utils",
  "wasmi",
 ]
 

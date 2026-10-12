@@ -1,80 +1,16 @@
-//! The graph pass: a host-installed rewrite of a graph before dispatch.
+//! The installed graph pass: the thread-local a host fills and a run consults.
 //! See docs/notes/graph-fusion.md §5 and §8.
 //!
 //! # Invariant
-//! This module names no fusion crate and no backend: it hands a pass a graph and a launch
-//! extent, and takes back the graph it wants run as plain data.
+//! The pass itself is `lichen_runtime::graph_pass`, which takes only a graph and a launch
+//! extent: a host thread's session is what owns one installed pass, so the installation and
+//! the consultation stay here.
 
 use std::cell::RefCell;
 
 use lichen_graph_ir::Graph;
 
-/// A graph's launch extent, read for the node that dispatches over it.
-///
-/// # Invariant
-/// A closure rather than a table, so a pass asks for the one node it is about and never
-/// has to know how many nodes the graph holds or which of them reads a count.
-pub type LaunchExtent<'a> = dyn Fn(usize) -> Option<usize> + 'a;
-
-/// A rewrite a host installs, applied to a graph once per run, immediately before dispatch.
-///
-/// # Invariant
-/// The graph handed over is the one that will run, so a pass that answers a different one
-/// changes what runs and a pass that answers `None` changes nothing. Every line it records
-/// is reported through the run report's own channel, so a refusal is visible rather than
-/// swallowed, and a launch the pass declines to serve is said rather than left to die at
-/// the dispatcher.
-pub trait GraphPass {
-    /// The graph to dispatch, with one line recorded per node the pass looked at.
-    fn apply(
-        &self,
-        graph: &Graph,
-        extent: &LaunchExtent<'_>,
-        lines: &mut Vec<String>,
-    ) -> Option<Graph>;
-}
-
-/// The one pass that applies `stages` in turn, for a caller that wants several.
-///
-/// # Invariant
-/// A stage sees the graph the stage before it answered, or the one it was handed when that
-/// stage answered `None` — the trait's `None` means "leave it as it was". The lines are the
-/// stages' own, in stage order and verbatim: every merge refusal names its check after
-/// `refused: `, a tiling line states the sentence alone, and the chain answers `None` only
-/// when no stage rewrote anything.
-pub fn pass_chain(stages: Vec<Box<dyn GraphPass>>) -> Box<dyn GraphPass> {
-    Box::new(PassChain { stages })
-}
-
-/// The chain: an ordered list of passes, one installed pass in its place.
-struct PassChain {
-    /// The stages, in the order they are applied.
-    stages: Vec<Box<dyn GraphPass>>,
-}
-
-impl GraphPass for PassChain {
-    /// Apply every stage in turn, each to the graph the one before it answered.
-    ///
-    /// # Invariant
-    /// The graph running is the last answer, or the caller's own while it is `None`: a stage
-    /// that rewrote nothing hands the next stage the graph it was given, which is what makes a
-    /// chain of one refusing stage and one rewriting stage the second stage's own answer.
-    fn apply(
-        &self,
-        graph: &Graph,
-        extent: &LaunchExtent<'_>,
-        lines: &mut Vec<String>,
-    ) -> Option<Graph> {
-        let mut current: Option<Graph> = None;
-        for stage in &self.stages {
-            let seen = current.as_ref().unwrap_or(graph);
-            if let Some(rewritten) = stage.apply(seen, extent, lines) {
-                current = Some(rewritten);
-            }
-        }
-        current
-    }
-}
+pub use lichen_runtime::graph_pass::{GraphPass, LaunchExtent, pass_chain};
 
 thread_local! {
     /// The installed pass, and the lines the last consultation recorded.

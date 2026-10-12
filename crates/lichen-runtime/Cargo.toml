@@ -18,6 +18,17 @@ edition.workspace = true
 # `lichen-kernel-ir` states: a dependency named here is one every backend that reads
 # an artifact cannot avoid.
 lichen-kernel-ir.workspace = true
+# The recording a pass rewrites: `Graph` and its nodes. It depends on
+# `lichen-kernel-ir` alone, so naming it adds nothing to the backend contract.
+lichen-graph-ir.workspace = true
+# The symbolic core and the bridge that reads a marked role out of a fragment: a
+# region's schema is an expression tree, so deriving one is library work and not a
+# backend's. `lichen-fusion` has no dependencies of its own and the bridge names only
+# it and `lichen-kernel-ir`, so a backend that reads a claim inherits no runtime.
+lichen-fusion.workspace = true
+lichen-fusion-bridge.workspace = true
+# The hashes a region and a pack are named by, taken over canonical text.
+lichen-utils.workspace = true
 # The fused kernel is text a human edits, so the schema derives `Facet` and the text
 # is JSON rather than a hand-written codec.
 facet.workspace = true

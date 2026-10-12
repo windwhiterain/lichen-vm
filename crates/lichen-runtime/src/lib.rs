@@ -1,4 +1,4 @@
-//! `lichen-runtime`: an artifact read and run on IR alone, with no language in it.
+//! `lichen-runtime`: an artifact, the passes and the packs, read on IR alone.
 //! See docs/notes/graph-fusion.md §5.
 //!
 //! # Invariant
@@ -7,8 +7,23 @@
 //! that also wants a `Module` belongs to the language side. `cargo tree -p
 //! lichen-runtime` naming no language crate *is* the check.
 
+pub mod automatic_tiling;
 pub mod fused;
+pub mod fusion_claim;
+pub mod graph_pass;
+pub mod kernel_registry;
 pub mod module_cache;
+pub mod packs;
+pub mod placement_pack;
+pub mod region_merge;
 
-pub use fused::{FusedKernel, FusedRefusal, malformed_at, read_fused_kernel, write_fused_kernel};
+pub use automatic_tiling::tiling_pass;
+pub use fused::{
+    FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, malformed_at, read_fused_kernel,
+    write_fused_kernel,
+};
+pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
+pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};
 pub use module_cache::{cached_module, module_cache_misses};
+pub use placement_pack::{PlacementPack, read_placement_pack};
+pub use region_merge::{MergeRefusal, region_merge_pass};

@@ -35,16 +35,6 @@ waffle = { version = "0.3.2", default-features = false }
 # Stated in the workspace because the runtime's emitted-module cache holds one of
 # these per kernel; the version note that matters is the one on the encoder above.
 wasmi.workspace = true
-# The fused-kernel artifact is text a human edits, so the schema derives
-# `Facet` and the text is JSON rather than a hand-written codec.
-facet.workspace = true
-# The reader, which refuses a hand-edited text with the field and the byte
-# offset it failed at rather than a message saying only that it failed.
-facet-json.workspace = true
-# The symbolic core and its bridge: a schema's projections are `lichen_fusion::Expr`,
-# so deriving one is library work and not an example's. See docs/notes/graph-fusion.md §4.
-lichen-fusion.workspace = true
-lichen-fusion-bridge.workspace = true
 
 [dev-dependencies]
 # The seam test: a real lichen program dispatching to a real device. This crate
@@ -55,3 +45,8 @@ lichen-compute-gpu.workspace = true
 # lives in its own crate; a dev-dependency keeps them here without putting the
 # generator in the library.
 lichen-tools.workspace = true
+# The symbolic core and its bridge: a region's schema is an expression tree, and
+# the tests state one by hand. The library reads both through `lichen-runtime`,
+# which is where the derivation now is.
+lichen-fusion.workspace = true
+lichen-fusion-bridge.workspace = true
