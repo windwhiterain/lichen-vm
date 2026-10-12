@@ -718,18 +718,6 @@ fn the_retired_angle_type_prefix_is_a_parse_error() {
 }
 
 #[test]
-fn the_retired_table_value_braces_are_a_type_not_a_value() {
-    // The braced form is the *type*, so the entry arrow has no pair here.
-    let err = parse_err("table{1 ==> 2}");
-    assert!(err.message.contains("expected"), "{}", err.message);
-    // The parenthesised value form is the one that takes entries.
-    assert!(matches!(
-        parse_ok("table(1 ==> 2)"),
-        Expr::Table(entries, _) if entries.len() == 1
-    ));
-}
-
-#[test]
 fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(

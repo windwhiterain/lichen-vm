@@ -90,8 +90,7 @@ which `build.rs` finds as a fallback); `build.rs` prints exactly that if it is a
   `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`, `X{n}`,
   `X::a`), the infix `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix
   keyword operators.  The retired angle forms (`<…>`, `struct<…>`, `array<…, n>`,
-  the raw index `X<e>`) no longer parse; the grammar's own
-  `retired_spellings_have_error_nodes` test pins that.  See
+  the raw index `X<e>`) no longer parse.  See
   [operators §10](operators.md#10-the-editor-grammar) for the `<`/`>` history and
   the one reading the grammar still cannot take (the container of a glued `{n}`,
   which is a checker unify rather than a spelling).

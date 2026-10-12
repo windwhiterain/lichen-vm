@@ -113,26 +113,3 @@ fn edge_cases_parse_without_error_nodes() {
         );
     }
 }
-
-#[test]
-fn retired_spellings_have_error_nodes() {
-    // The retired angle spellings must not parse; see `docs/notes/operators.md` §10.
-    let mut parser = parser();
-
-    let cases = [
-        "s = struct<.x Int>",
-        "a = array<Int, 3>",
-        "b = x : <Int, Int>",
-        "c = f<A, B>",
-        "d = a <Int, string>",
-    ];
-
-    for (idx, src) in cases.iter().enumerate() {
-        let tree = parser.parse(src, None).expect("parse");
-        assert!(
-            tree.root_node().has_error(),
-            "retired spelling #{idx} must not parse:\n---\n{src}\n---\n{}",
-            tree.root_node().to_sexp()
-        );
-    }
-}

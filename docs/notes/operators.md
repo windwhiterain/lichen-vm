@@ -380,8 +380,7 @@ three changes, and the first is the interesting one.
   `X{n}` and `X::a`; the infix `t <== k`; `@in`, `@any`, `@shallow` and `@loop`;
   and §7's and §11's seven prefix keywords (`int2float`, `float2int`, `max`,
   `min`, `exp`, `sqrt`, `floor`). `struct<…>`, `array<…, n>`, the bare `<…>`
-  tuple type and the raw index `X<e>` no longer parse at all, and the grammar's
-  own `retired_spellings_have_error_nodes` test pins that.
+  tuple type and the raw index `X<e>` no longer parse at all.
 
 The one reading an editor still cannot take from the grammar is the *semantic*
 half of a glued brace: `X{n}` and `t{k}` are the same token sequence, so both are
