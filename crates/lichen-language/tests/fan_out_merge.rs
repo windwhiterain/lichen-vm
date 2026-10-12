@@ -90,10 +90,16 @@ fn recording() -> String {
 }
 
 /// The diamond as a program that runs its recording and answers it.
+///
+/// # Invariant
+/// The run's answer is the array of the graph's returns in the recording's own order, so ordinal
+/// `k` names the `k`-th return: each is collected on its own, which is what makes the second one
+/// an observation rather than an inference.
 fn running() -> String {
     format!(
         "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, data))\nout\n",
+         (compute.Buf Float))\nr = compute.graphrun built (count, data)\n\
+         (compute.collect (r[0]), compute.collect (r[1]))\n",
         recording(),
         count = COUNT,
         elements = elements(),
@@ -128,13 +134,20 @@ fn root_items(value: &LangValue) -> &[ArrayItem] {
     unsafe { array.items() }
 }
 
-/// The `Float` elements `compute.collect` read back for the graph.
+/// The two `Float` arrays the graph's returns become, one per returned buffer.
 ///
 /// # Invariant
-/// `collect` gathers the returned buffers into **one** array, so this is a whole run's answer and
-/// not a prefix of it: a counterfactual that moved one element would still be caught by equality.
-fn collected(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> {
-    common::float_array(module, value)
+/// The run's answer is the array of the recording's returns in its own order, so each is
+/// collected through its own ordinal and the pair is the run's whole answer. The two consumers
+/// compute the same numbers, so the ordinals are told apart by the counterfactual and not by the
+/// values: it moves one consumer's constant alone and moves one of these two buffers alone.
+fn outputs(module: &Module<LangProgram>, value: &LangValue) -> (Vec<f32>, Vec<f32>) {
+    let returned = common::array_values(module, value);
+    assert_eq!(returned.len(), 2, "the diamond returns two buffers");
+    (
+        common::float_array(module, &returned[0]),
+        common::float_array(module, &returned[1]),
+    )
 }
 
 /// The two claimed kernels the recording's root tuple holds.
@@ -257,12 +270,13 @@ fn consulted(
     (rewritten, lines)
 }
 
-/// The merge with **every** consumer's `+ 1.0` constant turned into `+ 10.0`.
+/// The merge with the **second** consumer's `+ 1.0` turned into `+ 10.0`.
 ///
 /// # Invariant
 /// The mutation is inside the composed body alone, so an answer that changes says the composed
-/// node executed and an answer that does not says the recording did. Every occurrence is moved, so
-/// the counterfactual does not depend on which consumer's constant a read happened to find first.
+/// node executed and an answer that does not says the recording did. `compose_fan_out` appends the
+/// consumers' bodies in order and declares their outputs in that same order, so the **last** of the
+/// body's `+ 1.0` definitions is the second consumer's own constant.
 struct MovedBias(Box<dyn GraphPass>);
 
 impl GraphPass for MovedBias {
@@ -284,26 +298,34 @@ impl GraphPass for MovedBias {
     }
 }
 
-/// Turn every `Const(Float, 1.0)` in the composed body into `Const(Float, 10.0)`.
+/// Move the composed body's **last** `Const(Float, 1.0)` into `Const(Float, 10.0)`.
 fn move_bias(body: &mut KernelBody) {
     let one = 1.0f32.to_bits() as i64;
     let ten = 10.0f32.to_bits() as i64;
-    let mut moved = 0;
-    for definition in &mut body.values {
-        if let ValueDef::Instr {
-            op: KernelInstr::Const(ScalarClass::Float, bits),
-            ..
-        } = definition
-            && *bits == one
-        {
-            *bits = ten;
-            moved += 1;
-        }
-    }
+    let biases: Vec<usize> = body
+        .values
+        .iter()
+        .enumerate()
+        .filter_map(|(at, definition)| match definition {
+            ValueDef::Instr {
+                op: KernelInstr::Const(ScalarClass::Float, bits),
+                ..
+            } if *bits == one => Some(at),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        moved, 2,
-        "the composed body holds one `+ 1.0` per consumer, and the counterfactual moves both"
+        biases.len(),
+        2,
+        "the composed body holds one `+ 1.0` per consumer, and the counterfactual moves the second"
     );
+    if let ValueDef::Instr {
+        op: KernelInstr::Const(ScalarClass::Float, bits),
+        ..
+    } = &mut body.values[*biases.last().expect("the two biases are two definitions")]
+    {
+        *bits = ten;
+    }
 }
 
 /// The fragment a merged graph's one node holds.
@@ -450,23 +472,24 @@ fn a_pack_naming_the_fan_out_merges_all_three_nodes_into_one() {
     );
 }
 
-/// Run the diamond three times on a device: as recorded, merged, and merged with the bias moved.
+/// Run the diamond three times on a device: as recorded, merged, and merged with the constants moved.
 ///
 /// # Invariant
-/// The three answers are the whole of the evidence, and the **counterfactual is the proof**: a
+/// The three observations are the whole of the evidence, and the **counterfactual is the proof**: a
 /// fused diamond computes the same numbers unfused, so only an answer that moves with the composed
-/// body says which node the device dispatched.
+/// body says which node the device dispatched. One consumer's constant moves alone, so one returned
+/// buffer moves alone and the second ordinal is read rather than inferred from the first.
 fn device_triple(test: &str) {
     let Some((_context, _device)) = device(test) else {
         return;
     };
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running());
-    let recorded = collected(&base_module, &base_value);
+    let recorded = outputs(&base_module, &base_value);
     assert_eq!(
         recorded,
-        answer(1.0),
-        "with no pass installed the program runs its own three kernels"
+        (answer(1.0), answer(1.0)),
+        "with no pass installed the program runs its own three kernels and hands back two buffers"
     );
 
     let (_module, _instances, schema, _graph) = derived(&recording());
@@ -474,7 +497,7 @@ fn device_triple(test: &str) {
 
     install_region_merge_with_packs(&base_module, &packs);
     let (merged_module, merged_value, _root) = common::run(&running());
-    let merged = collected(&merged_module, &merged_value);
+    let merged = outputs(&merged_module, &merged_value);
     let report = pass_report(&merged_module);
     println!("the run's own report:\n  {}", report.join("\n  "));
     assert!(
@@ -487,7 +510,7 @@ fn device_triple(test: &str) {
     );
     assert_eq!(
         merged, recorded,
-        "the merged graph answers the program's answer element for element"
+        "the merged graph answers the program's answer element for element, on **both** ordinals"
     );
 
     // **The counterfactual**: only the composed node can answer a value the recording cannot.
@@ -496,16 +519,17 @@ fn device_triple(test: &str) {
         &packs,
     ))));
     let (moved_module, moved_value, _root) = common::run(&running());
-    let moved = collected(&moved_module, &moved_value);
+    let moved = outputs(&moved_module, &moved_value);
     clear_graph_pass();
     println!(
-        "the device ran `{test}`: recorded {recorded:?}, merged {merged:?}, both `+ 1.0` moved to \
-         `+ 10.0` {moved:?}"
+        "the device ran `{test}`: recorded {recorded:?}, merged {merged:?}, the second consumer's \
+         `+ 1.0` moved to `+ 10.0` {moved:?}"
     );
     assert_eq!(
         moved,
-        answer(10.0),
-        "the composed body with both biases moved answers what the recording cannot"
+        (answer(1.0), answer(10.0)),
+        "moving the second consumer's constant alone moved the **second** returned buffer and \
+         left the first where the recording had it"
     );
     assert_ne!(
         moved, merged,

@@ -167,6 +167,8 @@ pub fn compose_fan_out(
             .collect();
         // **Every surviving read of the consumer's own buffer takes the union's position for it.**
         let shifted = shifted_positions(&mut body, &edge.reads, union, edge.absorbed);
+        // **And every write of the consumer's own output takes the sum of the outputs before it.**
+        let writes = shifted_write_positions(&mut body, &consumer.body, outputs);
         let entry = consumer.body.entry;
         let base = blocks_base;
         let mapped_block = |block: usize| -> usize {
@@ -187,7 +189,7 @@ pub fn compose_fan_out(
             for &value in &block.instrs {
                 let Some(&address) = absorbed_at_address.get(&value) else {
                     // The position is a constant **value**, so it stands before the read that uses it.
-                    if let Some(&constant) = shifted.get(&value) {
+                    if let Some(&constant) = shifted.get(&value).or_else(|| writes.get(&value)) {
                         sequence.push(constant);
                     }
                     sequence.push(renumber.resolve(value));
@@ -232,7 +234,9 @@ pub fn compose_fan_out(
                 ValueDef::Instr { op, args, classes } => {
                     let mut args: Vec<ValueId> =
                         args.iter().map(|&arg| renumber.resolve(arg)).collect();
-                    if let Some(&constant) = shifted.get(&ValueId(value as u32))
+                    if let Some(&constant) = shifted
+                        .get(&ValueId(value as u32))
+                        .or_else(|| writes.get(&ValueId(value as u32)))
                         && let Some(first) = args.first_mut()
                     {
                         *first = constant;
@@ -980,6 +984,42 @@ fn shifted_positions(
             classes: vec![ScalarClass::Int],
         });
         shifted.insert(read, constant);
+    }
+    shifted
+}
+
+/// The position constant each write of a consumer takes in the merged body.
+///
+/// # Invariant
+/// The merged fragment declares the consumers' outputs **summed**, so a consumer starting at `base`
+/// names its own output `p` at `base + p`. A position that does not move takes **no** fresh value.
+fn shifted_write_positions(
+    merged: &mut KernelBody,
+    consumer: &KernelBody,
+    base: usize,
+) -> HashMap<ValueId, ValueId> {
+    let mut shifted = HashMap::new();
+    for write in write_sites(consumer) {
+        let Some(ValueDef::Instr { args, .. }) = consumer.values.get(write.0 as usize) else {
+            continue;
+        };
+        let Some(&position) = args.first() else {
+            continue;
+        };
+        let Some(value) = consumer.constant(Some(position)) else {
+            continue;
+        };
+        let at = base.saturating_add(value as usize);
+        if at == value as usize {
+            continue;
+        }
+        let constant = ValueId(merged.values.len() as u32);
+        merged.values.push(ValueDef::Instr {
+            op: KernelInstr::Const(ScalarClass::Int, i64::try_from(at).unwrap_or(i64::MAX)),
+            args: Vec::new(),
+            classes: vec![ScalarClass::Int],
+        });
+        shifted.insert(write, constant);
     }
     shifted
 }
