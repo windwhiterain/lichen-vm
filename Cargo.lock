@@ -892,6 +892,7 @@ dependencies = [
  "lichen-language",
  "lichen-lowlevel",
  "lichen-perspective",
+ "lichen-runtime",
  "lichen-tools",
  "lichen-utils",
  "stacksafe",
@@ -1075,6 +1076,16 @@ dependencies = [
  "lichen-highlevel",
  "lichen-lowlevel",
  "lichen-utils",
+]
+
+[[package]]
+name = "lichen-runtime"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "facet-json",
+ "lichen-kernel-ir",
+ "wasmi",
 ]
 
 [[package]]

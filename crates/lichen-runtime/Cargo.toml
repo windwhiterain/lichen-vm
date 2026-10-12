@@ -1,0 +1,29 @@
+[package]
+name = "lichen-runtime"
+version.workspace = true
+edition.workspace = true
+
+# **No language dependency, and that is an invariant rather than an accident of the
+# current tree.**  The seam is checkable in review: anything that takes a `Module`
+# belongs to the language-integration side (`lichen-compute`), anything that takes
+# only IR types — a `KernelFragment`, an `Artifact`, a `KernelId` — belongs here.
+# `Module` is `lichen-lowlevel`'s, so naming none of `lichen-lowlevel`,
+# `lichen-highlevel`, `lichen-language`, `lichen-language-parser` or
+# `lichen-preprocess` *is* the check: `cargo tree -p lichen-runtime` must show none
+# of them.  Without that, anything that wants to run an artifact has to drag the
+# language in, and a runtime that cannot exist without a language is a sub-language
+# with a smaller name.
+[dependencies]
+# The artifact is `lichen-kernel-ir`'s vocabulary, so this is the same argument
+# `lichen-kernel-ir` states: a dependency named here is one every backend that reads
+# an artifact cannot avoid.
+lichen-kernel-ir.workspace = true
+# The fused kernel is text a human edits, so the schema derives `Facet` and the text
+# is JSON rather than a hand-written codec.
+facet.workspace = true
+# The reader, which refuses a hand-edited text with the field and the byte offset it
+# failed at rather than a message saying only that it failed.
+facet-json.workspace = true
+# The engine one backend caches its compiled modules in. It is a runtime, not a
+# language: `wasmi::Module` is a compiled wasm module and not `lichen_lowlevel::Module`.
+wasmi.workspace = true

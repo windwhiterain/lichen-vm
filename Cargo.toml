@@ -15,6 +15,7 @@ members = [
     "crates/lichen-lowlevel",
     "crates/lichen-highlevel",
     "crates/lichen-testkit",
+    "crates/lichen-runtime",
     "crates/lichen-compute",
     "crates/lichen-render",
     "crates/lichen-doc",
@@ -69,6 +70,9 @@ lichen-highlevel = { path = "crates/lichen-highlevel" }
 # IR writer and an inspection surface over the built module. A test-only
 # dependency, so no library half of the workspace links it.
 lichen-testkit = { path = "crates/lichen-testkit" }
+# The runtime an artifact runs in: it takes IR types and nothing from the language,
+# so `lichen-compute` is what plugs it into the language rather than what contains it.
+lichen-runtime = { path = "crates/lichen-runtime" }
 lichen-compute = { path = "crates/lichen-compute" }
 lichen-render = { path = "crates/lichen-render" }
 lichen-doc = { path = "crates/lichen-doc" }
@@ -92,6 +96,9 @@ serde_json = "1"
 sha2 = "0.10"
 slotmap = "1.1.1"
 stacksafe = "1"
+# The engine the emitted-module cache holds one compiled module per kernel in; both
+# the runtime that owns the cache and the sub-language that plugs it in name it.
+wasmi = "2.0.0"
 
 # `lichen-std-native` declares its core deps as **git** deps (to this same
 # repo) so an external compose crate (a generated plugin-built compiler) can

@@ -338,7 +338,7 @@ impl From<artifact::Fusion> for Fusion {
 /// # Invariant
 /// Every type mirrors `lichen-kernel-ir`, and the plan is the fused artifact's own spelling
 /// rather than a second one: one plan text serves both artifacts
-/// (`crates/lichen-compute/src/compute/fused/schema.rs`).
+/// (`crates/lichen-runtime/src/fused/schema.rs`).
 mod artifact {
     use facet::Facet;
 

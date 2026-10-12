@@ -6,8 +6,8 @@
 //! added to `lichen-kernel-ir` is a compile error here rather than a silent
 //! omission from the text.
 
-use crate::compute::fused::schema;
-use crate::compute::fused::{FusedKernel, FusedRefusal};
+use crate::fused::schema;
+use crate::fused::{FusedKernel, FusedRefusal};
 use lichen_kernel_ir as ir;
 
 /// Where a conversion found a name that holds nothing, and what it named.
