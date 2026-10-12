@@ -141,6 +141,22 @@ index, however many buffers the body reads. All of them are in
 `fragment_digest`, so two fragments differing only in a class cannot intern to one
 id.
 
+**And a read is recorded at the position it names, not in the order the reads were
+emitted** — the invariant the sentence above always meant, which the builder did not hold until
+`3bbcdc42`. The list was pushed in emission order and read by every consumer **by position**
+(`buffer_class_of` for a binding, `compose`, `region_merge`, and `Port::class`, which is inside a
+schema hash); a two-input kernel that read neither every input nor them in declaration order was
+therefore described wrongly. Measured on the shape that showed it — an elementwise producer feeding a
+consumer that reads only its **second** input — the consumer declared `input_classes == [Float, Int]`
+against `roles.input_classes == [Some(Float), Some(Float)]`, and the backend refused the kernel with
+`MixedClasses` before any fusion question could be asked. Now the read's class is placed at the index
+its position operand names, and it travels back from the recording, so a read and a hole cannot
+disagree; a position no read reached takes the class its declaring role states, and a position that
+neither a read nor a role states a class for keeps the ABI's integer default — the open element cell's
+own answer rather than a gap, since the parameter declares no class there to be wrong about. The four
+hashes `examples/fusion_schema.rs` prints did **not** move: each of those chains either declares one
+input or reads all of them at one class, which is exactly why the misordering stayed latent.
+
 A **decided** leaf's class is its parameter field's: `scalar_leaf_classes` reads
 each parallel parameter leaf's class from the field the role walk names, so a
 runtime `Float` scalar reaches the body's own argument. Two parallel leaves stay
