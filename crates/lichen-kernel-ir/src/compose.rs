@@ -81,7 +81,7 @@ pub fn compose(
             }
         });
     };
-    let (produced, forwarded) = write_edge(&producer.body, write)?;
+    let (produced, forwarded, written_at) = write_edge(&producer.body, write)?;
     if produced != consumer.input_classes[absorbed_at] {
         return Err(ComposeRefusal::ClassesDiffer {
             produced,
@@ -101,10 +101,23 @@ pub fn compose(
             returns: returns.len(),
         });
     };
-    if let Some(&lane) = producer_parameters.last() {
-        let incoming = producer.body.incoming_arguments();
-        if producer.body.depends_on(forwarded, lane, &incoming) {
-            return Err(ComposeRefusal::ForwardedValueIsLaneDependent { value: forwarded });
+    let incoming_arguments = producer.body.incoming_arguments();
+    if let Some(&lane) = producer_parameters.last()
+        && producer
+            .body
+            .depends_on(forwarded, lane, &incoming_arguments)
+    {
+        // Lane dependence is exact in-lane; only a read elsewhere needs a slice.
+        if let Some(read) = misaddressed_read(
+            &consumer.body,
+            consumer_parameters,
+            entry_parameter(producer_parameters, written_at),
+            absorbed_at,
+        ) {
+            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
+                value: forwarded,
+                read,
+            });
         }
     }
     if let Some(block) = branch_targeting(&consumer.body, consumer.body.entry) {
@@ -344,10 +357,12 @@ pub enum ComposeRefusal {
         /// The block that branches there.
         block: usize,
     },
-    /// The forwarded value is reachable from the producer's invocation index.
+    /// The forwarded value is reachable from the lane, and a read asks for another lane's.
     ForwardedValueIsLaneDependent {
         /// The value being forwarded.
         value: ValueId,
+        /// The read of the absorbed buffer that addresses somewhere else.
+        read: ValueId,
     },
     /// Two of the marks a merged fragment keeps carry one text.
     DuplicatedMark {
@@ -485,11 +500,13 @@ impl std::fmt::Display for ComposeRefusal {
                 "block {block} branches to the consumer's entry block, whose parameters are bound \
                  once, so a second arrival would re-enter what is inlined away"
             ),
-            ComposeRefusal::ForwardedValueIsLaneDependent { value } => write!(
+            ComposeRefusal::ForwardedValueIsLaneDependent { value, read } => write!(
                 formatter,
                 "the forwarded value {value:?} is reachable from the producer's invocation index, \
-                 so binding it in a lane's own block reads another lane's value — a slice and a \
-                 barrier rather than an inlining (`docs/notes/graph-fusion.md` §4)"
+                 so binding it in a lane's own block reads another lane's value — and the read \
+                 {read:?} addresses the absorbed buffer at an address the producer did not write \
+                 for that lane, which takes one copy of the producer's cone per read with the \
+                 address rebound (`docs/notes/graph-fusion.md` §4)"
             ),
             ComposeRefusal::DuplicatedMark { text } => write!(
                 formatter,
@@ -515,8 +532,51 @@ impl std::fmt::Display for ComposeRefusal {
     }
 }
 
-/// The class the producer's write declares and the value operand it forwards.
-fn write_edge(body: &KernelBody, write: ValueId) -> Result<(ScalarClass, ValueId), ComposeRefusal> {
+/// The first read of the absorbed buffer that does not address what the producer's write did.
+///
+/// # Invariant
+/// The addresses are compared **as the bodies state them**: each is the entry's own parameter
+/// at some position, and the two parameter lists correspond position for position, so "the same
+/// position" is "the same value" in the merged body — the invocation index in every shape
+/// measured. An address that is no entry parameter at all is another lane's, and refuses.
+fn misaddressed_read(
+    consumer: &KernelBody,
+    consumer_parameters: &[ValueId],
+    written: Option<usize>,
+    absorbed: usize,
+) -> Option<ValueId> {
+    consumer
+        .blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter().copied())
+        .filter(|value| {
+            let Some(ValueDef::Instr {
+                op: KernelInstr::BufferReadCall(_),
+                args,
+                ..
+            }) = consumer.values.get(value.0 as usize)
+            else {
+                return false;
+            };
+            let [position, address] = args[..] else {
+                return false;
+            };
+            consumer.constant(Some(position)) == Some(absorbed as u64)
+                && entry_parameter(consumer_parameters, address) != written
+        })
+        .next()
+}
+
+/// The entry parameter `value` is, at the position it sits, when it is one.
+fn entry_parameter(parameters: &[ValueId], value: ValueId) -> Option<usize> {
+    parameters.iter().position(|&parameter| parameter == value)
+}
+
+/// The class the producer's write declares, the value it forwards, and the address it fills.
+fn write_edge(
+    body: &KernelBody,
+    write: ValueId,
+) -> Result<(ScalarClass, ValueId, ValueId), ComposeRefusal> {
     let Some(ValueDef::Instr {
         op: KernelInstr::BufferWriteCall(class),
         args,
@@ -528,7 +588,7 @@ fn write_edge(body: &KernelBody, write: ValueId) -> Result<(ScalarClass, ValueId
         });
     };
     match args.as_slice() {
-        [_, _, value] => Ok((*class, *value)),
+        [_, address, value] => Ok((*class, *value, *address)),
         _ => Err(ComposeRefusal::ProducerIsNotWellFormed {
             cause: format!(
                 "the buffer write {write:?} reads {} operand(s) and stages a value with three",

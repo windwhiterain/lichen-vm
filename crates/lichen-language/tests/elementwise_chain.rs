@@ -200,13 +200,19 @@ fn merge_lines(module: &Module<LangProgram>, graph: &Graph) -> Vec<String> {
     lines
 }
 
-/// The line the pass reports for a region holding an elementwise instance.
-fn declined() -> String {
-    "region 0 (nodes 0, 1): refused: InterfacesAreNotProved: the region's node(s) claim \
-     Elementwise, and a merge is licensed by the reduction chain this pass can prove: whether \
-     these operations become one kernel is a machine fact, and a pack's `fuse` is where it is \
-     decided"
-        .to_string()
+/// The line the pass reports for a region holding an elementwise instance and no installed pack.
+///
+/// # Invariant
+/// The sentence names the **region's** own hash, because that is what a pack's `fuse` must
+/// match: §5's rule is that a pack that steers a fusion names the region's schema, so a runner
+/// reading this line can write the pack that would change it.
+fn declined(schema: &RegionSchema) -> String {
+    format!(
+        "region 0 (nodes 0, 1): refused: InterfacesAreNotProved: the region's node(s) claim \
+         Elementwise, and a merge is licensed by the reduction chain this pass can prove or by a \
+         pack whose `fuse` names this region's schema {}: no installed pack asks for this region",
+        schema.hash
+    )
 }
 
 /// An `[elementwise, reduction]` chain derives, prints and hashes, and the floor declines it.
@@ -274,7 +280,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_declines_by_name() {
 
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![declined()],
+        vec![declined(&schema)],
         "the floor declines the region by name: whether these operations become one kernel is a \
          pack's decision"
     );
@@ -302,7 +308,7 @@ fn two_elementwise_kernels_derive_a_region_and_the_floor_declines_it_by_name() {
     hash_is_of_printed_form(&schema);
     assert_eq!(
         merge_lines(&module, &graph),
-        vec![declined()],
+        vec![declined(&schema)],
         "the floor declines an elementwise region whatever the second node claims"
     );
 }

@@ -379,10 +379,12 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         lines,
         vec![format!(
             "region 0: nodes 0 and 1 merged into one node at 1 (the survivor), absorbing input \
-             position {ABSORBED} of node 1; the merged fragment is unregistered, so it carries no \
+             position {ABSORBED} of node 1, licensed by the floor: every node of the region claims \
+             Reduction and nothing else; the merged fragment is unregistered, so it carries no \
              claim and a later digest-keyed pass cannot name it"
         )],
-        "the report names both nodes, the survivor and the absorbed input"
+        "the report names both nodes, the survivor, the absorbed input and the licence that \
+         answered: with no pack installed it is the floor's own proof"
     );
     let Node::Kernel(node) = &merged.nodes()[0];
     assert_eq!(

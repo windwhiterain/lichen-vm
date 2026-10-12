@@ -103,8 +103,53 @@ fn producer_reading(position: i64) -> KernelBody {
     body
 }
 
+/// A one-block producer whose forwarded value is the lane's own index as a `Float`.
+///
+/// # Invariant
+/// The write fills `index`, so every lane writes the element it computed: a forwarded value
+/// reachable from the invocation index whose read is at that same address is bindable in-lane.
+fn lane_producer_body() -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let index = body.add_param(entry);
+    let forwarded = body.add_op(
+        entry,
+        KernelInstr::Conv {
+            from: ScalarClass::Int,
+            to: ScalarClass::Float,
+        },
+        vec![index],
+        vec![ScalarClass::Float],
+    );
+    let out = body.add_const(entry, ScalarClass::Int, 0);
+    body.add_op(
+        entry,
+        KernelInstr::BufferWriteCall(ScalarClass::Float),
+        vec![out, index, forwarded],
+        Vec::new(),
+    );
+    let dummy = body.add_const(entry, ScalarClass::Int, 0);
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![dummy],
+        },
+    );
+    body
+}
+
 /// A one-block consumer that reads each of `positions` and stages their sum.
+///
+/// # Invariant
+/// `shifted` addresses the **last** read one element past the invocation index, which is a
+/// value no entry parameter is: a shape read-site recomputation serves and in-lane binding does
+/// not.
 fn consumer_body(positions: &[i64]) -> KernelBody {
+    consumer_reading(positions, false)
+}
+
+fn consumer_reading(positions: &[i64], shifted: bool) -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let extent = body.add_param(entry);
@@ -116,13 +161,25 @@ fn consumer_body(positions: &[i64]) -> KernelBody {
         vec![extent, index],
         vec![ScalarClass::Int],
     );
+    let last = positions.len().saturating_sub(1);
     let mut reads = Vec::new();
-    for position in positions {
-        let at = body.add_const(entry, ScalarClass::Int, *position);
+    for (slot, position) in positions.iter().enumerate() {
+        let position = body.add_const(entry, ScalarClass::Int, *position);
+        let address = if shifted && slot == last {
+            let one = body.add_const(entry, ScalarClass::Int, 1);
+            body.add_op(
+                entry,
+                KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+                vec![index, one],
+                vec![ScalarClass::Int],
+            )
+        } else {
+            index
+        };
         reads.push(body.add_op(
             entry,
             KernelInstr::BufferReadCall(ScalarClass::Float),
-            vec![at, index],
+            vec![position, address],
             vec![ScalarClass::Float],
         ));
     }
@@ -741,49 +798,110 @@ fn a_consumer_whose_entry_is_branched_to_is_refused() {
     );
 }
 
+/// A lane-dependent value read at the producer's own address is bound in-lane, not refused.
+///
+/// # Invariant
+/// The lane dependence is what makes the value recomputable: every lane wrote the element it
+/// computed, and the read asks for that element, so the binding needs no slice and no barrier.
 #[test]
-fn a_forwarded_value_that_depends_on_the_lane_is_refused() {
-    let mut body = KernelBody::new();
-    let entry = body.add_block();
-    let _extent = body.add_param(entry);
-    let index = body.add_param(entry);
-    let forwarded = body.add_op(
-        entry,
-        KernelInstr::Conv {
-            from: ScalarClass::Int,
-            to: ScalarClass::Float,
-        },
-        vec![index],
-        vec![ScalarClass::Float],
+fn a_lane_dependent_value_read_at_its_own_address_is_bound_in_lane() {
+    let producer = fragment(lane_producer_body(), 1, vec![ScalarClass::Float]);
+    let merged = compose(&producer, &consumer(), 1).expect("the chain composes in-lane");
+    merged
+        .body
+        .validate()
+        .expect("the merged body is well formed");
+    merged
+        .validate()
+        .expect("the merged fragment is well formed");
+    assert_eq!(
+        read_positions(&merged.body),
+        vec![0],
+        "the absorbed read is gone: the value is the lane's own, not a buffer's"
     );
-    let out = body.add_const(entry, ScalarClass::Int, 0);
-    body.add_op(
-        entry,
-        KernelInstr::BufferWriteCall(ScalarClass::Float),
-        vec![out, index, forwarded],
-        Vec::new(),
+    let sum = merged
+        .body
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(value, definition)| match definition {
+            ValueDef::Instr {
+                op: KernelInstr::Bin(ScalarClass::Float, KernelBin::Add),
+                args,
+                ..
+            } => Some((ValueId(value as u32), args.clone())),
+            _ => None,
+        })
+        .expect("the consumer's element computation survives the merge");
+    let conv = merged
+        .body
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(value, definition)| match definition {
+            ValueDef::Instr {
+                op:
+                    KernelInstr::Conv {
+                        from: ScalarClass::Int,
+                        to: ScalarClass::Float,
+                    },
+                ..
+            } => Some(ValueId(value as u32)),
+            _ => None,
+        })
+        .expect("the producer's own conversion survives the merge");
+    assert!(
+        sum.1.contains(&conv),
+        "the consumer's computation reads the lane's own conversion, not the buffer: {sum:?}"
     );
-    let dummy = body.add_const(entry, ScalarClass::Int, 0);
-    body.set_terminator(
-        entry,
-        Terminator::Return {
-            values: vec![dummy],
-        },
+}
+
+/// A lane-dependent value the consumer reads at another address is refused, naming the read.
+///
+/// # Invariant
+/// The read asks for `index + 1`, which no lane wrote: answering it in-lane would hand a lane
+/// its neighbour's value, and the shape that serves it is read-site recomputation — a later
+/// slice this crate must not fake.
+#[test]
+fn a_lane_dependent_value_read_at_another_address_is_refused() {
+    let producer = fragment(lane_producer_body(), 1, vec![ScalarClass::Float]);
+    let consumer = fragment(
+        consumer_reading(&[0, 1], true),
+        2,
+        vec![ScalarClass::Float; 2],
     );
-    let producer = fragment(body, 1, vec![ScalarClass::Float]);
-    let refusal = compose(&producer, &consumer(), 1)
+    let refusal = compose(&producer, &consumer, 1)
         .expect_err("a value reachable from the lane cannot be bound in-lane");
+    assert_eq!(refusal.name(), "ForwardedValueIsLaneDependent");
     assert!(
         matches!(
             refusal,
-            ComposeRefusal::ForwardedValueIsLaneDependent { value } if value == forwarded
+            ComposeRefusal::ForwardedValueIsLaneDependent { read, .. } if read
+                == buffer_reads_at(&consumer.body, 1)[0]
         ),
-        "the refusal names the value: {refusal}"
+        "the refusal names the read that puts it out of reach: {refusal}"
     );
+    let message = refusal.message();
     assert!(
-        refusal.message().contains("index"),
-        "the refusal says what the value depends on: {refusal}"
+        message.contains("index") && message.contains("address"),
+        "the refusal says what the value depends on and what the read asks for: {message}"
     );
+}
+
+/// The value ids of the reads addressing `position`, in table order.
+fn buffer_reads_at(body: &KernelBody, position: i64) -> Vec<ValueId> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter().copied())
+        .filter(|value| match &body.values[value.0 as usize] {
+            ValueDef::Instr {
+                op: KernelInstr::BufferReadCall(_),
+                args,
+                ..
+            } => constant_of(body, args[0]) == Some(position),
+            _ => false,
+        })
+        .collect()
 }
 
 #[test]

@@ -1,31 +1,75 @@
-//! A placement pack: the plan a runner installs for a node's schema.
+//! A placement pack: a runner's plan for a node, and its `fuse` for a region.
 //! See docs/notes/graph-fusion.md §5.
 //!
 //! # Invariant
-//! A pack is guidance, not an implementation: it names the schema it implements, the fragment
-//! facts it needs and where the staged values live, and never what a region computes. A pack
-//! whose hash or constraints do not match is **inert**, so the engine's own choice answers.
+//! A pack is guidance, not an implementation: it names the schema it steers, the fragment facts
+//! it needs and — where it has them — where the staged values live and which region's
+//! operations become one kernel. It never says what anything computes. A pack whose hash or
+//! constraints do not match is **inert**, so the engine's own choice answers.
 
 use lichen_compute::compute::fused::malformed_at;
-use lichen_kernel_ir::{KernelFragment, Plan, ScalarClass, Staging};
+use lichen_kernel_ir::{KernelFragment, Plan, ScalarClass};
 
 use crate::fusion_claim::SchemaHash;
 
 /// A plan a runner installs for one node schema, read from the text a human wrote.
 ///
 /// # Invariant
-/// [`read_placement_pack`] is the only constructor, so a pack's schema is always one
-/// `sha256:<hex>` spells and its plan always stages at least one value.
+/// [`read_placement_pack`] is the only constructor, so every hash a pack spells is one
+/// `sha256:<hex>` and every pack steers **something**: a staged placement, a named region, or
+/// both. The two halves are separate — a `schema` places one node and a [`Fuse`] names one
+/// region — so a pack that steers one places no node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacementPack {
-    /// The node schema this pack implements.
-    schema: SchemaHash,
+    /// The node schema this pack places, or `None` when it places no node.
+    schema: Option<SchemaHash>,
     /// The pack's name, for the run report.
     name: String,
     /// The fragment facts the pack needs before it may fire.
     requires: Constraints,
+    /// The machine's decision that a region's operations become one kernel.
+    fuse: Option<Fuse>,
     /// Where the values the fusion stages live.
     plan: Plan,
+}
+
+/// The machine's decision that a region's operations become one kernel.
+///
+/// # Invariant
+/// A `fuse` naming no region steers no fusion: the pack is placement-only, and the merge pass
+/// reads it as naming nothing, so the engine's own floor answers. The hash is the **region's**
+/// schema — which of the two granularities a pack binds by is what it steers (§4) — and the
+/// directive states no body, so what the region computes is still the logic's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fuse {
+    /// The region this pack steers, or `None` when the directive names none.
+    region: Option<SchemaHash>,
+    /// What the region's operations become.
+    form: Fusion,
+}
+
+/// What a fused region's operations become.
+///
+/// # Invariant
+/// One variant, and it is the only decision this interface carries: `compose` inlines a chain,
+/// so asking for anything else would name a shape the engine cannot produce rather than a
+/// licence it would have to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fusion {
+    /// Every operation of the region becomes one kernel.
+    OneKernel,
+}
+
+impl Fuse {
+    /// The region this pack's `fuse` names, or `None` when it names none.
+    pub fn region(&self) -> Option<&SchemaHash> {
+        self.region.as_ref()
+    }
+
+    /// What the region's operations become, as a report reads it.
+    pub fn form(&self) -> Fusion {
+        self.form
+    }
 }
 
 /// The fragment facts a pack states and the engine checks.
@@ -40,27 +84,37 @@ struct Constraints {
 }
 
 impl Constraints {
-    /// Whether `fragment` states this constraint, or which one does not hold.
+    /// Whether the element class in hand is the one this pack needs, or which one is not.
     ///
     /// # Invariant
-    /// The class is read from the fragment's own first input buffer, which is the buffer an
-    /// intra-kernel tiling folds: a node with no input states no class, so a pack needing one
-    /// does not hold there rather than being checked against something else.
-    fn hold_for(&self, fragment: &KernelFragment) -> Result<(), ConstraintRefusal> {
-        let found = fragment.input_classes.first().copied();
+    /// The class is **stated** by the pack and read off the body it steers — a node's first
+    /// input buffer, or a region's first input port — never derived: a constraint is the one fact
+    /// a schema hash cannot carry, so a mismatch makes the pack inert rather than wrong.
+    fn hold_for(&self, class: Option<ScalarClass>) -> Result<(), ConstraintRefusal> {
         match self.class {
-            Some(wanted) if found != Some(wanted) => {
-                Err(ConstraintRefusal::ClassMismatch { wanted, found })
-            }
+            Some(wanted) if class != Some(wanted) => Err(ConstraintRefusal::ClassMismatch {
+                wanted,
+                found: class,
+            }),
             _ => Ok(()),
         }
     }
 }
 
 impl PlacementPack {
-    /// The node schema this pack implements.
-    pub fn schema(&self) -> &SchemaHash {
-        &self.schema
+    /// The node schema this pack places, or `None` when it places no node.
+    pub fn schema(&self) -> Option<&SchemaHash> {
+        self.schema.as_ref()
+    }
+
+    /// Whether this pack places the node whose schema is `hash`, staging a value for it.
+    ///
+    /// # Invariant
+    /// Placement needs both halves: a pack that names no node places none, and a plan that stages
+    /// nothing places nothing, so neither is a firing pack. This is the gate the tiling pass
+    /// consults, and it is why a pack that steers only a fusion never reaches the emitter.
+    pub fn places(&self, hash: &SchemaHash) -> bool {
+        self.schema() == Some(hash) && self.plan.staging.first().is_some()
     }
 
     /// The pack's name, for the run report.
@@ -73,21 +127,24 @@ impl PlacementPack {
         &self.plan
     }
 
-    /// The one staged value a plan for an intra-kernel tiling states.
-    ///
-    /// # Invariant
-    /// The reader refuses a plan that stages nothing, so this entry always exists: it is where
-    /// the space, the group width and the mark's name come from.
-    pub fn staging(&self) -> &Staging {
-        self.plan
-            .staging
-            .first()
-            .expect("a pack that was read stages at least one value")
+    /// The machine's decision that a region's operations become one kernel, when the pack states one.
+    pub fn fuse(&self) -> Option<&Fuse> {
+        self.fuse.as_ref()
     }
 
     /// Whether `fragment` states every fact this pack's constraints need.
     pub fn holds_for(&self, fragment: &KernelFragment) -> Result<(), ConstraintRefusal> {
-        self.requires.hold_for(fragment)
+        self.holds_for_class(fragment.input_classes.first().copied())
+    }
+
+    /// Whether the element class in hand is every fact this pack's constraints need.
+    ///
+    /// # Invariant
+    /// One rule read off two sources: a node's first input buffer, or a region's first input
+    /// port. A node with no input states no class, so a pack needing one does not hold there
+    /// rather than being checked against something else.
+    pub fn holds_for_class(&self, class: Option<ScalarClass>) -> Result<(), ConstraintRefusal> {
+        self.requires.hold_for(class)
     }
 }
 
@@ -154,7 +211,17 @@ pub enum PackRefusal {
         /// What the field carried.
         found: String,
     },
-    /// The plan stages nothing, so the pack steers nothing.
+    /// The `fuse` directive's region hash is not one `sha256:<hex>` spells.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::BadSchemaHash`] because it is a distinct field: the node's
+    /// hash places an intra-kernel staging and the region's licenses a fusion, so a report that
+    /// named both by one sentence could not say which one to fix.
+    BadRegionHash {
+        /// What the field carried.
+        found: String,
+    },
+    /// The pack stages nothing and names no region, so it steers nothing.
     EmptyPlan {
         /// The pack's own name.
         name: String,
@@ -187,10 +254,16 @@ impl std::fmt::Display for PackRefusal {
                  `sha256:` and 64 hex digits, the shape a report prints \
                  (`docs/notes/graph-fusion.md` §4)"
             ),
+            PackRefusal::BadRegionHash { found } => write!(
+                formatter,
+                "the pack's `fuse` names the region `{found}`, which is not a schema hash: a \
+                 region is bound by the **region's** own hash, which a region report prints \
+                 (`docs/notes/graph-fusion.md` §4)"
+            ),
             PackRefusal::EmptyPlan { name } => write!(
                 formatter,
-                "the pack `{name}` hands over a plan that stages nothing, so it names no \
-                 placement to apply (`docs/notes/graph-fusion.md` §5)"
+                "the pack `{name}` stages nothing and names no region, so it steers neither a \
+                 placement nor a fusion (`docs/notes/graph-fusion.md` §5)"
             ),
         }
     }
@@ -200,14 +273,30 @@ impl std::fmt::Display for PackRefusal {
 ///
 /// # Invariant
 /// **Pure**: nothing is interned and no global is consulted, so the same text reads back as the
-/// same pack in any process. The order is parse, hash, plan: every refusal happens before a pack
-/// reaches the pass, and a pack that names no plan is refused rather than installed inert.
+/// same pack in any process. The order is parse, node hash, region hash, plan: every refusal
+/// happens before a pack reaches a pass, and a pack that steers neither a placement nor a
+/// fusion is refused rather than installed inert.
 pub fn read_placement_pack(text: &str) -> Result<PlacementPack, PackRefusal> {
     let pack: artifact::Pack = facet_json::from_str(text).map_err(malformed)?;
-    let schema =
-        SchemaHash::parse(&pack.schema).ok_or(PackRefusal::BadSchemaHash { found: pack.schema })?;
+    let schema = pack
+        .schema
+        .map(|found| SchemaHash::parse(&found).ok_or(PackRefusal::BadSchemaHash { found }))
+        .transpose()?;
+    let fuse = pack
+        .fuse
+        .map(|directive| {
+            let region = directive
+                .region
+                .map(|found| SchemaHash::parse(&found).ok_or(PackRefusal::BadRegionHash { found }))
+                .transpose()?;
+            Ok(Fuse {
+                region,
+                form: directive.r#as.into(),
+            })
+        })
+        .transpose()?;
     let plan: Plan = pack.plan.into();
-    if plan.staging.is_empty() {
+    if plan.staging.is_empty() && fuse.as_ref().and_then(Fuse::region).is_none() {
         return Err(PackRefusal::EmptyPlan { name: pack.name });
     }
     Ok(PlacementPack {
@@ -216,6 +305,7 @@ pub fn read_placement_pack(text: &str) -> Result<PlacementPack, PackRefusal> {
         requires: Constraints {
             class: pack.requires.class.map(ScalarClass::from),
         },
+        fuse,
         plan,
     })
 }
@@ -231,6 +321,14 @@ impl From<artifact::ScalarClass> for ScalarClass {
         match class {
             artifact::ScalarClass::Int => ScalarClass::Int,
             artifact::ScalarClass::Float => ScalarClass::Float,
+        }
+    }
+}
+
+impl From<artifact::Fusion> for Fusion {
+    fn from(form: artifact::Fusion) -> Self {
+        match form {
+            artifact::Fusion::OneKernel => Fusion::OneKernel,
         }
     }
 }
@@ -271,13 +369,36 @@ mod artifact {
     #[repr(C)]
     #[facet(deny_unknown_fields)]
     pub struct Pack {
-        /// The node schema hash this pack implements, as `sha256:<hex>`.
-        pub schema: String,
+        /// The node schema hash this pack places, as `sha256:<hex>`, or `null` for none.
+        pub schema: Option<String>,
         /// The pack's name, for the run report.
         pub name: String,
         /// The fragment facts the pack needs.
         pub requires: Constraints,
+        /// The machine's decision that a region's operations become one kernel, or `null`.
+        pub fuse: Option<Fuse>,
         /// Where the values the fusion stages live.
         pub plan: Plan,
+    }
+
+    /// What a fused region's operations become, as a pack spells it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+    #[repr(u8)]
+    pub enum Fusion {
+        /// Every operation of the region becomes one kernel.
+        #[facet(rename = "one_kernel")]
+        OneKernel,
+    }
+
+    /// The `fuse` half of a pack, as the text spells it.
+    #[derive(Debug, Clone, PartialEq, Eq, Facet)]
+    #[repr(C)]
+    #[facet(deny_unknown_fields)]
+    pub struct Fuse {
+        /// The **region's** schema hash this pack steers, as `sha256:<hex>`, or `null`.
+        pub region: Option<String>,
+        /// What the region's operations become.
+        #[facet(rename = "as")]
+        pub r#as: Fusion,
     }
 }

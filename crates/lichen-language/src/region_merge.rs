@@ -4,6 +4,9 @@
 //! # Invariant
 //! The pass merges and never reorders: the surviving node stands at the region's last position,
 //! every other value keeps its order, and a region the pass declines changes nothing.
+//!
+//! A pack decides **which** regions are merged, never **what** a merge must satisfy: every
+//! legality condition refuses by name under a pack exactly as it does under the floor.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -17,20 +20,40 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::Module;
 
 use crate::fusion_claim::{
-    Instance, REDUCTION, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id, offsets,
-    region_positions,
+    Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, claim_of, derive_regions, fragment_of,
+    kernel_id, offsets, region_positions,
 };
+use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
 use crate::program::LangProgram;
 
-/// Install the region merge pass for `module`, replacing any previous pass.
+/// Install the region merge pass for `module`, with no pack installed.
 pub fn install_region_merge(module: &Module<LangProgram>) {
-    set_graph_pass(region_merge_pass(module));
+    install_region_merge_with_packs(module, &[]);
+}
+
+/// Install the region merge pass for `module`, with the packs a runner installed there.
+///
+/// # Invariant
+/// The packs are consulted in order and the first whose `fuse` names a region's schema and whose
+/// constraints hold licenses that region; a region no pack names is left to the floor, which
+/// merges only what a declaration lets it prove (`docs/notes/graph-fusion.md` §5).
+pub fn install_region_merge_with_packs(module: &Module<LangProgram>, packs: &[PlacementPack]) {
+    set_graph_pass(region_merge_pass_with_packs(module, packs));
 }
 
 /// The pass `install_region_merge` installs, for a caller that wants to wrap it.
 pub fn region_merge_pass(module: &Module<LangProgram>) -> Box<dyn GraphPass> {
+    region_merge_pass_with_packs(module, &[])
+}
+
+/// The pass `install_region_merge_with_packs` installs, for a caller that wants to wrap it.
+pub fn region_merge_pass_with_packs(
+    module: &Module<LangProgram>,
+    packs: &[PlacementPack],
+) -> Box<dyn GraphPass> {
     Box::new(RegionMerge {
         instances: instances(module),
+        packs: packs.to_vec(),
     })
 }
 
@@ -38,6 +61,16 @@ pub fn region_merge_pass(module: &Module<LangProgram>) -> Box<dyn GraphPass> {
 struct RegionMerge {
     /// One instance per claimed kernel the module's own values name.
     instances: Vec<Instance>,
+    /// The installed packs, in the order they are consulted.
+    packs: Vec<PlacementPack>,
+}
+
+/// What licensed one region's merge, as the report names it.
+enum Licence<'a> {
+    /// The engine's own proof: every node claims the reduction chain and nothing else.
+    Floor,
+    /// A pack whose `fuse` names this region's schema and whose constraints hold.
+    Pack(&'a PlacementPack),
 }
 
 /// One region's verdict: the line it reports, and its merge when it has one.
@@ -67,8 +100,9 @@ impl GraphPass for RegionMerge {
     /// Merge every two-node region whose legality conditions hold.
     ///
     /// # Invariant
-    /// A region is looked at once and reported once, merged or refused. The graph handed over is
-    /// the recording every time, because a rewrite is stored under its own digest.
+    /// A region is looked at once and reported once, merged or refused, and a merged region's line
+    /// names the licence that answered for it. The graph handed over is the recording every time,
+    /// because a rewrite is stored under its own digest.
     fn apply(
         &self,
         graph: &Graph,
@@ -93,8 +127,14 @@ impl GraphPass for RegionMerge {
                     None,
                 ),
                 Ok(schema) => {
-                    match licence(&schema).and_then(|()| merge_region(graph, &starts, positions)) {
-                        Ok(merge) => (merged_line(index, &merge), Some(merge)),
+                    // The licence says the merge may be *attempted*; every condition below
+                    // stands whatever answered it.
+                    match licence(&schema, &self.packs).and_then(|licensed| {
+                        merge_region(graph, &starts, positions).map(|m| (licensed, m))
+                    }) {
+                        Ok((licensed, merge)) => {
+                            (merged_line(index, &merge, &licensed), Some(merge))
+                        }
                         Err(refusal) => (
                             refused_line(index, positions, refusal.name(), &refusal.message()),
                             None,
@@ -216,6 +256,10 @@ pub enum MergeRefusal {
     InterfacesAreNotProved {
         /// The interfaces the region's nodes claim, other than the reduction's.
         interfaces: Vec<String>,
+        /// The region's schema, which is what a pack's `fuse` must name.
+        region: SchemaHash,
+        /// A pack that named it and whose constraints did not hold, when one was consulted.
+        inert: Option<(String, ConstraintRefusal)>,
     },
 }
 
@@ -305,25 +349,45 @@ impl fmt::Display for MergeRefusal {
                  merged fragment puts {merged:?} there"
             ),
             MergeRefusal::CompositionRefused { refusal } => write!(formatter, "{refusal}"),
-            MergeRefusal::InterfacesAreNotProved { interfaces } => write!(
-                formatter,
-                "the region's node(s) claim {}, and a merge is licensed by the reduction chain \
-                 this pass can prove: whether these operations become one kernel is a machine \
-                 fact, and a pack's `fuse` is where it is decided",
-                interfaces.join(", ")
-            ),
+            MergeRefusal::InterfacesAreNotProved {
+                interfaces,
+                region,
+                inert,
+            } => {
+                write!(
+                    formatter,
+                    "the region's node(s) claim {}, and a merge is licensed by the reduction chain \
+                     this pass can prove or by a pack whose `fuse` names this region's schema \
+                     {region}: no installed pack asks for this region",
+                    interfaces.join(", ")
+                )?;
+                if let Some((pack, refusal)) = inert {
+                    write!(
+                        formatter,
+                        " (the pack \"{pack}\" named it and its constraints did not hold: {})",
+                        refusal.message()
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
 
-/// The algebra this pass must be able to prove before it merges a region.
+/// The algebra this pass must be able to prove before it merges a region, or the pack that
+/// decided it does.
 ///
 /// # Invariant
-/// The licence is the reduction chain and nothing else: a claim that states a function says
-/// what a kernel computes, not that inlining pays, and whether it pays is this machine's
-/// fact. So a region whose nodes claim any other interface — `Elementwise` today — is
-/// declined by name, never merged on the graph's shape alone.
-fn licence(schema: &RegionSchema) -> Result<(), MergeRefusal> {
+/// The floor's licence is the reduction chain: a claim states what a kernel computes, not that
+/// inlining pays, and whether it pays is a machine fact. Any other interface — `Elementwise`
+/// today — is attempted **only** where a pack's `fuse` names the region's hash.
+///
+/// A pack changes which regions are attempted, never what must hold: every refusal in
+/// [`merge_region`] stands under one.
+fn licence<'a>(
+    schema: &RegionSchema,
+    packs: &'a [PlacementPack],
+) -> Result<Licence<'a>, MergeRefusal> {
     let interfaces: BTreeSet<&str> = schema
         .nodes
         .iter()
@@ -331,11 +395,47 @@ fn licence(schema: &RegionSchema) -> Result<(), MergeRefusal> {
         .filter(|interface| *interface != REDUCTION)
         .collect();
     if interfaces.is_empty() {
-        return Ok(());
+        return Ok(Licence::Floor);
+    }
+    let class = first_input_class(schema);
+    let mut inert = None;
+    for pack in packs {
+        let asks = pack.fuse().is_some_and(|directive| {
+            directive.region() == Some(&schema.hash) && directive.form() == Fusion::OneKernel
+        });
+        if !asks {
+            continue;
+        }
+        match pack.holds_for_class(class) {
+            Ok(()) => return Ok(Licence::Pack(pack)),
+            Err(refusal) => {
+                if inert.is_none() {
+                    inert = Some((pack.name().to_string(), refusal));
+                }
+            }
+        }
     }
     Err(MergeRefusal::InterfacesAreNotProved {
         interfaces: interfaces.into_iter().map(str::to_string).collect(),
+        region: schema.hash.clone(),
+        inert,
     })
+}
+
+/// The element class of the region's first input port, which is the one a pack's `requires`
+/// is checked against.
+///
+/// # Invariant
+/// One rule with the tiling pass's, read off two sources: a node's first input buffer is the
+/// buffer an intra-kernel staging folds, and a region's first input port is the buffer its first
+/// node reads that no node in the region produced. A region with no input port states no class,
+/// so a pack needing one is inert rather than checked against something else.
+fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
+    schema
+        .ports
+        .iter()
+        .find(|port| port.kind == PortKind::Input)
+        .and_then(|port| port.class)
 }
 
 /// The merge one region's two nodes decide, or why they do not.
@@ -587,12 +687,27 @@ fn mapped_count(count: Count, map: &[Option<GraphValueId>]) -> Option<Count> {
     }
 }
 
-/// One merged region's line, naming both nodes, the absorbed input and the unregistered survivor.
-fn merged_line(index: usize, merge: &Merge) -> String {
+/// One merged region's line, naming both nodes, the absorbed input, the licence and the
+/// unregistered survivor.
+///
+/// # Invariant
+/// The licence is named in the line and not left to the graph: a runner reading a report has to
+/// know whether a pack's `fuse` decided this merge or the engine's own proof did, because the
+/// two are not the same claim about the same region.
+fn merged_line(index: usize, merge: &Merge, licensed: &Licence<'_>) -> String {
+    let licence = match licensed {
+        Licence::Floor => "licensed by the floor: every node of the region claims Reduction and \
+                          nothing else"
+            .to_string(),
+        Licence::Pack(pack) => format!(
+            "licensed by pack \"{}\", whose `fuse` names this region's schema",
+            pack.name()
+        ),
+    };
     format!(
         "region {index}: nodes {} and {} merged into one node at {} (the survivor), absorbing \
-         input position {} of node {}; the merged fragment is unregistered, so it carries no claim \
-         and a later digest-keyed pass cannot name it",
+         input position {} of node {}, {licence}; the merged fragment is unregistered, so it \
+         carries no claim and a later digest-keyed pass cannot name it",
         merge.absorbed, merge.survivor, merge.survivor, merge.absorbed_input, merge.survivor,
     )
 }

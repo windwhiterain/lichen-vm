@@ -18,7 +18,7 @@ use lichen_fusion::{Reduction, normalize};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    KernelClaim, KernelFragment, KernelId, Plan, Slice, Space, fragment_digest,
+    KernelClaim, KernelFragment, KernelId, Plan, Slice, Space, Staging, fragment_digest,
 };
 use lichen_lowlevel::Module;
 
@@ -77,8 +77,8 @@ struct Instance {
 /// What the installed packs have to say about one node.
 #[derive(Clone, Copy)]
 enum Decision<'a> {
-    /// This pack's hash is the node's and its constraints hold: it fires.
-    Fires(&'a PlacementPack),
+    /// This pack places the node and its constraints hold: it fires.
+    Fires(&'a PlacementPack, &'a Staging),
     /// This pack's hash is the node's and a constraint did not hold: it is inert.
     Inert(&'a PlacementPack, ConstraintRefusal),
     /// No installed pack's hash is the node's.
@@ -194,9 +194,9 @@ fn decision<'a>(
     fragment: &KernelFragment,
 ) -> Decision<'a> {
     let mut inert = None;
-    for pack in packs.iter().filter(|pack| pack.schema() == hash) {
+    for pack in packs.iter().filter(|pack| pack.places(hash)) {
         match pack.holds_for(fragment) {
-            Ok(()) => return Decision::Fires(pack),
+            Ok(()) => return Decision::Fires(pack, staging_of(pack)),
             Err(refusal) => {
                 if inert.is_none() {
                     inert = Some((pack, refusal));
@@ -208,6 +208,18 @@ fn decision<'a>(
         Some((pack, refusal)) => Decision::Inert(pack, refusal),
         None => Decision::Unmatched,
     }
+}
+
+/// The one value a firing pack stages, which is where its space, width and name come from.
+///
+/// # Invariant
+/// [`PlacementPack::places`] already refused a pack that stages nothing, so this entry exists
+/// for every pack a caller can be handed as a [`Decision::Fires`].
+fn staging_of(pack: &PlacementPack) -> &Staging {
+    pack.plan()
+        .staging
+        .first()
+        .expect("a pack that places a node stages a value for it")
 }
 
 /// Tile `position`, or say by name why its launch cannot be served.
@@ -229,7 +241,7 @@ fn tile(
     let decision = decision(packs, &hash, &node.fragment);
     // A pack's width is what the tiling is built at, so a width the target lacks is `check_plan`'s.
     let group_width = match decision {
-        Decision::Fires(pack) => pack.staging().group_width,
+        Decision::Fires(_, staging) => staging.group_width,
         _ => lane_width,
     };
     let Some(count) = extent else {
@@ -271,11 +283,11 @@ fn tile(
     let mut fragment = node.fragment.clone();
     fragment.body = tiled.body().clone();
     let (space, plan, marks) = match decision {
-        Decision::Fires(pack) => (
-            pack.staging().space,
+        Decision::Fires(pack, staging) => (
+            staging.space,
             pack.plan().clone(),
             // The plan's own staging name is the mark the body publishes, so `check_plan` finds it.
-            tiled.marks(&pack.staging().name),
+            tiled.marks(&staging.name),
         ),
         // The floor publishes no mark: a name is the logic's and a plan is a pack's.
         _ => (Space::Shared, Plan::default(), Vec::new()),
@@ -297,11 +309,13 @@ fn tile(
         return declined(position, &hash, decision, &landing_reason(&refusal));
     }
     match decision {
-        Decision::Fires(pack) => format!(
+        Decision::Fires(pack, staging) => format!(
             "node {position}: pack \"{}\" fired for schema {hash}: its plan stages `{}` in \
-             {space:?} over {group_width} lane(s)",
+             {:?} over {} lane(s)",
             pack.name(),
-            pack.staging().name,
+            staging.name,
+            staging.space,
+            group_width,
         ),
         Decision::Inert(pack, refusal) => format!(
             "node {position}: pack \"{}\" was consulted and its constraints did not hold ({}), \
@@ -339,7 +353,7 @@ fn landing_reason(refusal: &LandingRefusal) -> String {
 /// pack steered the node or the engine's own choice did.
 fn declined(position: usize, hash: &SchemaHash, decision: Decision<'_>, reason: &str) -> String {
     match decision {
-        Decision::Fires(pack) => format!(
+        Decision::Fires(pack, _) => format!(
             "node {position}: pack \"{}\" was refused: {reason}",
             pack.name()
         ),
