@@ -1471,9 +1471,7 @@ compute.call k 1.5
 fn a_gpu_program_chains_two_kernels_on_a_device() {
     // The installed-backend slot is process-global, so this test owns it for its
     // whole body.
-    let _installed = GPU_SLOT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _installed = common::device_slot();
     if let Err(reason) = lichen_compute_gpu::install_default() {
         eprintln!("no device to run on, so the seam is not covered here: {reason}");
         return;
@@ -1524,9 +1522,6 @@ out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
     );
 }
 
-/// Serialises the tests that install a backend; the slot is process-global.
-static GPU_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// The placeholder the backend name is written as, so **one source** serves
 /// both backends.
 const BACKEND: &str = "BACKEND";
@@ -1543,9 +1538,7 @@ fn answer_from_each_backend(
     (Module<LangProgram>, LangValue),
     (Module<LangProgram>, LangValue),
 )> {
-    let _installed = GPU_SLOT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _installed = common::device_slot();
     let (cpu_module, cpu, _) = run(&source.replace(BACKEND, "cpu"));
     if let Err(reason) = lichen_compute_gpu::install_default() {
         eprintln!(

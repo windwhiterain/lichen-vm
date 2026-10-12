@@ -3,26 +3,18 @@
 
 mod common;
 
-use std::sync::{Mutex, MutexGuard};
+use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
 use lichen_compute::language::new_store;
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Graph, Node};
 use lichen_language::Report;
 use lichen_utils::extend::AsEnum;
 
 /// The elements the chain runs over.
 const COUNT: usize = 8;
-
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while
-/// the first runs leaves the first's buffers on a device that is no longer installed.
-static DEVICE: Mutex<()> = Mutex::new(());
 
 /// The chain every case here records, with the argument's declaration and the step's body.
 ///
@@ -429,25 +421,4 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
         "and never the buffer rule, which would blame a declaration this step did not make: {run}"
     );
     println!("the unannotated step is judged by the fallback alone:\n  {run}");
-}
-
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, and the guard travels back with
-/// the context, so a caller that keeps both keeps the device for as long as it runs.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
 }

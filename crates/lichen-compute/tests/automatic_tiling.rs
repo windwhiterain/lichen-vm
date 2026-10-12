@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::sync::{Mutex, MutexGuard};
+use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{GraphPass, LaunchExtent, clear_graph_pass, set_graph_pass};
@@ -11,7 +11,7 @@ use lichen_compute::floor::{floor_pass_with_packs, install_floor};
 use lichen_compute::fusion_claim::{claim_of, kernel_id};
 use lichen_compute::kernel_fragment;
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
+use lichen_compute_gpu::LOCAL_SIZE_X;
 use lichen_fusion::BinaryOp;
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
@@ -117,37 +117,6 @@ fn literal() -> String {
         .replace("if s(0) == 0 then", "if s(0) >= 7 then")
         .replace("fold (s(0) - 1,", "fold (s(0) + 1,")
         .replace("fold (i + 1, 0.0", "fold (0, 0.0")
-}
-
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while the
-/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
-/// tests here run one at a time.
-static DEVICE: Mutex<()> = Mutex::new(());
-
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in this
-/// tree reports one. The context is installed as the process's backend, because a graph run
-/// reaches a device only through `ParallelBackend`. The guard travels back with the context, so a
-/// caller that keeps both keeps the device for as long as it runs.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
 }
 
 /// The kernel id the program dispatched, as the registry knows it.

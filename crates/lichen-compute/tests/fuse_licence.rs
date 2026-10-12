@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::sync::{Mutex, MutexGuard};
+use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -18,7 +18,6 @@ use lichen_compute::placement_pack::{PackRefusal, PlacementPack, read_placement_
 use lichen_compute::region_merge::{
     install_region_merge, install_region_merge_with_packs, region_merge_pass_with_packs,
 };
-use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, compose,
@@ -34,14 +33,6 @@ const ABSORBED: u32 = 1;
 
 /// The pack a runner installs for this region.
 const PACK: &str = "elementwise-pair";
-
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while the
-/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
-/// tests here run one at a time.
-static DEVICE: Mutex<()> = Mutex::new(());
 
 /// The chain `e[i] = d[i] · 2` feeding `z[i] = e[i] + 1`, both claimed as elementwise.
 ///
@@ -312,27 +303,6 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
         .filter(|entry| entry.category.contains("pass"))
         .map(|entry| entry.message.clone())
         .collect()
-}
-
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, and the guard travels back with the
-/// context, so a caller that keeps both keeps the device for as long as it runs.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
 }
 
 /// Hand the recorded graph to the pass with `packs` installed, and answer what it decided.

@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::sync::{Mutex, MutexGuard};
+use common::device;
 
 use lichen_compute::compute::{
     GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, set_graph_pass,
@@ -12,7 +12,6 @@ use lichen_compute::compute::{
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_compute::region_merge::{install_region_merge, region_merge_pass};
-use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, compose,
@@ -22,14 +21,6 @@ use lichen_utils::extend::AsEnum;
 
 /// The elements the chain runs over.
 const COUNT: usize = 8;
-
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while the
-/// first runs leaves the first's buffers on a device that is no longer installed: the tests here
-/// run one at a time.
-static DEVICE: Mutex<()> = Mutex::new(());
 
 /// The natural chain: `r[i] = Σ d[k]`, then `z[i] = Σ r[k] + 1`.
 ///
@@ -189,27 +180,6 @@ fn buffer_reads_at(body: &KernelBody, position: i64) -> Vec<ValueId> {
             )
         })
         .collect()
-}
-
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, and the guard travels back with the
-/// context, so a caller that keeps both keeps the device for as long as it runs.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
 }
 
 /// The lines the installed pass reported for a module, through the run report's own channel.

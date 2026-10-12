@@ -3,13 +3,13 @@
 
 mod common;
 
-use std::sync::{Mutex, MutexGuard};
+use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
+use lichen_compute_gpu::LOCAL_SIZE_X;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{KernelFragment, fragment_digest};
 use lichen_lowlevel::Module;
@@ -23,37 +23,6 @@ const COUNT: usize = LOCAL_SIZE_X as usize;
 /// No element equals the sum, so a consumer reading the producer's value answers a number its own
 /// element does not have, and a consumer that read the value as a datum answers the element.
 const DATA: [f32; 3] = [2.0, 4.0, 6.0];
-
-/// The device, held for the whole of a test that runs on one.
-///
-/// # Invariant
-/// `install_default` replaces the process's backend, so a second test installing one while the
-/// first runs leaves the first's buffers belonging to a device that is no longer installed: the
-/// tests here run one at a time.
-static DEVICE: Mutex<()> = Mutex::new(());
-
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure. The context is installed as the process's
-/// backend, because a graph run reaches a device only through `ParallelBackend`. The guard
-/// travels back with the context, so a caller that keeps both keeps the device for as long as it
-/// runs.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
-}
 
 /// A `Σ` producer feeding a `max(d − r)` consumer, over a two-node recording.
 ///
