@@ -395,8 +395,9 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
     );
     assert_eq!(
         node.inputs,
-        vec![1],
-        "the merged node reads the graph's buffer input, value 1, and not the deleted output 2"
+        vec![1, 1],
+        "the merged node reads the union: the producer's own input, value 1, and the consumer's \
+         surviving one, which names the same buffer, and neither is the deleted output 2"
     );
     assert_eq!(
         node.count,

@@ -12,10 +12,12 @@ use crate::{
 /// The fragment `producer` and `consumer` become, or the decision the merge cannot make.
 ///
 /// # Invariant
-/// Values are renumbered past the producer's, its store and marks go, and the consumer's entry block
-/// is inlined into the producer's return block. `compose` never sees the graph, so a caller whose
-/// producer reads and surviving consumer inputs are not the same buffers in the same order gets a
-/// wrong answer, not a refusal; the merge pass's `PortsDoNotCorrespond` is that check.
+/// **The merged inputs are the union: the producer's inputs in their order, then the consumer's
+/// surviving inputs in theirs**, the absorbed one left out — so a surviving consumer read moves
+/// up by the producer's input count, a producer read keeps its position, and `input_classes` is
+/// that union too. The producer's store and marks go and the consumer's entry block is inlined.
+/// `compose` never sees the graph, so a producer reading past its own ports is the mismatch it
+/// refuses, and the merge pass's `PortsDoNotCorrespond` is that check for the ports themselves.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
@@ -44,6 +46,18 @@ pub fn compose(
         return Err(ComposeRefusal::AbsorbedIsOutOfRange {
             absorbed,
             inputs: consumer.inputs,
+        });
+    }
+    // **The merged inputs are the union**: the producer's inputs, then the consumer's but the
+    // absorbed one, because `compose` never sees the graph and so cannot name one buffer once.
+    let inputs = producer.inputs + consumer.inputs - 1;
+    if producer.input_classes.len() != producer.inputs {
+        return Err(ComposeRefusal::ProducerIsNotWellFormed {
+            cause: format!(
+                "the producer declares {} input(s) and states {} class(es) for them",
+                producer.inputs,
+                producer.input_classes.len()
+            ),
         });
     }
     if consumer.input_classes.len() != consumer.inputs {
@@ -105,7 +119,20 @@ pub fn compose(
     if let Some(block) = branch_targeting(&consumer.body, consumer.body.entry) {
         return Err(ComposeRefusal::ConsumerEntryIsABranchTarget { block });
     }
-    buffer_reads(&producer.body, "producer")?;
+    let producer_reads = buffer_reads(&producer.body, "producer")?;
+    // **The producer's reads keep their positions**, because the union puts the producer's inputs
+    // first; one past its own ports would land on a port the union hands the consumer, which is
+    // the single position where the two bodies' ordinals disagree about which buffer is there.
+    if let Some(position) = producer_reads
+        .iter()
+        .map(|(_, position)| *position)
+        .find(|position| *position as usize >= producer.inputs)
+    {
+        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge {
+            position,
+            inputs,
+        });
+    }
     let consumer_reads = buffer_reads(&consumer.body, "consumer")?;
     let absorbed_reads: Vec<(ValueId, ValueId)> = consumer_reads
         .iter()
@@ -161,6 +188,8 @@ pub fn compose(
     let landed: Vec<Option<ValueId>> = (0..consumer.body.values.len())
         .map(|index| renumber.reserve(ValueId(index as u32), &mut body))
         .collect();
+    // **Every surviving read of the consumer's own buffer takes the union's position for it.**
+    let shifted = shifted_positions(&mut body, &consumer_reads, producer.inputs, absorbed_at);
     // One copy of the cone per read, at that read's own address, spliced in where it stood.
     let absorbed_at_address: HashMap<ValueId, ValueId> = absorbed_reads.iter().copied().collect();
     let mut shared: HashMap<(usize, ValueId), (usize, ValueId)> = HashMap::new();
@@ -170,6 +199,10 @@ pub fn compose(
         let merged_block = mapped_block(index);
         for &value in &block.instrs {
             let Some(&address) = absorbed_at_address.get(&value) else {
+                // The position is a constant **value**, so it stands before the read that uses it.
+                if let Some(&constant) = shifted.get(&value) {
+                    sequence.push(constant);
+                }
                 sequence.push(renumber.resolve(value));
                 continue;
             };
@@ -207,11 +240,20 @@ pub fn compose(
                 block: mapped_block(*block),
                 index: *index,
             },
-            ValueDef::Instr { op, args, classes } => ValueDef::Instr {
-                op: *op,
-                args: args.iter().map(|&arg| renumber.resolve(arg)).collect(),
-                classes: classes.clone(),
-            },
+            ValueDef::Instr { op, args, classes } => {
+                let mut args: Vec<ValueId> =
+                    args.iter().map(|&arg| renumber.resolve(arg)).collect();
+                if let Some(&constant) = shifted.get(&ValueId(index as u32))
+                    && let Some(first) = args.first_mut()
+                {
+                    *first = constant;
+                }
+                ValueDef::Instr {
+                    op: *op,
+                    args,
+                    classes: classes.clone(),
+                }
+            }
         };
     }
     let resolve = |value: ValueId| renumber.resolve(value);
@@ -249,13 +291,17 @@ pub fn compose(
         })
         .collect();
 
-    // The merged inputs are the consumer's less the absorbed one: a higher read moves down one.
-    let inputs = consumer.inputs - 1;
-    renumber_reads(&mut body, absorbed, inputs)?;
-
+    // **The merged inputs are the union** built above, and `input_classes` is that same union.
     compact(&mut body, &mut marks);
-    let mut input_classes = consumer.input_classes.clone();
-    input_classes.remove(absorbed_at);
+    let mut input_classes = producer.input_classes.clone();
+    input_classes.extend(
+        consumer
+            .input_classes
+            .iter()
+            .enumerate()
+            .filter(|(ordinal, _)| *ordinal != absorbed_at)
+            .map(|(_, class)| *class),
+    );
     let fragment = KernelFragment {
         param_shape: producer.param_shape.clone(),
         roles: KernelRoles::default(),
@@ -346,12 +392,7 @@ pub enum ComposeRefusal {
         /// The read.
         read: ValueId,
     },
-    /// The producer reads the very position the consumer's output feeds.
-    ProducerReadsTheAbsorbedInput {
-        /// The position the producer reads.
-        position: u32,
-    },
-    /// The producer reads an input position the merged fragment does not declare.
+    /// The producer reads a position the union hands to the consumer.
     ProducerReadsOutsideTheMerge {
         /// The position the producer reads.
         position: u32,
@@ -430,7 +471,6 @@ impl ComposeRefusal {
             ComposeRefusal::AbsorbedIsOutOfRange { .. } => "AbsorbedIsOutOfRange",
             ComposeRefusal::AbsorbedIsNotRead { .. } => "AbsorbedIsNotRead",
             ComposeRefusal::ReadPositionIsNotAConstant { .. } => "ReadPositionIsNotAConstant",
-            ComposeRefusal::ProducerReadsTheAbsorbedInput { .. } => "ProducerReadsTheAbsorbedInput",
             ComposeRefusal::ProducerReadsOutsideTheMerge { .. } => "ProducerReadsOutsideTheMerge",
             ComposeRefusal::ProducerWritesNothing => "ProducerWritesNothing",
             ComposeRefusal::ProducerWritesSeveral { .. } => "ProducerWritesSeveral",
@@ -491,15 +531,12 @@ impl std::fmt::Display for ComposeRefusal {
                 "the {body}'s read {read:?} addresses a buffer at a position that is not an \
                  integer constant, so which buffer it reads cannot be decided"
             ),
-            ComposeRefusal::ProducerReadsTheAbsorbedInput { position } => write!(
-                formatter,
-                "the producer reads input position {position}, which is the position the \
-                 consumer's output feeds, so the merge would be a cycle"
-            ),
             ComposeRefusal::ProducerReadsOutsideTheMerge { position, inputs } => write!(
                 formatter,
-                "the producer reads input position {position} and the merged fragment declares \
-                 {inputs} input(s), so that read has no buffer"
+                "the producer reads input position {position}, and the merged fragment's {inputs} \
+                 input(s) are the producer's own first and the consumer's surviving ones after \
+                 them, so that position names a consumer's buffer and the producer's read would \
+                 answer another one"
             ),
             ComposeRefusal::ProducerWritesNothing => write!(
                 formatter,
@@ -799,70 +836,36 @@ fn mapped_terminator(
     }
 }
 
-/// Point every buffer read at the position it holds once the absorbed input is gone.
+/// The position constant each surviving read of the consumer takes in the merged body.
 ///
 /// # Invariant
-/// A read's position is a constant **value**, not an offset, so a read above the absorbed position
-/// is given a fresh constant before it in its own block; a read at the absorbed position itself is
-/// a producer read, because the consumer's reads of it were dropped.
-fn renumber_reads(
-    body: &mut KernelBody,
-    absorbed: u32,
-    inputs: usize,
-) -> Result<(), ComposeRefusal> {
-    for block in 0..body.blocks.len() {
-        let listed = body.blocks[block].instrs.clone();
-        let mut rebuilt: Vec<ValueId> = Vec::with_capacity(listed.len());
-        for value in listed {
-            let position = match body.values.get(value.0 as usize) {
-                Some(ValueDef::Instr {
-                    op: KernelInstr::BufferReadCall(_),
-                    args,
-                    ..
-                }) => args
-                    .first()
-                    .copied()
-                    .and_then(|at| match body.values.get(at.0 as usize) {
-                        Some(ValueDef::Instr {
-                            op: KernelInstr::Const(ScalarClass::Int, bits),
-                            ..
-                        }) => Some(*bits as u32),
-                        _ => None,
-                    }),
-                _ => None,
-            };
-            match position {
-                Some(position) if position == absorbed => {
-                    return Err(ComposeRefusal::ProducerReadsTheAbsorbedInput { position });
-                }
-                Some(position) if position > absorbed => {
-                    if position - 1 >= inputs as u32 {
-                        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge {
-                            position,
-                            inputs,
-                        });
-                    }
-                    let constant = ValueId(body.values.len() as u32);
-                    body.values.push(ValueDef::Instr {
-                        op: KernelInstr::Const(ScalarClass::Int, i64::from(position - 1)),
-                        args: Vec::new(),
-                        classes: vec![ScalarClass::Int],
-                    });
-                    if let Some(ValueDef::Instr { args, .. }) =
-                        body.values.get_mut(value.0 as usize)
-                        && let Some(first) = args.first_mut()
-                    {
-                        *first = constant;
-                    }
-                    rebuilt.push(constant);
-                }
-                _ => {}
-            }
-            rebuilt.push(value);
+/// The union puts the producer's inputs first, so the consumer's ordinal `c` lands at
+/// `producer_inputs + c - (1 if c > absorbed else 0)`; the absorbed read is dropped and takes
+/// none, and each surviving read gets a fresh constant **value**, because a read's position is a
+/// value and not an offset.
+fn shifted_positions(
+    merged: &mut KernelBody,
+    consumer_reads: &[(ValueId, u32)],
+    producer_inputs: usize,
+    absorbed: usize,
+) -> HashMap<ValueId, ValueId> {
+    let mut shifted = HashMap::new();
+    for &(read, position) in consumer_reads {
+        let position = position as usize;
+        if position == absorbed {
+            continue;
         }
-        body.blocks[block].instrs = rebuilt;
+        let at = i64::try_from(producer_inputs + position - usize::from(position > absorbed))
+            .unwrap_or(i64::MAX);
+        let constant = ValueId(merged.values.len() as u32);
+        merged.values.push(ValueDef::Instr {
+            op: KernelInstr::Const(ScalarClass::Int, at),
+            args: Vec::new(),
+            classes: vec![ScalarClass::Int],
+        });
+        shifted.insert(read, constant);
     }
-    Ok(())
+    shifted
 }
 
 /// Drop every value nothing reads, and give the survivors fresh ids.

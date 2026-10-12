@@ -311,8 +311,8 @@ fn a_chain_composes_and_compacts() {
         .expect("the merged fragment is well formed");
     assert_eq!(
         (merged.inputs, merged.input_classes.clone()),
-        (1, vec![ScalarClass::Float]),
-        "the merged inputs are the consumer's with the absorbed position removed"
+        (2, vec![ScalarClass::Float, ScalarClass::Float]),
+        "the merged inputs are the union: the producer's one, then the consumer's surviving one"
     );
     assert_eq!(
         (merged.outputs, merged.output_classes.clone()),
@@ -354,8 +354,8 @@ fn a_chain_composes_and_compacts() {
     );
     assert_eq!(
         read_positions(&merged.body),
-        vec![0],
-        "the absorbed read is gone and the surviving read still addresses position 0"
+        vec![1],
+        "the absorbed read is gone and the surviving one moved up past the producer's input"
     );
     assert_eq!(
         write_count(&merged.body),
@@ -438,8 +438,14 @@ fn a_chain_composes_and_compacts() {
     );
 }
 
+/// A surviving read moves **up** by the producer's input count, and a read above the absorbed
+/// ordinal moves up by one less than that.
+///
+/// # Invariant
+/// The union is the producer's inputs then the consumer's survivors, so ordinal 0 lands at
+/// `producer_inputs` and ordinal 2 — above the absorbed 1 — lands one short of `producer_inputs + 2`.
 #[test]
-fn a_read_above_the_absorbed_position_moves_down_one() {
+fn a_surviving_read_moves_up_by_the_producers_inputs() {
     let consumer = fragment(consumer_body(&[0, 1, 2]), 3, vec![ScalarClass::Float; 3]);
     let merged =
         compose(&producer(1, vec![ScalarClass::Float]), &consumer, 1).expect("the chain composes");
@@ -449,13 +455,13 @@ fn a_read_above_the_absorbed_position_moves_down_one() {
         .expect("the merged body is well formed");
     assert_eq!(
         (merged.inputs, merged.input_classes.clone()),
-        (2, vec![ScalarClass::Float, ScalarClass::Float]),
-        "the absorbed position leaves the consumer's other two"
+        (3, vec![ScalarClass::Float; 3]),
+        "the union is the producer's one input and the consumer's two survivors"
     );
     assert_eq!(
         read_positions(&merged.body),
-        vec![0, 1],
-        "a read at position 2 addresses position 1 once the absorbed input is gone"
+        vec![1, 2],
+        "the absorbed read is gone and the survivors sit above the producer's input"
     );
 }
 
@@ -622,38 +628,63 @@ fn a_read_whose_position_is_not_a_constant_is_refused() {
     assert_eq!(refusal.name(), "ReadPositionIsNotAConstant");
 }
 
+/// A producer reading the very ordinal the consumer absorbs reads **its own** input there.
+///
+/// # Invariant
+/// The union puts the producer's inputs first, so its ordinal 1 and the consumer's absorbed
+/// ordinal 1 are two ports of one merged fragment: the guard that used to refuse this shape was
+/// `ProducerReadsTheAbsorbedInput`, which the union makes unreachable — the producer's read
+/// names its own port, and a producer reading the buffer it *produces* is the merge pass's
+/// `ProducedValueIsReadElsewhere`, which sees the graph `compose` never sees.
 #[test]
-fn a_producer_reading_the_absorbed_input_is_refused() {
+fn a_producer_reading_the_ordinal_the_consumer_absorbs_keeps_its_own_input() {
     let producer = fragment(
         producer_reading(1),
         2,
         vec![ScalarClass::Float, ScalarClass::Float],
     );
-    let refusal = compose(&producer, &consumer(), 1)
-        .expect_err("the producer reads the buffer the consumer absorbs");
-    assert!(
-        matches!(
-            refusal,
-            ComposeRefusal::ProducerReadsTheAbsorbedInput { position: 1 }
-        ),
-        "{refusal}"
+    let merged = compose(&producer, &consumer(), 1).expect("the two ordinals are two ports");
+    merged
+        .body
+        .validate()
+        .expect("the merged body is well formed");
+    assert_eq!(
+        (merged.inputs, merged.input_classes.clone()),
+        (3, vec![ScalarClass::Float; 3]),
+        "the union is the producer's two inputs and the consumer's one survivor"
+    );
+    assert_eq!(
+        read_positions(&merged.body),
+        vec![1, 2],
+        "the producer's read keeps its own position 1 and the consumer's survivor moves up to 2"
     );
 }
 
+/// A producer read past its own ports is refused: the union hands that position to the consumer.
+///
+/// # Invariant
+/// This is the one position the two bodies' ordinals disagree about — the producer's body reads
+/// position 1 while its fragment declares one port, and the union puts the consumer's surviving
+/// ordinal 0 there — so the merge refuses rather than answer one buffer as another.
 #[test]
-fn a_producer_reading_an_input_the_merge_lacks_is_refused() {
-    let producer = fragment(producer_reading(2), 3, vec![ScalarClass::Float; 3]);
-    let refusal =
-        compose(&producer, &consumer(), 1).expect_err("the merged fragment declares one input");
+fn a_producer_reading_past_its_own_ports_is_refused() {
+    let producer = fragment(producer_reading(1), 1, vec![ScalarClass::Float]);
+    let refusal = compose(&producer, &consumer(), 1)
+        .expect_err("the union gives that position to the consumer's own input");
     assert!(
         matches!(
             refusal,
             ComposeRefusal::ProducerReadsOutsideTheMerge {
-                position: 2,
-                inputs: 1
+                position: 1,
+                inputs: 2
             }
         ),
         "{refusal}"
+    );
+    assert_eq!(refusal.name(), "ProducerReadsOutsideTheMerge");
+    assert!(
+        refusal.message().contains("the producer's own first"),
+        "the refusal names the union's order: {refusal}"
     );
 }
 
@@ -816,7 +847,7 @@ fn a_lane_dependent_value_read_at_its_own_address_is_recomputed_in_lane() {
         .expect("the merged fragment is well formed");
     assert_eq!(
         read_positions(&merged.body),
-        vec![0],
+        vec![1],
         "the absorbed read is gone: the value is computed, not read from a buffer"
     );
     let sum = merged
@@ -877,7 +908,7 @@ fn a_lane_dependent_value_read_at_another_address_is_recomputed_there() {
         .expect("the merged body is well formed");
     assert_eq!(
         read_positions(&merged.body),
-        vec![0],
+        vec![1],
         "the absorbed read is gone whatever address it asked for"
     );
     let conv = merged

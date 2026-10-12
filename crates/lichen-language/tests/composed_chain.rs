@@ -113,7 +113,7 @@ fn the_composed_chain_answers_the_two_pass_reference_and_the_recorded_graph() {
             length,
             "recorded",
         );
-        // The merged fragment: one node, one launch, one input.
+        // The merged fragment: one node, one launch, the union's two inputs over one buffer.
         let single = run(
             &context,
             &merged_graph(&merged, length),
@@ -214,13 +214,18 @@ fn two_pass_graph(producer: &KernelFragment, consumer: &KernelFragment, extent: 
 }
 
 /// The merged fragment as one node over the graph's own input.
+///
+/// # Invariant
+/// The merged fragment's inputs are the union — the producer's own, then the consumer's
+/// surviving one — and both name the graph's single buffer here, so the node lists that one
+/// value twice.
 fn merged_graph(fragment: &KernelFragment, extent: usize) -> Graph {
     let mut graph = Graph::with_inputs(1);
     let node = graph
         .push(
             Node::Kernel(KernelNode {
                 fragment: fragment.clone(),
-                inputs: vec![0],
+                inputs: vec![0, 0],
                 count: Count::Constant(extent),
             }),
             1,

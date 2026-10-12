@@ -89,7 +89,7 @@ struct Merge {
     absorbed_input: usize,
     /// The fragment the surviving node holds.
     fragment: KernelFragment,
-    /// The surviving node's inputs, with the absorbed position removed.
+    /// The surviving node's inputs: the producer's, then the consumer's but the absorbed one.
     inputs: Vec<GraphValueId>,
 }
 
@@ -228,11 +228,11 @@ pub enum MergeRefusal {
         /// The class the consumer's input declares, if it declares one.
         expected: Option<ScalarClass>,
     },
-    /// A position the producer reads is not the buffer the merged fragment puts there.
+    /// A buffer the union names at a position the merged fragment has no port for.
     PortsDoNotCorrespond {
-        /// The producer's input position.
+        /// The merged node's input position.
         position: usize,
-        /// The value the producer reads there.
+        /// The value the union puts there.
         producer: GraphValueId,
         /// The value the merged fragment puts there, if it has that many inputs.
         merged: Option<GraphValueId>,
@@ -329,8 +329,8 @@ impl fmt::Display for MergeRefusal {
                 merged,
             } => write!(
                 formatter,
-                "the producer reads graph value {producer} at input position {position}, and the \
-                 merged fragment puts {merged:?} there"
+                "the merged node reads graph value {producer} at input position {position}, and \
+                 the merged fragment puts {merged:?} there"
             ),
             MergeRefusal::CompositionRefused { refusal } => write!(formatter, "{refusal}"),
             MergeRefusal::InterfacesAreNotProved {
@@ -426,7 +426,11 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 ///
 /// # Invariant
 /// Every condition is checked before `compose` reads either body: a merge that slipped past one
-/// would be a node whose body reads a buffer the program never wired to it.
+/// would be a node whose body reads a buffer the program never wired to it. The one check the
+/// union cannot make for itself is `PortsDoNotCorrespond`: the merged node's inputs **are** the
+/// union, so a buffer past the merged fragment's ports is a node whose ordinals name a different
+/// number of buffers than its body reads ports for, and wiring it would answer one buffer as
+/// another.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
@@ -495,21 +499,35 @@ fn merge_region(
             return Err(MergeRefusal::ClassIsNotStated { produced, expected });
         }
     }
-    let inputs: Vec<GraphValueId> = consumer_node
+    // **The merged node's inputs are the union**: the producer's inputs in their order, then the
+    // consumer's surviving inputs in theirs, because the merged fragment's own ports are that
+    // union and a node is wired to the ports its body reads.
+    let inputs: Vec<GraphValueId> = producer_node
         .inputs
         .iter()
-        .enumerate()
-        .filter(|(ordinal, _)| *ordinal != absorbed)
-        .map(|(_, value)| *value)
+        .copied()
+        .chain(
+            consumer_node
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|(ordinal, _)| *ordinal != absorbed)
+                .map(|(_, value)| *value),
+        )
         .collect();
-    for (position, value) in producer_node.inputs.iter().enumerate() {
-        if inputs.get(position) != Some(value) {
-            return Err(MergeRefusal::PortsDoNotCorrespond {
-                position,
-                producer: *value,
-                merged: inputs.get(position).copied(),
-            });
-        }
+    // A buffer past the merged fragment's ports is one the merged node is handed at a position
+    // its body reads as the other body's: the ordinals name a different number of buffers than
+    // the bodies read ports for, which is the mismatch the union cannot paper over.
+    let ports = producer_node
+        .fragment
+        .inputs
+        .saturating_add(consumer_node.fragment.inputs)
+        .saturating_sub(1);
+    if let Some(position) = inputs.len().checked_sub(ports + 1) {        return Err(MergeRefusal::PortsDoNotCorrespond {
+            position,
+            producer: inputs[position],
+            merged: None,
+        });
     }
     let fragment = compose(
         &producer_node.fragment,
