@@ -613,8 +613,13 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   than land a program that cannot build. **The recording path itself is not the
   suspect**: it applies the step to placeholders built from the **cells of the
   parameter** and reads back what dispatched, with no one-buffer assumption in it
-  (`compute.rs:4965`–`5005`), so the two refusals that fire first are about typing the
-  step, not about the graph machinery.
+  (`compute.rs:4965`–`5005`). Nor is `this value is not a container` a type refusal —
+  it is `EvalError::IndexTarget`, a **read applied to a non-container during
+  evaluation** (`lichen-highlevel/src/diagnostic.rs`), while `argument N of this
+  dispatch is not a buffer` is the dispatch's own check. **Which read becomes a
+  non-container, and why only with a second buffer, is what a minimal bisect would
+  settle** — one buffer with the same field shape works in ten places, so the
+  difference is the second one, not the shape of a buffer field.
 
 ## Landmines, each of which is a silent wrong answer
 
