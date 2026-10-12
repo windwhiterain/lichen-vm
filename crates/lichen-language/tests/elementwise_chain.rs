@@ -18,20 +18,20 @@ use lichen_utils::hash::{hex, sha256};
 /// The extent the test consults the pass with, standing in for the run's own count.
 const COUNT: usize = 8;
 
-/// The chain's first kernel: `e[i] = exp(2·d[i])`, marked as the function it computes.
+/// The chain's first kernel: `e[i] = 2·d[i]`, marked as the function it computes.
 ///
 /// # Invariant
-/// The marked expression's head is the `exp` **application**, so the mark anchors to the whole
-/// expression rather than to its first operand — a routed operator at the top level of a body
-/// anchors to that operand, which would record the identity where the kernel computes a product.
-/// The extent is `k.n`, a run-time value, so the recorded node's count is the graph's own.
+/// The mark rides the **whole** expression — a top-level routed operator anchors to the
+/// product and not to its first operand (`docs/notes/graph-fusion.md` §3) — so the region's
+/// node 0 records the element function this kernel computes and nothing else. The extent is
+/// `k.n`, a run-time value, so the recorded node's count is the graph's own.
 const SCALE: &str = r#"
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
 ParE = compute.P (compute.KT Float)(.I In, .O OutE)
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) ~ "element")))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
 "#;
@@ -74,7 +74,8 @@ built = compute.graph step
 ///
 /// # Invariant
 /// The second kernel reads only the buffer its producer filled, so its `element` role is a
-/// function of the value that arrives and the region records it as the code between the two.
+/// function of the value that arrives — the interface's `r` — and the region records it as
+/// the code between the two.
 fn elementwise_chain() -> String {
     format!(
         r#"
@@ -87,7 +88,7 @@ OutF = struct{{.f (compute.Buf Float)}}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutF)
 rescale_raw = (k : Par2) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.f, .at i, .value (exp ((compute.read ((compute.Read _)(.from k.in.p, .at i)) * 3.0)) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.f, .at i, .value ((compute.read ((compute.Read _)(.from k.in.p, .at i)) * 3.0) ~ "element")))
 }}
 rescale = compute.parallel (rescale_raw ~ "claim:Elementwise(element)") "gpu"
 GArg = struct{{.n Int, .in In}}
@@ -228,7 +229,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_declines_by_name() {
         [
             "region 2",
             "node 0 interface Elementwise",
-            "role element (exp (* 2.0 d))",
+            "role element (* 2.0 d)",
             "node 1 interface Reduction",
             "role combine (+ d (+ t (- r)))",
             "role element (+ d (- r))",
@@ -254,7 +255,7 @@ fn an_elementwise_chain_derives_a_schema_the_floor_declines_by_name() {
             .elementwise()
             .expect("node 0 claims Elementwise")
             .to_string(),
-        "exp(2 * d)",
+        "2 * d",
         "the elementwise reading is the node's own element function, in terms of its datum"
     );
     assert_eq!(
@@ -288,13 +289,13 @@ fn two_elementwise_kernels_derive_a_region_and_the_floor_declines_it_by_name() {
             .projection("element")
             .map(ToString::to_string)
             .as_deref(),
-        Some("exp(r * 3)"),
+        Some("r * 3"),
         "the second kernel's element is read as a function of the value that arrives"
     );
     assert!(
         schema
             .canonical_form()
-            .contains("between 0 1 input 0 (exp (* 3.0 r))"),
+            .contains("between 0 1 input 0 (* 3.0 r)"),
         "and the region records it as the code between the two instances:\n{}",
         schema.canonical_form()
     );
