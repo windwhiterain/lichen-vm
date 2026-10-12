@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{self, Write as _};
 
-use lichen_fusion::{Expr, Reduction, Variable, normalize};
+use lichen_fusion::{BinaryOp, Expr, Reduction, Variable, normalize};
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_graph_ir::{Count, Graph, Node, ValueId as GraphValueId};
 use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId, ScalarClass, fragment_digest};
@@ -213,6 +213,40 @@ impl SchemaNode {
             combine: *operator,
             identity,
         })
+    }
+
+    /// Whether this node's `combine` projection declares the fold itself, or the refusal that says
+    /// it does not.
+    ///
+    /// # Invariant
+    /// The **canonical** form, and exactly `(+ t d)` or `(* d t)` — the loop's carried state and the
+    /// datum, one occurrence of each, in either operand order. [`Self::reduction`] keeps the
+    /// **operator** alone and a fold built from it reads the datum **raw**, so work the combine
+    /// does to the datum — a square, a bias, a second read — is algebra a tiled body drops.
+    pub fn declares_the_fold(&self) -> Result<(), SchemaRefusal> {
+        let combine = self
+            .canonical(COMBINE)
+            .ok_or_else(|| SchemaRefusal::MissingRole {
+                node: self.position,
+                role: COMBINE.to_string(),
+            })?;
+        let fold = match combine {
+            Expr::Binary(operator, left, right) => {
+                matches!(operator, BinaryOp::Add | BinaryOp::Mul)
+                    && [left.as_ref(), right.as_ref()].into_iter().all(|operand| {
+                        matches!(operand, Expr::Variable(variable) if FOLD_SLOTS.contains(variable))
+                    })
+            }
+            _ => false,
+        };
+        if fold {
+            Ok(())
+        } else {
+            Err(SchemaRefusal::CombineIsNotAFold {
+                node: self.position,
+                projection: combine.clone(),
+            })
+        }
     }
 
     /// The elementwise function this node's `element` projection declares.
@@ -472,6 +506,21 @@ pub enum SchemaRefusal {
         /// The projection as it bridged.
         projection: Expr,
     },
+    /// A node's `combine` projection is one binary operator, but not over the accumulator and the
+    /// datum and nothing else.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::NotACombine`] because it is a distinct answer: that one says
+    /// the combine is not one operator and this says it is one operator over something no fold can
+    /// be built from. [`SchemaNode::reduction`] keeps the operator alone, so the work the combine
+    /// does to the datum — a square, a bias, a second read — is algebra a tiled body does not
+    /// compute.
+    CombineIsNotAFold {
+        /// The region-local position of the node.
+        node: usize,
+        /// The combine as it canonicalized.
+        projection: Expr,
+    },
     /// A node's `identity` projection is not a literal.
     NotAnIdentity {
         /// The region-local position of the node.
@@ -515,6 +564,7 @@ impl SchemaRefusal {
             SchemaRefusal::UnknownInterface { .. } => "UnknownInterface",
             SchemaRefusal::MissingRole { .. } => "MissingRole",
             SchemaRefusal::NotACombine { .. } => "NotACombine",
+            SchemaRefusal::CombineIsNotAFold { .. } => "CombineIsNotAFold",
             SchemaRefusal::NotAnIdentity { .. } => "NotAnIdentity",
             SchemaRefusal::NotAnElementFunction { .. } => "NotAnElementFunction",
         }
@@ -597,6 +647,13 @@ impl fmt::Display for SchemaRefusal {
                 "the instance at {node} declares the combine `{projection}`, which is not one \
                  binary operator"
             ),
+            SchemaRefusal::CombineIsNotAFold { node, projection } => write!(
+                formatter,
+                "the instance at {node} declares the combine `{projection}`, which is not the \
+                 fold itself: a schedule rebuilds the loop from the operator and the raw datum, so \
+                 a claim it can honour has to describe the whole datum — the accumulator and the \
+                 datum, and nothing else — rather than the operator alone"
+            ),
             SchemaRefusal::NotAnIdentity { node, projection } => write!(
                 formatter,
                 "the instance at {node} declares the identity `{projection}`, which is not a \
@@ -621,6 +678,14 @@ const COMBINE: &str = "combine";
 const IDENTITY: &str = "identity";
 /// The reduction's element role: the code between two instances.
 const ELEMENT: &str = "element";
+
+/// The two slots a combine the pass can fold reads: the loop's carried state and the datum.
+///
+/// # Invariant
+/// One occurrence of each and nothing else: a combine that computes anything of the datum — a
+/// square, a bias, a second read — is algebra [`SchemaNode::reduction`] keeps no trace of, and a
+/// body rebuilt from the operator over the raw buffer does not compute.
+const FOLD_SLOTS: [Variable; 2] = [Variable::CONSUMER_STATE, Variable::DATUM];
 
 /// Derive one schema per fusible region of `graph`, in evaluation order.
 ///

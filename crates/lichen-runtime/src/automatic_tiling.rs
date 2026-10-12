@@ -152,7 +152,11 @@ impl GraphPass for AutomaticTiling {
                         }
                         .message()
                     )),
-                    None => tiled.push((position, instance.clone())),
+                    // The row is the node's own algebra; folding it is what the claim must license.
+                    None => match instance.schema.declares_the_fold() {
+                        Ok(()) => tiled.push((position, instance.clone())),
+                        Err(refusal) => lines.push(named(position, &refusal)),
+                    },
                 },
                 Err(refusal) => {
                     lines.push(format!("node {position}: refused: {}", refusal.message()));
@@ -186,13 +190,27 @@ fn beyond_a_node(inputs: impl Iterator<Item = usize>, graph_inputs: usize) -> Op
 ///
 /// # Invariant
 /// A refusal and not a derivation: there is no claim to read roles from and no algebra to
-/// normalize, so the pass reports the join's own miss and tiles nothing. Naming the node is the
-/// whole of the report — a composed fragment is left exactly as the merge left it. The check's
-/// **name** is not printed, which is what tells this pass's node lines from the merge pass's.
+/// normalize, so the pass reports the join's own miss and tiles nothing, and a composed fragment
+/// is left exactly as the merge left it. The sentence alone is what tells this pass's node lines
+/// from the merge pass's `region N …` ones; [`named`] is the one line that also prints a name.
 fn unclaimed(position: usize) -> String {
     format!(
         "node {position}: refused: {}",
         SchemaRefusal::NotClaimed { node: position }.message()
+    )
+}
+
+/// One node's line, for a refusal the pass states **by the check's own name**.
+///
+/// # Invariant
+/// The name as well as the sentence, for the reason [`landing_reason`] gives: the report is the
+/// only place a caller reads which check refused a node, and this one tells an operator author
+/// what their claim has to describe, which the projection alone does not.
+fn named(position: usize, refusal: &SchemaRefusal) -> String {
+    format!(
+        "node {position}: refused: {}: {}",
+        refusal.name(),
+        refusal.message()
     )
 }
 
