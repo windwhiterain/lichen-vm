@@ -1,23 +1,26 @@
-//! The `table(k ==> v)` literal and the `t <== k` read, which compiles
-//! straight to `TableGet`; see docs/notes/record-program.md.
+//! The `table(k ==> v)` literal and the `t <== k` read; see
+//! record-program.md.
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::program::ProgramImpl;
 use lichen_testkit::{Probe, Writer};
 
-/// The diagnostic kinds a program reports, written by `build` and checked
-/// without evaluating it: a refusal is the fact under test.
-fn kinds(build: impl FnOnce(&mut Writer) -> ExprId) -> Vec<DiagKind> {
-    let mut w = Writer::new();
-    let root = build(&mut w);
+/// The diagnostic kinds a program reports, written by `build`.
+///
+/// # Invariant
+/// Never evaluated: a refusal is the fact under test, and evaluating a program
+/// that was refused reads the graph it never finished building.
+fn kinds(build: impl FnOnce(&Writer) -> ExprId) -> Vec<DiagKind> {
+    let w = Writer::new();
+    let root = build(&w);
     Probe::<ProgramImpl>::build_refusing(w.finish(root)).diagnostic_kinds()
 }
 
-/// A `table` literal probe over the default program.
-fn value_of(build: impl FnOnce(&mut Writer) -> ExprId, what: &str) -> usize {
-    let mut w = Writer::new();
-    let root = build(&mut w);
+/// The `usize` a named expression evaluated to.
+fn value_of(build: impl FnOnce(&Writer) -> ExprId, what: &str) -> usize {
+    let w = Writer::new();
+    let root = build(&w);
     let mut probe = Probe::<ProgramImpl>::build(w.finish(root));
     probe.usize_of(what)
 }
@@ -75,8 +78,7 @@ fn a_miss_is_a_recorded_error() {
 
 #[test]
 fn an_undecided_key_is_dropped_with_an_error() {
-    // The table is built eagerly, so a key reading the parameter — undecided
-    // at build time — cannot be hashed and its entry is dropped.
+    // The table is built eagerly, so an undecided key cannot be hashed.
     let found = kinds(|w| {
         let x = w.param("x");
         let table = w.table("table", &[(x, w.int("one", 1))]);
@@ -170,8 +172,7 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
 
 #[test]
 fn a_failed_read_key_never_phantom_matches() {
-    // Both keys are failed reads: the build drops its entry and the lookup
-    // misses rather than matching an unhashable key against another.
+    // Both keys are failed reads: the entry is dropped and the lookup misses.
     let found = kinds(|w| {
         let out_of_bounds = w.index(
             "source_read",

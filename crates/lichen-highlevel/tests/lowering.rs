@@ -62,8 +62,11 @@ fn every_named_expression_answers_the_node_it_lowered_to() {
     }
 }
 
-/// A parameter has no separate value node: its value is `Index(pair, 0)` the
-/// checker builds on demand, so the attribution available is the pair.
+/// A parameter has no separate value node.
+///
+/// # Invariant
+/// Its value is `Index(pair, 0)`, built on demand, so the attribution a probe
+/// can reach is the pair.
 #[test]
 fn a_parameter_is_attributed_through_the_pair_it_compiled_to() {
     let probe = identity_applied();
@@ -83,8 +86,7 @@ fn a_parameter_is_attributed_through_the_pair_it_compiled_to() {
 #[test]
 fn a_node_nothing_attributed_reads_as_such() {
     let probe = identity_applied();
-    // The marker nodes the checker installs are built before any expression
-    // exists, so one of them is lowered from nothing at all.
+    // An installed marker is built before any expression exists.
     let marker = probe.checked().markers.int_marker;
     assert_eq!(
         probe.explain(marker),
@@ -93,8 +95,10 @@ fn a_node_nothing_attributed_reads_as_such() {
     );
 }
 
-/// The whole point of a name: a probe that cannot find it says so in the words
-/// the program was written with, not as an id.
+/// The whole point of a name.
+///
+/// # Invariant
+/// A probe that cannot find one says so in the program's words, not as an id.
 #[test]
 fn an_unknown_name_panics_with_the_names_the_program_has() {
     let missing = std::panic::catch_unwind(|| {
@@ -114,8 +118,10 @@ fn an_unknown_name_panics_with_the_names_the_program_has() {
     );
 }
 
-/// A node the reader already holds is the other direction: the name comes back
-/// out of the graph rather than out of the writer.
+/// The other direction: a node the reader already holds.
+///
+/// # Invariant
+/// Its name comes back out of the graph, not out of the writer's table.
 #[test]
 fn a_node_read_out_of_an_array_names_its_expression() {
     let mut w: Writer = Writer::new();

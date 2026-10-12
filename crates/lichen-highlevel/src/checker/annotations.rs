@@ -484,9 +484,8 @@ where
                 slots.push(node);
             }
         }
-        // Every attribute slot is attributed to the annotation at its own tail
-        // index. `ExprState::attr` names one node without that index, so the
-        // lowering map reads it from here instead (see `crate::lowering`).
+        // Each attribute slot is attributed at its own tail index, which
+        // `ExprState::attr` cannot say; see `crate::lowering`.
         for (index, &node) in slots.iter().enumerate() {
             self.node_edges
                 .insert(node, self.loc(e, shape::attr_slot(index)));

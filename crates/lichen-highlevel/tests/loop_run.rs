@@ -1,10 +1,8 @@
-//! A marked recursion runs as a loop, so a trip count the expansion cannot
-//! afford is answered. See docs/notes/loop-conversion.md.
+//! A marked recursion runs as a loop; see loop-conversion.md.
 //!
 //! # Invariant
-//! The mark is **permission, not a command**: the same source built marked and
-//! unmarked must answer the same value, and differ only in what the expansion
-//! can afford.
+//! The mark is **permission, not a command**: marked and unmarked must answer
+//! the same value, differing only in what the expansion can afford.
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::BinOp;
@@ -14,6 +12,7 @@ use lichen_testkit::{Probe, Writer};
 
 /// `sum_to (n, 0) = n`, iterated: the reduction whose count is the answer.
 ///
+/// # Invariant
 /// `if c then t else e` lowers to `[e, t][c]`, so the branch is an array read.
 fn sum_to(marked: bool, count: usize) -> Probe<ProgramImpl> {
     let w = Writer::new();

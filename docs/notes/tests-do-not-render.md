@@ -55,3 +55,10 @@ two of them equal is what would make a comparison of two backends vacuous.
 `run::render_build`'s refusal gate: a program that produced nothing while a refusal
 was recorded is a failure, not an empty answer. A refusal explains a value that
 never arrived; a program that produced one has nothing to explain.
+
+**The moved suites made the rule cheap to keep.** `crates/lichen-language/tests/table.rs`
+and `loop_run.rs` now live in `crates/lichen-highlevel` as IR
+([test-harness](test-harness.md)); their ten table assertions became `DiagKind`
+comparisons where they had matched on message text, because the highlevel
+carries a kind and no wording. A message assertion has no home in the crate that
+produces the fact, which is the clearest form the rule takes.

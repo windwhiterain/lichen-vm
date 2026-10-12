@@ -10,8 +10,11 @@ use crate::ir::{ExprId, Loc, LocStep};
 use crate::program::{HighProgram, ValueType};
 use crate::shape;
 
-/// The pair slot the leading step of `path` names, or `None` when the path
-/// names the expression as a whole or enters a structure rather than a slot.
+/// The pair slot the leading step of `path` names.
+///
+/// # Invariant
+/// `None` means the path names the expression as a whole or enters a structure,
+/// neither of which is one slot.
 pub fn slot_of_path(path: &[LocStep]) -> Option<usize> {
     match path.first() {
         Some(LocStep::Value) => Some(shape::PAIR_VALUE_SLOT),
@@ -46,17 +49,14 @@ where
     P::Value: ValueType,
 {
     let mut map: HashMap<NodeId, Loc> = HashMap::new();
-    // The checker's own edges carry the nodes the slot layout does not own —
-    // an index read's result, a table read's key — and a path a unify extended
-    // past the slot it refused on.
+    // The checker's own edges carry the nodes the slot layout does not own.
     map.extend(
         build
             .node_edges
             .iter()
             .map(|(&node, loc)| (node, loc.clone())),
     );
-    // The slot layout fills the rest: an empty path is the pair itself, and a
-    // one-step path is the slot that pair holds.
+    // The slot layout fills the rest.
     for (index, state) in build.state.iter().enumerate() {
         for (node, loc) in slots_of(ExprId(index as u32), state) {
             map.entry(node).or_insert(loc);
@@ -69,8 +69,8 @@ impl<P: HighProgram> Build<P>
 where
     P::Value: ValueType,
 {
-    /// Every node this build attributed to an expression. See
-    /// docs/notes/lowering-map.md.
+    /// Every node this build attributed to an expression.
+    /// See docs/notes/lowering-map.md.
     ///
     /// # Invariant
     /// The map is **total over the compiled slots**: an expression's pair,
@@ -82,20 +82,23 @@ where
         self.lowerings.get_or_init(|| compile(self))
     }
 
-    /// The expression `node` lowered from, or `None` when this build attributed
-    /// it to nothing.
+    /// The expression `node` lowered from.
     ///
     /// # Invariant
-    /// A clone resolves through its origin first, so a node an apply
-    /// materialized answers for the template it instantiates — the same handoff
+    /// `None` when this build attributed it to nothing. A clone resolves through
+    /// its origin first, so a node an apply materialized answers for the
+    /// template it instantiates — the same handoff
     /// [`lichen_lowlevel::Module::marks_of`] makes for a mark.
     pub fn lowering_of(&self, node: NodeId) -> Option<&Loc> {
         let anchored = self.module.node_origin(node).unwrap_or(node);
         self.lowerings().get(&anchored)
     }
 
-    /// The pair slot `loc` names, or `None` when its path names the expression
-    /// as a whole or enters a structure.
+    /// The pair slot `loc` names.
+    ///
+    /// # Invariant
+    /// `None` when the path names the expression as a whole or enters a
+    /// structure; see [`slot_of_path`].
     pub fn lowering_slot(loc: &Loc) -> Option<usize> {
         slot_of_path(&loc.path)
     }

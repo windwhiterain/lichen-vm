@@ -50,8 +50,11 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = _` — a block-wide binding's reserved id, filled in by
-    /// [`Self::fill`]. A recursion resolves to this id, so it must exist before
-    /// the body that refers to it.
+    /// [`Self::close_binding`].
+    ///
+    /// # Invariant
+    /// A recursion resolves to this id, so it must exist before the body that
+    /// refers to it.
     pub fn binding(&self, name: &str) -> ExprId {
         let expr = self.named(name, ExprKind::Placeholder);
         self.ir.borrow_mut().block_roots.insert(expr);
@@ -487,8 +490,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(name, ExprKind::NativeCall { op, args: range })
     }
 
-    /// `name = [v1, @shallow v2, @shallow(2) v3]` — each element carries its `~`
-    /// depth, and the whole is typed like a tuple rather than an array.
+    /// `name = [v1, @shallow v2, @shallow(2) v3]`, each element carrying its
+    /// `~` depth.
+    ///
+    /// # Invariant
+    /// Typed like a tuple rather than an array: a homogeneous element type
+    /// would reject `[x, @shallow f(x+1)]`.
     pub fn shallow_array(&self, name: &str, elements: &[(ExprId, usize)]) -> ExprId {
         let element_range = self.push_children(
             &elements

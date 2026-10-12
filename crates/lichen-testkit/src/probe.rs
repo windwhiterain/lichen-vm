@@ -30,9 +30,12 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// Check and evaluate `program`, refusing a diagnostic and a runtime refusal
-    /// alike — a probe that ran a broken program answers questions about a
-    /// program the test never meant to build.
+    /// Check and evaluate `program`.
+    ///
+    /// # Invariant
+    /// A diagnostic and a runtime refusal are both fatal here: a probe that ran
+    /// a broken program answers questions about a program the test never meant
+    /// to build.
     pub fn build(program: Program<P::Attr, P::Literal>) -> Self {
         let Program { ir, names, .. } = program;
         let build = Checker::<P>::build(ir);
@@ -174,8 +177,11 @@ where
         self.build.lowering_of(node).map(|loc| loc.expr)
     }
 
-    /// The pair slot `node` is: `value`, `type`, `an attribute slot`, `the
-    /// expression itself`, or `a position inside the expression`.
+    /// The pair slot `node` is, as a phrase.
+    ///
+    /// # Invariant
+    /// One of `value`, `type`, `an attribute slot`, `the expression itself`,
+    /// `a position inside the expression`, or `no slot in this build`.
     pub fn slot_at(&self, node: NodeId) -> &'static str {
         slot_at(&self.build, node)
     }
@@ -292,8 +298,11 @@ where
     }
 }
 
-/// The dynamic node behind a value read — the checker builds only dynamic
-/// graphs, so this is the one conversion a probe needs.
+/// The dynamic node behind a value read.
+///
+/// # Invariant
+/// The checker builds only dynamic graphs, so this is the one conversion a
+/// probe needs; a static id is unreachable rather than merely rare.
 pub fn dyn_node(id: AnyNodeId) -> NodeId {
     match id {
         AnyNodeId::Dynamic(node) => node,
