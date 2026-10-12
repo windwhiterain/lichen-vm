@@ -244,7 +244,7 @@ per entry.
 
 ## What is open
 
-- Nothing here. The editor grammar models these forms too —
-  `tree-sitter-lichen/grammar.js` has the keyword-led `tuple{…}`, `struct{…}`,
-  `array{…}`, `set{…}` and `table{…}` types and the value-less annotation chain
-  `: T # a` — and `docs/notes/operators.md` §10 records that grammar's state.
+Nothing. The editor grammar models these forms too — `tree-sitter-lichen/grammar.js`
+carries the keyword-led `tuple{…}`, `struct{…}`, `array{…}`, `set{…}` and
+`table{…}` types and the value-less annotation chain `: T # a` — and
+`docs/notes/operators.md` §10 records that grammar's state.
