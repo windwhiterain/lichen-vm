@@ -1172,7 +1172,18 @@ record (today)  →  collect interface instances, cut fusible regions  →  per 
 dispatcher**, on the graph that will run, with its lines going to the run report's own channel so a
 refusal is visible rather than swallowed. `lichen-compute` names no fusion crate: the host that reads
 a claim installs the pass (`crates/lichen-language/src/automatic_tiling.rs`), which is the direction
-the bridge's manifest already stated. Two properties are the seam's own:
+the bridge's manifest already stated. The seam's own properties:
+
+- **One pass, so several transforms need a chain.** The seam stores a **single** pass and every
+  installer replaces it, so a host that installs the merge pass gets no tiling and one that installs the
+  tiling pass gets no merge — while a pack may carry **both** a `plan` and a `fuse`, and could therefore
+  only half apply, silently. The **floor** (`crates/lichen-language/src/floor.rs`,
+  `install_floor`/`install_floor_with_packs`, and the wrap-able `floor_pass_with_packs`) is the chain
+  that honours both: **[region merge, then tiling]** in one `set_graph_pass`, merge first because it
+  leaves fewer nodes for the tiling pass to look at, both stages' lines in the one report in stage order.
+  A merged node has no claim, so the tiling stage meets it and refuses it **by name** (`NotClaimed`,
+  `9a944661`) rather than passing over it — the chain is only honest because that silence was already
+  removed. `pass_chain` (`lichen-compute`) is the mechanism; the floor is the order a machine installs.
 
 - **A rewrite takes an entry of its own.** The graph store is keyed by a digest of its nodes' bodies,
   so writing the pass's answer over the recorded entry would leave the index naming bytes that are no
