@@ -247,7 +247,7 @@ fn the_two_buffer_chain_runs_on_the_device_and_answers_over_both() {
 /// from the accepted one by a single field and by nothing the body reads — its second
 /// buffer is never read — so what separates them is where the buffer sits, not the read.
 #[test]
-fn a_buffer_beside_the_in_group_records_and_the_same_buffer_under_it_does_not() {
+fn a_second_buffer_records_under_the_in_group_and_does_not_beside_it() {
     assert!(
         records(&chain(ONE_BUFFER)),
         "the control records, which is what the other two are measured against"
