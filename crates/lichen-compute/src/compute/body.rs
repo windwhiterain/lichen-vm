@@ -1596,11 +1596,9 @@ where
                 "read's buffer argument is not an input buffer of the parallel parameter ({seen})"
             )
         })?;
-        // **A read's element class is declared, not inferred**: the parameter's `Buf T`
-        // states what this position reads.
-        let element = self.declared_input_class(pos);
-        self.tally.reads = self.tally.reads.max(pos + 1);
-        self.tally.read_classes.push(element);
+        // **A read's element class is declared, not inferred**: the tally records it
+        // at the position and answers the class.
+        let element = self.tally.record_read(pos);
         // The position is an `Int`, always: a compile-time ordinal in the input
         // space, not data.
         let position = self.emit_const(ScalarClass::Int, pos as i64);
@@ -1659,20 +1657,6 @@ where
             vec![position, index, value],
             element,
         ))
-    }
-
-    /// The element class the parameter declares for input `position`.
-    ///
-    /// # Invariant
-    /// A class the parameter's own `Buf T` states is the authority; a parameter that states
-    /// none — the older open element cell, or the tuple form — falls back to the fragment's
-    /// own declared element class.
-    fn declared_input_class(&self, position: usize) -> ScalarClass {
-        self.params
-            .first()
-            .and_then(|slot| slot.roles.as_ref())
-            .and_then(|roles| roles.input_classes.get(position).copied().flatten())
-            .unwrap_or_else(|| self.tally.element_class.unwrap_or(ScalarClass::Int))
     }
 
     /// The element class the parameter declares for write ordinal `ordinal`.

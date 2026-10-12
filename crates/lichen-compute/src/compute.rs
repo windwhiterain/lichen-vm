@@ -2163,7 +2163,7 @@ where
     }];
 
     // A scalar kernel has no buffers: the fragment declares no inputs or outputs.
-    let mut tally = Positions::default();
+    let mut tally = Positions::for_params(&params);
     // The body is emitted leaf by leaf: a scalar codomain is one leaf, a tuple
     // one per element, each its own stack slot.
     let leaves = codomain_leaves(module, ret_value)?;
@@ -2397,7 +2397,7 @@ where
         .unwrap_or(ScalarClass::Int);
     // **The outputs are the codomain's**, and each position must hold a
     // `compute.write` naming that same position.
-    let mut tally = Positions::default();
+    let mut tally = Positions::for_params(&params);
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
     // **A conditional is left to the walk**, which knows *why* it did not reduce the
@@ -2936,15 +2936,20 @@ struct Positions {
     /// [`Self::output_classes`]: every codomain position is checked to resolve to its
     /// own ordinal, so every ordinal below the declared count is written.
     write_classes: Vec<ScalarClass>,
-    /// The element class of each input position read, in read order.
+    /// The element class of each input position read, **placed at its position**.
     ///
     /// # Invariant
-    /// A list of the *reads*, not of the positions: [`Self::reads`] is a max over a
-    /// sparse space, so a body that reads position 1 and not 0 has one entry here
-    /// and a count of two. Every entry is the class the reads are *declared* in
-    /// ([`Self::element_class`]), because a buffer's element class is a fact of the
-    /// value the host binds at the run, not of any node.
-    read_classes: Vec<ScalarClass>,
+    /// Placed and not pushed: read positions are a sparse space, so a body that reads
+    /// position 1 and not 0 declares two inputs ([`Self::reads`]) and leaves two entries
+    /// here. `None` at a position no read reached, so a hole is not mistaken for a read.
+    read_classes: Vec<Option<ScalarClass>>,
+    /// The class the parameter's own `Buf T` declares for each input position.
+    ///
+    /// # Invariant
+    /// Parallel to the parameter's `roles.inputs` — the list `parallel_buffer_pos` numbers
+    /// a read against — and `None` at a position the parameter leaves open. Held here so
+    /// [`Self::declared_input_class`] is the only place that resolves one position.
+    declared_inputs: Vec<Option<ScalarClass>>,
     /// The class a buffer read's element is declared in.
     ///
     /// # Invariant
@@ -2957,17 +2962,68 @@ struct Positions {
 }
 
 impl Positions {
+    /// The tally one body's lowering records into, seeded with the parameter's declaration.
+    ///
+    /// # Invariant
+    /// The declared classes are copied off the first parameter's `roles`, the same list
+    /// [`Self::declared_input_class`] numbers: position `k` is the one the parameter
+    /// declares and the one a read at `k` names, or the two are not the same position.
+    fn for_params(params: &[ParamSlot]) -> Self {
+        Self {
+            declared_inputs: params
+                .first()
+                .and_then(|slot| slot.roles.as_ref())
+                .map(|roles| roles.input_classes.clone())
+                .unwrap_or_default(),
+            ..Self::default()
+        }
+    }
+
+    /// The class input `position` is declared in: the parameter's `Buf T`, else the
+    /// fragment's own element class.
+    ///
+    /// # Invariant
+    /// **The one answer for a position, read or not**: a read at `position` is lowered in
+    /// this class and recorded with it, and a position no read reached takes the same one
+    /// — so a sparse body cannot describe one buffer twice.
+    fn declared_input_class(&self, position: usize) -> ScalarClass {
+        self.declared_inputs
+            .get(position)
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| self.element_class.unwrap_or(ScalarClass::Int))
+    }
+
     /// The declared class of every input position, `declared` entries long.
     ///
     /// # Invariant
-    /// The count is the fragment's declaration — the highest position a tuple-form
-    /// body read, the `.in` field count for a struct one — so a position a body
-    /// never read still takes the declared class.
+    /// One entry per **position**, the index every reader above uses. A position
+    /// no read reached takes [`Self::declared_input_class`], and only a position neither a
+    /// read nor a `Buf T` names takes the ABI's integer default: that is the open element
+    /// cell, which declares no class the fragment could be wrong about.
     fn input_classes(&self, declared: usize) -> Vec<ScalarClass> {
-        let class = self.element_class.unwrap_or(ScalarClass::Int);
-        let mut classes = self.read_classes.clone();
-        classes.resize(declared.max(classes.len()), class);
-        classes
+        (0..declared.max(self.read_classes.len()))
+            .map(|position| {
+                self.read_classes
+                    .get(position)
+                    .copied()
+                    .flatten()
+                    .unwrap_or_else(|| self.declared_input_class(position))
+            })
+            .collect()
+    }
+    /// Record one read of input `position`, and answer the class its element is declared in.
+    ///
+    /// # Invariant
+    /// The class goes **at the position**, as [`Self::write_classes`] puts a write's at its
+    /// ordinal, so a body that reads position 1 first and position 0 second describes both.
+    /// The answer travels back because the read's own instruction is lowered in it.
+    fn record_read(&mut self, position: usize) -> ScalarClass {
+        let class = self.declared_input_class(position);
+        self.reads = self.reads.max(position + 1);
+        self.read_classes.resize(position + 1, None);
+        self.read_classes[position] = Some(class);
+        class
     }
     /// Record one write of output `ordinal`, in the class its element is declared in.
     ///
