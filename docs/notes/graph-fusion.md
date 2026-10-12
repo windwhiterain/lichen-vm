@@ -716,6 +716,15 @@ position-for-position correspondence of the producer's reads with the consumer's
 caller's precondition whose violation would be a wrong answer, and `compose`'s own doc now says so and
 names the check.
 
+**The merged fragment's inputs are the union** (`b6e0c126`): the **producer's** inputs in their order,
+then the **consumer's surviving** inputs in theirs, with every one of the consumer's surviving reads
+shifted up by the producer's input count. That is what makes the natural chain work — a consumer whose
+parameter struct names **only** the buffer it absorbs used to be refused, and the acceptance tests used
+to declare an input they never read in order to satisfy the old rule, which compared the two bodies'
+ordinals instead of building the union. A buffer **both** bodies name is listed **twice**, once per
+port: the union counts ports, not buffers, and a caller that reads the merged node's `inputs` sees the
+duplicate. `input_classes` follows the same order, so the merged fragment's digest moves with it.
+
 **What the merge can reach today is narrower than "shape-changing fusion", and the reason is a
 classification `compose` does not yet make — not staging.** `compose` refuses a forwarded value that is
 reachable from the producer's invocation index, and an **elementwise** producer's value always is — so
