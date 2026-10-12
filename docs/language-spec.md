@@ -837,7 +837,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` pairs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
 | `! p` / `e : T ! p` | the same `Annotation` chain's **refinement** piece: `p` is a predicate on the annotated *value*, held in one attribute slot and required to evaluate to `1`.  Like `#`/`?` the right side is one operand at the `->` level, so `e : T ! (x => x > 3)` writes the predicate explicitly; see [operator-polymorphism](notes/operator-polymorphism.md) §3 |
 | `_` (any position — type or value) | `Placeholder` |
-| `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
+| `T1 -> T2` | `TypeFunction { parameter, return_type }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `tuple{T1, …, Tn}` | `TypeTuple(range)` |
 | `struct{.a T1, .b T2}` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct{T1, …}`) is a `StructFieldName` check error |

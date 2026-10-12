@@ -767,15 +767,15 @@ impl Compiler {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 span,
             } => {
                 let parameter = self.compile_expr(parameter_type);
-                let r#return = self.compile_expr(r#return);
+                let return_type = self.compile_expr(return_type);
                 self.alloc(
                     ExprKind::TypeFunction {
                         parameter,
-                        r#return,
+                        return_type,
                     },
                     span,
                 )

@@ -328,11 +328,11 @@ impl Resolver {
             }
             Expr::Arrow {
                 parameter_type,
-                r#return,
+                return_type,
                 ..
             } => {
                 self.resolve_expr(parameter_type);
-                self.resolve_expr(r#return);
+                self.resolve_expr(return_type);
             }
             Expr::Tuple(elems, _)
             | Expr::TypeTuple(elems, _)
