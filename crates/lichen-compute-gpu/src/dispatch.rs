@@ -24,7 +24,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
 use lichen_kernel_ir::{
-    BufferSlot, DeviceExtent, LaunchSet, ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BatchExtent, BatchInput, BatchRefusal, BufferSlot, DeviceExtent, Dispatch, LaunchSet,
+    ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
 use crate::spirv::{self, Binding, SpirvRefusal};
@@ -56,13 +57,20 @@ pub enum RunError {
     StagedLaunchNotAWholeWorkgroup { count: usize, lane_width: u32 },
     /// More storage buffers than the pool has room for; the pool is allocated once.
     TooManyBindings { total: usize, max: usize },
-    /// A chain asked for a dispatch count one submission cannot record.
+    /// A run asked for a dispatch count one submission cannot record.
     ///
     /// # Invariant
     /// One to `MAX_DISPATCHES_PER_SUBMISSION`, which is what the pool has sets for; zero is
     /// refused too, because a submission with no dispatch is a different request, not a shorter
-    /// chain.
-    ChainLength { wanted: usize, max: usize },
+    /// run. A chain and a graph are one rule and one number, not two bounds.
+    TooManyDispatches { wanted: usize, max: usize },
+    /// A batch edge naming an output no earlier dispatch produces.
+    ///
+    /// # Invariant
+    /// Named rather than skipped: an edge that resolved to nothing would bind no buffer and
+    /// the dispatch would write over uninitialised memory, which is a wrong answer with no
+    /// diagnostic in it.
+    UnknownBatchOutput { dispatch: usize, ordinal: usize },
     /// A chain needs each link to have one input and one output.
     ChainNotLinear { inputs: usize, outputs: usize },
     /// A chain whose fragment reads one class and writes the other, which a chain cannot carry.
@@ -149,10 +157,15 @@ impl fmt::Display for RunError {
                  sized for {max}, so it is refused here rather than left to fail as pool \
                  exhaustion on the device"
             ),
-            RunError::ChainLength { wanted, max } => write!(
+            RunError::TooManyDispatches { wanted, max } => write!(
                 f,
-                "a chain of {wanted} dispatch(es) cannot be recorded in one submission: the \
+                "a run of {wanted} dispatch(es) cannot be recorded in one submission: the \
                  range is 1 to {max}, which is what the descriptor pool has sets for."
+            ),
+            RunError::UnknownBatchOutput { dispatch, ordinal } => write!(
+                f,
+                "this batch reads output {ordinal} of dispatch {dispatch}, which no dispatch \
+                 before the one reading it produces."
             ),
             RunError::ChainNotLinear { inputs, outputs } => write!(
                 f,
@@ -238,13 +251,32 @@ impl std::error::Error for RunError {}
 ///
 /// # Invariant
 /// The arms differ in where the number lives and nowhere else, so every step that takes a
-/// count is written once: each asks this for the extent it allocates, and for the dispatch
-/// command that does not need the number at all.
+/// count is written once. A device-held extent names its **buffer**, not an id: a batch
+/// reads a count out of an output of the submission it is still recording, and has issued
+/// no id for it.
 enum Extent {
     /// `[0, count)`, a number the host holds.
     Host(usize),
     /// `[0, device)`, a number only the device holds, with the run's allocation.
-    Device(DeviceExtent),
+    Device {
+        buffer: DeviceBuffer,
+        index: usize,
+        capacity: usize,
+    },
+}
+
+impl Extent {
+    /// How many elements a run over this extent is allocated for.
+    ///
+    /// # Invariant
+    /// The device arm's `capacity`, because the number deciding how much of those buffers
+    /// the shader reaches is not one this host has.
+    fn allocated(&self) -> usize {
+        match self {
+            Extent::Host(count) => *count,
+            Extent::Device { capacity, .. } => *capacity,
+        }
+    }
 }
 
 /// Where a recorded dispatch's workgroup count is read from.
@@ -358,6 +390,21 @@ pub struct GpuContext {
     /// an output across `[0, padded)` and an input across `[0, count)` — so no stale byte
     /// is ever read back.
     recycled: Mutex<HashMap<(usize, ScalarClass), Vec<DeviceBuffer>>>,
+    /// How many command buffers this context has handed to the queue.
+    ///
+    /// # Invariant
+    /// Counted at the `queue_submit` and nowhere else, because it is the only way to
+    /// *observe* that several dispatches went as one: a command buffer's shape is a claim
+    /// and this is the count. A read-back is a submission too, so what a caller reads is
+    /// every hand-over, not only the dispatches'.
+    submissions: AtomicU64,
+    /// How many fences this context has waited on.
+    ///
+    /// # Invariant
+    /// One per submission that finished, counted where the wait confirmed it — so "one
+    /// submission and one wait" is two numbers read off the device rather than one claim
+    /// about a command buffer.
+    waits: AtomicU64,
 }
 
 /// How deep a pool is when nobody says otherwise.
@@ -599,6 +646,8 @@ impl GpuContext {
             }),
             layouts: Mutex::new(HashMap::new()),
             recycled: Mutex::new(HashMap::new()),
+            submissions: AtomicU64::new(0),
+            waits: AtomicU64::new(0),
         })
     }
 
@@ -610,6 +659,16 @@ impl GpuContext {
     /// How many submissions this context may have in flight at once.
     pub fn slot_depth(&self) -> usize {
         self.slots.lock().unwrap().entries.len()
+    }
+
+    /// How many command buffers this context has handed to its queue.
+    pub fn submissions(&self) -> u64 {
+        self.submissions.load(AtomicOrdering::Relaxed)
+    }
+
+    /// How many fences this context has waited on.
+    pub fn fence_waits(&self) -> u64 {
+        self.waits.load(AtomicOrdering::Relaxed)
     }
 
     /// Take a slot to record one submission into, and the token that will wait for it.
@@ -687,7 +746,7 @@ impl GpuContext {
         inputs: &[BufferSlot],
         extent: DeviceExtent,
     ) -> Result<Vec<ResidentId>, RunError> {
-        self.staged_and_waited(launch, inputs, Extent::Device(extent))
+        self.staged_and_waited(launch, inputs, self.held(extent)?)
     }
 
     /// Stage one run at `extent`, wait for it, and hand back the ids.
@@ -745,16 +804,165 @@ impl GpuContext {
         inputs: &[BufferSlot],
         extent: Extent,
     ) -> Result<Staged, RunError> {
+        // The slot is taken before anything is staged into it: the staging a run writes
+        // is the slot's own.
+        let mut segment = self.acquire()?;
+        let mut scratch = ScratchGuard {
+            context: self,
+            buffers: Vec::new(),
+        };
+        let bound = self.bound(inputs)?;
+        let staging_bytes = self.staged_bytes(
+            launch,
+            extent.allocated(),
+            bound
+                .iter()
+                .enumerate()
+                .filter_map(|(index, input)| match input {
+                    Bound::Host(data) => Some((index, *data)),
+                    Bound::Resident(_) => None,
+                }),
+        )?;
+        // The reservation is the whole run's, made before the first byte is staged.
+        segment.reserve(self, staging_bytes)?;
+        let (dispatched, _) =
+            self.dispatch_into(&mut segment, &mut scratch, 0, launch, &bound, extent)?;
+
+        segment.begin()?;
+        segment.record(
+            dispatched.pipeline,
+            &dispatched.descriptors,
+            &dispatched.uploads,
+            dispatched.workgroups,
+            &dispatched.scalars,
+        )?;
+        // Nothing below can fail, so the bookkeeping comes after the submit: a failed
+        // submit means nothing reached the queue.
+        let token = segment.submit()?;
+        let ids = self.issue(dispatched.outputs);
+        // The guard is now empty; what is left is the host upload targets.
+        let scratch = std::mem::take(&mut scratch.buffers);
+        Ok(Staged {
+            token,
+            ids,
+            scratch,
+        })
+    }
+
+    /// The buffers a caller's slots name, as this backend's own form of them.
+    fn bound<'a>(&self, inputs: &[BufferSlot<'a>]) -> Result<Vec<Bound<'a>>, RunError> {
+        inputs
+            .iter()
+            .map(|input| match input {
+                BufferSlot::Host(data) => Ok(Bound::Host(data)),
+                BufferSlot::Resident(id) => self.resident_buffer(*id).map(Bound::Resident),
+            })
+            .collect()
+    }
+
+    /// A [`DeviceExtent`] as this backend's own extent: the buffer behind the id.
+    fn held(&self, extent: DeviceExtent) -> Result<Extent, RunError> {
+        Ok(Extent::Device {
+            buffer: self.resident_buffer(extent.count)?,
+            index: extent.index,
+            capacity: extent.capacity,
+        })
+    }
+
+    /// Hand out one [`ResidentId`] per buffer, and record what it names.
+    fn issue(&self, buffers: Vec<DeviceBuffer>) -> Vec<ResidentId> {
+        let mut resident = self.resident.lock().unwrap();
+        buffers
+            .into_iter()
+            .map(|buffer| {
+                let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
+                resident.insert(id, buffer);
+                id
+            })
+            .collect()
+    }
+
+    /// The staging one dispatch's host inputs need, and whether they are long enough.
+    ///
+    /// # Invariant
+    /// The sum of each host input's own `count × byte_width()`, checked against that same
+    /// count — **the width is the buffer's own class**, not one module-wide answer, and a
+    /// device input stages nothing and has no length to check. Asked for before anything is
+    /// recorded, because that is when the reservation must be made.
+    fn staged_bytes<'a>(
+        &self,
+        launch: &LaunchSet<'_>,
+        count: usize,
+        hosts: impl Iterator<Item = (usize, &'a [u8])>,
+    ) -> Result<vk::DeviceSize, RunError> {
+        let fragment = launch.root();
+        let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        let mut bytes: vk::DeviceSize = 0;
+        for (index, data) in hosts {
+            let width = spirv::buffer_class_of(fragment, index, class).byte_width();
+            if data.len() < count * width {
+                return Err(RunError::InputShorterThanCount {
+                    buffer: index,
+                    len: data.len() / width,
+                    count,
+                });
+            }
+            bytes += count as vk::DeviceSize * width as vk::DeviceSize;
+        }
+        Ok(bytes)
+    }
+
+    /// The staging a whole batch's host inputs need, before any of it is recorded.
+    fn batch_staging(&self, batch: &[Dispatch<'_>]) -> Result<vk::DeviceSize, RunError> {
+        let mut bytes: vk::DeviceSize = 0;
+        for dispatch in batch {
+            bytes += self.staged_bytes(
+                dispatch.launch,
+                dispatch.extent.allocated(),
+                dispatch
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, input)| match input {
+                        BatchInput::Host(data) => Some((index, *data)),
+                        _ => None,
+                    }),
+            )?;
+        }
+        Ok(bytes)
+    }
+
+    /// [`Self::dispatch_into`], with the staging offset it stopped at.
+    ///
+    /// # Invariant
+    /// Staging is reserved by the caller **before** anything is recorded, and the
+    /// offset is the sum of every block staged before this dispatch. Growing a slot's
+    /// staging destroys the buffer an earlier recorded transfer names, so a submission
+    /// reserves once. Upload targets and indirect blocks go to `scratch`, so a run that
+    /// never completes recycles them; the outputs are the caller's.
+    fn dispatch_into(
+        &self,
+        segment: &mut Segment<'_>,
+        scratch: &mut ScratchGuard<'_>,
+        at: vk::DeviceSize,
+        launch: &LaunchSet<'_>,
+        inputs: &[Bound<'_>],
+        extent: Extent,
+    ) -> Result<(Dispatched, vk::DeviceSize), RunError> {
         let fragment = launch.root();
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
         // The number the extent leaf is pushed with; a device-held extent has none.
         let (leaf, held) = match extent {
             Extent::Host(count) => (count, None),
-            Extent::Device(held) => (0, Some(held)),
+            Extent::Device {
+                buffer,
+                index,
+                capacity,
+            } => (0, Some((buffer, index, capacity))),
         };
         let count = match held {
             None => leaf,
-            Some(held) => held.capacity,
+            Some((_, _, capacity)) => capacity,
         };
         // The block the entry point reads the launch's leaves out of.
         let scalars = self.scalar_block(launch, class, leaf)?;
@@ -762,19 +970,6 @@ impl GpuContext {
             inputs: inputs.len(),
             outputs: fragment.outputs,
         };
-        for (index, slot) in inputs.iter().enumerate() {
-            // **The width is this buffer's own class**, not one module-wide answer.
-            let width = spirv::buffer_class_of(fragment, index, class).byte_width();
-            if let BufferSlot::Host(data) = slot
-                && data.len() < count * width
-            {
-                return Err(RunError::InputShorterThanCount {
-                    buffer: index,
-                    len: data.len() / width,
-                    count,
-                });
-            }
-        }
         let pipeline = self.pipeline(launch, binding, scalars.len() as u32)?;
 
         // Round up so the last workgroup's surplus lanes address padding rather
@@ -785,37 +980,16 @@ impl GpuContext {
             // A zero-element run would ask Vulkan for a zero-sized buffer.
             return Err(RunError::EmptyRun);
         }
-        // The slot is taken before anything is staged into it: the staging a run writes
-        // is the slot's own.
-        let mut segment = self.acquire()?;
-        // The reservation is the sum of each host input's own `count × byte_width()`.
-        let staging_bytes: vk::DeviceSize = inputs
-            .iter()
-            .enumerate()
-            .map(|(index, slot)| match slot {
-                BufferSlot::Host(_) => {
-                    count as vk::DeviceSize
-                        * spirv::buffer_class_of(fragment, index, class).byte_width()
-                            as vk::DeviceSize
-                }
-                BufferSlot::Resident(_) => 0,
-            })
-            .sum();
-        segment.reserve(self, staging_bytes)?;
 
-        let mut scratch = ScratchGuard {
-            context: self,
-            buffers: Vec::new(),
-        };
         let mut descriptors: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(binding.total());
         let mut uploads: Vec<Transfer> = Vec::with_capacity(inputs.len());
         // A block begins where the previous one ended: `offset` is the sum of the blocks before it.
-        let mut offset: vk::DeviceSize = 0;
-        for (index, slot) in inputs.iter().enumerate() {
-            let buffer = match slot {
+        let mut offset: vk::DeviceSize = at;
+        for (index, input) in inputs.iter().enumerate() {
+            let buffer = match input {
                 // Used where it lies: a chained run costs one upload, not two.
-                BufferSlot::Resident(id) => self.resident_buffer(*id)?,
-                BufferSlot::Host(data) => {
+                Bound::Resident(buffer) => *buffer,
+                Bound::Host(data) => {
                     let buffer_class = spirv::buffer_class_of(fragment, index, class);
                     let element = buffer_class.byte_width() as vk::DeviceSize;
                     let data_bytes = count as vk::DeviceSize * element;
@@ -852,63 +1026,185 @@ impl GpuContext {
         // The command block is scratch like an upload target: this submission owns it.
         let indirect = match held {
             None => None,
-            Some(held) => {
-                let (command, block) = self.indirect_extent(launch, held)?;
+            Some((buffer, index, _)) => {
+                let (command, block) = self.indirect_extent(launch, buffer, index)?;
                 scratch.buffers.push(block);
                 Some(command)
             }
         };
         // Each output is allocated and recorded at its own class, the width a fetch reads it at.
+        let mut outputs = Vec::with_capacity(binding.outputs);
         for buffer_class in &output_classes {
             let buffer = self.allocate(padded, *buffer_class)?;
             descriptors.push(buffer.descriptor());
-            scratch.buffers.push(buffer);
+            outputs.push(DeviceBuffer {
+                handle: buffer.handle,
+                memory: buffer.memory,
+                padded,
+                // The class this output's element type was emitted for, so a fetch reads
+                // it back at the width it was written at.
+                class: *buffer_class,
+            });
         }
 
-        segment.begin()?;
-        segment.record(
-            pipeline,
-            &descriptors,
-            &uploads,
-            match indirect {
-                None => Workgroups::Direct(workgroups as u32),
-                Some(indirect) => indirect,
-            },
-            &scalars,
-        )?;
-        // Nothing below can fail, so the bookkeeping comes after the submit: a failed
-        // submit means nothing reached the queue.
-        let token = segment.submit()?;
-        let mut resident = self.resident.lock().unwrap();
-        let mut ids = Vec::with_capacity(binding.outputs);
-        for (ordinal, buffer) in scratch
-            .buffers
-            .split_off(scratch.buffers.len() - binding.outputs)
-            .into_iter()
-            .enumerate()
-        {
-            let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
-            resident.insert(
-                id,
-                DeviceBuffer {
-                    handle: buffer.handle,
-                    memory: buffer.memory,
-                    padded,
-                    // The class this output's element type was emitted for, so a fetch reads
-                    // it back at the width it was written at.
-                    class: output_classes[ordinal],
+        Ok((
+            Dispatched {
+                pipeline,
+                descriptors,
+                uploads,
+                workgroups: match indirect {
+                    None => Workgroups::Direct(workgroups as u32),
+                    Some(indirect) => indirect,
                 },
-            );
-            ids.push(id);
+                scalars,
+                outputs,
+            },
+            offset,
+        ))
+    }
+
+    /// The buffers one batch dispatch reads, as this backend's own form of them.
+    ///
+    /// # Invariant
+    /// A [`BatchInput::Produced`] is an output of an earlier dispatch **of this batch**, and
+    /// the buffer bound is the one that dispatch was allocated: no [`ResidentId`] names it
+    /// yet, and none is needed to bind one.
+    fn bind<'a>(
+        &self,
+        inputs: &[BatchInput<'a>],
+        produced: &[Vec<DeviceBuffer>],
+    ) -> Result<Vec<Bound<'a>>, RunError> {
+        inputs
+            .iter()
+            .map(|input| match input {
+                BatchInput::Host(data) => Ok(Bound::Host(data)),
+                BatchInput::Resident(id) => self.resident_buffer(*id).map(Bound::Resident),
+                BatchInput::Produced { dispatch, ordinal } => produced
+                    .get(*dispatch)
+                    .and_then(|outputs| outputs.get(*ordinal))
+                    .copied()
+                    .map(Bound::Resident)
+                    .ok_or(RunError::UnknownBatchOutput {
+                        dispatch: *dispatch,
+                        ordinal: *ordinal,
+                    }),
+            })
+            .collect()
+    }
+
+    /// A batch dispatch's extent as this backend's own, with the buffer its count is in.
+    fn held_batch(
+        &self,
+        extent: BatchExtent,
+        produced: &[Vec<DeviceBuffer>],
+    ) -> Result<Extent, RunError> {
+        match extent {
+            BatchExtent::Host(count) => Ok(Extent::Host(count)),
+            BatchExtent::Resident {
+                count,
+                index,
+                capacity,
+            } => self.held(DeviceExtent {
+                count,
+                index,
+                capacity,
+            }),
+            BatchExtent::Produced {
+                dispatch,
+                ordinal,
+                index,
+                capacity,
+            } => Ok(Extent::Device {
+                buffer: produced
+                    .get(dispatch)
+                    .and_then(|outputs| outputs.get(ordinal))
+                    .copied()
+                    .ok_or(RunError::UnknownBatchOutput { dispatch, ordinal })?,
+                index,
+                capacity,
+            }),
         }
-        // The guard is now empty; what is left is the host upload targets.
-        let scratch = std::mem::take(&mut scratch.buffers);
-        drop(resident);
-        Ok(Staged {
-            token,
-            ids,
-            scratch,
-        })
+    }
+
+    /// Record a graph's dispatches into one command buffer, submit once, wait once.
+    ///
+    /// # Invariant
+    /// The framing is [`Self::run_chain`]'s: one slot, one `begin`, one submit, one wait,
+    /// so a graph pays one fence whatever its length. What a graph adds is that a dispatch
+    /// may read *any* earlier dispatch's output, and the trailing barrier each recording
+    /// already carries is what orders it. Ids are issued **after** the wait: none names a
+    /// buffer the device is still writing.
+    pub fn run_batch(&self, batch: &[Dispatch<'_>]) -> Result<Vec<Vec<ResidentId>>, RunError> {
+        if batch.is_empty() || batch.len() > MAX_DISPATCHES_PER_SUBMISSION {
+            return Err(RunError::TooManyDispatches {
+                wanted: batch.len(),
+                max: MAX_DISPATCHES_PER_SUBMISSION,
+            });
+        }
+        // One slot, and one staging for the whole batch, reserved up
+        // front: a dispatch's block begins where the last one ended.
+        let mut segment = self.acquire()?;
+        segment.reserve(self, self.batch_staging(batch)?)?;
+        let mut scratch = ScratchGuard {
+            context: self,
+            buffers: Vec::new(),
+        };
+        let mut produced: Vec<Vec<DeviceBuffer>> = Vec::with_capacity(batch.len());
+
+        // Nothing has reached the queue, so every buffer recorded so far
+        // is this submission's to give back.
+        if let Err(error) = self.record_batch(&mut segment, &mut scratch, batch, &mut produced) {
+            for outputs in produced.drain(..) {
+                for buffer in outputs {
+                    self.recycle(buffer);
+                }
+            }
+            return Err(error);
+        }
+
+        segment.submit_and_wait()?;
+        // The guard recycles what the wait proved nobody reads; the
+        // outputs go to the host as ids.
+        Ok(produced
+            .into_iter()
+            .map(|buffers| self.issue(buffers))
+            .collect())
+    }
+
+    /// Record every dispatch of a batch into the segment's open command buffer.
+    ///
+    /// # Invariant
+    /// In order, and each dispatch binds the outputs of the ones before it: the barrier a
+    /// recording ends with is what orders them, so the only thing this loop owes the next
+    /// turn is that the buffer exists. Nothing is submitted here.
+    fn record_batch(
+        &self,
+        segment: &mut Segment<'_>,
+        scratch: &mut ScratchGuard<'_>,
+        batch: &[Dispatch<'_>],
+        produced: &mut Vec<Vec<DeviceBuffer>>,
+    ) -> Result<(), RunError> {
+        let mut at: vk::DeviceSize = 0;
+
+        // One reset for the whole submission and none inside it: a reset frees sets an
+        // earlier dispatch is still bound to.
+        segment.begin()?;
+        for dispatch in batch {
+            let inputs = self.bind(dispatch.inputs, produced)?;
+            let extent = self.held_batch(dispatch.extent, produced)?;
+            let (dispatched, next) =
+                self.dispatch_into(segment, scratch, at, dispatch.launch, &inputs, extent)?;
+            segment.record(
+                dispatched.pipeline,
+                &dispatched.descriptors,
+                &dispatched.uploads,
+                dispatched.workgroups,
+                &dispatched.scalars,
+            )?;
+            at = next;
+            produced.push(dispatched.outputs);
+        }
+        Ok(())
     }
 
     /// Record `links` dispatches into one command buffer, submit once, wait once, and hand
@@ -927,7 +1223,7 @@ impl GpuContext {
     ) -> Result<ResidentId, RunError> {
         let fragment = launch.root();
         if links == 0 || links > MAX_DISPATCHES_PER_SUBMISSION {
-            return Err(RunError::ChainLength {
+            return Err(RunError::TooManyDispatches {
                 wanted: links,
                 max: MAX_DISPATCHES_PER_SUBMISSION,
             });
@@ -1073,7 +1369,9 @@ impl GpuContext {
     fn indirect_extent(
         &self,
         launch: &LaunchSet<'_>,
-        extent: DeviceExtent,
+        // The buffer the count is in, named not by id: a batch has none yet.
+        buffer: DeviceBuffer,
+        index: usize,
     ) -> Result<(Workgroups, DeviceBuffer), RunError> {
         let body = &launch.root().body;
         if let Some(leaf) = body
@@ -1084,22 +1382,18 @@ impl GpuContext {
         {
             return Err(RunError::ExtentLeafUnfixed);
         }
-        let buffer = self.resident_buffer(extent.count)?;
         let len = buffer.padded;
         if buffer.class != ScalarClass::Int {
             return Err(RunError::IndirectExtentNotIntegers { len });
         }
-        if extent.index >= len {
-            return Err(RunError::IndirectExtentOutOfReach {
-                index: extent.index,
-                len,
-            });
+        if index >= len {
+            return Err(RunError::IndirectExtentOutOfReach { index, len });
         }
         let block = self.allocate(SCALAR_WORDS, ScalarClass::Int)?;
         let command = Workgroups::Indirect {
             block: block.handle,
             source: buffer.handle,
-            offset: extent.index as vk::DeviceSize * SCALAR_BYTES,
+            offset: index as vk::DeviceSize * SCALAR_BYTES,
         };
         Ok((command, block))
     }
@@ -1345,7 +1639,10 @@ impl GpuContext {
                     &[vk::SubmitInfo::default().command_buffers(&[slot.command])],
                     slot.fence,
                 )
-            })
+            })?;
+            // After the hand-over: a submission the queue refused is not one.
+            self.submissions.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(())
         })
     }
 
@@ -1361,7 +1658,9 @@ impl GpuContext {
                 true,
                 std::time::Duration::from_secs(30).as_nanos() as u64,
             )
-        })
+        })?;
+        self.waits.fetch_add(1, AtomicOrdering::Relaxed);
+        Ok(())
     }
 
     /// Record one dispatch into the command buffer that is already open.
@@ -1765,6 +2064,11 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         ))
     }
 
+    /// The one backend that records a whole graph: one command buffer, one submit, one wait.
+    fn run_batch(&self, batch: &[Dispatch<'_>]) -> Result<Vec<Vec<ResidentId>>, BatchRefusal> {
+        GpuContext::run_batch(self, batch).map_err(|error| BatchRefusal::Refused(error.to_string()))
+    }
+
     /// The one backend that reads no number back: the workgroup count is an indirect
     /// command's, and the host never holds it.
     fn run_over_device_extent(
@@ -1822,6 +2126,34 @@ pub fn installed_backend_name() -> Option<&'static str> {
 pub fn uninstall() {
     lichen_kernel_ir::clear_parallel_backend();
 }
+/// One input, resolved to what this backend can bind.
+///
+/// # Invariant
+/// The one form [`fn dispatch_into`] binds, so a run and a batch are staged the same way. A
+/// device buffer is carried by value rather than named by [`ResidentId`], because a batch
+/// binds an output of the submission it is still recording and has issued no id for.
+enum Bound<'a> {
+    /// Data the host already holds, uploaded when the dispatch is recorded.
+    Host(&'a [u8]),
+    /// A buffer this backend is already holding.
+    Resident(DeviceBuffer),
+}
+
+/// Everything one prepared dispatch needs to be recorded, and what it leaves behind.
+///
+/// # Invariant
+/// Its descriptors name buffers this submission owns, so it is recorded once and dropped
+/// after: a second recording of the same value would bind a buffer the first has since
+/// recycled. The outputs are **not** in `scratch` — they are what the caller keeps.
+struct Dispatched {
+    pipeline: vk::Pipeline,
+    descriptors: Vec<vk::DescriptorBufferInfo>,
+    uploads: Vec<Transfer>,
+    workgroups: Workgroups,
+    scalars: Vec<u8>,
+    outputs: Vec<DeviceBuffer>,
+}
+
 /// One staging-to-device copy recorded into a dispatch.
 struct Transfer {
     /// Where the run's staged bytes sit in the staging buffer.

@@ -8,6 +8,7 @@
 //! The crate depends on nothing, so a backend inherits no other's runtime.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
 mod barrier;
@@ -292,6 +293,120 @@ impl<'a> LaunchSet<'a> {
     }
 }
 
+/// What one dispatch inside a batch reads.
+///
+/// # Invariant
+/// Three arms and no middle, because a batch is recorded before any of it has run: an
+/// earlier dispatch's output has no id yet, so it is named by where it will be
+/// ([`Self::Produced`]) and only a buffer already held is named by id. A [`Self::Host`] arm
+/// is uploaded as the batch is recorded, so a whole graph costs one copy per host input
+/// and none per device one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BatchInput<'a> {
+    /// Data the host already holds: `count` elements, read as the class the fragment
+    /// declares for this position.
+    Host(&'a [u8]),
+    /// A buffer this backend is already holding, from an earlier run.
+    Resident(ResidentId),
+    /// The `ordinal`-th output of the `dispatch`-th dispatch before this one.
+    Produced { dispatch: usize, ordinal: usize },
+}
+
+/// Where one dispatch inside a batch gets its index range from.
+///
+/// # Invariant
+/// The arms differ in where the number lives and nowhere else, as [`DeviceExtent`]'s do,
+/// and every one of them allocates [`Self::allocated`] elements. A device-held count is
+/// named the way its buffer is — by id when the backend already holds it, by position when
+/// this batch produces it — because an output has no id until it is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchExtent {
+    /// `[0, count)`, a number the host holds.
+    Host(usize),
+    /// `[0, device)`, read out of element `index` of a buffer this backend already holds.
+    Resident {
+        count: ResidentId,
+        index: usize,
+        capacity: usize,
+    },
+    /// `[0, device)`, read out of element `index` of an earlier dispatch's output.
+    Produced {
+        dispatch: usize,
+        ordinal: usize,
+        index: usize,
+        capacity: usize,
+    },
+}
+
+impl BatchExtent {
+    /// How many elements a dispatch over this extent is allocated for.
+    ///
+    /// # Invariant
+    /// The device arms' `capacity`, for the reason [`DeviceExtent::capacity`] gives: the
+    /// returned ids' count means this, so a fetch cannot be handed a length the allocation
+    /// does not cover.
+    pub fn allocated(self) -> usize {
+        match self {
+            BatchExtent::Host(count) => count,
+            BatchExtent::Resident { capacity, .. } | BatchExtent::Produced { capacity, .. } => {
+                capacity
+            }
+        }
+    }
+}
+
+/// One dispatch of a batch: what it launches, over how much, reading what.
+///
+/// # Invariant
+/// A batch is handed the graph's own shape and not a chain's: an input is bytes, a buffer
+/// already held, or the output of an earlier dispatch, so a fan-out and a fan-in are the
+/// same thing to record — which a chain cannot say, since it has one input and one output
+/// per link.
+#[derive(Debug, Clone)]
+pub struct Dispatch<'a> {
+    /// The fragments this dispatch launches, root first.
+    pub launch: &'a LaunchSet<'a>,
+    /// One input per read position of [`LaunchSet::root`].
+    pub inputs: &'a [BatchInput<'a>],
+    /// The index range this dispatch covers.
+    pub extent: BatchExtent,
+}
+
+/// Why a batch did not run.
+///
+/// # Invariant
+/// Two kinds, and which one it is is the caller's: [`Self::Cannot`] is "this backend has
+/// no way to record a batch", which a caller answers by choosing another schedule, while
+/// [`Self::Refused`] is this graph on this device — a different diagnosis, and the one a
+/// fallback would hide behind the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchRefusal {
+    /// This backend cannot record several dispatches into one submission.
+    Cannot,
+    /// This backend refuses this batch, and says why.
+    Refused(String),
+}
+
+impl BatchRefusal {
+    /// What a backend that has no such capability says.
+    ///
+    /// # Invariant
+    /// One sentence, quoted wherever the refusal is reported, so a caller reads the same
+    /// words whether they came from this contract's default or from a backend declining
+    /// for the same reason.
+    pub const CANNOT: &'static str =
+        "this backend cannot record several dispatches into one submission";
+}
+
+impl fmt::Display for BatchRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BatchRefusal::Cannot => f.write_str(Self::CANNOT),
+            BatchRefusal::Refused(reason) => f.write_str(reason),
+        }
+    }
+}
+
 /// A backend that can run a parallel fragment over an index range.
 ///
 /// # Invariant
@@ -333,6 +448,18 @@ pub trait ParallelBackend: Send + Sync {
         Ok(Box::new(Waited {
             ids: self.run(launch, inputs, count)?,
         }))
+    }
+
+    /// [`Self::run`] for a whole graph: every dispatch recorded, then one submission and
+    /// one wait.
+    ///
+    /// # Invariant
+    /// Defaults to refusing by name, because a serial fallback is a different schedule
+    /// wearing this one's name and a caller would be counting a schedule it did not ask
+    /// for. The answer is one id list per [`Dispatch`] and in that order, every buffer
+    /// settled when this returns, so the result says nothing a caller must wait for.
+    fn run_batch(&self, _batch: &[Dispatch<'_>]) -> Result<Vec<Vec<ResidentId>>, BatchRefusal> {
+        Err(BatchRefusal::Cannot)
     }
 
     /// [`Self::run`], with the index range read from a number the device already holds.

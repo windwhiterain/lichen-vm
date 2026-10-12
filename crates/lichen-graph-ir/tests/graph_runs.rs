@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarClass,
-    ScalarData, TargetFacts,
+    BatchInput, BatchRefusal, BufferSlot, Dispatch, FlatOp, IntWidth, KernelBin, KernelBody,
+    KernelFragment, KernelInstr, KernelRoles, KernelShape, LaneWidth, LaunchSet, ParallelBackend,
+    Pending, ResidentId, ScalarClass, ScalarData, TargetFacts,
 };
 
 /// `out[i] = in[i] + in[i] + 1`, which is `adds` everywhere else in this tree.
@@ -83,26 +83,113 @@ impl Stub {
             match slot {
                 // A host slot is packed bytes, decoded as the `Int` words every
                 // fragment here declares.
-                BufferSlot::Host(data) => {
-                    columns.push(
-                        data.chunks_exact(8)
-                            .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
-                            .collect(),
-                    );
-                }
-                BufferSlot::Resident(id) => {
-                    columns.push(self.data.lock().unwrap()[id.0 as usize - 1].clone())
-                }
+                BufferSlot::Host(data) => columns.push(Stub::words(data)),
+                BufferSlot::Resident(id) => columns.push(self.column(*id)),
             }
         }
         // Only the single-input fragment is ever dispatched here, so the kernel
         // is `adds` applied to the first column.
-        let out: Vec<i64> = (0..count)
-            .map(|i| columns[0][i] + columns[0][i] + 1)
-            .collect();
+        vec![self.hold(&Stub::adds(&columns[0], count))]
+    }
+
+    /// A host payload as the `Int` words every fragment here declares.
+    fn words(data: &[u8]) -> Vec<i64> {
+        data.chunks_exact(8)
+            .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
+            .collect()
+    }
+
+    /// `out[i] = in[i] + in[i] + 1`, over one column.
+    fn adds(column: &[i64], count: usize) -> Vec<i64> {
+        (0..count).map(|i| column[i] + column[i] + 1).collect()
+    }
+
+    /// The column a resident buffer holds.
+    fn column(&self, id: ResidentId) -> Vec<i64> {
+        self.data.lock().unwrap()[id.0 as usize - 1].clone()
+    }
+
+    /// Keep a column as this stub's next buffer, and name it.
+    fn hold(&self, column: &[i64]) -> ResidentId {
         let mut data = self.data.lock().unwrap();
-        data.push(out);
-        vec![ResidentId(data.len() as u64)]
+        data.push(column.to_vec());
+        ResidentId(data.len() as u64)
+    }
+}
+
+/// [`Stub`] with the one capability the contract gained: a whole graph in one submission.
+///
+/// # Invariant
+/// Each dispatch is computed from the buffers the contract handed it, and an output of an
+/// earlier dispatch is resolved by the **position** the graph named — which is what a fan-in
+/// needs and a chain has no way to say.
+#[derive(Clone, Default)]
+struct BatchStub {
+    stub: Stub,
+}
+
+impl ParallelBackend for BatchStub {
+    fn name(&self) -> &'static str {
+        "batch-stub"
+    }
+
+    fn run(
+        &self,
+        _launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot<'_>],
+        count: usize,
+    ) -> Result<Vec<ResidentId>, String> {
+        self.stub.asked.lock().unwrap().push("run");
+        Ok(self.stub.compute(inputs, count))
+    }
+
+    fn submit<'backend>(
+        &'backend self,
+        _launch: &LaunchSet<'_>,
+        inputs: &[BufferSlot<'_>],
+        count: usize,
+    ) -> Result<Box<dyn Pending + 'backend>, String> {
+        self.stub.asked.lock().unwrap().push("submit");
+        Ok(Box::new(StubPending {
+            ids: self.stub.compute(inputs, count),
+            stub: self.stub.clone(),
+        }))
+    }
+
+    /// The whole graph in one call.
+    ///
+    /// # Invariant
+    /// **One** entry in `asked` whatever the graph's length: the submission count is the
+    /// claim under test, so a stub recording one entry per dispatch would prove nothing.
+    fn run_batch(&self, batch: &[Dispatch<'_>]) -> Result<Vec<Vec<ResidentId>>, BatchRefusal> {
+        self.stub.asked.lock().unwrap().push("run_batch");
+        let mut produced: Vec<Vec<ResidentId>> = Vec::with_capacity(batch.len());
+        let mut computed: Vec<Vec<Vec<i64>>> = Vec::with_capacity(batch.len());
+        for dispatch in batch {
+            let inputs: Vec<Vec<i64>> = dispatch
+                .inputs
+                .iter()
+                .map(|input| match input {
+                    BatchInput::Host(data) => Stub::words(data),
+                    BatchInput::Resident(id) => self.stub.column(*id),
+                    BatchInput::Produced { dispatch, ordinal } => {
+                        computed[*dispatch][*ordinal].clone()
+                    }
+                })
+                .collect();
+            let out = Stub::adds(&inputs[0], dispatch.extent.allocated());
+            produced.push(vec![self.stub.hold(&out)]);
+            computed.push(vec![out]);
+        }
+        Ok(produced)
+    }
+
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
+        self.stub.fetch(id, count)
+    }
+
+    fn release(&self, id: ResidentId) {
+        self.stub.release(id);
     }
 }
 
@@ -301,6 +388,91 @@ fn a_batch_policy_is_refused_by_name_rather_than_run_as_something_else() {
         stub.asked().is_empty(),
         "a refused policy touches the backend not at all: {:?}",
         stub.asked()
+    );
+}
+
+#[test]
+fn a_backend_without_the_capability_refuses_in_the_contracts_own_words() {
+    let stub = Stub::new();
+    let refusal = Runner::new(&stub, Policy::Batch)
+        .run(&chain(4), vec![Value::host(vec![0; 4])])
+        .expect_err("a stub with no way to record a batch");
+    assert_eq!(
+        refusal.to_string(),
+        format!(
+            "the batch schedule is not available: {}",
+            BatchRefusal::CANNOT
+        ),
+        "the refusal a caller already sees, carrying the backend's own sentence: a \
+         schedule it cannot do, rather than one it ran under another name"
+    );
+}
+
+#[test]
+fn a_batch_graph_answers_what_the_same_graph_answers_one_dispatch_at_a_time() {
+    let count = 8;
+    let input: Vec<i64> = (0..count as i64).collect();
+
+    let serial = Stub::new();
+    let one_at_a_time = Runner::new(&serial, Policy::Serial)
+        .run(&chain(count), vec![Value::host(input.clone())])
+        .expect("the graph runs one dispatch at a time");
+    let serial_answer = serial
+        .fetch(
+            resident(one_at_a_time.last().expect("the last node produced one")),
+            count,
+        )
+        .expect("the serial answer comes back");
+
+    let batched = BatchStub::default();
+    let in_one = Runner::new(&batched, Policy::Batch)
+        .run(&chain(count), vec![Value::host(input)])
+        .expect("a backend with the capability runs the graph in one submission");
+
+    assert!(
+        in_one.iter().all(Value::is_ready),
+        "Batch: a value is never pending, because the one submission was waited for \
+         before the runner handed a single id back"
+    );
+    assert_eq!(
+        batched
+            .stub
+            .fetch(
+                resident(in_one.last().expect("the last node produced one")),
+                count
+            )
+            .expect("the batched answer comes back"),
+        serial_answer,
+        "one submission is a schedule and not a different program: the second node \
+         reads the first one's output out of the same recording"
+    );
+}
+
+#[test]
+fn a_batch_is_one_call_where_a_serial_run_is_one_per_node() {
+    let count = 8;
+    let input: Vec<i64> = (0..count as i64).collect();
+
+    let serial = Stub::new();
+    Runner::new(&serial, Policy::Serial)
+        .run(&chain(count), vec![Value::host(input.clone())])
+        .expect("the graph runs");
+
+    let batched = BatchStub::default();
+    Runner::new(&batched, Policy::Batch)
+        .run(&chain(count), vec![Value::host(input)])
+        .expect("the graph runs in one submission");
+
+    assert_eq!(
+        serial.asked(),
+        vec!["run", "run"],
+        "one submission per node, which is what a serial run is"
+    );
+    assert_eq!(
+        batched.stub.asked(),
+        vec!["run_batch"],
+        "and one for the whole graph: a backend that still dispatched per node would \
+         answer the same numbers under a name it had not earned"
     );
 }
 

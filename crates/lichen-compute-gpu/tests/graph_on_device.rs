@@ -9,7 +9,7 @@
 mod common;
 
 use lichen_compute_gpu::GpuContext;
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
+use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, Br, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
     KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, Slice, Space,
@@ -1280,6 +1280,133 @@ fn a_graph_of_dispatches_computes_the_same_numbers() {
         );
         release_all(&context, &out);
     }
+}
+
+/// A whole graph in one submission, counted on the device.
+///
+/// # Invariant
+/// **The counters are the claim.** A command buffer's shape is a structural claim anyone
+/// can make about code; `submissions()` and `fence_waits()` are counted at the
+/// `queue_submit` and the `wait_for_fences`. The same graph under [`Policy::Serial`] is
+/// the measurement this is compared against, on the same device in the same run.
+#[test]
+fn a_batch_records_a_whole_graph_in_one_submission_and_one_wait() {
+    let Some(context) =
+        common::context("a_batch_records_a_whole_graph_in_one_submission_and_one_wait")
+    else {
+        return;
+    };
+    let count = 100;
+    let data: Vec<i64> = (0..count as i64).collect();
+    let other: Vec<i64> = (0..count as i64).map(|value| value % 7).collect();
+    let inputs = || vec![Value::host(data.clone()), Value::host(other.clone())];
+    // adds(data), then adds that to `other`.
+    let expected: Vec<i64> = (0..count as i64)
+        .map(|value| (2 * value + 1) + (value % 7) + 1)
+        .collect();
+
+    let before = (context.submissions(), context.fence_waits());
+    let one_at_a_time = Runner::new(&context, Policy::Serial)
+        .run(&chained(count), inputs())
+        .expect("the graph runs one dispatch at a time");
+    let serial = (
+        context.submissions() - before.0,
+        context.fence_waits() - before.1,
+    );
+    release_all(&context, &one_at_a_time);
+
+    let before = (context.submissions(), context.fence_waits());
+    let in_one = Runner::new(&context, Policy::Batch)
+        .run(&chained(count), inputs())
+        .expect("the graph runs in one submission");
+    let batch = (
+        context.submissions() - before.0,
+        context.fence_waits() - before.1,
+    );
+
+    assert_eq!(
+        serial,
+        (2, 2),
+        "a two-node graph under Serial is two submissions and two fence waits, which \
+         is the number Batch is measured against"
+    );
+    assert_eq!(
+        batch,
+        (1, 1),
+        "**and the whole graph is one of each.** The second dispatch reads the first \
+         one's output inside the same command buffer, so there is nothing for a second \
+         submission to carry and nothing for a second fence to wait on"
+    );
+    assert!(
+        in_one.iter().all(Value::is_ready),
+        "every value is settled before the run hands it back: Batch waits once, at the end"
+    );
+    let id = resident(in_one.last().expect("the last node produced one"));
+    assert_eq!(
+        words(
+            context
+                .fetch(id, count)
+                .expect("the answer comes off the device")
+        ),
+        expected,
+        "a batch answers what the same fragments answer outside one: the schedule \
+         changed and the numbers did not"
+    );
+    release_all(&context, &in_one);
+}
+
+/// A graph too long for one submission is refused, and only as a batch.
+///
+/// # Invariant
+/// `MAX_DISPATCHES_PER_SUBMISSION` is the descriptor pool's set count, so 65 dispatches is
+/// over the line and the refusal names the range rather than the count alone. The same
+/// graph under [`Policy::Serial`] still runs: what is refused is the **schedule**, not the
+/// program.
+#[test]
+fn a_graph_too_long_for_one_submission_is_refused_by_name() {
+    let Some(context) = common::context("a_graph_too_long_for_one_submission_is_refused_by_name")
+    else {
+        return;
+    };
+    let count = 64;
+    let data: Vec<i64> = (0..count as i64).collect();
+    let mut graph = Graph::with_inputs(1);
+    for _ in 0..65 {
+        graph
+            .push(
+                Node::Kernel(KernelNode {
+                    fragment: adds(),
+                    inputs: vec![0],
+                    count: Count::Constant(count),
+                }),
+                1,
+            )
+            .expect("one output, one declared");
+    }
+
+    let one_at_a_time = Runner::new(&context, Policy::Serial)
+        .run(&graph, vec![Value::host(data.clone())])
+        .expect("the graph itself is fine: 65 dispatches is a schedule, not a mistake");
+    release_all(&context, &one_at_a_time);
+
+    let refusal = Runner::new(&context, Policy::Batch)
+        .run(&graph, vec![Value::host(data)])
+        .expect_err("65 dispatches is past what one submission records");
+    assert!(
+        matches!(
+            refusal,
+            GraphRefusal::Backend {
+                what: "recording the graph in one submission",
+                ..
+            }
+        ),
+        "a named refusal rather than a graph split into two schedules: {refusal}"
+    );
+    assert!(
+        refusal.to_string().contains("1 to 64"),
+        "and it names the range one submission can record, so the caller knows what to \
+         do about it: {refusal}"
+    );
 }
 
 /// A dispatch whose extent is one of the graph's own values, on real hardware.
