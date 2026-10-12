@@ -52,7 +52,7 @@ and the registry's filling.
 
 **And the split is verified end to end, not asserted.** One slice more (`499ca9fc`) removed the last
 edge: the GPU backend's only use of the sub-language was a *test* reaching four runtime items through a
-language-side re-export, so the library edge is now
+language-side re-export, so the library edge became
 
 ```
 $ cargo tree -p lichen-compute-gpu --edges normal --prefix none
@@ -61,22 +61,68 @@ ash v0.38.0+1.3.281
 libloading v0.8.9
 windows-link v0.2.1
 lichen-kernel-ir v0.1.0
+lichen-runtime v0.1.0        ← widened by the loader's slice (`d3ddf13a`), and see below
 ```
 
-— nothing else, and neither the plain tree nor `--all-targets` names `lichen-highlevel`,
-`lichen-lowlevel`, `lichen-language*`, `lichen-preprocess`, `lichen-perspective` or `lichen-registry`
-(all seven were present before, under dev-dependencies through `lichen-compute`, which also made that a
-dev-dependency *cycle*). So the closed, language-free path a server composes is
+and a later slice widened it further: `impl DeviceFactsSource for GpuContext` cannot live in either
+crate without one of them naming the other (the orphan rule), so **`lichen-runtime` became a normal
+dependency of the backend**, bringing `facet`, `facet-json` and **`wasmi`** in transitively. The
+language-free property is unaffected — neither the plain tree nor `--all-targets` names
+`lichen-highlevel`, `lichen-lowlevel`, `lichen-language*`, `lichen-preprocess`, `lichen-perspective` or
+`lichen-registry` (all seven were present before, under dev-dependencies through `lichen-compute`,
+which also made that a dev-dependency *cycle*). **`wasmi` in a GPU serving image is a packaging
+decision, not a dependency accident**: the runtime's emitted-module cache holds a `wasmi::Engine`, so
+the wasm backend's cost rides along with the SPIR-V one unless the cache's wasm half is made optional.
+
+## The loader, and the facts it refuses on
+
+`lichen_runtime::load_fused_kernel(text, &mut Graph, node, &impl DeviceFactsSource) -> Result<LoadedKernel, LoadRefusal>`
+(`load.rs`) is the one call the previous paragraph asked for, and it is **gate-ordered so that a
+refusal touches nothing**: probe the **format version** → `read_fused_kernel` (parse, convert, the body
+gate, the fragment gate, `check_plan`) → `DeviceFacts::check(&fragment, &plan)` → `replace_kernel`. A
+refused load leaves the graph **byte-identical**, and the version refusal fires **before the rest of
+the text is parsed** — the price is parsing the text twice, which its invariant records. `LoadRefusal`
+names five gates (`Read`, `VersionMissing`, `VersionMismatch { found, wanted }`, `Device(…)`,
+`Graph(…)`) and `DeviceRefusal` names seven.
+
+**`DeviceFacts`** is the model `TargetFacts` states, extended to the thing the fragment will actually
+run on: `int_bits`, `max_workgroup_lanes` (a *ceiling*, never rounded down — rounding runs a different
+program), `subgroup_width: Option<u32>`, `max_shared_bytes`, `max_storage_buffers`. The middle one is
+why the loader exists: **a module cannot pin its subgroup width** (`OpExecutionMode SubgroupSize` needs
+Vulkan 1.3 while this target emits SPIR-V 1.3), so a `Warp` slice on a narrower device answers
+*undefined* in a way `spirv-val` cannot see — and `check_plan` only ever compared that width against the
+**workgroup**, which is why `DeviceFacts::check` walks the plan too. Two facts the design considered and
+left out, with reasons worth keeping: **indirect dispatch is not a capability** (`vkCmdDispatchIndirect`
+is core in Vulkan 1.0; the real limit belongs to a run's extent, and "a fact no gate reads is a number
+nobody asked for"), and **push-constant bytes belong to the emitter** (re-deriving that rule in the
+runtime would be the second copy of a rule this repository refuses). The probe reads
+`shaderInt64`, `maxComputeWorkGroupInvocations ∧ maxComputeWorkGroupSize[0]`, `subgroupSize` through
+`vkGetPhysicalDeviceProperties2` — and since ash's missing-function stub *panics*, a 1.0 loader yields
+`None` (`SubgroupWidthNotReported`) rather than a guess. It deliberately does **not** read
+`spirv::LOCAL_SIZE_X`/`SUBGROUP_WIDTH` as device facts: a loader that compared an artifact against them
+would be checking the compiler against itself.
+
+**The version is an explicit required `version: u32`** on `schema::Artifact` (`FORMAT_VERSION = 1`),
+not a wrapper — `deny_unknown_fields` already refuses a later format's extra fields, so a wrapper would
+only add a second name for one artifact. A missing version is refused by that same denial (measured:
+deleting `"version": 1` fails all five `fused_landing` tests, naming the path `version`), and the
+loader adds what the field cannot: a **named** refusal before a full parse. Measured on the device
+(RTX 3060, `int_bits 64`, `max_workgroup_lanes 1024`, `subgroup_width Some(32)`, `max_shared_bytes
+49152`): the one-call load answers what the direct path answers, a `"version": 2` text is refused with
+`submissions()`/`fence_waits()`/the node's digest all unchanged, and a hand-made `subgroup_width: 16`
+refuses a 32-element `Warp` slice by name. Two mutation checks make those tests discriminate: setting
+the wrong format constant or the matching subgroup width makes them fail.
+
+**And the path a server composes is now one call, with nothing else reachable from it**:
 
 ```
-read_fused_kernel → land_fused_kernel (into a Graph) → GpuContext::new()
-  → install(context) or install_default() → Runner::new(&context, policy).run(graph, inputs)
+load_fused_kernel (version → parse → body/fragment gates → check_plan → DeviceFacts::check)
+  → GpuContext::new() → install(context) or install_default()
+  → Runner::new(&context, policy).run(graph, inputs)
 ```
 
-with no `Module`, no checker and no sub-language reachable from it. **What is missing there is an API
-shape rather than a dependency**: the backend's entry points take a `&Graph`, so read-and-land is
-three lines the *host* writes instead of one call that says "run this artifact". A loader that owns
-that, plus the version and device-fact gates below, is the slice that makes this note's unit real.
+— no `Module`, no checker, no sub-language, and **no dispatch before every gate has passed**.
+
 
 ## What the fused artifact carries, layer by layer
 
