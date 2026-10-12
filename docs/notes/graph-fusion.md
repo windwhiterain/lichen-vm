@@ -236,7 +236,8 @@ The ordering constraint the measurement establishes, with the code path:
    traces it), so in `crates/lichen-language/examples/reduction_algebra.rs` the literal-count `combine`
    bridged to the seed — `0` for the seed `0.0`, **`3.5`** for a distinctive seed. **Corrected by that
    fix**: the literal-count `combine` now bridges to the fold's own `Bin(Float, Add)`, canonical
-   `d + d + …`, so the two halves no longer fail for one cause — `combine` reads as `+` and only
+   `0 + d + d + …` — the fold's own `Bin(Float, Add)` chain, the seed included, verified by running
+`reduction_algebra` — so the two halves no longer fail for one cause: `combine` reads as `+` and only
    `identity` is still missing (passage 4's scheduling constraint). The two acceptance tests that
    hard-code `Reduction { combine: Add, identity: 0.0 }`
    (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) were accurate when written
