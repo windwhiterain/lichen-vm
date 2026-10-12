@@ -17,7 +17,7 @@ test file.
 |---|---|
 | **RMSNorm** | **landed** (`419aab56`): a row-wise `Σ x²` reduction plus the rescale that reads it |
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
-| **softmax** | **closer than this note first said.** `exp` is *not* the wall: measured, `exp` inside a reduction's own marked `element`, nested under arithmetic and inside a `@loop`, **bridges and propagates into `combine` and the between-code**. The wall is the **licence**: `exp` is genuinely elementwise, so softmax's `exp` node has *no reduction to be honest about*, and the lie-the-surface-forces escape hatch that RMSNorm could use is not available here. Still open: the second reduction, the divide by the sum, and `max`'s `−∞` identity, which the language cannot write |
+| **softmax** | **landed** (`f8645274`): a `max` fold plus the normalise that reads it, in the RMSNorm two-kernel shape — and that pair **merges**. The walls are about *arity*, not `exp`: the textbook three-kernel form is refused `NotAReductionChain` (exactly **one incoming edge per consumer**, and softmax's final kernel reads `m` and `s` — a **diamond**, where the floor knows only a **chain**), and even a *linear* three-kernel chain is refused `RegionIsNotAPair` (**a merge is two instances, period**). `Max` as a `combine` is refused by name (`CombineIsNotAFold`) — safe, and the reason attention's stable softmax cannot be scheduled yet |
 | **RoPE** | **language wall first**: `cos`/`sin` do not exist in the language at all |
 | **matmul** | **not close**: nothing expresses a two-dimensional launch — `compute.range` is one dimension and a parallel fragment's shape is `(config, index)` |
 | **attention** | behind both the softmax and the matmul walls |
@@ -152,6 +152,32 @@ faithfulness** — a body that marks `(+ t d)` while computing something else is
 tell.
 
 ## Smaller findings, each with the thing that would change
+
+- **The canonicaliser rewrites arithmetic, so a region hash can name what the body does not compute.**
+  `exp(d − r)` becomes `exp(d) * exp(−r)` (`lichen-fusion/src/normalize.rs`, `exponent_product`), and the
+  hashed projection is the rewritten form — while as Taylor sums the two are **not numerically equal**.
+  A digest therefore identifies an algebra, not the body's own expression tree.
+- **A `Max`/`Min` fold cannot be scheduled at all** (`CombineIsNotAFold` admits `Add | Mul` only). That
+  is safe — softmax's `max` runs as the program's own per-lane body — but it is also why attention's
+  numerically stable subtraction has no shared-memory reduction and no tile: the reduction it needs is
+  exactly the one the floor refuses. Teaching `Folding` `Max`/`Min` behind the same proof is the
+  capability half of the `combine` gate, and it is the datum-carrying slice, not a loosened gate.
+- **Non-uniform softmax is never exact in `f32` here.** Scanning 2394 four-element integer rows, **none**
+  reproduce the true `f32` softmax (best gap 7 × 10⁻⁷), because this language's `exp` is a degree-10
+  Taylor sum: the true `f32` answer and the program's answer differ in **every** element. So the
+  example's declared output is the **program-faithful** value, derived independently by modelling
+  `exp_body` and the program's own fold order in `f32` — it matches the printed bits exactly. `m = 4.0`,
+  the offsets `−3 … 0` and `exp(0) = 1.0` are the parts that are exact.
+- **The device agreed bit for bit.** The two-kernel softmax ran through `compute.graph`/`graphrun` on the
+  RTX 3060 and answered exactly the CPU result, which is the claim the floating-point note makes about
+  the shared `exp` body; with the tiling pass installed the same run reported the `CombineIsNotAFold`
+  line through the run report's own channel.
+- **What attention needs, in order.** (1) **A launch that is not one row** — `compute.range` is one
+  dimension and a parallel fragment's shape is `(config, index)`, so matmul and attention both need a
+  two-dimensional workgroup, and matmul is nowhere near. (2) **A region that is not a pair**
+  (`region_merge.rs`: a merge is exactly two instances) — or attention expressed so every stage stays a
+  pair, keeping one producer per consumer; the fan-in that breaks it is the same `NotAReductionChain`
+  softmax's diamond hit. (3) **A `Max`/`Min` tile**, which is the bullet above.
 
 - **A transcendental bridges anywhere, not only at a marked expression's root.** The reader is consulted
   from `Walk::instruction` (`fusion-bridge/src/lower.rs`), which the walk calls for **every value it
