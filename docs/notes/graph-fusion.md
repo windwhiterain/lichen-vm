@@ -523,13 +523,19 @@ is the interface the other fields are owed in:
 
 ```lichen
 --- inside a pack, schematically ---
-schema     = "sha256:…"                      -- landed: the NODE schema's hash, not a region's
+schema     = "sha256:…"                      -- landed: the NODE schema's hash; **optional** since `fuse`
 name       = "sum-in-shared"                 -- landed: what the report calls it
 requires   = { class = f32 }                 -- landed for `class` only; `axis` has no surface yet
 reference  = <the algebra this claims>       -- owed: no interface verification exists
-fuse       = { region = …, as = one_kernel } -- owed: §5's two gaps are still missing
+fuse       = { region = "sha256:…" }         -- landed: the REGION schema's hash; `as = one_kernel` is its only form
 plan       = { staging = …, sync = … }       -- landed for `staging`; `sync` is owed
 ```
+
+**A pack must steer something.** `schema` became optional at `78131b5a` because a pack that only asks
+for a fusion names a **region** and has no node to place; a pack that neither stages a value nor names a
+region is refused (`EmptyPlan`), a `fuse` with no region steers no fusion, and the emitter's placement
+gate is "names this node **and** stages a value", so a fusion-only pack can never fire there. A region's
+`requires` is read off its first input **port**'s class — one rule with the node case, not a second one.
 
 The landed pack's plan is **the fused artifact's own spelling** — one `Plan`
 type, not a second one — so a pack and an artifact cannot disagree about what a
@@ -738,9 +744,21 @@ until a shape needs one; see the refusals below for the state those two are actu
 automatically — but whether it pays is a machine fact: it changes register pressure, occupancy and
 instruction count, and an extreme optimization has to weigh all of it. So a merge is **claim-gated**:
 the logic's claim states a *fact* about its code (a reduction's algebra, an elementwise kernel's
-function), and a **pack** states the machine's decision (`fuse`, further below). The automatic floor
-merges only what a declaration lets it *prove* — today, a reduction chain whose algebra licenses the
-merge. Two more facts a reader should carry: `returns() == None` forbids **every**
+function), and a **pack** states the machine's decision — **`fuse` landed at `78131b5a`**, naming the
+**region** schema it licenses, with the pass reporting which of the two licensed each firing (the pack
+by name, or the floor's own proof). The rule that keeps the two apart is the pass's own invariant: **a
+pack changes which regions are attempted, never what must hold** — every legality condition below still
+refuses by name under a pack. The floor itself merges only what a declaration lets it *prove*: today, a
+reduction chain whose algebra licenses the merge. **And the first elementwise merge runs**: `compose`
+refused *any* lane-dependent forwarded value, and measured that was too broad — where the producer's
+write and every absorbed read address the same entry parameter, binding it in-lane is exact and needs
+no slice and no barrier. That is now exactly what it accepts (and nothing more; the check compares the
+bodies' own statements, so a write at `i + 1` read at `i + 1` is still refused, conservatively). The
+device proves it end to end: `e[i] = d[i]·2` feeding `z[i] = e[i] + 1` merges under a pack, answers the
+un-merged program element for element, and a **counterfactual** — `+ 1.0` moved to `+ 10.0` inside the
+composed body — moves the answer from `[3, 5, …]` to `[12, 14, …]`, which is what says the composed
+node is the one dispatched rather than a rewrite nobody ran.
+Two more facts a reader should carry: `returns() == None` forbids **every**
 merge (the runner then takes the whole value table, so a deleted value changes the answer, and the pass
 refuses rather than merging), and the surviving node is **anonymous** — a composed fragment is never
 registered, so it carries no claim and a later digest-keyed pass walks past it, which the merged report
@@ -1193,7 +1211,7 @@ about shrinks exactly where fusion fires.
 | the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
-| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs; what is left is a directive to ask for it, and the shapes that need the plan** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: a **`fuse` directive** (nothing parses one), the **elementwise and fan-out shapes** (they need the memory plan's cross-lane staging, because `compose` refuses a lane-dependent forwarded value), and the merged node's **anonymity** (unregistered, so no later digest-keyed pass can name it) |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **a merged region runs, a pack can ask for one, and the general shapes are what remain** | §5 measured at `ebae69bc`: **no code path in `crates/` fused two kernels** — `derive_regions` had no caller outside an example, `lichen_fusion::derive` has no `KernelBody` emitter, and the only transform in production was the intra-kernel tiling of one reduction. **Both halves then landed**: the body composition at `027447ab` (`lichen_kernel_ir::compose`, its four decisions as named refusals) and its caller at `98761ae4` (`region_merge.rs`, a graph pass that derives the region, checks, composes and rebuilds the graph — a device counterfactual shows the composed node is what dispatched). What remains: the **general index-local shapes** (the accepted check is parameter-only, so a computed address — a write at `i + 1` read at `i + 1` — is still refused, and read-site recomputation is unwritten), an elementwise consumer that reads **only** the absorbed buffer (`PortsDoNotCorrespond`), and the merged node's **anonymity** (unregistered, so no later digest-keyed pass can name it) |
 | a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
