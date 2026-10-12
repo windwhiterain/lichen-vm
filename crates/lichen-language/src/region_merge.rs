@@ -5,7 +5,7 @@
 //! The pass merges and never reorders: the surviving node stands at the region's last position,
 //! every other value keeps its order, and a region the pass declines changes nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use lichen_compute::compute::{GraphPass, LaunchExtent, claimed_kernels, set_graph_pass};
@@ -17,7 +17,8 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::Module;
 
 use crate::fusion_claim::{
-    Instance, claim_of, derive_regions, fragment_of, kernel_id, offsets, region_positions,
+    Instance, REDUCTION, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id, offsets,
+    region_positions,
 };
 use crate::program::LangProgram;
 
@@ -91,13 +92,15 @@ impl GraphPass for RegionMerge {
                     refused_line(index, positions, refusal.name(), &refusal.message()),
                     None,
                 ),
-                Ok(_) => match merge_region(graph, &starts, positions) {
-                    Ok(merge) => (merged_line(index, &merge), Some(merge)),
-                    Err(refusal) => (
-                        refused_line(index, positions, refusal.name(), &refusal.message()),
-                        None,
-                    ),
-                },
+                Ok(schema) => {
+                    match licence(&schema).and_then(|()| merge_region(graph, &starts, positions)) {
+                        Ok(merge) => (merged_line(index, &merge), Some(merge)),
+                        Err(refusal) => (
+                            refused_line(index, positions, refusal.name(), &refusal.message()),
+                            None,
+                        ),
+                    }
+                }
             };
             decisions.push(Decision { line, merge });
         }
@@ -209,6 +212,11 @@ pub enum MergeRefusal {
         /// What `compose` refused.
         refusal: ComposeRefusal,
     },
+    /// The region holds an interface whose merge this engine has no algebra for.
+    InterfacesAreNotProved {
+        /// The interfaces the region's nodes claim, other than the reduction's.
+        interfaces: Vec<String>,
+    },
 }
 
 impl MergeRefusal {
@@ -230,6 +238,7 @@ impl MergeRefusal {
             MergeRefusal::ClassIsNotStated { .. } => "ClassIsNotStated",
             MergeRefusal::PortsDoNotCorrespond { .. } => "PortsDoNotCorrespond",
             MergeRefusal::CompositionRefused { refusal } => refusal.name(),
+            MergeRefusal::InterfacesAreNotProved { .. } => "InterfacesAreNotProved",
         }
     }
 
@@ -296,8 +305,37 @@ impl fmt::Display for MergeRefusal {
                  merged fragment puts {merged:?} there"
             ),
             MergeRefusal::CompositionRefused { refusal } => write!(formatter, "{refusal}"),
+            MergeRefusal::InterfacesAreNotProved { interfaces } => write!(
+                formatter,
+                "the region's node(s) claim {}, and a merge is licensed by the reduction chain \
+                 this pass can prove: whether these operations become one kernel is a machine \
+                 fact, and a pack's `fuse` is where it is decided",
+                interfaces.join(", ")
+            ),
         }
     }
+}
+
+/// The algebra this pass must be able to prove before it merges a region.
+///
+/// # Invariant
+/// The licence is the reduction chain and nothing else: a claim that states a function says
+/// what a kernel computes, not that inlining pays, and whether it pays is this machine's
+/// fact. So a region whose nodes claim any other interface — `Elementwise` today — is
+/// declined by name, never merged on the graph's shape alone.
+fn licence(schema: &RegionSchema) -> Result<(), MergeRefusal> {
+    let interfaces: BTreeSet<&str> = schema
+        .nodes
+        .iter()
+        .map(|node| node.interface.as_str())
+        .filter(|interface| *interface != REDUCTION)
+        .collect();
+    if interfaces.is_empty() {
+        return Ok(());
+    }
+    Err(MergeRefusal::InterfacesAreNotProved {
+        interfaces: interfaces.into_iter().map(str::to_string).collect(),
+    })
 }
 
 /// The merge one region's two nodes decide, or why they do not.

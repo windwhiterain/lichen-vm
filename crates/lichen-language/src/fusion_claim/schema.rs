@@ -214,6 +214,48 @@ impl SchemaNode {
             identity,
         })
     }
+
+    /// The elementwise function this node's `element` projection declares.
+    ///
+    /// # Invariant
+    /// The one role, read as §6's engine reads a role: the canonical form, so a report and a
+    /// pack that names the function name the same one. A node that declares this interface
+    /// states a function and nothing more — whether these operations become one kernel is a
+    /// pack's decision, so this reading licenses nothing.
+    pub fn elementwise(&self) -> Result<&Expr, SchemaRefusal> {
+        if self.interface != ELEMENTWISE {
+            return Err(SchemaRefusal::UnknownInterface {
+                node: self.position,
+                interface: self.interface.clone(),
+            });
+        }
+        let element = self
+            .canonical(ELEMENT)
+            .ok_or_else(|| SchemaRefusal::MissingRole {
+                node: self.position,
+                role: ELEMENT.to_string(),
+            })?;
+        if !reads_a_datum(element) {
+            return Err(SchemaRefusal::NotAnElementFunction {
+                node: self.position,
+                projection: element.clone(),
+            });
+        }
+        Ok(element)
+    }
+}
+
+/// Whether a projection is a function of a datum.
+///
+/// # Invariant
+/// A datum is a buffer read and the roles name every read: `d` is the node's own datum, and
+/// `r` the producer's value arriving at the input ordinal the region's edge found. So the
+/// function is one over whichever of the two its body read, and never over a loop's carried
+/// value — which is `Reduction`'s own element, not an elementwise one.
+fn reads_a_datum(element: &Expr) -> bool {
+    let variables = element.variables();
+    !variables.contains(&Variable::CONSUMER_STATE)
+        && (variables.contains(&Variable::DATUM) || variables.contains(&Variable::PRODUCER))
 }
 
 /// The analyzable code one instance feeds the next through.
@@ -405,6 +447,13 @@ pub enum SchemaRefusal {
         /// The projection as it bridged.
         projection: Expr,
     },
+    /// A node's `element` projection is not a function of a datum.
+    NotAnElementFunction {
+        /// The region-local position of the node.
+        node: usize,
+        /// The projection as it bridged.
+        projection: Expr,
+    },
 }
 
 impl SchemaRefusal {
@@ -434,6 +483,7 @@ impl SchemaRefusal {
             SchemaRefusal::MissingRole { .. } => "MissingRole",
             SchemaRefusal::NotACombine { .. } => "NotACombine",
             SchemaRefusal::NotAnIdentity { .. } => "NotAnIdentity",
+            SchemaRefusal::NotAnElementFunction { .. } => "NotAnElementFunction",
         }
     }
 }
@@ -513,12 +563,19 @@ impl fmt::Display for SchemaRefusal {
                 "the instance at {node} declares the identity `{projection}`, which is not a \
                  literal"
             ),
+            SchemaRefusal::NotAnElementFunction { node, projection } => write!(
+                formatter,
+                "the instance at {node} declares the elementwise function `{projection}`, which \
+                 is not a function of any datum: it reads none, or it reads a loop's carried value"
+            ),
         }
     }
 }
 
+/// The elementwise interface's name: a body that computes one function of its own datum per index.
+pub const ELEMENTWISE: &str = "Elementwise";
 /// The reduction interface's name.
-const REDUCTION: &str = "Reduction";
+pub const REDUCTION: &str = "Reduction";
 /// The reduction's combine role.
 const COMBINE: &str = "combine";
 /// The reduction's identity role.
@@ -693,6 +750,8 @@ struct Edge {
 /// # Invariant
 /// One producer and one consumer per node: a node fed by two instances of its own region, or
 /// feeding two, is not the producer→code→consumer shape §6 matches and is refused by name.
+/// A region's first node is that shape with no incoming edge, so nothing here reads its own
+/// element — only a consumer's element must name the producer, which is [`region_schema`]'s.
 fn region_edges(
     graph: &Graph,
     starts: &[usize],

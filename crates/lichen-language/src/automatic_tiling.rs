@@ -23,8 +23,8 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::Module;
 
 use crate::fusion_claim::{
-    RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, claim_of, fragment_of, kernel_id,
-    marked_value,
+    REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, claim_of, fragment_of,
+    kernel_id, marked_value,
 };
 use crate::placement_pack::{ConstraintRefusal, PlacementPack};
 use crate::program::LangProgram;
@@ -419,9 +419,15 @@ fn insert(
 /// The projections are the fragment's own, as §6's engine reads them: a role the body does not
 /// mark is refused by name, and a marked subexpression the bridge cannot read carries its cause.
 ///
-/// The refusal's `node` is the kernel **id**, which is what a schema names an instance by; the
-/// run report prepends the graph node. A role outside [`NODE_LOCAL_ROLES`] is beyond a node.
+/// The refusal's `node` is the kernel **id**; the run report prepends the graph node. A role
+/// outside [`NODE_LOCAL_ROLES`] is beyond a node, and another interface is not read at all.
 fn derive(kernel: &Kernel) -> Row {
+    if kernel.claim.interface != REDUCTION {
+        return Err(SchemaRefusal::UnknownInterface {
+            node: kernel.id,
+            interface: kernel.claim.interface.clone(),
+        });
+    }
     let roles = roles(&kernel.claim);
     let mut projections = Vec::with_capacity(roles.len());
     for role in roles.iter().cloned() {
