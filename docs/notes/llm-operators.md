@@ -68,11 +68,19 @@ treats a degree-10 Taylor sum as `eˣ`. It matters here because a fused region i
 symbolic form; the approximation is the same one the bodies already carry, but it is an assumption
 rather than a proof, and nothing verifies it.
 
-**A test-harness hazard, not a regression**: at `--test-threads 2` a device test can fail with *"the
-\"gpu\" backend declined to return input buffer 0 … not one this device is holding"*, because
-`install_default` replaces the process's backend — a second test installing one while the first is
-running leaves the first's buffers on a device that is no longer installed (`fuse_licence.rs` documents
-the same thing). Those suites are trustworthy at `--test-threads 1`.
+**A test-harness hazard, now closed for the stragglers.** At `--test-threads 2` a device test could fail
+with *"the \"gpu\" backend declined to return input buffer 0 … not one this device is holding"*, because
+a helper calls `install_default()` — which **replaces** the process's backend slot — and a second test
+installing one while the first runs leaves the first's buffers on a device that is no longer installed
+(`fuse_licence.rs` documents the same thing). The fix is the repository's own idiom, not a new one:
+**seven** device-test binaries already held a `static DEVICE: Mutex<()>` for the whole of a test that
+runs on a device, and `2a62591e` converted the **three** that had not (`automatic_tiling`,
+`fused_region`, `consumer_guard`) — measured 1 failure in 16 runs before, 0 in 16 after, on the binary
+that had the defect (`lichen-compute`, not the GPU crate, whose helpers return a context by value and
+never touch the slot). **The remaining risk is duplication**: the guard and its helper now exist in ten
+copies, so a new device test that copies the *unguarded* older form reintroduces the flake silently —
+which is plausibly how the three came to miss it. Collapsing the ten into one guarded helper is the
+follow-up, not a rewrite of any test.
 
 ## The hazard, and the gate that closed the tiling half of it
 
