@@ -9,6 +9,7 @@ use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
 use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Graph, Node};
+use lichen_language::Report;
 use lichen_language::package::PackageStore;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_utils::extend::AsEnum;
@@ -86,6 +87,21 @@ built = compute.graph step
 built
 "#;
 
+/// The same chain over a step whose parameter states **no** type at all.
+///
+/// # Invariant
+/// `ins(0)` and `ins(1)` are the flat placeholder tuple's own cells, which is
+/// the whole of what an unannotated parameter gets: the body reads positions
+/// rather than role paths.
+const UNANNOTATED: &str = r#"
+step = ins => {
+  first = (compute.plrun scale ((compute.A In)(.n ins(0), .I In(.d ins(1)))) : OutE)
+  compute.plrun offset ((compute.A In2)(.n ins(0), .I In2(.d ins(2), .p first.e)))
+}
+built = compute.graph step
+built
+"#;
+
 /// The recording, run over two buffers whose elements are `1 … COUNT` and `10 … COUNT + 9`.
 fn running() -> String {
     format!(
@@ -156,18 +172,34 @@ fn records(source: &str) -> bool {
 /// produced: the check report's own, then the run's refusals as `render_build` prints
 /// them (`category: message`). A run is not entered for a program the checker already
 /// refused, so a check-stage failure stays check-stage.
-fn reported_run(source: &str) -> (Vec<String>, Option<LangValue>) {
+/// `source` compiled and checked, never run.
+///
+/// # Invariant
+/// The report is the checker's own: nothing here evaluates a node a run would,
+/// so a line it carries was produced while the definition was checked.
+fn compile(source: &str) -> Report<LangProgram> {
     let mut store = PackageStore::<LangProgram>::new();
     let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
     assert!(diags.is_empty(), "the program's imports resolve: {diags:?}");
-    let report = lichen_language::compile_with_imports_at::<LangProgram>(
+    lichen_language::compile_with_imports_at::<LangProgram>(
         preprocessed.code,
         &preprocessed.imports,
         Some(store.registry()),
         preprocessed.code_base,
         &lichen_language::lex::line_starts(source),
         lichen_highlevel::no_native_ops(),
-    );
+    )
+}
+
+/// `source` compiled and run: every line its report carried, and the root value.
+///
+/// # Invariant
+/// The lines are the ones a user reads, in both channels and in the order they were
+/// produced: the check report's own, then the run's refusals as `render_build` prints
+/// them (`category: message`). A run is not entered for a program the checker already
+/// refused, so a check-stage failure stays check-stage.
+fn reported_run(source: &str) -> (Vec<String>, Option<LangValue>) {
+    let report = compile(source);
     let mut lines: Vec<String> = report
         .diagnostics
         .iter()
@@ -306,6 +338,97 @@ fn a_buffer_beside_the_in_group_is_refused_by_the_line_that_names_it() {
         );
     }
     println!("the misplaced buffer is refused by:\n  {refusal}");
+}
+
+/// The rule is checked at the step's own definition, and the program is never run.
+///
+/// # Invariant
+/// The refusal rides the channel a layer reserves for facts it can check while
+/// the build runs, so it fails the build: `Report::ok` is false before anything
+/// is evaluated, and the same sentence is the whole report. The accepted twin
+/// is in the same comparison, because a check that refuses both shapes would
+/// pass a test that only ever asserted the refusal.
+#[test]
+fn a_declared_buffer_beside_the_in_group_fails_the_build_and_never_runs() {
+    let report = compile(&chain(MISPLACED_BUFFER));
+    assert!(
+        !report.ok(),
+        "the declared type is refused while the definition is checked, so the program is never \
+         run and its report is the check's own"
+    );
+    let lines: Vec<&str> = report
+        .diagnostics
+        .iter()
+        .map(|line| line.message.as_str())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one cause, one line:\n  {}",
+        lines.join("\n  ")
+    );
+    assert_eq!(
+        lines[0],
+        "compute.graph: a parallel kernel's parameter holds a buffer outside `.in`/`.out` at \
+         position 2.0, and the ABI has no place for it",
+        "the check's refusal is the one sentence the rule already had, filed under the graph"
+    );
+    assert!(
+        records(&chain(TWO_BUFFERS)),
+        "and the same step with its second buffer under `.in` still records, which is the half of \
+         the rule that accepts"
+    );
+    println!("the misplaced buffer fails the build with:\n  {}", lines[0]);
+}
+
+/// The unannotated form states no type, so the rule has nothing to check and
+/// the flat fallback stays reachable.
+///
+/// # Invariant
+/// `parallel_roles` answers `Undecided` for a parameter whose type slot holds
+/// no decided term, and only a **refusal** — never a "not yet" — reaches the
+/// check. So this program is judged by the fallback that follows, alone.
+/// `graph_jit.rs`'s unannotated steps are the same fact from the other side:
+/// each is refused by its own rule, reachable only because the fallback placed
+/// the body.
+///
+/// # Invariant
+/// The fallback's placeholder is a bare graph input, so a dispatch reading a
+/// buffer refuses it — the limit is the fallback's, not this rule's.
+#[test]
+fn an_unannotated_step_is_never_refused_by_the_rule() {
+    let report = compile(&chain(UNANNOTATED));
+    assert!(
+        report.ok(),
+        "a step that declares no parameter type is not an error: the rule checks what is \
+         declared, so the check has nothing to refuse"
+    );
+    let joined = report
+        .diagnostics
+        .iter()
+        .map(|line| line.message.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        !joined.contains("outside `.in`/`.out`"),
+        "and the check itself says nothing about it: {joined}"
+    );
+    let (run_lines, value) = reported_run(&chain(UNANNOTATED));
+    assert!(
+        value.as_ref().and_then(recorded).is_none(),
+        "the flat fallback hands the body bare placeholders, which a dispatch that reads a \
+         buffer cannot use — that is the fallback's own limit and predates the check"
+    );
+    let run = run_lines.join(" | ");
+    assert!(
+        run.contains("not a buffer") || run.contains("names no backend"),
+        "so what refuses an unannotated step is the fallback's own rule, never this one: {run}"
+    );
+    assert!(
+        !run.contains("outside `.in`/`.out`"),
+        "and never the buffer rule, which would blame a declaration this step did not make: {run}"
+    );
+    println!("the unannotated step is judged by the fallback alone:\n  {run}");
 }
 
 /// A context on a device, or `None` when there is none here, with the device held for the run.

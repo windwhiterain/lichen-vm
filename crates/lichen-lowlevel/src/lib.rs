@@ -902,6 +902,16 @@ pub struct Module<P: Program> {
     /// Append-only and never cleared, so a second pass sees the first pass's records.
     /// Recording the same fact twice is declined: a node is deep-evaluated more than once.
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
+    /// Refusals a layer above the lowlevel produced that **fail the build**.
+    /// See [`Module::record_extension_failure`].
+    ///
+    /// # Invariant
+    ///
+    /// Append-only and never cleared, and held apart from
+    /// [`Self::extension_diagnostics`] because the two differ in what they mean:
+    /// a note leaves the build usable, a failure does not. The duplicate rule is
+    /// the note channel's, for the same reason it holds there.
+    pub extension_failures: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     /// The **mark anchors** each lowered marked expression reached, keyed by the

@@ -36,6 +36,7 @@ impl<P: Program> Module<P> {
             apply_errors: Vec::new(),
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
+            extension_failures: Vec::new(),
             global_ext: P::GlobalExt::default(),
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
@@ -407,6 +408,36 @@ impl<P: Program> Module<P> {
             return;
         }
         self.extension_diagnostics.push(ExtensionDiagnostic {
+            category,
+            node,
+            message,
+        });
+    }
+
+    /// Record a refusal a **layer above the lowlevel** produced that is an error
+    /// rather than a note.
+    ///
+    /// # Invariant
+    ///
+    /// A record here **fails the build**, so a program is never handed a module
+    /// whose own definition a downstream refused. The same
+    /// `(category, node, message)` entry is dropped as a duplicate, because the
+    /// definition pass and the run both walk a node.
+    pub fn record_extension_failure(
+        &mut self,
+        category: &'static str,
+        node: Option<NodeId>,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        let duplicate = self
+            .extension_failures
+            .iter()
+            .any(|e| e.category == category && e.node == node && e.message == message);
+        if duplicate {
+            return;
+        }
+        self.extension_failures.push(ExtensionDiagnostic {
             category,
             node,
             message,

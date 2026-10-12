@@ -296,6 +296,10 @@ where
             None => "a native operator returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
                 .to_string(),
         },
+        DiagKind::ExtensionRule => match d.field.as_deref() {
+            Some(sentence) => sentence.to_string(),
+            None => "a layer above the language refused this definition".to_string(),
+        },
         DiagKind::NoAttributeExtension => {
             "this expression carries an attribute, but this build has no attribute extension to lower it"
                 .to_string()

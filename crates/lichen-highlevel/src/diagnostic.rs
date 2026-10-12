@@ -158,6 +158,15 @@ pub enum DiagKind {
     /// loop, the other says the loop is ready and the backend is missing.
     /// `a`/`b` carry the apply node the refusal is about.
     LoopNotEmitted,
+    /// A layer above the lowlevel refused a definition it could check while the
+    /// build ran.
+    ///
+    /// # Invariant
+    /// `field` carries the refusing layer's own sentence, prefixed by its
+    /// category, verbatim: the highlevel names no rule of its own here. A
+    /// refusal only a **run** can reach belongs on
+    /// `Module::extension_diagnostics`, which leaves the build usable.
+    ExtensionRule,
     /// A failed build that [`Build::diagnostics`] could attribute *nothing* to.
     ///
     /// # Invariant
@@ -389,6 +398,19 @@ where
         }
         attributed.sort_by_key(|&(seq, _)| seq);
         out.extend(attributed.into_iter().map(|(_, diag)| diag));
+        // A downstream's refusal, on which the build already failed: its own
+        // sentence, at the node it named.
+        for entry in &self.module.extension_failures {
+            let loc = entry
+                .node
+                .and_then(|node| self.node_loc(AnyNodeId::Dynamic(node)));
+            out.push(Diag {
+                a: entry.node.unwrap_or_default(),
+                b: entry.node.unwrap_or_default(),
+                field: Some(format!("{}: {}", entry.category, entry.message)),
+                ..Diag::factual(DiagKind::ExtensionRule, loc)
+            });
+        }
         // An error no diary entry owns: a deep apply-time failure with no
         // recording position.
         out.extend(index.orphan_indexes().map(|i| self.mismatch(i, &index)));

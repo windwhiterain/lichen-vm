@@ -4921,10 +4921,13 @@ where
         let parameter = module.functions[fid].parameter;
         match parallel_roles(module, parameter) {
             Ok(decoded) => roles = Some(decoded),
-            // A refusal reaches the user: the fallback below reports the
-            // symptoms of this one cause, never the cause itself.
+            // The declared type is not a graph ABI: the build fails here.
             Err(RoleUnread::Refusal(why)) => {
-                refuse(module, why);
+                let at = match function_node {
+                    AnyNodeId::Dynamic(node) => Some(node),
+                    AnyNodeId::Static(_) => None,
+                };
+                module.record_extension_failure(GRAPH_DIAGNOSTIC, at, why);
                 return None;
             }
             // A "not yet", and only that: the flat tuple below is the honest reading.
