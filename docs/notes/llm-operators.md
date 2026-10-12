@@ -16,8 +16,8 @@ test file.
 | step | state |
 |---|---|
 | **RMSNorm** | **landed** (`419aab56`): a row-wise `Σ x²` reduction plus the rescale that reads it |
-| **SiLU / MLP** | **ready** — `claim:Elementwise(element)` over `exp` and `int2float`, no reduction and no edge. `exp` bridges (there is an `inlined_exp_operand` reader), but it must stay outside the marked expression, and a consumer on a reduction's tail still needs the reduction role (below) |
-| **softmax** | **two walls**: the hazard below, and `exp` *inside* a marked `element`, which is the same invisible-transcendental problem as `sqrt` |
+| **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
+| **softmax** | **closer than this note first said.** `exp` is *not* the wall: measured, `exp` inside a reduction's own marked `element`, nested under arithmetic and inside a `@loop`, **bridges and propagates into `combine` and the between-code**. The wall is the **licence**: `exp` is genuinely elementwise, so softmax's `exp` node has *no reduction to be honest about*, and the lie-the-surface-forces escape hatch that RMSNorm could use is not available here. Still open: the second reduction, the divide by the sum, and `max`'s `−∞` identity, which the language cannot write |
 | **RoPE** | **language wall first**: `cos`/`sin` do not exist in the language at all |
 | **matmul** | **not close**: nothing expresses a two-dimensional launch — `compute.range` is one dimension and a parallel fragment's shape is `(config, index)` |
 | **attention** | behind both the softmax and the matmul walls |
@@ -153,6 +153,22 @@ tell.
 
 ## Smaller findings, each with the thing that would change
 
+- **A transcendental bridges anywhere, not only at a marked expression's root.** The reader is consulted
+  from `Walk::instruction` (`fusion-bridge/src/lower.rs`), which the walk calls for **every value it
+  reaches** — so `exp` (and `sqrt`, since `c5e8e63e`) is recognised wherever it appears, including
+  nested under arithmetic inside a reduction's own marked `element`. An earlier version of this note
+  claimed it had to stay outside the marked expression; that was wrong, and SiLU measured it.
+- **An independent derivation of a transcendental operator must model *this* `exp`, not `Math::Exp`.**
+  `exp_body` is a clamped, halved, Horner-evaluated degree-10 Taylor sum squared back up, and the two
+  disagree in the 6th–7th significant digit (relative error 1.5 × 10⁻⁷ … 3.0 × 10⁻⁶). SiLU's declared
+  output is therefore the value the VM's own `exp` gives — derived independently by re-implementing
+  `exp_body` outside the workspace — and the example does **not** claim exactness. Every later operator
+  with a transcendental inherits this discipline, and it is the same modelling caveat as the `sqrt`
+  reader's: the symbolic operator is not a theorem about the body.
+- **The language has no unary minus.** SiLU's negative branch must be written `(0.0 - 1.0)`; `-1.0`
+  fails to parse (`expected a separator, … found '-'`). For an operator whose defining feature is its
+  negative branch, that is a real ergonomic hit.
+
 - **A graph cannot run on the host at all** (`compute/graph.rs`: "this graph was compiled for the
   \"cpu\" backend, and a graph runs through the `ParallelBackend` contract — which the cpu path is
   not"), and the only `ParallelBackend` in the workspace is the GPU one. So `compute.graph`/`graphrun`
@@ -171,8 +187,10 @@ tell.
   one is correct.
 - **The `element` role is a `Reduction` role**, so a consumer that is not a reduction must claim
   `Reduction(element)` — "a small lie the surface forces" — or bring a pack for the floor's licence.
-- **A graph of exactly one claimed kernel cannot run with the floor installed**: `RegionIsNotAPair`
-  ("the region holds 1 instance(s)") comes back as a run **error**, not a stage line.
+- **A graph of exactly one claimed kernel** reports **whichever check comes first, and the interface
+  check precedes the arity check**: an `Elementwise` single-instance region is refused
+  `InterfacesAreNotProved`, while a `Reduction`-claiming one reaches the arity check and reports
+  `RegionIsNotAPair` ("the region holds 1 instance(s)"), both as stage lines.
 - **The kernel registry is process-wide and append-only**, so a long-lived host that runs one program
   twice under different claims meets `AmbiguousClaim` in the region merge — while the tiling pass
   deliberately collapses the same collision by digest. The merge refuses where the tiling pass picks.

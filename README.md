@@ -518,4 +518,47 @@ half = int2float 1 + 2.0
 (int2float 3, float2int 3.7, float2int (3.0 / 2.0), int2float (2 > 1), half)
 ```
 
+### `silu.lichen`
+
+```text
+---
+  order = "16"
+  compute = import "compute.lichen"
+  doc = "SwiGLU's gate half: `y[i] = silu(g[i]) * u[i]`, where `silu(x) = x / (1 + exp(-x))`.
+  It is two kernels because the surface fuses a **pair**, and one kernel would have claimed the
+  whole of `silu(g) * u` and fused with nothing. The split puts the quotient in the producer and
+  leaves a plain product to the consumer, which is also where a reader looking for the operator
+  looks first. `g = 0, 1, -1, 2` and `u = 3, 1, 0.5, 4`, so lane 0 is `0 / (1 + exp(0)) = 0`
+  exactly and lane 1 is `exp(-1)`; `0 - 1` is written `0.0 - 1.0` because the language has no
+  unary minus. The other three lanes are the language's own `exp` — a degree-10 Taylor sum over
+  seven halvings, not `e` — so the declared output is that sum evaluated in `f32`, which is at
+  most 3 parts in `10⁶` away from `x / (1 + e⁻ˣ)` and is not claimed to be equal to it."
+  output = "[0.0, 0.73105794, -0.13447031, 7.0463777]: array{Float, 4}"
+---
+Gate  = struct{.g (compute.Buf Float)}
+SiluA = struct{.a (compute.Buf Float)}
+ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
+silu_raw = (k : ParA) => {
+  i = compute.range k.n
+  g = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
+}
+silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu"
+UpIn  = struct{.a (compute.Buf Float), .u (compute.Buf Float)}
+OutY  = struct{.y (compute.Buf Float)}
+ParB  = compute.P (compute.KT Float)(.I UpIn, .O OutY)
+up_raw = (k : ParB) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  u = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((a * u) ~ "element")))
+}
+up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu"
+g = (compute.buffer ([0.0, 1.0, (0.0 - 1.0), 2.0] : array{Float, 4}) : (compute.Buf Float))
+u = (compute.buffer ([3.0, 1.0, 0.5, 4.0] : array{Float, 4}) : (compute.Buf Float))
+act = (compute.plrun silu ((compute.A Gate)(.n 4, .I Gate(.g g))) : SiluA)
+out = (compute.plrun up ((compute.A UpIn)(.n 4, .I UpIn(.a act.a, .u u))) : OutY)
+compute.collect out.y : array{Float, 4}
+```
+
 <!-- end: examples -->
