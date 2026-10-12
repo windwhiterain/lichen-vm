@@ -1184,6 +1184,13 @@ the bridge's manifest already stated. The seam's own properties:
   A merged node has no claim, so the tiling stage meets it and refuses it **by name** (`NotClaimed`,
   `9a944661`) rather than passing over it — the chain is only honest because that silence was already
   removed. `pass_chain` (`lichen-compute`) is the mechanism; the floor is the order a machine installs.
+  **Measured at `148de866`**: a stage's refusal does not consume the chain. On a program whose one
+  kernel is a declared reduction, the merge stage refuses its one-node region by name
+  (`region 0 (nodes 0): refused: RegionIsNotAPair: …`) and the tiling stage then **tiles** it —
+  `node 0: … the automatic floor tiled: its own marks declare \`+\` over 64 lane(s)` — and the device
+  answers the **closed form** (18528 = 192·193/2) where the un-passed program answers its per-lane
+  partial (1), with a counterfactual that raises the tiled body's identity and moves the answer by
+  exactly the number of times that seed carries (65: one per lane, plus the slice fold).
 
 - **A rewrite takes an entry of its own.** The graph store is keyed by a digest of its nodes' bodies,
   so writing the pass's answer over the recorded entry would leave the index naming bytes that are no
