@@ -39,8 +39,9 @@ pub trait GraphPass {
 /// # Invariant
 /// A stage sees the graph the stage before it answered, or the one it was handed when that
 /// stage answered `None` — the trait's `None` means "leave it as it was". The lines are the
-/// stages' own, in stage order and verbatim, so a reader can still tell which stage spoke, and
-/// the chain answers `None` only when no stage rewrote anything.
+/// stages' own, in stage order and verbatim: every merge refusal names its check after
+/// `refused: `, a tiling line states the sentence alone, and the chain answers `None` only
+/// when no stage rewrote anything.
 pub fn pass_chain(stages: Vec<Box<dyn GraphPass>>) -> Box<dyn GraphPass> {
     Box::new(PassChain { stages })
 }

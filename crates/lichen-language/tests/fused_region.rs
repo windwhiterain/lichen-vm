@@ -712,3 +712,41 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
     );
     clear_graph_pass();
 }
+
+/// A graph that already holds a composed node: the merge pass names it and leaves it alone.
+///
+/// # Invariant
+/// The composed node is in no row of the digest join, so a second consult reports it by name
+/// before any region line and answers no graph — there is no region left to merge. The line names
+/// the check that refused it, which is what tells this pass's node lines from the tiling pass's.
+#[test]
+fn a_composed_node_is_named_by_a_second_merge_pass_and_left_alone() {
+    clear_graph_pass();
+    let (module, value, _root) = common::run(&recording());
+    let graph = recorded(&module, &value);
+    install_region_merge(&module);
+    let merged = consult_graph_pass(&graph, &|_node| Some(COUNT))
+        .expect("the pass answers a graph for a region it may merge");
+    let _ = take_graph_pass_lines();
+
+    install_region_merge(&module);
+    assert!(
+        consult_graph_pass(&merged, &|_node| Some(COUNT)).is_none(),
+        "the second pass has nothing to rewrite in the graph the first one left"
+    );
+    let lines = take_graph_pass_lines();
+    clear_graph_pass();
+    assert_eq!(
+        lines.len(),
+        merged.len(),
+        "one line per node the pass looked at, and the merged graph has {} node(s): {lines:?}",
+        merged.len()
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("node ") && line.contains("refused: NotClaimed:")),
+        "each is this pass's own voice — the node, the check that refused it, its sentence: \
+         {lines:?}"
+    );
+}

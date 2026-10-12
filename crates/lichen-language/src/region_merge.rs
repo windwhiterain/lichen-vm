@@ -17,8 +17,8 @@ use lichen_kernel_ir::{ComposeRefusal, KernelFragment, ScalarClass, compose};
 use lichen_lowlevel::Module;
 
 use crate::fusion_claim::{
-    Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, claim_of, derive_regions, fragment_of,
-    kernel_id, offsets, region_positions,
+    Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, SchemaRefusal, claim_of,
+    derive_regions, fragment_of, kernel_id, offsets, region_positions,
 };
 use crate::placement_pack::{ConstraintRefusal, Fusion, PlacementPack};
 use crate::program::LangProgram;
@@ -97,9 +97,10 @@ impl GraphPass for RegionMerge {
     /// Merge every two-node region whose legality conditions hold.
     ///
     /// # Invariant
-    /// A region is looked at once and reported once, merged or refused, and a merged region's line
-    /// names the licence that answered for it. The graph handed over is the recording every time,
-    /// because a rewrite is stored under its own digest.
+    /// Every node is looked at and named: a region reports its nodes once, merged or refused, and
+    /// a node no region holds — no claim names its fragment — is refused by name before the
+    /// regions' lines. A merged region's line names the licence that answered for it. The graph
+    /// handed over is the recording every time, because a rewrite is stored under its own digest.
     fn apply(
         &self,
         graph: &Graph,
@@ -115,6 +116,10 @@ impl GraphPass for RegionMerge {
         };
         let starts = offsets(graph);
         let positions = region_positions(graph, instances);
+        // A node no region holds is named too: "no fusible region" and "no claim" are two answers.
+        for position in skipped(graph, &positions) {
+            lines.push(unclaimed(position));
+        }
         let derived = derive_regions(graph, instances);
         let mut decisions: Vec<Decision> = Vec::new();
         for (index, (region, positions)) in derived.iter().zip(positions.iter()).enumerate() {
@@ -356,6 +361,24 @@ impl fmt::Display for MergeRefusal {
             }
         }
     }
+}
+
+/// The graph positions no region holds, in evaluation order.
+///
+/// # Invariant
+/// The complement of [`region_positions`], read off that grouping rather than off a second join:
+/// the grouping is what decides a node carries no claim, so a node it skipped is exactly a node
+/// no instance's fragment is, and the two answers cannot disagree.
+fn skipped(graph: &Graph, positions: &[Vec<usize>]) -> Vec<usize> {
+    let mut grouped = vec![false; graph.len()];
+    for region in positions {
+        for &position in region {
+            grouped[position] = true;
+        }
+    }
+    (0..graph.len())
+        .filter(|position| !grouped[*position])
+        .collect()
 }
 
 /// The algebra this pass must be able to prove before it merges a region, or the pack that
@@ -657,7 +680,28 @@ fn refused_line(index: usize, positions: &[usize], name: &str, message: &str) ->
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    format!("region {index} (nodes {nodes}): refused: {name}: {message}")
+    refusal_line(format!("region {index} (nodes {nodes})"), name, message)
+}
+
+/// One node's line, for a fragment no row of the join holds.
+///
+/// # Invariant
+/// The join's own miss in **this** pass's voice: the refusal and its sentence are the ones the
+/// tiling pass gives that same node, so the two passes cannot answer a miss differently, while
+/// the check's name is what tells their lines apart in a chain — this pass names every check it
+/// refuses by.
+fn unclaimed(position: usize) -> String {
+    let refusal = SchemaRefusal::NotClaimed { node: position };
+    refusal_line(
+        format!("node {position}"),
+        refusal.name(),
+        &refusal.message(),
+    )
+}
+
+/// A refusal as one line: what it is about, the check that refused it, and that check's sentence.
+fn refusal_line(subject: String, name: &str, message: &str) -> String {
+    format!("{subject}: refused: {name}: {message}")
 }
 
 /// The claimed kernels a module's own nodes name, as the derivation reads them.

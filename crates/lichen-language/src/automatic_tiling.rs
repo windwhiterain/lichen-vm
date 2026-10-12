@@ -205,7 +205,8 @@ fn beyond_a_node(inputs: impl Iterator<Item = usize>, graph_inputs: usize) -> Op
 /// # Invariant
 /// A refusal and not a derivation: there is no claim to read roles from and no algebra to
 /// normalize, so the pass reports the join's own miss and tiles nothing. Naming the node is the
-/// whole of the report — a composed fragment is left exactly as the merge left it.
+/// whole of the report — a composed fragment is left exactly as the merge left it. The check's
+/// **name** is not printed, which is what tells this pass's node lines from the merge pass's.
 fn unclaimed(position: usize) -> String {
     format!(
         "node {position}: refused: {}",
