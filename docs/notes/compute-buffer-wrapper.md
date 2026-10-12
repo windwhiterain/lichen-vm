@@ -444,9 +444,8 @@ walk has to draw, and does, is between **"not yet"** and **"wrong"**:
 - an **unresolved** parameter type (the annotation's cell holds no value, or a
   pin whose name table is not written yet) leaves the operator **undecided with
   no diagnostic**, so a later pass compiles the kernel once the annotation states
-  the struct. `parallel_roles` answers the sentinel
-  `PARALLEL_PARAMETER_UNDECIDED`, and the `Parallel` arm turns exactly that
-  answer into `None` rather than a recorded diagnostic — so the same kernel can
+  the struct. `parallel_roles` answers `RoleUnread::Undecided`, and the `Parallel` arm turns
+  exactly that answer into `None` rather than a recorded diagnostic — so the same kernel can
   compile twice (`roles=None`, then `Some((1, 1, 1))`) and only the later one
   carries roles;
 - a **decided** parameter type that is readable but is not the named struct — a

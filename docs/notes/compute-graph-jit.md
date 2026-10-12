@@ -609,7 +609,8 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, while `compute.graph` leaves its
   argument's type **unconstrained**, so nothing tells a step's author. Two buffers under
   `.in` record; a buffer beside `.in` does not.
-  **And the real reason never reaches the user.** `build_graph` decodes the parameter with
+  **And the real reason did not reach the user** until `1d7fd753` (the paragraph below is the
+  defect as it stood, and the one after it is the repair). `build_graph` decodes the parameter with
   `parallel_roles(...).ok()` (`compute.rs:4893`), and the `.ok()` **discards `walk_role`'s
   named refusal** (`compute.rs:1971`: *"a parallel kernel's parameter holds a buffer outside
   `.in`/`.out` at position 2.0, and the ABI has no place for it"* — recovered by
@@ -622,16 +623,27 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   (measured: instrumenting it and running every recording test gives zero hits), so naming
   the refusal there moves no recorded value — but it does change user-visible diagnostics,
   so it is a decision rather than a mechanical repair.
-- **A named refusal `build_graph` discards — the repair is owed, not done.** The bisect
-  localizes it exactly: `compute.rs:4893`'s `.ok()` throws away `walk_role`'s refusal and lets a
-  misplaced buffer fall into the positional fallback, so the user gets four misleading lines
-  instead of the one true one. The repair is to discriminate `PARALLEL_PARAMETER_UNDECIDED` (keep
-  the fallback — a genuine "not yet") from every other `walk_role` refusal, reporting the latter
-  (`refuse(module, why)`). `parallel_roles` returns `Result<_, String>`, so the two cases separate
-  only by string equality until that becomes a type (`:1866`, `:1971`, `:2359`, `:4893`).
-  **Unmeasured, and it decides the shape of the repair**: whether `PARALLEL_PARAMETER_UNDECIDED` is
-  reachable for a graph argument at all — if it is not, the fallback is dead and could go instead
-  of being kept.
+- **A named refusal `build_graph` discarded — repaired at `1d7fd753`.** The bisect localized it
+  exactly: `compute.rs:4893`'s `.ok()` threw away `walk_role`'s refusal and let a
+  misplaced buffer fall into the positional fallback, so the user got four misleading lines
+  instead of the one true one. The repair landed as a **type**, not a text comparison:
+  `RoleUnread { Undecided, Refusal(String) }` is carried from `parallel_roles` through
+  `compile_parallel_fragment` to `build_graph` (`:4893`), which reports a `Refusal` and falls
+  through only on `Undecided`. The sentinel `PARALLEL_PARAMETER_UNDECIDED` is deleted, and the
+  `Parallel` arm's own text comparison went with it — **that arm was itself discriminating by
+  text**, so typing only `parallel_roles` would have left a message edit able to turn a refusal
+  back into a silent "not yet".
+  **The channel moved, and a host should know it.** The four lines were *check-stage* diagnostics
+  (`report.ok() == false`); the one true line is a *run-stage* refusal, so `report.ok()` is now
+  **true** for this program. That is the honest place — the checker does not rule on a graph
+  argument, `compute.graph` does — but a host gating on `report.ok()` alone will read this
+  program as accepted. The user now gets exactly: *"compute.graph: a parallel kernel's parameter
+  holds a buffer outside `.in`/`.out` at position 2.0, and the ABI has no place for it"*.
+  **Still unmeasured, and it decides whether the fallback earns its keep**: whether `Undecided` is
+  reachable for a graph argument at all. The fallback is reachable *by construction* through two
+  doors — `parallel_roles` answering `Undecided`, and an imported (`Static`) function whose roles
+  are never read — but instrumenting it gave **zero hits** over the recording tests, so "needed"
+  and "merely dead" are still open.
 
 ## Landmines, each of which is a silent wrong answer
 
