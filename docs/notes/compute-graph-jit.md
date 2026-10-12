@@ -586,21 +586,24 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 
 - **`Batch`.** Needs a fused-submission capability the contract does not have, and
   is refused by name until it does. `run_chain` is that fusion at depth one.
-- **The general builder.** The `compute.graph` operator, the `Graph` value and the
-  lowering exist; what remains is the shape the design records for a graph that is
-  not a linear chain of one fragment — a graph's fan-out is not that. **Measured
-  since**: the *graph* side is not the gap. A graph pass can already return a legal
-  two-nodes-into-one graph (`with_inputs` + `push` + `returning` build it and the
-  runner accepts it), so what blocks a merge is that nothing composes two fragments
-  into one body, that `replace_kernel`'s `FragmentShape` gate refuses a merged
-  fragment, and that a merge away from the tail forces a renumbering (`push`
-  allocates ids consecutively from `input_count()`).
+- **The general builder — landed; what is left is fan-out.** The `compute.graph`
+  operator, the `Graph` value and the lowering exist, and so does a graph pass that
+  merges a producer→consumer region into one node. **The three blockers measured here
+  are each gone, and one was never on the merge's path.** Two fragments become one body
+  through `lichen_kernel_ir::compose`; a merge that deletes a node away from the tail
+  renumbers through a map `rebuild` fills as it goes, which is the `push`-allocates-
+  consecutively fact turned into the answer; and the pass builds its graph with
+  `with_inputs` + `push` + `returning`, so it never reaches `replace_kernel` at all.
+  **That gate is not idle** — it is `land_fused_kernel`'s, where a hand-written
+  artifact replaces a recorded node and a moved shape *should* be refused. What is
+  still refused by name is the **fan-out**: a producer feeding two consumers is one
+  region of three, which is not a producer-to-consumer chain.
   [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
 - **`traced`'s first real user.** The graph is not it; see the builder.
-- **What a graph's argument may be — the rule is `.in`/`.out`, and a refusal that
-  discards itself.** *Corrected by a bisect at `2661ab89`, which replaced this note's
+- **What a graph's argument may be — the rule is `.in`/`.out`, and the surface does
+  not say so.** *Corrected by a bisect at `2661ab89`, which replaced this note's
   earlier claim that a two-buffer step "does not record":* **it does record, and runs
   on the device** (`crates/lichen-language/tests/graph_argument.rs`: two buffers, three
   graph inputs, `2a + b + 1` answered over both). The rule is narrower than the buffer
@@ -608,42 +611,9 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   `out`** — the same rule a kernel parameter has, spelled `compute.lichen:5`'s
   `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, while `compute.graph` leaves its
   argument's type **unconstrained**, so nothing tells a step's author. Two buffers under
-  `.in` record; a buffer beside `.in` does not.
-  **And the real reason did not reach the user** until `1d7fd753` (the paragraph below is the
-  defect as it stood, and the one after it is the repair). `build_graph` decodes the parameter with
-  `parallel_roles(...).ok()` (`compute.rs:4893`), and the `.ok()` **discards `walk_role`'s
-  named refusal** (`compute.rs:1971`: *"a parallel kernel's parameter holds a buffer outside
-  `.in`/`.out` at position 2.0, and the ABI has no place for it"* — recovered by
-  instrumenting the discarded line; the string appears nowhere else in the tree). `roles`
-  becomes `None`, control falls into the positional fallback (`compute.rs:4956`), which
-  applies the step to a flat tuple of **bare** placeholders — so a struct-expecting step
-  answers `this value is not a container` (twice), the dispatch says `argument 0 of this
-  dispatch is not a buffer`, and the recording says the return is not a value a graph can
-  hand back. **All four are consequences; none is the cause.** The fallback is dead in-tree
-  (measured: instrumenting it and running every recording test gives zero hits), so naming
-  the refusal there moves no recorded value — but it does change user-visible diagnostics,
-  so it is a decision rather than a mechanical repair.
-- **A named refusal `build_graph` discarded — repaired at `1d7fd753`.** The bisect localized it
-  exactly: `compute.rs:4893`'s `.ok()` threw away `walk_role`'s refusal and let a
-  misplaced buffer fall into the positional fallback, so the user got four misleading lines
-  instead of the one true one. The repair landed as a **type**, not a text comparison:
-  `RoleUnread { Undecided, Refusal(String) }` is carried from `parallel_roles` through
-  `compile_parallel_fragment` to `build_graph` (`:4893`), which reports a `Refusal` and falls
-  through only on `Undecided`. The sentinel `PARALLEL_PARAMETER_UNDECIDED` is deleted, and the
-  `Parallel` arm's own text comparison went with it — **that arm was itself discriminating by
-  text**, so typing only `parallel_roles` would have left a message edit able to turn a refusal
-  back into a silent "not yet".
-  **The channel moved, and a host should know it.** The four lines were *check-stage* diagnostics
-  (`report.ok() == false`); the one true line is a *run-stage* refusal, so `report.ok()` is now
-  **true** for this program. That is the honest place — the checker does not rule on a graph
-  argument, `compute.graph` does — but a host gating on `report.ok()` alone will read this
-  program as accepted. The user now gets exactly: *"compute.graph: a parallel kernel's parameter
-  holds a buffer outside `.in`/`.out` at position 2.0, and the ABI has no place for it"*.
-  **Still unmeasured, and it decides whether the fallback earns its keep**: whether `Undecided` is
-  reachable for a graph argument at all. The fallback is reachable *by construction* through two
-  doors — `parallel_roles` answering `Undecided`, and an imported (`Static`) function whose roles
-  are never read — but instrumenting it gave **zero hits** over the recording tests, so "needed"
-  and "merely dead" are still open.
+  `.in` record; a buffer beside `.in` does not — and since `1d7fd753` it says so by
+  name, `build_graph` telling the two ways `parallel_roles` can answer apart instead of
+  discarding the one that had a sentence.
 
 ## Landmines, each of which is a silent wrong answer
 
