@@ -614,9 +614,29 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   consecutively fact turned into the answer; and the pass builds its graph with
   `with_inputs` + `push` + `returning`, so it never reaches `replace_kernel` at all.
   **That gate is not idle** — it is `land_fused_kernel`'s, where a hand-written
-  artifact replaces a recorded node and a moved shape *should* be refused. What is
-  still refused by name is the **fan-out**: a producer feeding two consumers is one
-  region of three, which is not a producer-to-consumer chain.
+  artifact replaces a recorded node and a moved shape *should* be refused.
+  **The fan-out landed too** (`52e6a0a8`): a producer feeding two consumers is one region of three,
+  the derivation now derives it (it keeps the one-consumer rule and drops the one-producer one, and
+  `RegionSchema::off_chain_node` names the node whose edges are not a chain's), and a **pack's
+  `fuse`** may name its hash — the floor still may not, because `Licence::Floor` additionally
+  requires `off_chain_node().is_none()`, so *a pack changes which regions are attempted, never what
+  must hold*. The composition is one mechanism rather than two: `compose_fan_out` takes the whole
+  consumer list and `compose` is that with one consumer, **byte-identical** (the 26 existing compose
+  tests did not move). It is **one cone built once**, copied at each consumer's absorbed read at that
+  read's own address — because composing twice is *not* the honest reading: the first call removes
+  the producer's store and declares the first consumer's outputs, so a second call would hand the
+  second consumer the **first consumer's** value, and the union no longer has a port naming the
+  producer's edge. The union is the producer's inputs then each consumer's survivors in order, the
+  outputs are the consumers' outputs summed, and `rebuild` maps them **by name** so the merged node
+  stands at the region's last position. Measured on the device: recorded `[3,5,…,17]`, merged
+  identical, and moving **both** consumers' `+ 1.0` to `+ 10.0` inside the composed body answers
+  `[12,…,26]`. **Still refused**: a fan-out with no pack (`NotAReductionChain`, from the licence), a
+  **fan-in**, a three-node *chain* (`RegionIsNotAPair` — `compose` inlines consumers of one producer
+  only), a non-last consumer whose entry block branches (`ConsumerEntryDoesNotReturn`), and a
+  composition naming no consumer. **And one honest limit**: `compute.collect` gathers the graph's
+  returns into one array, so the run observes only one of the two outputs; what backs the other is
+  that the merged fragment is byte-equal to `compose_fan_out(…)`, declares 3 inputs and 2 outputs,
+  and `rebuild` maps both graph values.
   [graph-fusion](graph-fusion.md) §5 ranks the slices.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
