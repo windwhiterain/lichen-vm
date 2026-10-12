@@ -70,9 +70,20 @@ dependency of the backend**, bringing `facet`, `facet-json` and **`wasmi`** in t
 language-free property is unaffected — neither the plain tree nor `--all-targets` names
 `lichen-highlevel`, `lichen-lowlevel`, `lichen-language*`, `lichen-preprocess`, `lichen-perspective` or
 `lichen-registry` (all seven were present before, under dev-dependencies through `lichen-compute`,
-which also made that a dev-dependency *cycle*). **`wasmi` in a GPU serving image is a packaging
-decision, not a dependency accident**: the runtime's emitted-module cache holds a `wasmi::Engine`, so
-the wasm backend's cost rides along with the SPIR-V one unless the cache's wasm half is made optional.
+which also made that a dev-dependency *cycle*). **`wasmi` was then made optional** (`d5e3217f`), and
+that is the pattern a serving image wants: `lichen-runtime` carries a **default-on `wasm` feature**
+(`wasmi = { workspace = true, optional = true }`, `wasm = ["dep:wasmi"]`), everything naming the
+engine lives in one `#[cfg(feature = "wasm")] mod cache`, and the GPU crate takes the runtime with
+**`default-features = false`** — stated by *path*, because cargo refuses `default-features = false` on
+a `workspace = true` dependency. Measured: `cargo tree -p lichen-compute-gpu --edges normal` no longer
+names `wasmi`, `wasmparser`, `wat`, `wast` or `spin`, both feature sets check with **zero warnings**,
+and the device suite is unchanged at **70 passed**. What `--no-default-features` removes is
+`cached_module` (it hands back a `wasmi::Engine`/`Module` pair, so it cannot exist without an engine);
+`module_cache_misses()` stays and is permanently `0`, which is the honest reading rather than a broken
+one. **The caveat is cargo's, not the split's**: features unify across a workspace build, so
+`--workspace` re-enables `wasm` because `lichen-compute` needs it — a genuinely GPU-only image must be
+built with the GPU crate as its root, which is exactly what `cargo tree -p lichen-compute-gpu`
+measures.
 
 ## The loader, and the facts it refuses on
 
