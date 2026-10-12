@@ -599,27 +599,39 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 - **A node that computes a number.** A scalar kernel has no node to be, so a count
   today is either a build-time literal or a value the caller passed.
 - **`traced`'s first real user.** The graph is not it; see the builder.
-- **What a graph's argument may be — unexercised with two buffers.** Every step this
-  tree records names **one** buffer beside the extent (`GArg = struct{.n Int, .in In}`:
-  six files, ten sites, no exception), so a step naming **two** independent argument
-  buffers has never run, and it does not record: the checker refuses `s.q.p` with
-  `this value is not a container — it has no element to read` (twice), the dispatch
-  with `argument 0 of this dispatch is not a buffer` (`compute.rs`'s own rule), and the
-  recording with `this function's return is not a value a graph can hand back`
-  (`compute.rs:5020`). Whether the recording path *should* accept two buffers, or
-  whether one buffer and an extent **is** the contract, is undecided — and unstated:
-  no note says what the argument may be. Found while writing the union's end-to-end
-  test (`crates/lichen-language/tests/union_ports.rs`), which dropped that case rather
-  than land a program that cannot build. **The recording path itself is not the
-  suspect**: it applies the step to placeholders built from the **cells of the
-  parameter** and reads back what dispatched, with no one-buffer assumption in it
-  (`compute.rs:4965`–`5005`). Nor is `this value is not a container` a type refusal —
-  it is `EvalError::IndexTarget`, a **read applied to a non-container during
-  evaluation** (`lichen-highlevel/src/diagnostic.rs`), while `argument N of this
-  dispatch is not a buffer` is the dispatch's own check. **Which read becomes a
-  non-container, and why only with a second buffer, is what a minimal bisect would
-  settle** — one buffer with the same field shape works in ten places, so the
-  difference is the second one, not the shape of a buffer field.
+- **What a graph's argument may be — the rule is `.in`/`.out`, and a refusal that
+  discards itself.** *Corrected by a bisect at `2661ab89`, which replaced this note's
+  earlier claim that a two-buffer step "does not record":* **it does record, and runs
+  on the device** (`crates/lichen-language/tests/graph_argument.rs`: two buffers, three
+  graph inputs, `2a + b + 1` answered over both). The rule is narrower than the buffer
+  count: **every buffer a step's argument names must sit under a group named `in` or
+  `out`** — the same rule a kernel parameter has, spelled `compute.lichen:5`'s
+  `P = T: KT _ => struct{.n Int, .in T.I, .out T.O}`, while `compute.graph` leaves its
+  argument's type **unconstrained**, so nothing tells a step's author. Two buffers under
+  `.in` record; a buffer beside `.in` does not.
+  **And the real reason never reaches the user.** `build_graph` decodes the parameter with
+  `parallel_roles(...).ok()` (`compute.rs:4893`), and the `.ok()` **discards `walk_role`'s
+  named refusal** (`compute.rs:1971`: *"a parallel kernel's parameter holds a buffer outside
+  `.in`/`.out` at position 2.0, and the ABI has no place for it"* — recovered by
+  instrumenting the discarded line; the string appears nowhere else in the tree). `roles`
+  becomes `None`, control falls into the positional fallback (`compute.rs:4956`), which
+  applies the step to a flat tuple of **bare** placeholders — so a struct-expecting step
+  answers `this value is not a container` (twice), the dispatch says `argument 0 of this
+  dispatch is not a buffer`, and the recording says the return is not a value a graph can
+  hand back. **All four are consequences; none is the cause.** The fallback is dead in-tree
+  (measured: instrumenting it and running every recording test gives zero hits), so naming
+  the refusal there moves no recorded value — but it does change user-visible diagnostics,
+  so it is a decision rather than a mechanical repair.
+- **A named refusal `build_graph` discards — the repair is owed, not done.** The bisect
+  localizes it exactly: `compute.rs:4893`'s `.ok()` throws away `walk_role`'s refusal and lets a
+  misplaced buffer fall into the positional fallback, so the user gets four misleading lines
+  instead of the one true one. The repair is to discriminate `PARALLEL_PARAMETER_UNDECIDED` (keep
+  the fallback — a genuine "not yet") from every other `walk_role` refusal, reporting the latter
+  (`refuse(module, why)`). `parallel_roles` returns `Result<_, String>`, so the two cases separate
+  only by string equality until that becomes a type (`:1866`, `:1971`, `:2359`, `:4893`).
+  **Unmeasured, and it decides the shape of the repair**: whether `PARALLEL_PARAMETER_UNDECIDED` is
+  reachable for a graph argument at all — if it is not, the fallback is dead and could go instead
+  of being kept.
 
 ## Landmines, each of which is a silent wrong answer
 
