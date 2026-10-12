@@ -213,3 +213,58 @@ _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` 
 field-based 3-field struct). The shipped v1 keeps `launch`/`plrun` two-step and uses the
 `.native`/`.I`/`.O` struct; `call` remains the cross-kernel-body form, applied to the bare
 `.native`._
+## Named access is *not* normalized away, and compute matches names
+
+**Measured against the question "can compute analyze a kernel body that contains structs, on the
+assumption that by function normalization every named access is already an ordinary tuple index" — the
+assumption is false, in the direction that matters.**
+
+**There is no normalization pass.** A named access is turned into a subscript **once, per expression,
+at check time, and only conditionally**: `check_named_field`
+(`crates/lichen-highlevel/src/checker/structs.rs:273-292`) chooses a `USize(at)` constant cell when the
+container's type is concrete and the field is in its name table, and otherwise emits a **lazy
+`TableGet(names, "name")`** that is committed to the graph and resolved per apply clone. The name to
+position fold is `crates/lichen-highlevel/src/shape.rs:657` — a lookup, not a rewrite. `LowOperator` is
+exactly `Index | Apply | TableGet`, so there is nothing for a later stage to fold into, and the
+checker's own comment says why the constant exists at all: *"A constant is not an optimisation: a kernel
+body is walked by operands, and a `TableGet` is no value to resolve."*
+
+**What compute reads, measured by instrumenting the walk:** for the **parameter struct**, `k.in.d` and
+`k.out.z` arrive as `TableGet` and are resolved **by name** (`compute.rs:3851` and `:3903-3916`, through
+`IndexStep::Named`), and `parallel_roles` (`compute.rs:1823-1863`) decides where the buffers are by
+**comparing strings against the parameter's own name table** — `position(|name| *name == Some("in"))`.
+Renaming the parameter struct to `.input`/`.output` refuses by name ("a parallel kernel's parameter
+holds a buffer outside .in/.out …"), which is the proof: these are names at the compute layer, not
+positions. For a **struct that is not the parameter**, compute reads **nothing at all** — `Lower::apply`'s
+residual branch (`compute/body.rs:884-896`) leaves the field's value in place, so no field-shaped node
+ever exists in the caller.
+
+**Behaviour, all on the serial/`"cpu"` path:** a struct local with a literal field, with a computed
+`Float` field, and a **depth-2** named read on a non-parameter struct all build and answer correctly;
+two same-typed buffers read as `k.in.b` then `k.in.a` answer per the **name** rather than the field
+order, which is the sharpest positive check. Refused by name: a struct **returned by a cross-kernel
+call** read as `s.p`; and a **nested struct group under `.in`/`.out`** (`In = struct{.g Inner}`, read
+`k.in.g.b`) — which is the first of two defects below, because `b` *is* a field of `Inner`.
+
+**Two defects, both false refusals and neither a wrong answer** (the guards are what rule the wrong
+answer out: `resolve_steps` returns an `Err` naming the step instead of guessing a position, and the
+non-parameter case has no node to get wrong):
+
+- **A nested struct group under `.in`/`.out` is refused with the wrong reason.** The descent in
+  `resolve_steps` (`compute.rs:3921-3935`) does not move when the shape element carries no element slot
+  — `slot_type` answers the same node through `.unwrap_or(node)`, so the next named step sees no name
+  table and reports "that type's fields are `None`". `walk_role` walks to any depth; `param_path` reads
+  two names deep.
+- **`scalar_leaf_classes` assumes a scalar role is a direct field** — its comment says so at
+  `compute.rs:1761-1762` — while `walk_role` emits paths of any depth. A `Float` scalar under a grouped
+  `.in` is therefore forced to `Int` and refused at launch ("a parallel parameter's scalar leaf is Int
+  here and the launch passes a Float for it"), which misnames the cause; the `Int` case runs correctly.
+  The launch still compares the real class against the declared one, so this degrades to a refusal.
+
+**No test in the tree covers a struct constructed inside a kernel body** — every existing kernel body
+reads nothing but the parameter struct. Until the nested-group defect is fixed, an operator author
+should keep `.in`/`.out` **flat**: compute name-matches those two fields, and a nested group under them
+hits the false refusal above. The decisive file is the checker's `check_named_field`, which the
+field-naming work is actively changing; if its constant-versus-`TableGet` choice moves, the node-kind
+evidence above must be re-measured, though the behaviours would survive a shape change more readily than
+the refusal texts.
