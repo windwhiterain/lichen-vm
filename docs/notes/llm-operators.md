@@ -74,31 +74,51 @@ rather than a proof, and nothing verifies it.
 running leaves the first's buffers on a device that is no longer installed (`fuse_licence.rs` documents
 the same thing). Those suites are trustworthy at `--test-threads 1`.
 
-## The hazard: the tiling pass can silently replace the operator's algebra
+## The hazard, and the gate that closed the tiling half of it
 
-**Measured, not theorised, and it is a wrong-answer class.** `SchemaNode::reduction()` keeps only the
-**top-level operator** of the `combine` projection (`fusion_claim/schema.rs`), and `Folding` rebuilds
+**Measured, not theorised, and it was a wrong-answer class.** `SchemaNode::reduction()` keeps only the
+**top-level operator** of the `combine` projection (`fusion_claim/schema.rs`), and `Folding` rebuilt
 the fold from that one operator over the **raw buffer** (`automatic_tiling.rs`). The `x²` of `Σ x²`
 lives in the `element` role, which `NODE_LOCAL_ROLES` excludes (`automatic_tiling.rs`). So the two
-encodings both lose:
+encodings both lost:
 
-- declare `element` — the honest claim — and the pass **refuses** (`BeyondANode`): safe;
-- omit `element` — and the pass **tiles**, trusting an algebra that is a strict weakening of the
-  body's: the answer changes.
+- declare `element` — the honest claim — and the pass **refused** (`BeyondANode`): safe;
+- omit `element` — and the pass **tiled**, trusting an algebra that is a strict weakening of the
+  body's: the answer changed.
 
 Same program, same device, same data (`x = [1…64]`), only the installed floor differing:
 
 | | `y[0]` on the device | the sum it used |
 |---|---|---|
 | no pass installed | `0.026747627` | `Σ x² = 89440` |
-| floor installed | `0.1747408` | `Σ x = 2080` |
+| floor installed, before the gate | `0.1747408` | `Σ x = 2080` |
 
 Both reproduce bit-for-bit in `f32` from the two closed forms, and the pass **said so itself** while
 the run still succeeded: *"node 0: no pack matched its schema …, so the automatic floor tiled: its own
-marks declare `+` over 64 lane(s)"*. **There is currently no claim an author can write for `Σ x²` that
-is both truthful and safe.** Two ways out, and they are a real choice: carry the datum function into
-`Folding` (which already has an `Element` enum), or refuse to tile a `combine` whose canonical form is
-not exactly `Add(acc, datum)` / `Mul(acc, datum)`.
+marks declare `+` over 64 lane(s)"*.
+
+**The gate (`6c656f50`)**: `SchemaNode::declares_the_fold()` reads the **canonical** `combine` and
+requires `Expr::Binary` over `Add | Mul` with one occurrence of each of `FOLD_SLOTS =
+[CONSUMER_STATE, DATUM]` — in either order, since `normalize` sorts the datum before the state — and
+nothing else. It sits in `AutomaticTiling::apply` **after `beyond_a_node`, before `tile()`**, so it
+fires before any pack is consulted and reports a **node line** (`node N: refused:
+CombineIsNotAFold: …`), not a run error. `reduction()`, `element` and `NODE_LOCAL_ROLES` are untouched,
+and no existing test moved — the position matters: a gate inside `derive()` would have preempted
+`consumer_guard`'s `ReadsAnotherNode` refusal, which pins a different defect. **Measured on the device,
+same program and data as the table above**: the pass now refuses and **no number is produced at all**
+— nothing lands, the node keeps the program's own body, and the answer is element-for-element the
+un-passed one. The wrong value is no longer reachable, and neither is any other tiling of that claim.
+A legitimate `Σ x` still tiles byte for byte (its `Shared` slice and barrier still run, and the
+seed-raised counterfactual still moves by `65 × 7`).
+
+**What the gate does not cover**, because a wrong answer is what is at stake: it does **not** carry the
+datum function into `Folding` — a `combine` that *is* `Add(t, d)` while the body computes the datum
+differently elsewhere is still tiled from the raw datum (that is the deferred slice); it reads only
+`combine`, so an `identity` that is not the operator's unit is unchecked; it is the **tiling** pass's
+gate, not the **merge** pass's, so a producer claiming `Reduction(combine, identity, element)` still
+merges (`rmsnorm_denominator` exercises exactly that and passes unchanged); and it judges **shape, not
+faithfulness** — a body that marks `(+ t d)` while computing something else is still a lie a claim can
+tell.
 
 ## Smaller findings, each with the thing that would change
 
