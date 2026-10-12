@@ -1457,3 +1457,13 @@ Still open, cheapest to settle before the interface syntax is written:
   §6 operationalizes.
 - [artifact-cache.md](artifact-cache.md) — the content-addressed store schema
   artifacts and pack bindings ride on.
+
+## A measured hazard around what a `combine` means
+
+The tiling pass can **silently replace the operator's algebra**: `SchemaNode::reduction()` keeps only
+the top-level operator of the `combine` projection and `Folding` rebuilds the fold over the raw buffer,
+while anything else the body computed lives in the `element` role, which `NODE_LOCAL_ROLES` excludes.
+Declaring that role honestly makes the pass refuse (safe); omitting it makes the pass **tile** and the
+answer change — measured on a device, bit-for-bit, at `419aab56`.
+[LLM inference operators](llm-operators.md) carries the measurement and the two ways out; it is the
+note to read before changing what a `combine` may claim.
