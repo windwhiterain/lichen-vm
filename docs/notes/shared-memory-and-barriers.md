@@ -586,20 +586,48 @@ what puts a pair in the analysis at all.
 
 The facts decide *whether* a pair needs a barrier. They also decide **where the value
 between the pair lives**, which is the same question one level up: a value that crosses
-lanes needs somewhere to be between its write and its read. There are three spaces, and
-only two of them are a kernel's to choose.
+lanes needs somewhere to be between its write and its read. There are four spaces, and three of
+them are a kernel's to choose — registers, shared, and the warp exchange; the fourth, global, is
+the graph's.
 
 | space | who reads it | mechanism | today |
 |---|---|---|---|
 | **registers** | the lane that wrote it | a **scalar** is an SSA value and needs nothing; a **slice** is a per-lane array of its declared count, which needs a `Private`-storage variable and an array type — the array type and the module-scope variable exist for `Shared`, the storage class does not | a scalar: the only one that exists; a slice: refused by name (`SpirvRefusal::StagingNotOnThisBackend`) |
 | **shared** | another lane of the same workgroup | a `Workgroup` variable, and a **block-level** barrier | emitted for a `from_flat` body — `Workgroup` storage and `OpControlBarrier` (§9 step 5's GPU half); the surface that names one is unbuilt |
 | **global** | another workgroup | **a graph edge**, so the region is not one kernel | the fusion gate's answer |
+| **warp** | another lane of the same **subgroup** | **the shuffle network**: a write emits nothing (the value stays in the writer's register) and a read is one `OpGroupNonUniformShuffle` | landed at `de60dec0` — `Space::Warp` (`lichen-kernel-ir`), emitted by `spirv.rs`; a target without it keeps refusing by name |
 
-**The space a slice states is a field, not a name.** The two values a slice may carry are the
-plan's own, `space = Register | Shared`, and they are `Slice { class, count, space }`'s third
+**The space a slice states is a field, not a name.** The values a slice may carry are the
+plan's own, `space = Register | Shared | Warp`, and they are `Slice { class, count, space }`'s third
 field — `KernelFragment::slices`, hashed whole by `fragment_digest` as it was before. A target
 that cannot honour one refuses it **by name** rather than placing the elements in the other
-(`SpirvRefusal::StagingNotOnThisBackend`); `Shared` is emitted, `Register` is not.
+(`SpirvRefusal::StagingNotOnThisBackend`); `Shared` and `Warp` are emitted, `Register` is not.
+
+**`Warp` is a placement and not an instruction, which is why it is a `Space` member** (`de60dec0`).
+Its contract: **element `i` is staged by the lane whose subgroup-local id is `i`** — the lane a
+read's index names. Putting the shuffle in an access instruction would move a storage decision
+into the op, which the rule above forbids outright, and giving `Register` a conditional warp
+meaning would make one spelling mean two programs depending on a gate — the exact trap this
+section names ("naming the slice after one of them turns a placement into an identity, and then
+nothing can move it"). The gate is one element per subgroup lane: a wider slice "names a lane the
+reader cannot reach" and a narrower one a lane its siblings also staged, so `spirv.rs` refuses
+both (`StagingNotOneElementPerLane`) and refuses a read of a slice this lane never staged into
+(`WarpExchangeWithoutAWrite`) — **never placing them elsewhere**. The capability is the child
+`GroupNonUniformShuffle` (65), **not** the parent `GroupNonUniform` (61): a module that declares
+only the parent is refused by `spirv-as`. The companion barrier is `OpControlBarrier` at
+**Subgroup** scope with `AcquireRelease|WorkgroupMemory` — a register-staged value has no shared
+memory for `WorkgroupMemory` alone to order — so the warp path is also what "a barrier downgraded
+to a warp sync" means.
+**A landmine the module cannot close**: the subgroup width **cannot be pinned**.
+`OpExecutionMode SubgroupSize` needs `SubgroupDispatch` (Vulkan 1.3 / SPIR-V 1.6) and this target
+emits SPIR-V 1.3, so `spirv::SUBGROUP_WIDTH = 32` is an assumption about the device exactly as
+`LOCAL_SIZE_X = 64` already is — and on a device whose subgroup is 16, a read at index 20 names a
+lane outside the reader's subgroup and the answer is **undefined**, not merely wrong, in a way
+`spirv-val` cannot see. Closing it needs Vulkan 1.3 emission or a `subgroupSize` query gating the
+`Warp` path by name. **And the emitter cannot prove the body's half** of the contract: that lane
+`i` staged element `i` is a statement about the body, and the IR does not hand the emitter the
+lane parameter, so a body writing `slice[lane / 2]` would exchange against the wrong lane and
+answer a plausible wrong number; enforcing it belongs to the walk.
 
 **`global` is not a placement.** A fused body has no global staging: a value two
 workgroups must exchange cannot be one kernel, so the answer is that the region does not

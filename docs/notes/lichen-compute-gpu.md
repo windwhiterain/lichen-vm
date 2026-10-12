@@ -854,6 +854,24 @@ Stated here because they are silent-wrong-answer rules rather than slow ones:
 - **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
   memory lives until `GpuContext::drop`, the same rule as the deliberate
   no-per-value-release decision above.
+- **An indirect dispatch's extent is *three* group counts, and a zero anywhere runs
+  nothing** (`427f768b`). `cmd_dispatch_indirect` reads a twelve-byte
+  `VkDispatchIndirectCommand { x, y, z }` from a buffer, so an `Int` element can never *be* the
+  command: the backend assembles a 16-byte block on the device (the count, then two ones) and hands
+  over an offset. A command with `y` or `z` zero is legal, validates, and dispatches no workgroups —
+  a silent zero, not a refusal.
+- **A device-held extent must be ordered `TRANSFER_WRITE → DRAW_INDIRECT |
+  INDIRECT_COMMAND_READ`.** The obvious `COMPUTE_SHADER / SHADER_READ` barrier compiles, passes
+  `spirv-val`, and dispatches **zero** workgroups: the write was made by a compute shader, but the
+  *reader* here is the command processor, not a shader.
+- **The shuffle exchange carries its scope as an operand** (`de60dec0`). `OpGroupNonUniformShuffle`
+  takes **five** operands — type, result, **scope**, value, id — and a module that declares the
+  parent `GroupNonUniform` (61) instead of the child `GroupNonUniformShuffle` (65) is refused by
+  `spirv-as`. Emitting four operands is the dangerous version: it validates as far as the device is
+  concerned and answers a **wrong number** (496 where 528 was due, before the scope operand was
+  added), which is why the warp tests run the module through `spirv-val` rather than trusting the
+  answer, and why a subgroup-scoped `OpControlBarrier` in the negative case is read back off the
+  constant ids instead of being trusted to differ.
 
 ## Recovered measurements
 

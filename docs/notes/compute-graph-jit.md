@@ -146,6 +146,26 @@ Value::Host    { data, class }                   // host data, a graph's own inp
 Value::Int(i64)                                  // a number, so never pending
 ```
 
+**And an extent may be a number the device wrote** (`427f768b`), which is the one thing that value
+table cannot express: `Value::Int` is host-resident *by construction* — its own note said "never
+pending: a number is not produced by a device" — so a count a kernel computed would have to be
+fetched to the host, which is exactly the stall this feature exists to avoid. So the new form is a
+**`Count` arm, not a `Value` form**: `Count::Device { value, index }` (beside `Constant` and
+`Value`), because the missing thing is not the payload's kind but that an **extent needs an
+address**. Every existing `Pending`/`Device`/`Host`/`Int` consumer is therefore untouched. The
+runner resolves it to a `DeviceExtent` and calls `ParallelBackend::run_over_device_extent`, whose
+**default reads the number and delegates to `run`** — the same reason `submit` defaults: a backend
+that cannot dispatch over one still satisfies the contract, and its read *is* the stall, which is
+what every backend gets until it says it can do better. `lichen-compute-gpu` overrides it with
+`cmd_dispatch_indirect`. **Measured on the device**: a two-node fold whose first node counts 40 of
+128 elements writes that count where the second node's extent reads it — the dispatch ran **one**
+workgroup, and the same graph with `Count::Constant(128)` ran two. Two refusals keep it honest:
+`Policy::Async` refuses a device-held extent by name rather than reporting a submission for a
+schedule nobody asked for (a `submit_over_device_extent` sibling is the fix, deliberately not
+written), and `ExtentLeafUnfixed` refuses a fragment that reads its own extent leaf, because
+Vulkan's indirect dispatch hands the shader nothing — so a loop over the extent is ineligible
+today.
+
 **`Pending` is a value, not a rule.** A value is pending for exactly as long as
 the host has other work to do, and spending that window is the whole reason for
 running a graph this way — so folding it into "a buffer" would either lie about
