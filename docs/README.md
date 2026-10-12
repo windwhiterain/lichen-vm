@@ -73,6 +73,7 @@ authority, and this table only names the state.
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel` | current — T3/T4 proposed |
 | [Incremental update: identity by path, retention by `cache`](notes/incremental-update.md) | `lichen-language-parser` (`path`), `lichen-language` (`cells`/`session`), `lichen-lowlevel` (`freeze`/`registry`), `lichen-compute` | current — the keystroke fine cut is open |
 | [Build performance](notes/build-performance.md) | `lichen-language-parser` | current |
+| [Parse performance: the clean probe](notes/parse-clean-probe.md) | `lichen-language-parser`, `lichen-language-lex` | current |
 | [Language toolchain](notes/language-toolchain.md) | `lichen-span`/`-lex`/`-parser`/`-language`/`-server`, `lichen-language-zed` | current |
 | [Lichen Home for the LSP](notes/liche-lsp-home.md) | `lichen-language-server` (`home`), `lichen-language` | current |
 | [Packages & import](notes/packages.md) | `lichen-preprocess`, `lichen-language`, `lichen-compiler` | current |

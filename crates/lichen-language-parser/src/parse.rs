@@ -3,9 +3,10 @@
 //!
 //! # Invariant
 //! `parse` produces a program for almost any input; only an input with no
-//! parseable statement at all fails outright.
+//! parseable statement at all fails outright.  A parse runs the grammar at most
+//! twice: a zero-sized clean probe first, then the diagnostic pass when that
+//! probe has anything to report (`docs/notes/parse-clean-probe.md`).
 
-use chumsky::input::Stream;
 use chumsky::prelude::*;
 use std::collections::HashSet;
 
@@ -35,10 +36,35 @@ pub struct ParseDiag {
 
 /// The parser's input: the token stream, whose spans are token *indices*
 /// (each item is one token).
-type In<'a> = Stream<std::iter::Cloned<std::slice::Iter<'a, Token>>>;
-/// The parser's error: rich errors whose spans are token-index ranges and
-/// whose "found" value is the offending token.
-type E<'a> = extra::Err<Rich<'a, Token, SimpleSpan<usize>>>;
+type In<'a> = &'a [Token];
+/// A grammar instantiation's parser extra, over its error type.
+type Ex<'a, Er> = extra::Err<Er>;
+
+/// The error a parse reports through: `Rich` keeps the diagnostic, and
+/// `EmptyErr` is zero-sized.
+///
+/// # Invariant
+/// Every failure and every emitted message goes through this type, so the clean
+/// probe and the diagnostic pass accept the same inputs with the same AST
+/// (`docs/notes/parse-clean-probe.md`).
+trait GrammarError<'a>:
+    chumsky::error::Error<'a, In<'a>> + chumsky::error::LabelError<'a, In<'a>, &'static str> + 'a
+{
+    /// A message the grammar emits itself, e.g. a recovered table entry.
+    fn message(span: SimpleSpan<usize>, text: &'static str) -> Self;
+}
+
+impl<'a> GrammarError<'a> for Rich<'a, Token, SimpleSpan<usize>> {
+    fn message(span: SimpleSpan<usize>, text: &'static str) -> Self {
+        Rich::custom(span, text)
+    }
+}
+
+impl<'a> GrammarError<'a> for chumsky::error::EmptyErr {
+    fn message(_span: SimpleSpan<usize>, _text: &'static str) -> Self {
+        chumsky::error::EmptyErr::default()
+    }
+}
 
 /// The result of parsing: the (possibly partial) program plus every error
 /// encountered along the way.
@@ -123,9 +149,21 @@ pub fn parse(tokens: &[Token]) -> Parsed {
 type ParseOut = (Program, Vec<ParseDiag>);
 
 fn parse_inner(tokens: &[Token]) -> ParseOut {
-    let stream = Stream::from_iter(tokens.iter().cloned());
-    let parser = program_parser(tokens);
-    let (output, errs) = parser.parse(stream).into_output_errors();
+    // The clean probe's answer stands only when it reports nothing
+    // (`docs/notes/parse-clean-probe.md`).
+    let probe = program_parser::<chumsky::error::EmptyErr>(tokens);
+    let (output, errs) = probe.parse(tokens).into_output_errors();
+    if let Some(mut program) = output.filter(|_| errs.is_empty()) {
+        program.error_blocks = collect_error_blocks(&program);
+        return (program, Vec::new());
+    }
+    parse_diagnostics(tokens)
+}
+
+/// The diagnostic pass: the program plus every diagnostic it reports.
+fn parse_diagnostics(tokens: &[Token]) -> ParseOut {
+    let parser = program_parser::<Rich<'_, Token, SimpleSpan<usize>>>(tokens);
+    let (output, errs) = parser.parse(tokens).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
     // Dedup by whole diagnostic content: chumsky emits the same rich error more
     // than once.
@@ -192,23 +230,27 @@ pub fn parse_statement_region_traced(
 /// token-index ranges, and the diagnostics.
 type RegionOut = (Vec<BlockStmt>, Vec<(usize, usize)>, Vec<ParseDiag>);
 
-fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
+/// The region parser, over the error type a pass reports through.
+fn region_parser<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
+    start: usize,
+    end: usize,
+) -> impl Parser<'a, In<'a>, Vec<(BlockStmt, (usize, usize))>, Ex<'a, Er>> {
     let region = &tokens[start..end];
-    let expr = expression(region);
+    let expr = expression::<Er>(region);
     // `seps elem (seps elem)* seps` — the statement list without the tail pop.
     let seps = separator_run();
     let seps1 = separators_between();
     let elem = block_statement(region, expr.clone())
         .recover_with(skip_then_retry_until(
-            any::<In<'_>, E<'_>>().ignored(),
+            any::<In<'_>, Ex<'_, Er>>().ignored(),
             choice((
                 token(TokenKind::Eof).ignored(),
                 token(TokenKind::RBrace).ignored(),
             )),
         ))
         .map_with(|s, me| (s, (me.span().start, me.span().end)));
-    let parser = seps
-        .clone()
+    seps.clone()
         .then(elem.clone())
         .then(
             (seps1.clone().then(elem.clone()))
@@ -220,9 +262,40 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
             std::iter::once(first)
                 .chain(rest.into_iter().map(|(_, e)| e))
                 .collect::<Vec<(BlockStmt, (usize, usize))>>()
-        });
-    let stream = Stream::from_iter(region.iter().cloned());
-    let (output, errs) = parser.parse(stream).into_output_errors();
+        })
+}
+
+/// Pair a region's elements with their absolute token-index ranges.
+fn region_result(
+    elems: Vec<(BlockStmt, (usize, usize))>,
+    start: usize,
+) -> (Vec<BlockStmt>, Vec<(usize, usize)>) {
+    let statements: Vec<BlockStmt> = elems.iter().map(|(s, _)| s.clone()).collect();
+    // Byte positions are absolute; the token-index ranges are region-relative,
+    // so offset them by `start`.
+    let ranges: Vec<(usize, usize)> = elems
+        .iter()
+        .map(|(_, r)| (r.0 + start, r.1 + start))
+        .collect();
+    (statements, ranges)
+}
+
+fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
+    // The same clean probe as [`parse_inner`]'s.
+    let region = &tokens[start..end];
+    let probe = region_parser::<chumsky::error::EmptyErr>(tokens, start, end);
+    let (output, errs) = probe.parse(region).into_output_errors();
+    if let Some(elems) = output.filter(|_| errs.is_empty()) {
+        let (statements, ranges) = region_result(elems, start);
+        return (statements, ranges, Vec::new());
+    }
+    region_diagnostics(tokens, start, end)
+}
+
+fn region_diagnostics(tokens: &[Token], start: usize, end: usize) -> RegionOut {
+    let region = &tokens[start..end];
+    let parser = region_parser::<Rich<'_, Token, SimpleSpan<usize>>>(tokens, start, end);
+    let (output, errs) = parser.parse(region).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
     // The same content-keyed dedup as [`parse_inner`]'s.
     let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
@@ -232,14 +305,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
             errors.push(diag);
         }
     }
-    // Byte positions are absolute; the token-index ranges are region-relative,
-    // so offset them by `start`.
-    let elems: Vec<(BlockStmt, (usize, usize))> = output.unwrap_or_default();
-    let statements: Vec<BlockStmt> = elems.iter().map(|(s, _)| s.clone()).collect();
-    let ranges: Vec<(usize, usize)> = elems
-        .iter()
-        .map(|(_, r)| (r.0 + start, r.1 + start))
-        .collect();
+    let (statements, ranges) = region_result(output.unwrap_or_default(), start);
     (statements, ranges, errors)
 }
 
@@ -248,9 +314,11 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
 
 /// A parser matching a single token of the given kind, labelled with the
 /// kind's human-readable spelling.
-fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
-    let label = kind.describe();
-    any::<In<'a>, E<'a>>()
+fn token<'a, Er: GrammarError<'a>>(
+    kind: TokenKind,
+) -> impl Parser<'a, In<'a>, Token, Ex<'a, Er>> + Clone {
+    let label = kind.describe_static();
+    any::<In<'a>, Ex<'a, Er>>()
         .filter(move |t: &Token| t.kind == kind)
         .labelled(label)
 }
@@ -261,7 +329,8 @@ fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
 /// # Invariant
 /// `repeated` rewinds, so a run that is not there leaves the enclosing closer
 /// or the end of input to match at the same position.
-fn separator_run<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
+fn separator_run<'a, Er: GrammarError<'a>>() -> impl Parser<'a, In<'a>, Vec<()>, Ex<'a, Er>> + Clone
+{
     token(TokenKind::Separator)
         .ignored()
         .repeated()
@@ -269,7 +338,8 @@ fn separator_run<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
 }
 
 /// A run of separators of at least one — the separator between two items.
-fn separators_between<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
+fn separators_between<'a, Er: GrammarError<'a>>()
+-> impl Parser<'a, In<'a>, Vec<()>, Ex<'a, Er>> + Clone {
     token(TokenKind::Separator)
         .ignored()
         .repeated()
@@ -278,8 +348,8 @@ fn separators_between<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
 }
 
 /// A name token; `_` lexes as its own [`TokenKind::Placeholder`] token.
-fn name<'a>() -> impl Parser<'a, In<'a>, (String, Span), E<'a>> + Clone {
-    any::<In<'a>, E<'a>>()
+fn name<'a, Er: GrammarError<'a>>() -> impl Parser<'a, In<'a>, (String, Span), Ex<'a, Er>> + Clone {
+    any::<In<'a>, Ex<'a, Er>>()
         .filter(|t: &Token| matches!(t.kind, TokenKind::Name(_)))
         .map(|t| match t.kind {
             TokenKind::Name(n) => (n, t.span),
@@ -330,7 +400,9 @@ fn err_node(tokens: &[Token], span: SimpleSpan<usize>) -> Expr {
 
 /// The program: the block body (the top level is a block) then the end of the
 /// input.
-fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E<'a>> {
+fn program_parser<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
+) -> impl Parser<'a, In<'a>, Program, Ex<'a, Er>> {
     let expr = expression(tokens);
     // The lexer appends a real `Eof`, so `end()` would fail with it unconsumed.
     block_body(tokens, expr)
@@ -348,10 +420,10 @@ fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E
 
 /// A statement: a binding (`let name = …` / `name = …`) or a bare
 /// expression.
-fn statement<'a>(
+fn statement<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Stmt, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Stmt, Ex<'a, Er>> + Clone {
     choice((
         binding(tokens, expr.clone()).map(Stmt::Binding),
         expr.map(Stmt::Expr),
@@ -360,10 +432,10 @@ fn statement<'a>(
 
 /// `['@loop'] ['cache'] ['let'] name = expr` — a binding, with three
 /// independent marks.
-fn binding<'a>(
+fn binding<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Binding, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Binding, Ex<'a, Er>> + Clone {
     let head = token(TokenKind::KwLoop)
         .ignored()
         .or_not()
@@ -386,7 +458,7 @@ fn binding<'a>(
     // A broken value skips to the next separator or the input's end (never Eof)
     // and substitutes an error node.
     let value = expr.recover_with(via_parser(
-        any::<In<'a>, E<'a>>()
+        any::<In<'a>, Ex<'a, Er>>()
             .filter(|t: &Token| t.kind != TokenKind::Separator && t.kind != TokenKind::Eof)
             .ignored()
             .repeated()
@@ -407,12 +479,12 @@ fn binding<'a>(
 
 /// An operand: a full expression, or a non-consuming error node when the
 /// operator is dangling at a statement boundary.
-fn operand<'a>(
+fn operand<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    p: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    p: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     p.recover_with(via_parser(
-        empty::<In<'a>, E<'a>>().map_with(move |_, me| err_node(tokens, me.span())),
+        empty::<In<'a>, Ex<'a, Er>>().map_with(move |_, me| err_node(tokens, me.span())),
     ))
 }
 
@@ -422,12 +494,12 @@ fn operand<'a>(
 /// The operand parser is the level the operator's operands are read at: a one-operand
 /// keyword takes an application (`int2float f x` converts `f x`), while a two-operand one
 /// takes atoms (`max a b` is the maximum of `a` and `b`, not of `a` and `b`'s application).
-fn prefix_op<'a>(
+fn prefix_op<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     kind: TokenKind,
     operator: PrefixOp,
-    operand: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    operand: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(kind)
         .ignore_then(
             operand
@@ -444,7 +516,9 @@ fn prefix_op<'a>(
 }
 
 /// The precedence chain over atoms, with `=>` as the loosest operator.
-fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+fn expression<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     recursive(|expr| {
         let atom = atom_parser(tokens, expr.clone());
 
@@ -746,12 +820,12 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                             }
                         }
                         value => {
-                            emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
+                            emit.emit(Er::message(me.span(), "expected a name before '=>'"));
                             value
                         }
                     },
                     other => {
-                        emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
+                        emit.emit(Er::message(me.span(), "expected a name before '=>'"));
                         other
                     }
                 },
@@ -794,8 +868,8 @@ where
 /// The payload is text the parser reads out of the literal, never an expression a
 /// checker would evaluate: a mark is compile-time metadata, so a payload that only a run
 /// could decide is not a mark the compiler can place.
-fn mark_payload<'a>() -> impl Parser<'a, In<'a>, String, E<'a>> + Clone {
-    any::<In<'a>, E<'a>>()
+fn mark_payload<'a, Er: GrammarError<'a>>() -> impl Parser<'a, In<'a>, String, Ex<'a, Er>> + Clone {
+    any::<In<'a>, Ex<'a, Er>>()
         .filter_map(|t: Token| match t.kind {
             TokenKind::Str(text) => Some(text),
             _ => None,
@@ -855,10 +929,10 @@ enum Pre {
 
 /// The atoms, with their postfix forms: `e[i]`, `a(k)`, `X{n}`, `X::a`, and
 /// `C(...)`.
-fn atom_parser<'a>(
+fn atom_parser<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     kw_atom(tokens, expr.clone())
         .or(postfix_atom(tokens, expr).labelled("an expression"))
         .boxed()
@@ -871,10 +945,10 @@ fn atom_parser<'a>(
 /// A bracket-led keyword leads both a value and a type — `set(…)` and `set{E}`,
 /// `table(k ==> v)` and `table{K, V}` — so the opening delimiter, never the
 /// word, selects the form.
-fn kw_atom<'a>(
+fn kw_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let paren = token(TokenKind::LParen).rewind();
     let brace = token(TokenKind::LBrace).rewind();
     let table_value = paren
@@ -904,10 +978,10 @@ fn kw_atom<'a>(
 }
 
 /// A primary, then its glued postfix forms.
-fn postfix_atom<'a>(
+fn postfix_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     primary_parser(tokens, expr.clone())
         .then(postfix_parser(expr).repeated().collect::<Vec<_>>())
         .map(|(atom, postfixes)| {
@@ -919,9 +993,9 @@ fn postfix_atom<'a>(
 
 /// The postfix forms, chained left: `[` is an index, a glued `{` is `X{n}`,
 /// and a glued `::name` is `X::a`.
-fn postfix_parser<'a>(
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Postfix, E<'a>> + Clone {
+fn postfix_parser<'a, Er: GrammarError<'a>>(
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Postfix, Ex<'a, Er>> + Clone {
     let glue = token(TokenKind::Glue).ignored();
     choice((
         token(TokenKind::Dot)
@@ -997,27 +1071,27 @@ fn apply_postfix(acc: Expr, p: Postfix) -> Expr {
 
 /// The atoms a *primary* can be: literals, names, grouping, and the
 /// keyword-led forms other than `set`/`table`.
-fn primary_parser<'a>(
+fn primary_parser<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::Glue)
         .ignored()
         .or_not()
         .ignore_then(choice((
-            any::<In<'a>, E<'a>>()
+            any::<In<'a>, Ex<'a, Er>>()
                 .filter(|t: &Token| matches!(t.kind, TokenKind::Int(_)))
                 .map(|t| match t.kind {
                     TokenKind::Int(n) => Expr::Int(n, t.span),
                     _ => unreachable!("filtered for an int"),
                 }),
-            any::<In<'a>, E<'a>>()
+            any::<In<'a>, Ex<'a, Er>>()
                 .filter(|t: &Token| matches!(t.kind, TokenKind::Float(_)))
                 .map(|t| match t.kind {
                     TokenKind::Float(n) => Expr::Float(n, t.span),
                     _ => unreachable!("filtered for a float"),
                 }),
-            any::<In<'a>, E<'a>>()
+            any::<In<'a>, Ex<'a, Er>>()
                 .filter(|t: &Token| matches!(t.kind, TokenKind::Str(_)))
                 .map(|t| match t.kind {
                     TokenKind::Str(s) => Expr::Str(s, t.span),
@@ -1059,9 +1133,9 @@ enum Postfix {
 }
 
 /// `.name expr` or a plain expression — one instantiation field argument.
-fn struct_inst_field<'a>(
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, StructInstArg, E<'a>> + Clone {
+fn struct_inst_field<'a, Er: GrammarError<'a>>(
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, StructInstArg, Ex<'a, Er>> + Clone {
     choice((
         token(TokenKind::Dot)
             .ignore_then(name())
@@ -1081,9 +1155,9 @@ fn struct_inst_field<'a>(
 /// # Invariant
 /// Every list form shares this one combinator, so their comma discipline cannot
 /// differ.
-fn comma_list<'a, T>(
-    item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
+fn comma_list<'a, T, Er: GrammarError<'a>>(
+    item: impl Parser<'a, In<'a>, T, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<T>, bool), Ex<'a, Er>> + Clone {
     let first = item.clone().or_not();
     first
         .then(
@@ -1108,25 +1182,25 @@ fn comma_list<'a, T>(
 
 /// The content of an adjacent `(` in an instantiation position, plus whether
 /// any comma appeared.
-fn struct_inst_fields<'a>(
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), E<'a>> + Clone {
+fn struct_inst_fields<'a, Er: GrammarError<'a>>(
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), Ex<'a, Er>> + Clone {
     comma_list(struct_inst_field(expr))
 }
 
 /// The content of an adjacent `(`: expressions plus whether any comma appeared.
-fn paren_fields<'a>(
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), E<'a>> + Clone {
+fn paren_fields<'a, Er: GrammarError<'a>>(
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), Ex<'a, Er>> + Clone {
     comma_list(expr)
 }
 
 /// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value (`tuple{…}`
 /// spells the tuple type).
-fn paren<'a>(
+fn paren<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LParen)
         .ignore_then(expr.clone())
         .then(
@@ -1149,10 +1223,10 @@ fn paren<'a>(
 
 /// `$name(args…)` — a native-operator call; the name resolves only against the
 /// module's private registry.
-fn native_call<'a>(
+fn native_call<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::Dollar)
         .ignore_then(name())
         .then(token(TokenKind::Glue).or_not())
@@ -1168,10 +1242,10 @@ fn native_call<'a>(
 
 /// `[e1, …, en]` — an array literal, where an element may carry the `@shallow`
 /// marker.
-fn array_literal<'a>(
+fn array_literal<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let element = shallow_marked(tokens, expr.clone());
     token(TokenKind::LBracket)
         .ignore_then(element.clone())
@@ -1193,10 +1267,10 @@ fn array_literal<'a>(
 
 /// `(k ==> v, …)` — the body of a constant table literal, `==>` separating the
 /// pair unambiguously.
-fn table_value_atom<'a>(
+fn table_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let entry = expr
         .clone()
         .then(
@@ -1207,7 +1281,7 @@ fn table_value_atom<'a>(
         .validate(|(key, value), me, emit| match value {
             Some(value) => (key, value),
             None => {
-                emit.emit(Rich::custom(
+                emit.emit(Er::message(
                     me.span(),
                     "a table entry must be a `key ==> value` pair",
                 ));
@@ -1224,10 +1298,10 @@ fn table_value_atom<'a>(
 
 /// `(a, b, …)` — a set of ordinary values, comma-separated like an array
 /// literal's (`set{E}` spells the set *type*).
-fn set_value_atom<'a>(
+fn set_value_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LParen)
         .ignore_then(comma_list(expr))
         .then_ignore(token(TokenKind::RParen))
@@ -1240,10 +1314,10 @@ fn set_value_atom<'a>(
 /// A set's element position is one slot serving every member, so the type form
 /// writes exactly one element and the walk pairs it with each member
 /// (`docs/notes/compound-element-slots.md`).
-fn set_type_atom<'a>(
+fn set_type_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LBrace)
         .ignore_then(separator_run())
         .ignore_then(expr.clone())
@@ -1253,10 +1327,10 @@ fn set_type_atom<'a>(
 }
 
 /// `{K, V}` — the body of the table type, holding the key and value **slots**.
-fn table_type_atom<'a>(
+fn table_type_atom<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LBrace)
         .ignore_then(separator_run())
         .ignore_then(expr.clone())
@@ -1276,10 +1350,10 @@ fn table_type_atom<'a>(
 /// A slot is `value : type`, so a top-level `:` makes an element a value slot; an
 /// element without one is a bare type expression, its value the wildcard `@any`.
 /// See `docs/notes/compound-element-slots.md`.
-fn tuple_slots<'a>(
+fn tuple_slots<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::KwTuple)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LBrace))
@@ -1302,10 +1376,10 @@ fn tuple_slots<'a>(
 
 /// An array element with an optional `@shallow` prefix; the marker wraps it
 /// as [`Expr::Shallow`].
-fn shallow_marked<'a>(
+fn shallow_marked<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::KwShallow)
         // A bare `@shallow` marks the whole subtree, read as `usize::MAX`.
         .ignore_then(shallow_depth().or_not())
@@ -1326,11 +1400,11 @@ fn shallow_marked<'a>(
 /// The parens must be glued, so a spaced `(` is the element itself rather than a
 /// depth — the one distinction the two spellings differ by, and the reason the
 /// bare `@shallow e` form cannot be ambiguous with the depth form.
-fn shallow_depth<'a>() -> impl Parser<'a, In<'a>, usize, E<'a>> + Clone {
+fn shallow_depth<'a, Er: GrammarError<'a>>() -> impl Parser<'a, In<'a>, usize, Ex<'a, Er>> + Clone {
     token(TokenKind::Glue)
         .ignore_then(token(TokenKind::LParen))
         .ignore_then(
-            any::<In<'a>, E<'a>>()
+            any::<In<'a>, Ex<'a, Er>>()
                 .filter_map(|t: Token| match t.kind {
                     TokenKind::Int(depth) => Some(depth),
                     _ => None,
@@ -1341,9 +1415,9 @@ fn shallow_depth<'a>() -> impl Parser<'a, In<'a>, usize, E<'a>> + Clone {
 }
 
 /// One `struct{…}` field: `.name type`, or a bare (positional) type.
-fn struct_field<'a>(
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, StructField, E<'a>> + Clone {
+fn struct_field<'a, Er: GrammarError<'a>>(
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, StructField, Ex<'a, Er>> + Clone {
     let named = token(TokenKind::Dot)
         .ignore_then(name())
         .then(expr.clone())
@@ -1353,10 +1427,10 @@ fn struct_field<'a>(
 }
 
 /// `struct{…}` — a nominal struct type; the field list is optional (`struct{}`).
-fn struct_type<'a>(
+fn struct_type<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     let field = struct_field(expr.clone());
     token(TokenKind::KwStruct)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
@@ -1369,10 +1443,10 @@ fn struct_type<'a>(
 
 /// `array{T, n}` — the array type, keyword-led like `struct{…}`, with exactly
 /// two fields.
-fn array_type<'a>(
+fn array_type<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::KwArray)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LBrace))
@@ -1388,10 +1462,10 @@ fn array_type<'a>(
 }
 
 /// `{ stmt; …; expr }` — a block: a program's statement list plus its value.
-fn block<'a>(
+fn block<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::LBrace)
         .ignore_then(block_body(tokens, expr))
         .then_ignore(token(TokenKind::RBrace))
@@ -1455,10 +1529,10 @@ enum BlockItem {
 /// The tail is resolved later by [`split_block_items`].
 type BlockBody = Vec<(BlockItem, (usize, usize))>;
 
-fn block_body<'a>(
+fn block_body<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, BlockBody, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, BlockBody, Ex<'a, Er>> + Clone {
     let seps = separator_run();
     let seps1 = separators_between();
     // A broken item skips tokens and retries, stopping at Eof or a `}` so it
@@ -1470,7 +1544,7 @@ fn block_body<'a>(
         block_statement(tokens, expr.clone()).map(BlockItem::Stmt),
     ))
     .recover_with(skip_then_retry_until(
-        any::<In<'a>, E<'a>>().ignored(),
+        any::<In<'a>, Ex<'a, Er>>().ignored(),
         choice((
             token(TokenKind::Eof).ignored(),
             token(TokenKind::RBrace).ignored(),
@@ -1562,17 +1636,17 @@ fn split_block_items(
 
 /// A statement inside a block: an optional `pub` prefix; `pub` cannot mark a
 /// `let` binding.
-fn block_statement<'a>(
+fn block_statement<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, BlockStmt, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, BlockStmt, Ex<'a, Er>> + Clone {
     token(TokenKind::KwPub)
         .ignored()
         .or_not()
         .then(statement(tokens, expr.clone()))
         .validate(|(public, stmt), me, emit| {
             if public.is_some() && matches!(&stmt, Stmt::Binding(b) if b.restrictive) {
-                emit.emit(Rich::custom(me.span(), "pub cannot mark a let binding"));
+                emit.emit(Er::message(me.span(), "pub cannot mark a let binding"));
             }
             BlockStmt {
                 stmt,
@@ -1583,10 +1657,10 @@ fn block_statement<'a>(
 
 /// `if cond then e1 else e2` — the keywords delimit the condition and the
 /// branches extend maximally.
-fn if_expr<'a>(
+fn if_expr<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
     token(TokenKind::KwIf)
         .ignore_then(expr.clone())
         .then_ignore(token(TokenKind::KwThen))
