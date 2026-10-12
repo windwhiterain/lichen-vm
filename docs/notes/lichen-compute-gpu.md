@@ -745,10 +745,16 @@ Named rather than implied, because each is a decision rather than a gap:
   so at the language level a loop body cannot yet reach a runtime scalar. The IR
   can express it, and the emitter's own module for it is validated
   (`a_pushed_leaf_reaches_a_loop_body_and_a_callee`).
-- **`Batch` as a submission policy.** A graph under `Batch` is refused by name,
-  because a backend can only fuse if the contract can hand it several dispatches
-  for one command buffer, and `submit` records one run. `run_chain` is that
-  fusion at depth one; the general capability is not in the contract.
+- **`Batch` as a submission policy — landed** (`09bbeee7`). `GpuContext::run_batch` records a
+  graph's dispatches into one submission: the whole batch's staging is reserved **up front**
+  (`Staging::reserve` destroys and recreates its buffer, so growing it between two recorded
+  dispatches would leave earlier `cmd_copy_buffer`s naming a destroyed handle — found by getting it
+  wrong first), one `begin`, one `submit_and_wait`, and ids issued **after** the wait so no id names
+  a buffer the device is still writing. A run and a batch stage through one function
+  (`dispatch_into`), not two. Past `MAX_DISPATCHES_PER_SUBMISSION` it refuses by name
+  (`RunError::TooManyDispatches`, which `run_chain` shares). Counted on the device: one submission
+  and one fence wait against `Serial`'s two; a backend without the capability still refuses in the
+  contract's own words.
 - **A general graph builder.** The `compute.graph` operator, the `Graph` value
   and the lowering exist; what remains is the shape the design records
   ([compute-graph-jit](compute-graph-jit.md) §"Not yet").

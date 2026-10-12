@@ -92,7 +92,7 @@ authority, and this table only names the state.
 | [The kernel parameter's class](notes/kernel-parameter-class.md) | `lichen-highlevel`, `lichen-lowlevel`, `lichen-compute`, `lichen-render` | current — both original defects fixed; residue open |
 | [Per-value class semantics](notes/kernel-class-crossing-fixes.md) | `lichen-compute`, `lichen-compute-gpu`, `lichen-language` (`tests`) | current |
 | [Runtime scalars in a parallel kernel](notes/compute-runtime-scalars.md) | `lichen-compute`, `lichen-compute-gpu` | current — the device path is refused until built |
-| [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current — `Policy::Batch` is refused by name |
+| [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current — a whole graph in one submission, per backend |
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-language-lex`/`-parser`, `lichen-highlevel`, `lichen-kernel-ir`, `lichen-lowlevel`, `lichen-compute`, `lichen-compute-gpu` | in progress — §8 is the handoff |
 | [The wasm backend: handoff](notes/wasm-backend-handoff.md) | `lichen-compute` (`compute/wasm/`), `lichen-kernel-ir` | in progress — read first for wasm code generation |

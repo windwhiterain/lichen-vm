@@ -2,9 +2,10 @@
 
 > Status: current — the IR, the two extension-point seams, the lowering, the
 > `compute.graph`/`compute.graphrun` surface and its tests are in.
-> `Policy::Batch` is **refused by name** (the backend contract cannot record
-> several dispatches into one submission), and what is left is listed under
-> [Not yet](#not-yet).
+> `Policy::Batch` is **the backend's own answer now** (`09bbeee7`): the contract carries a
+> fused-submission entry, the GPU records a whole graph in one submission — counted, one
+> submission and one fence wait against `Serial`'s two — and a backend without the capability
+> refuses by name. What is left is listed under [Not yet](#not-yet).
 >
 > What this note is: what a graph JIT is, why it exists, how to use it, and the
 > model that makes it sound. A **graph is a transcript of a run**, not of the
@@ -78,7 +79,7 @@ the producer* — and no stale read is expressible.
 | policy | when it submits | when it waits | what it buys |
 |---|---|---|---|
 | `Serial` | immediately | immediately | nothing; this is today's kernel path |
-| `Batch` | at the next demand | at the next demand | fewest submissions, no overlap — **refused, see below** |
+| `Batch` | at the next demand | at the next demand | fewest submissions, no overlap — **one submission, per backend** (`09bbeee7`) |
 | `Async` | as soon as a segment is recordable | at the next demand | host work overlaps device work, same submission count as `Serial` |
 
 `Batch` and `Async` are a real trade-off, submissions against overlap. **`Async`
@@ -528,7 +529,7 @@ role can say which one it found.
 | `UnknownValue { node, value }` | a value number that names nothing in the table |
 | `NotBufferData { node, value, found }` / `CountNotANumber { node, value, found }` | a demand asked for the wrong role; the runner assembles it so it can name the node and the edge |
 | `CountNegative { number }` | a count below zero — naming neither node nor edge, because a number also reaches a graph as a function's return, which no node asked for |
-| `PolicyUnsupported { policy, reason }` | `Batch`, because the backend contract cannot record several dispatches into one submission |
+| `PolicyUnsupported { policy, reason }` | `Batch`, from a backend **without** the fused-submission capability — a backend that has it and refuses *this* batch answers `Backend` instead, so "cannot batch" is never confused with "this graph failed here" |
 | `Backend { what, reason }` | the backend declined |
 | `this graph dispatches to a device, but no compute backend is installed…` | a run with no `ParallelBackend` installed |
 | `this graph was compiled for the "cpu" backend, and a graph runs through the `ParallelBackend` contract…` | a `"cpu"` graph: the cpu path is this crate's own wasm engine, driven by a compiled module rather than by a submitted run |
@@ -604,8 +605,6 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 
 ## Not yet
 
-- **`Batch`.** Needs a fused-submission capability the contract does not have, and
-  is refused by name until it does. `run_chain` is that fusion at depth one.
 - **The general builder — landed; what is left is fan-out.** The `compute.graph`
   operator, the `Graph` value and the lowering exist, and so does a graph pass that
   merges a producer→consumer region into one node. **The three blockers measured here

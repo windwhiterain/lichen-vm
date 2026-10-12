@@ -521,18 +521,13 @@ it:
 **So the first user is not the fixed-count case**, and that is what keeps this
 from being §4.1 restated.
 
-**The capability it requires already exists on the queue, refused by name.**
-`Policy::Batch` in `lichen-graph-ir` is *"refused by name"* because
-[compute-graph-jit](compute-graph-jit.md) states the reason exactly: *"a backend
-can only fuse if it can be handed several dispatches to be put in one command
-buffer, and the contract has no way to ask for that — `submit` records one run
-and hands it over."* **A growing graph is that missing capability.** The design
-here is therefore not a new mechanism but a **contract change**:
-`ParallelBackend` gains something like *"hand me this segment, put it in one
-submission, tell me when it is done"* — one method, and the two seams that must
-be sound together (the segment boundary, and the demand point) are already named
-in that note. That is a far smaller and better-specified piece of work than it
-looks from the outside.
+**The capability it required is now in the contract.** `Policy::Batch` in `lichen-graph-ir` used
+to be *"refused by name"* for everyone; since `09bbeee7` the contract carries
+`ParallelBackend::run_batch`, the GPU records a whole graph in **one** submission (observed: one
+submission and one fence wait against `Serial`'s two, on the same graph and device), and a backend
+without it refuses by name. The shape landed as the paragraph below sketched it — one entry, the
+graph's own shape rather than a chain's, because a fan-out cannot be written as a list of
+`(launch, slots, count)` when an input may be *the output of an earlier dispatch*.
 
 **The cost, and it is structural: "no dispatch while building" has to go.** That
 property is currently a boast of the design — *"the graph is built by recording an
