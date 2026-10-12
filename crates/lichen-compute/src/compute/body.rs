@@ -81,6 +81,14 @@ pub struct Lower<'a, P: Program> {
     /// Keyed by the **anchor**, not by the lowered node: an expanded recurrence lowers one
     /// anchor once per copy, and every copy is the same mark on the same expression.
     published_marks: HashSet<NodeId>,
+    /// The anchors whose **own** lowering is in progress, outermost first.
+    ///
+    /// # Invariant
+    /// `marks_at` resolves an origin chain that is many to one — every clone a frozen
+    /// callee leaves behind names the caller-side apply — so the operand a walk reaches
+    /// first is not the expression a mark names. A lowering defers the anchors it owns and
+    /// publishes them itself, at the end.
+    lowering: Vec<NodeId>,
     /// The entry block's parameters' classes in flattening order; [`param_classes_of`]
     /// states whose list that is.
     leaf_classes: Vec<ScalarClass>,
@@ -170,6 +178,7 @@ where
             depth: 0,
             value_classes: HashMap::new(),
             published_marks: HashSet::new(),
+            lowering: Vec::new(),
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
@@ -219,6 +228,7 @@ where
             depth: 0,
             value_classes: HashMap::new(),
             published_marks: HashSet::new(),
+            lowering: Vec::new(),
             leaf_classes: param_classes_of(params),
             block: entry,
             loops: Vec::new(),
@@ -289,7 +299,7 @@ where
                 None => match self.module.define_in(self.function, node) {
                     Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
                     Define::Computed(definition) => {
-                        let value = self.definition(definition)?;
+                        let value = self.lower_definition(definition)?;
                         // Both ends of a definition edge can be the anchor.
                         self.publish_mark(definition, value);
                         value
@@ -312,15 +322,18 @@ where
     /// Publish the marks `node` carries, once, against the value it produced.
     ///
     /// # Invariant
-    /// The lookup is a table read through the apply clone walk's origins, never a walk of
-    /// the body looking for marks, so a dispatched kernel's per-call clone publishes what
-    /// its template carries. **One `~ "text"` is one mark**, and the de-duplication is on
-    /// the *stamped* node: an expanded recurrence lowers one anchor once per copy, and
-    /// those copies are one mark.
+    /// The lookup reads the table through the apply clone walk's origins, never a walk of
+    /// the body looking for marks, so a dispatched kernel's per-call clone publishes its
+    /// template's. **One `~ "text"` is one mark**, de-duplicated on the *stamped* node: an
+    /// expanded recurrence lowers one anchor once per copy. **An anchor on
+    /// [`Self::lowering`] publishes nothing** — its own lowering does.
     fn publish_mark(&mut self, node: NodeId, value: ValueId) {
         let Some((source, payloads)) = self.module.marks_at(node) else {
             return;
         };
+        if self.lowering.contains(&source) {
+            return;
+        }
         if !self.published_marks.insert(source) {
             return;
         }
@@ -594,6 +607,25 @@ where
     }
 
     // ------------------------------------------------------------ definitions
+
+    /// Emit `node`'s definition with every mark anchored at `node` deferred to its end.
+    ///
+    /// # Invariant
+    /// The deferral is **per anchor** and covers the whole of this walk, so a nested marked
+    /// expression is unaffected and no operand of `node` can publish `node`'s marks. That is
+    /// what makes **a mark name the value its expression produced** (graph-fusion.md §3)
+    /// rather than the value of whichever of its nodes the walk met first.
+    fn lower_definition(&mut self, node: NodeId) -> Result<ValueId, String> {
+        let anchor = self.module.marks_at(node).map(|(source, _)| source);
+        if let Some(anchor) = anchor {
+            self.lowering.push(anchor);
+        }
+        let lowered = self.definition(node);
+        if anchor.is_some() {
+            self.lowering.pop();
+        }
+        lowered
+    }
 
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
