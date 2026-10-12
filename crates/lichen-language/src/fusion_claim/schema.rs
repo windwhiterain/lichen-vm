@@ -1,7 +1,7 @@
 //! The region schema derived from a recorded graph.
 //! See docs/notes/graph-fusion.md §4.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{self, Write as _};
 
 use lichen_fusion::{Expr, Reduction, Variable, normalize};
@@ -291,6 +291,28 @@ pub struct RegionSchema {
 }
 
 impl RegionSchema {
+    /// The region-local node whose edges are not a chain's, or `None` when the region is one.
+    ///
+    /// # Invariant
+    /// **One producer and one consumer per node**: a node two edges leave, or two arrive at, is not
+    /// the producer→code→consumer shape §6 matches. The derivation already refuses a node two
+    /// instances feed, so what this names is the **producer a fan-out reads from** — and a fan-out
+    /// is not a chain, so the floor's own proof cannot hold it however its nodes are claimed.
+    pub fn off_chain_node(&self) -> Option<usize> {
+        let mut leaving: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut arriving: BTreeMap<usize, usize> = BTreeMap::new();
+        for edge in &self.between {
+            *leaving.entry(edge.producer).or_default() += 1;
+            *arriving.entry(edge.consumer).or_default() += 1;
+        }
+        let fanning = leaving
+            .iter()
+            .chain(arriving.iter())
+            .find(|(_, count)| **count > 1)
+            .map(|(node, _)| *node);
+        fanning
+    }
+
     /// The canonical text the hash is taken over.
     ///
     /// # Invariant
@@ -765,10 +787,12 @@ struct Edge {
 /// The producer-to-consumer edges among a region's nodes.
 ///
 /// # Invariant
-/// One producer and one consumer per node: a node fed by two instances of its own region, or
-/// feeding two, is not the producer→code→consumer shape §6 matches and is refused by name.
-/// A region's first node is that shape with no incoming edge, so nothing here reads its own
-/// element — only a consumer's element must name the producer, which is [`region_schema`]'s.
+/// **One consumer per node**: a node two region instances feed names no single code between it
+/// and either producer, so it is refused by name here. A node feeding **two** is not: the
+/// **licence** is where the floor declines a fan-out.
+///
+/// The first node has no incoming edge, so nothing here reads its own element: only a
+/// consumer's element must name the producer.
 fn region_edges(
     graph: &Graph,
     starts: &[usize],
@@ -793,17 +817,6 @@ fn region_edges(
                 input,
             });
         }
-    }
-    if let Some(edge) = edges.iter().find(|edge| {
-        edges
-            .iter()
-            .filter(|other| other.producer == edge.producer)
-            .count()
-            > 1
-    }) {
-        return Err(SchemaRefusal::NotAReductionChain {
-            node: positions[edge.producer],
-        });
     }
     if let Some(consumer) = consumers.iter().position(|count| *count > 1) {
         return Err(SchemaRefusal::NotAReductionChain {

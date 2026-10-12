@@ -14,16 +14,341 @@ use crate::{
 /// # Invariant
 /// **The merged inputs are the union: the producer's inputs, then the consumer's surviving ones**,
 /// the absorbed one left out — so a surviving consumer read moves up by the producer's input
-/// count, a producer read keeps its place, and `input_classes` follows the same order. The
-/// producer's store and marks go, and the consumer's entry block is inlined.
+/// count, and `input_classes` follows the same order. The producer's store and marks go.
+///
+/// One name is [`compose_fan_out`] with one consumer, so a chain is not a second mechanism's.
 pub fn compose(
     producer: &KernelFragment,
     consumer: &KernelFragment,
     absorbed: u32,
 ) -> Result<KernelFragment, ComposeRefusal> {
+    compose_fan_out(producer, &[(consumer, absorbed)])
+}
+
+/// The fragment `producer` and every one of `consumers` become, or the decision it cannot make.
+///
+/// # Invariant
+/// **One producer, several consumers**: each entry names the input ordinal at which the
+/// producer's output reaches one consumer. The store goes once and **one cone is built for
+/// it**, copied at every absorbed read at that read's own address.
+///
+/// The union is the producer's inputs then each consumer's survivors, and **every consumer but
+/// the last must leave** the return block.
+pub fn compose_fan_out(
+    producer: &KernelFragment,
+    consumers: &[(&KernelFragment, u32)],
+) -> Result<KernelFragment, ComposeRefusal> {
+    if consumers.is_empty() {
+        return Err(ComposeRefusal::NoConsumerToInline);
+    }
     if let Err(cause) = producer.body.validate() {
         return Err(ComposeRefusal::ProducerIsNotWellFormed { cause });
     }
+    if producer.input_classes.len() != producer.inputs {
+        return Err(ComposeRefusal::ProducerIsNotWellFormed {
+            cause: format!(
+                "the producer declares {} input(s) and states {} class(es) for them",
+                producer.inputs,
+                producer.input_classes.len()
+            ),
+        });
+    }
+    let producer_parameters = producer.body.parameters();
+    // The union, folded from the consumers' own ports: the running `union` below is it counted
+    // forward.
+    let ports = consumers
+        .iter()
+        .fold(producer.inputs, |ports, (consumer, _)| {
+            ports.saturating_add(consumer.inputs.saturating_sub(1))
+        });
+    let producer_reads = buffer_reads(&producer.body, "producer")?;
+    // Only there do the two bodies' ordinals disagree about which buffer a position names.
+    if let Some(position) = producer_reads
+        .iter()
+        .map(|(_, position)| *position)
+        .find(|position| *position as usize >= producer.inputs)
+    {
+        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge {
+            position,
+            inputs: ports,
+        });
+    }
+    let mut edges = Vec::with_capacity(consumers.len());
+    for (index, (consumer, absorbed)) in consumers.iter().enumerate() {
+        edges.push(consumer_edge(
+            producer,
+            consumer,
+            *absorbed,
+            &producer_parameters,
+            index,
+            consumers.len(),
+        )?);
+    }
+    // A `BufferWriteCall` produces no value, so the write forwards its own value operand.
+    let writes = write_sites(&producer.body);
+    let [write] = writes[..] else {
+        return Err(if writes.is_empty() {
+            ComposeRefusal::ProducerWritesNothing
+        } else {
+            ComposeRefusal::ProducerWritesSeveral {
+                writes: writes.len(),
+            }
+        });
+    };
+    let (produced, forwarded, written_at) = write_edge(&producer.body, write)?;
+    for edge in &edges {
+        let expected = edge.fragment.input_classes[edge.absorbed];
+        if produced != expected {
+            return Err(ComposeRefusal::ClassesDiffer { produced, expected });
+        }
+    }
+    let returns: Vec<usize> = producer
+        .body
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| matches!(block.terminator, Terminator::Return { .. }))
+        .map(|(block, _)| block)
+        .collect();
+    let [return_block] = returns[..] else {
+        return Err(ComposeRefusal::ProducerDoesNotReturnInOneBlock {
+            returns: returns.len(),
+        });
+    };
+    // Every absorbed read becomes one copy of the cone, at that read's own address.
+    let cone = match producer.body.index_local_cone(
+        forwarded,
+        written_at,
+        producer_parameters.last().copied(),
+    ) {
+        Ok(cone) => cone,
+        // A value that never reaches the invocation index is the same in every lane.
+        Err(_) if !lane_dependent(&producer.body, forwarded, &producer_parameters) => {
+            Cone::reused(forwarded)
+        }
+        Err(blocker) => {
+            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
+                value: forwarded,
+                read: edges[0].absorbed_reads[0].0,
+                blocker,
+            });
+        }
+    };
+
+    let mut body = producer.body.clone();
+    // The producer's store goes: its buffer is not an output of the merged fragment.
+    for block in &mut body.blocks {
+        block.instrs.retain(|&value| value != write);
+    }
+    // The block and the port each consumer's own body lands at, both counted forward.
+    let mut blocks_base = body.blocks.len();
+    let mut union = producer.inputs;
+    // **The merged inputs are the union**, and `input_classes` is that same union.
+    let mut input_classes = producer.input_classes.clone();
+    let mut output_classes = Vec::new();
+    let mut outputs = 0;
+    let mut result_classes = Vec::new();
+    let mut slices = producer.slices.clone();
+    // The producer's marks go with its store: they name a role of an interface the merge drops.
+    let mut marks: Vec<KernelMark> = Vec::new();
+    for (index, edge) in edges.iter().enumerate() {
+        let consumer = edge.fragment;
+        // The consumer's values are renumbered past the producer's, less what is bound below.
+        let mut renumber = Renumber::default();
+        for (slot, &parameter) in consumer.body.parameters().iter().enumerate() {
+            renumber.bind(parameter, producer_parameters[slot]);
+        }
+        for &(read, _) in &edge.absorbed_reads {
+            // The read's own id until the copy below replaces it, so it reserves no value of its own.
+            renumber.bind(read, read);
+        }
+        let landed: Vec<Option<ValueId>> = (0..consumer.body.values.len())
+            .map(|value| renumber.reserve(ValueId(value as u32), &mut body))
+            .collect();
+        // **Every surviving read of the consumer's own buffer takes the union's position for it.**
+        let shifted = shifted_positions(&mut body, &edge.reads, union, edge.absorbed);
+        let entry = consumer.body.entry;
+        let base = blocks_base;
+        let mapped_block = |block: usize| -> usize {
+            if block == entry {
+                return_block
+            } else {
+                base + block - usize::from(block > entry)
+            }
+        };
+        // One copy of the cone per read, at that read's own address, spliced in where it stood.
+        let absorbed_at_address: HashMap<ValueId, ValueId> =
+            edge.absorbed_reads.iter().copied().collect();
+        let mut shared: HashMap<(usize, ValueId), (usize, ValueId)> = HashMap::new();
+        let mut sequences: Vec<Vec<ValueId>> = Vec::with_capacity(consumer.body.blocks.len());
+        for (block_index, block) in consumer.body.blocks.iter().enumerate() {
+            let mut sequence: Vec<ValueId> = Vec::with_capacity(block.instrs.len());
+            let merged_block = mapped_block(block_index);
+            for &value in &block.instrs {
+                let Some(&address) = absorbed_at_address.get(&value) else {
+                    // The position is a constant **value**, so it stands before the read that uses it.
+                    if let Some(&constant) = shifted.get(&value) {
+                        sequence.push(constant);
+                    }
+                    sequence.push(renumber.resolve(value));
+                    continue;
+                };
+                // **One copy per address per block**: the return block dominates them all.
+                let address = renumber.resolve(address);
+                let key = (merged_block, address);
+                let root = match shared.get(&key) {
+                    Some(&(placed, root)) if placed == return_block || placed == merged_block => {
+                        root
+                    }
+                    _ => {
+                        let mut fresh: HashMap<ValueId, ValueId> = HashMap::new();
+                        let root = copy_cone(
+                            &cone,
+                            forwarded,
+                            &producer.body,
+                            address,
+                            &mut body,
+                            &mut fresh,
+                            &mut sequence,
+                        );
+                        shared.insert(key, (merged_block, root));
+                        root
+                    }
+                };
+                renumber.bind(value, root);
+            }
+            sequences.push(sequence);
+        }
+        // **After the copies**: an operand that read the absorbed buffer now reads the cone.
+        for (value, definition) in consumer.body.values.iter().enumerate() {
+            let Some(target) = landed[value] else {
+                continue;
+            };
+            body.values[target.0 as usize] = match definition {
+                ValueDef::BlockParam { block, index } => ValueDef::BlockParam {
+                    block: mapped_block(*block),
+                    index: *index,
+                },
+                ValueDef::Instr { op, args, classes } => {
+                    let mut args: Vec<ValueId> =
+                        args.iter().map(|&arg| renumber.resolve(arg)).collect();
+                    if let Some(&constant) = shifted.get(&ValueId(value as u32))
+                        && let Some(first) = args.first_mut()
+                    {
+                        *first = constant;
+                    }
+                    ValueDef::Instr {
+                        op: *op,
+                        args,
+                        classes: classes.clone(),
+                    }
+                }
+            };
+        }
+        let resolve = |value: ValueId| renumber.resolve(value);
+        for (index, block) in consumer.body.blocks.iter().enumerate() {
+            if index == entry {
+                continue;
+            }
+            body.blocks.push(BasicBlock {
+                params: block.params.iter().map(|&param| resolve(param)).collect(),
+                instrs: std::mem::take(&mut sequences[index]),
+                terminator: mapped_terminator(&block.terminator, &resolve, &mapped_block),
+            });
+        }
+        body.blocks[return_block]
+            .instrs
+            .extend(std::mem::take(&mut sequences[entry]));
+        body.blocks[return_block].terminator = mapped_terminator(
+            &consumer.body.blocks[entry].terminator,
+            &resolve,
+            &mapped_block,
+        );
+        for pair in &consumer.body.barriers {
+            body.barriers.push(Barrier {
+                write: resolve(pair.write),
+                read: resolve(pair.read),
+            });
+        }
+        // Only the first consumer's marks are kept: a merged node carries no claim to read them.
+        if index == 0 {
+            marks = consumer
+                .marks
+                .iter()
+                .map(|mark| KernelMark {
+                    value: resolve(mark.value),
+                    payload: mark.payload.clone(),
+                })
+                .collect();
+        }
+        input_classes.extend(
+            consumer
+                .input_classes
+                .iter()
+                .enumerate()
+                .filter(|(ordinal, _)| *ordinal != edge.absorbed)
+                .map(|(_, class)| *class),
+        );
+        output_classes.extend(consumer.output_classes.iter().copied());
+        outputs += consumer.outputs;
+        // The last consumer's terminator is the merged body's, so its results are the merged ones.
+        result_classes.clone_from(&consumer.result_classes);
+        if slices.is_empty() {
+            slices.clone_from(&consumer.slices);
+        }
+        blocks_base += consumer.body.blocks.len() - 1;
+        union += consumer.inputs - 1;
+    }
+
+    compact(&mut body, &mut marks);
+    let fragment = KernelFragment {
+        param_shape: producer.param_shape.clone(),
+        roles: KernelRoles::default(),
+        body,
+        inputs: ports,
+        outputs,
+        input_classes,
+        output_classes,
+        result_classes,
+        target: producer.target,
+        slices,
+        marks,
+    };
+    if let Err(cause) = fragment.body.validate() {
+        return Err(ComposeRefusal::MergedBodyIsRefused { cause });
+    }
+    if let Err(cause) = fragment.validate() {
+        return Err(ComposeRefusal::MergedFragmentIsRefused { cause });
+    }
+    Ok(fragment)
+}
+
+/// One consumer of the producer: the fragment, and the reads the composition reads off it.
+///
+/// # Invariant
+/// The `absorbed` position is resolved against the consumer's own inputs before any value moves,
+/// so an edge this composition cannot serve is refused while the bodies are still untouched.
+struct Edge<'a> {
+    fragment: &'a KernelFragment,
+    absorbed: usize,
+    reads: Vec<(ValueId, u32)>,
+    absorbed_reads: Vec<(ValueId, ValueId)>,
+}
+
+/// Everything one consumer must answer before the merged body is built.
+///
+/// # Invariant
+/// **Every condition is checked before a body is touched**, and the one that needs the merged
+/// shape is stated here: a consumer that does not leave its entry block has nowhere for the next
+/// consumer's body to go, while the last consumer keeps the merged body's terminator.
+fn consumer_edge<'a>(
+    producer: &KernelFragment,
+    consumer: &'a KernelFragment,
+    absorbed: u32,
+    producer_parameters: &[ValueId],
+    index: usize,
+    total: usize,
+) -> Result<Edge<'a>, ComposeRefusal> {
     if let Err(cause) = consumer.body.validate() {
         return Err(ComposeRefusal::ConsumerIsNotWellFormed { cause });
     }
@@ -46,17 +371,6 @@ pub fn compose(
             inputs: consumer.inputs,
         });
     }
-    // The union, the absorbed ordinal left out; a buffer both bodies name is listed twice.
-    let inputs = producer.inputs + consumer.inputs - 1;
-    if producer.input_classes.len() != producer.inputs {
-        return Err(ComposeRefusal::ProducerIsNotWellFormed {
-            cause: format!(
-                "the producer declares {} input(s) and states {} class(es) for them",
-                producer.inputs,
-                producer.input_classes.len()
-            ),
-        });
-    }
     if consumer.input_classes.len() != consumer.inputs {
         return Err(ComposeRefusal::ConsumerIsNotWellFormed {
             cause: format!(
@@ -72,7 +386,6 @@ pub fn compose(
             consumer: first_slice_ordinal(&consumer.body),
         });
     }
-    let producer_parameters = producer.body.parameters();
     let consumer_parameters = consumer.body.parameters();
     if producer_parameters.len() != consumer_parameters.len() {
         return Err(ComposeRefusal::ParameterCountsDiffer {
@@ -81,52 +394,20 @@ pub fn compose(
         });
     }
     duplicated_mark(&consumer.marks)?;
-
-    // A `BufferWriteCall` produces no value, so the write forwards its own value operand.
-    let writes = write_sites(&producer.body);
-    let [write] = writes[..] else {
-        return Err(if writes.is_empty() {
-            ComposeRefusal::ProducerWritesNothing
-        } else {
-            ComposeRefusal::ProducerWritesSeveral {
-                writes: writes.len(),
-            }
-        });
-    };
-    let (produced, forwarded, written_at) = write_edge(&producer.body, write)?;
-    if produced != consumer.input_classes[absorbed_at] {
-        return Err(ComposeRefusal::ClassesDiffer {
-            produced,
-            expected: consumer.input_classes[absorbed_at],
-        });
-    }
-    let returns: Vec<usize> = producer
-        .body
-        .blocks
-        .iter()
-        .enumerate()
-        .filter(|(_, block)| matches!(block.terminator, Terminator::Return { .. }))
-        .map(|(block, _)| block)
-        .collect();
-    let [return_block] = returns[..] else {
-        return Err(ComposeRefusal::ProducerDoesNotReturnInOneBlock {
-            returns: returns.len(),
-        });
-    };
     if let Some(block) = branch_targeting(&consumer.body, consumer.body.entry) {
         return Err(ComposeRefusal::ConsumerEntryIsABranchTarget { block });
     }
-    let producer_reads = buffer_reads(&producer.body, "producer")?;
-    // Only there do the two bodies' ordinals disagree about which buffer a position names.
-    if let Some(position) = producer_reads
-        .iter()
-        .map(|(_, position)| *position)
-        .find(|position| *position as usize >= producer.inputs)
+    // A branching entry leaves the merged body elsewhere: the next consumer would run off this path.
+    if index + 1 < total
+        && !matches!(
+            consumer.body.blocks[consumer.body.entry].terminator,
+            Terminator::Return { .. }
+        )
     {
-        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge { position, inputs });
+        return Err(ComposeRefusal::ConsumerEntryDoesNotReturn { consumer: index });
     }
-    let consumer_reads = buffer_reads(&consumer.body, "consumer")?;
-    let absorbed_reads: Vec<(ValueId, ValueId)> = consumer_reads
+    let reads = buffer_reads(&consumer.body, "consumer")?;
+    let absorbed_reads: Vec<(ValueId, ValueId)> = reads
         .iter()
         .filter(|(_, position)| *position == absorbed)
         .map(|(value, _)| (*value, read_address(&consumer.body, *value)))
@@ -134,190 +415,12 @@ pub fn compose(
     if absorbed_reads.is_empty() {
         return Err(ComposeRefusal::AbsorbedIsNotRead { absorbed });
     }
-    // Every absorbed read becomes one copy of the cone, at that read's own address.
-    let cone = match producer.body.index_local_cone(
-        forwarded,
-        written_at,
-        producer_parameters.last().copied(),
-    ) {
-        Ok(cone) => cone,
-        // A value that never reaches the invocation index is the same in every lane.
-        Err(_) if !lane_dependent(&producer.body, forwarded, producer_parameters) => {
-            Cone::reused(forwarded)
-        }
-        Err(blocker) => {
-            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
-                value: forwarded,
-                read: absorbed_reads[0].0,
-                blocker,
-            });
-        }
-    };
-
-    // The consumer's values are renumbered past the producer's, less what is bound below.
-    let mut renumber = Renumber::default();
-    for (slot, &parameter) in consumer_parameters.iter().enumerate() {
-        renumber.bind(parameter, producer_parameters[slot]);
-    }
-    for &(read, _) in &absorbed_reads {
-        // The read's own id until the copy below replaces it, so it reserves no value of its own.
-        renumber.bind(read, read);
-    }
-    let mut body = producer.body.clone();
-    // The producer's store goes: its buffer is not an output of the merged fragment.
-    for block in &mut body.blocks {
-        block.instrs.retain(|&value| value != write);
-    }
-    let producer_blocks = body.blocks.len();
-    let entry = consumer.body.entry;
-    let mapped_block = |block: usize| -> usize {
-        if block == entry {
-            return_block
-        } else {
-            producer_blocks + block - usize::from(block > entry)
-        }
-    };
-    let landed: Vec<Option<ValueId>> = (0..consumer.body.values.len())
-        .map(|index| renumber.reserve(ValueId(index as u32), &mut body))
-        .collect();
-    // **Every surviving read of the consumer's own buffer takes the union's position for it.**
-    let shifted = shifted_positions(&mut body, &consumer_reads, producer.inputs, absorbed_at);
-    // One copy of the cone per read, at that read's own address, spliced in where it stood.
-    let absorbed_at_address: HashMap<ValueId, ValueId> = absorbed_reads.iter().copied().collect();
-    let mut shared: HashMap<(usize, ValueId), (usize, ValueId)> = HashMap::new();
-    let mut sequences: Vec<Vec<ValueId>> = Vec::with_capacity(consumer.body.blocks.len());
-    for (index, block) in consumer.body.blocks.iter().enumerate() {
-        let mut sequence: Vec<ValueId> = Vec::with_capacity(block.instrs.len());
-        let merged_block = mapped_block(index);
-        for &value in &block.instrs {
-            let Some(&address) = absorbed_at_address.get(&value) else {
-                // The position is a constant **value**, so it stands before the read that uses it.
-                if let Some(&constant) = shifted.get(&value) {
-                    sequence.push(constant);
-                }
-                sequence.push(renumber.resolve(value));
-                continue;
-            };
-            // **One copy per address per block**: the return block dominates them all.
-            let address = renumber.resolve(address);
-            let key = (merged_block, address);
-            let root = match shared.get(&key) {
-                Some(&(placed, root)) if placed == return_block || placed == merged_block => root,
-                _ => {
-                    let mut fresh: HashMap<ValueId, ValueId> = HashMap::new();
-                    let root = copy_cone(
-                        &cone,
-                        forwarded,
-                        &producer.body,
-                        address,
-                        &mut body,
-                        &mut fresh,
-                        &mut sequence,
-                    );
-                    shared.insert(key, (merged_block, root));
-                    root
-                }
-            };
-            renumber.bind(value, root);
-        }
-        sequences.push(sequence);
-    }
-    // **After** the copies: an operand that read the absorbed buffer now reads the cone.
-    for (index, definition) in consumer.body.values.iter().enumerate() {
-        let Some(target) = landed[index] else {
-            continue;
-        };
-        body.values[target.0 as usize] = match definition {
-            ValueDef::BlockParam { block, index } => ValueDef::BlockParam {
-                block: mapped_block(*block),
-                index: *index,
-            },
-            ValueDef::Instr { op, args, classes } => {
-                let mut args: Vec<ValueId> =
-                    args.iter().map(|&arg| renumber.resolve(arg)).collect();
-                if let Some(&constant) = shifted.get(&ValueId(index as u32))
-                    && let Some(first) = args.first_mut()
-                {
-                    *first = constant;
-                }
-                ValueDef::Instr {
-                    op: *op,
-                    args,
-                    classes: classes.clone(),
-                }
-            }
-        };
-    }
-    let resolve = |value: ValueId| renumber.resolve(value);
-    for (index, block) in consumer.body.blocks.iter().enumerate() {
-        if index == entry {
-            continue;
-        }
-        body.blocks.push(BasicBlock {
-            params: block.params.iter().map(|&param| resolve(param)).collect(),
-            instrs: std::mem::take(&mut sequences[index]),
-            terminator: mapped_terminator(&block.terminator, &resolve, &mapped_block),
-        });
-    }
-    body.blocks[return_block]
-        .instrs
-        .extend(std::mem::take(&mut sequences[entry]));
-    body.blocks[return_block].terminator = mapped_terminator(
-        &consumer.body.blocks[entry].terminator,
-        &resolve,
-        &mapped_block,
-    );
-    for pair in &consumer.body.barriers {
-        body.barriers.push(Barrier {
-            write: resolve(pair.write),
-            read: resolve(pair.read),
-        });
-    }
-    // The producer's marks go with its store: they name a role of an interface the merge drops.
-    let mut marks: Vec<KernelMark> = consumer
-        .marks
-        .iter()
-        .map(|mark| KernelMark {
-            value: resolve(mark.value),
-            payload: mark.payload.clone(),
-        })
-        .collect();
-
-    // **The merged inputs are the union** built above, and `input_classes` is that same union.
-    compact(&mut body, &mut marks);
-    let mut input_classes = producer.input_classes.clone();
-    input_classes.extend(
-        consumer
-            .input_classes
-            .iter()
-            .enumerate()
-            .filter(|(ordinal, _)| *ordinal != absorbed_at)
-            .map(|(_, class)| *class),
-    );
-    let fragment = KernelFragment {
-        param_shape: producer.param_shape.clone(),
-        roles: KernelRoles::default(),
-        body,
-        inputs,
-        outputs: consumer.outputs,
-        input_classes,
-        output_classes: consumer.output_classes.clone(),
-        result_classes: consumer.result_classes.clone(),
-        target: producer.target,
-        slices: if producer.slices.is_empty() {
-            consumer.slices.clone()
-        } else {
-            producer.slices.clone()
-        },
-        marks,
-    };
-    if let Err(cause) = fragment.body.validate() {
-        return Err(ComposeRefusal::MergedBodyIsRefused { cause });
-    }
-    if let Err(cause) = fragment.validate() {
-        return Err(ComposeRefusal::MergedFragmentIsRefused { cause });
-    }
-    Ok(fragment)
+    Ok(Edge {
+        fragment: consumer,
+        absorbed: absorbed_at,
+        reads,
+        absorbed_reads,
+    })
 }
 
 /// Why two fragments could not become one.
@@ -327,6 +430,8 @@ pub fn compose(
 /// guessed here would be a fragment that runs and answers another program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposeRefusal {
+    /// The composition names no consumer, so there is nothing to inline into the producer.
+    NoConsumerToInline,
     /// The producer's body is not one this crate reads.
     ProducerIsNotWellFormed {
         /// What `KernelBody::validate` refused.
@@ -408,6 +513,11 @@ pub enum ComposeRefusal {
         /// The block that branches there.
         block: usize,
     },
+    /// A consumer that is not the last leaves its entry block by branching.
+    ConsumerEntryDoesNotReturn {
+        /// Which consumer, in the order the composition named them.
+        consumer: usize,
+    },
     /// The forwarded value is lane-dependent, and its cone is not a function of an address.
     ForwardedValueIsLaneDependent {
         /// The value being forwarded.
@@ -454,6 +564,7 @@ impl ComposeRefusal {
     /// against the variant a caller reads, so the two would drift.
     pub fn name(&self) -> &'static str {
         match self {
+            ComposeRefusal::NoConsumerToInline => "NoConsumerToInline",
             ComposeRefusal::ProducerIsNotWellFormed { .. } => "ProducerIsNotWellFormed",
             ComposeRefusal::ConsumerIsNotWellFormed { .. } => "ConsumerIsNotWellFormed",
             ComposeRefusal::ShapesDiffer { .. } => "ShapesDiffer",
@@ -470,6 +581,7 @@ impl ComposeRefusal {
                 "ProducerDoesNotReturnInOneBlock"
             }
             ComposeRefusal::ConsumerEntryIsABranchTarget { .. } => "ConsumerEntryIsABranchTarget",
+            ComposeRefusal::ConsumerEntryDoesNotReturn { .. } => "ConsumerEntryDoesNotReturn",
             ComposeRefusal::ForwardedValueIsLaneDependent { .. } => "ForwardedValueIsLaneDependent",
             ComposeRefusal::DuplicatedMark { .. } => "DuplicatedMark",
             ComposeRefusal::SlicesCollide { .. } => "SlicesCollide",
@@ -482,6 +594,12 @@ impl ComposeRefusal {
 impl std::fmt::Display for ComposeRefusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ComposeRefusal::NoConsumerToInline => {
+                write!(
+                    formatter,
+                    "the composition names no consumer, so there is nothing to inline"
+                )
+            }
             ComposeRefusal::ProducerIsNotWellFormed { cause } => {
                 write!(formatter, "the producer's body is not well formed: {cause}")
             }
@@ -548,6 +666,12 @@ impl std::fmt::Display for ComposeRefusal {
                 formatter,
                 "block {block} branches to the consumer's entry block, whose parameters are bound \
                  once, so a second arrival would re-enter what is inlined away"
+            ),
+            ComposeRefusal::ConsumerEntryDoesNotReturn { consumer } => write!(
+                formatter,
+                "consumer {consumer} does not return from its entry block, and the next \
+                 consumer's body is appended where that block leaves the merged body, so it would \
+                 run on a path this consumer never takes"
             ),
             ComposeRefusal::ForwardedValueIsLaneDependent {
                 value,
@@ -831,14 +955,14 @@ fn mapped_terminator(
 /// The position constant each surviving read of the consumer takes in the merged body.
 ///
 /// # Invariant
-/// The union puts the producer's inputs first, so the consumer's ordinal `c` lands at
-/// `producer_inputs + c - (1 if c > absorbed else 0)`; the absorbed read is dropped and takes
-/// none, and each surviving read gets a fresh constant **value**, because a read's position is a
-/// value and not an offset.
+/// The union puts the producer's inputs first, then each consumer's survivors after the ones
+/// already there, so a consumer's ordinal `c` lands at `base + c - (1 if c > absorbed else 0)`;
+/// the absorbed read is dropped and takes none, and each surviving read gets a fresh constant
+/// **value**, because a read's position is a value and not an offset.
 fn shifted_positions(
     merged: &mut KernelBody,
     consumer_reads: &[(ValueId, u32)],
-    producer_inputs: usize,
+    base: usize,
     absorbed: usize,
 ) -> HashMap<ValueId, ValueId> {
     let mut shifted = HashMap::new();
@@ -847,8 +971,8 @@ fn shifted_positions(
         if position == absorbed {
             continue;
         }
-        let at = i64::try_from(producer_inputs + position - usize::from(position > absorbed))
-            .unwrap_or(i64::MAX);
+        let at =
+            i64::try_from(base + position - usize::from(position > absorbed)).unwrap_or(i64::MAX);
         let constant = ValueId(merged.values.len() as u32);
         merged.values.push(ValueDef::Instr {
             op: KernelInstr::Const(ScalarClass::Int, at),

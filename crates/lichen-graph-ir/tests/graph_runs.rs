@@ -373,7 +373,9 @@ fn a_batch_policy_is_refused_by_name_rather_than_run_as_something_else() {
     let stub = Stub::new();
     let refusal = Runner::new(&stub, Policy::Batch)
         .run(&chain(4), vec![Value::host(vec![0; 4])])
-        .expect_err("this stub cannot batch, so the policy is refused rather than run as something else");
+        .expect_err(
+            "this stub cannot batch, so the policy is refused rather than run as something else",
+        );
     assert!(
         matches!(
             refusal,

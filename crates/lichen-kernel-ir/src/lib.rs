@@ -23,7 +23,7 @@ pub use body::{
     from_flat,
 };
 pub(crate) use body::{Cone, ConeOrigin};
-pub use compose::{ComposeRefusal, compose};
+pub use compose::{ComposeRefusal, compose, compose_fan_out};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{

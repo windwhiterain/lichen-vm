@@ -580,13 +580,15 @@ fn an_address_the_consumer_computes_is_answered_by_the_producer_s_own_cone() {
     );
 }
 
-/// A region whose producer feeds two consumers is refused by the derivation's own name.
+/// A fan-out no pack names is refused by the licence's own name, and nothing merges.
 ///
 /// # Invariant
-/// The fan-out is expressible: both consumers are the same claimed kernel, so the region holds
-/// three instances and `region_edges` refuses the producer's second edge.
+/// The fan-out is **expressible**: both consumers are the same claimed kernel, so the region holds
+/// three instances and the derivation hashes it — which is what a pack's `fuse` must name. The
+/// floor's own proof is the reduction **chain**, and a node two of them read from is not one, so
+/// the licence refuses it by the name the derivation used to (`fan_out_merge.rs` merges it).
 #[test]
-fn a_fan_out_region_is_refused_by_the_derivations_own_name() {
+fn a_fan_out_region_with_no_pack_is_refused_by_name() {
     clear_graph_pass();
     let (module, value, _root) = common::run(&fan_out());
     let graph = recorded(&module, &value);
@@ -597,10 +599,11 @@ fn a_fan_out_region_is_refused_by_the_derivations_own_name() {
         lines,
         vec![
             "region 0 (nodes 0, 1, 2): refused: NotAReductionChain: graph node 0's edges inside \
-             the region do not make one producer-to-consumer chain"
+             the region do not make one producer-to-consumer chain, so the floor's own proof cannot \
+             hold it, and a merge is licensed only by a pack whose `fuse` names this region's schema"
                 .to_string()
         ],
-        "the region is refused by the derivation's own name, and nothing merged"
+        "the region is refused by name, and nothing merged"
     );
     clear_graph_pass();
 }
