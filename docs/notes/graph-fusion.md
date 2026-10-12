@@ -673,14 +673,38 @@ position-for-position correspondence of the producer's reads with the consumer's
 caller's precondition whose violation would be a wrong answer, and `compose`'s own doc now says so and
 names the check.
 
-**What the merge can reach today is narrower than "shape-changing fusion", and the reason is worth
-stating.** `compose` refuses a forwarded value that is reachable from the producer's invocation index,
-and an **elementwise** producer's value always is — so the only region that merges today is one whose
-producer is **lane-invariant**: a fold over the whole extent, written at position `0`. The address
-check's invocation-index arm is a licence no program cashes. Fan-out and elementwise regions therefore
-need the thing this section's second half is about — **the plan**, which stages a producer's value
-across lanes with a slice and a barrier. The plan is not tuning on this path; it is what makes those
-shapes reachable at all. Two more facts a reader should carry: `returns() == None` forbids **every**
+**What the merge can reach today is narrower than "shape-changing fusion", and the reason is a
+classification `compose` does not yet make — not staging.** `compose` refuses a forwarded value that is
+reachable from the producer's invocation index, and an **elementwise** producer's value always is — so
+the only region that merges today is one whose producer is **lane-invariant**: a fold over the whole
+extent, written at position `0`. Measured since, and the first reading of this was wrong: **lane
+invariance is strictly stronger than what a merge needs.** An **index-local** producer — one whose
+output at an address is a pure function of that address — needs **no exchange at all**, because the
+consumer can recompute it at whatever address it reads; the checkable predicate is the same
+`depends_on` walk with the write's address substituted for the lane, plus the soundness clauses that
+the cone contains no `SliceReadCall`, no `CallKernel` and no non-entry block parameter (loop-carried
+state). So `lane-invariant ⊊ index-local`, and the first elementwise case (`e[i] = d[i] * 2` feeding
+`z[i] = e[i]`) is closed by a **lane-conditioned** form of the refusal — refuse only when an absorbed
+read addresses neither `0` nor the survivor's own invocation index, which is the address test the merge
+pass already carries. The general case is **read-site recomputation**: one copy of the producer's cone
+per read, with the address rebound (`KernelBody`'s transcendental inlining is the same machinery), which
+is what `e[i] + e[i + 1]` needs and what in-lane binding cannot do.
+
+**No shape in this tree needs cross-lane staging**, and that matters for this section's second half:
+the only staging that exists is intra-kernel (`Folding::tiled` — one reduction folded across a
+workgroup, with no consumer node and no graph edge), no producer→consumer region measured needs a slice
+or a barrier, and there is no third class (neither lane-invariant nor index-local) in the tree. The
+staging slice is therefore speculative for now, and the plan's two fact checks have nothing to bite on
+until a shape needs one; see the refusals below for the state those two are actually in.
+
+**The decision to fuse is the machine's, not the engine's, and not the logic's.** Inlining is
+*logically* safe wherever those predicates hold — that is what makes this half tempting to do
+automatically — but whether it pays is a machine fact: it changes register pressure, occupancy and
+instruction count, and an extreme optimization has to weigh all of it. So a merge is **claim-gated**:
+the logic's claim states a *fact* about its code (a reduction's algebra, an elementwise kernel's
+function), and a **pack** states the machine's decision (`fuse`, further below). The automatic floor
+merges only what a declaration lets it *prove* — today, a reduction chain whose algebra licenses the
+merge. Two more facts a reader should carry: `returns() == None` forbids **every**
 merge (the runner then takes the whole value table, so a deleted value changes the answer, and the pass
 refuses rather than merging), and the surviving node is **anonymous** — a composed fragment is never
 registered, so it carries no claim and a later digest-keyed pass walks past it, which the merged report
@@ -835,9 +859,12 @@ note:
 and with the three quantities — a slice's element count, a staging group's width, a device's
 lane width — that keep being read as one.
 
-The refusals this interface owes, each naming its cause: `PlanContradicted` (a
-declared plan the three facts refute), `UncertifiedCrossLaneRead` (a cross-lane
-value with neither a barrier nor a uniformity certificate),
+The refusals this interface owes, each naming its cause — **and the state of two of them is not what
+this paragraph first claimed**, measured at `9616085b`: `UncertifiedCrossLaneRead` **exists only in
+these notes** (nothing in `crates/` names it), and the code's `PlanContradicted` means something
+narrower than "the three facts refute a plan": it is *the plan's `space` against the slice's declared
+`space`* (`crates/lichen-kernel-ir/src/plan.rs`). So the fact-checking half is unwritten, and it stays
+that way until a shape needs a staging to check. The two that do exist:
 `StagingNotOnThisBackend` (a target that cannot honour a space refuses it **by
 name** — the host path refuses any staged body by the memory note's §7 decision,
 and the GPU target refuses a `Register`-placed slice — so a plan that

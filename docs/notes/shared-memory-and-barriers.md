@@ -1195,7 +1195,11 @@ states the *interface* — what a pack may say about a plan — and delegates th
 staging table". This note is the receiving end of that delegation, and the pieces it
 owes are steps 3–5. The four refusals §5 names split across them: `PlanContradicted`
 and `UncertifiedCrossLaneRead` are step 4's (the facts refuting a declared plan; a
-cross-lane value with neither a barrier nor a certificate), `StagingNotOnThisBackend`
+cross-lane value with neither a barrier nor a certificate) — **and measured at `9616085b`, both are
+still unwritten**: `UncertifiedCrossLaneRead` is named only in these notes, and the code's
+`PlanContradicted` means *the plan's `space` against the slice's declared `space`*
+(`crates/lichen-kernel-ir/src/plan.rs`), which is step 2's question rather than the facts'. No shape in
+the tree needs a staging yet, so nothing has made them bite — `StagingNotOnThisBackend`
 is step 6's, and `StagingWidthNotAWidth` is step 2's — the step that did not exist
 when §5 was written, and the reason §5's seam "a declared plan is checked against the
 same facts the automatic one is" was owing a width with no named source.
