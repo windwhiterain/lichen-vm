@@ -181,7 +181,7 @@ consequences, and all three are the same decision:
 `0 - 1 > 1` is `1` and `(0 - 1) / 2` is `usize::MAX / 2`; both are pinned in
 `an_int_is_unsigned_where_the_two_readings_differ`, and the device side in
 `an_unsigned_reading_is_what_the_language_means`
-(`crates/lichen-compute-gpu/tests/gpu_matches_cpu.rs`), whose inputs are `2^63`
+(`crates/lichen-compute-gpu/tests/compute_gpu/gpu_matches_cpu.rs`), whose inputs are `2^63`
 and above — the values where a signed reading would take the other branch.
 
 ## 6. Division by zero
@@ -331,13 +331,13 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   example prints, and the two backends are compared on the device by
   `arithmetic`/`predicates` above.
 - SPIR-V, on a device: `arithmetic`, `predicates` and `unsigned_reading` in
-  `crates/lichen-compute-gpu/tests/gpu_matches_cpu.rs`, each checked against a
+  `crates/lichen-compute-gpu/tests/compute_gpu/gpu_matches_cpu.rs`, each checked against a
   hand-written expectation **and** an independent CPU reading of the IR.
 - SPIR-V, without a device: `the_emitted_module_validates` and
   `the_two_conversions_validate_in_a_float_module`
-  (`crates/lichen-compute-gpu/tests/spirv_validation.rs`) hand the emitted words
+  (`crates/lichen-compute-gpu/tests/compute_gpu/spirv_validation.rs`) hand the emitted words
   to `spirv-val`, and `an_integer_module_refuses_a_conversion_by_name`
-  (`crates/lichen-compute-gpu/tests/refusals.rs`) is the refusal that needs no
+  (`crates/lichen-compute-gpu/tests/compute_gpu/refusals.rs`) is the refusal that needs no
   validator at all.
 - The example programs `examples/operators.lichen` and `examples/gcd.lichen` are
   the user-visible statement of the set, and `tests/examples.rs` runs them.

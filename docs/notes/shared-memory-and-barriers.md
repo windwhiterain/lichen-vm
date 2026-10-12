@@ -1279,7 +1279,7 @@ per-lane reference, and not CPU against device.
 **The case it was landed with, and the two things driving it measured.** The tiling is in
 `lichen-fusion-bridge/src/tiled.rs` and its acceptance case in
 `crates/lichen-compute/tests/tiled_reduction.rs`; the fold over a staged slice is also driven
-directly on a device by `crates/lichen-compute-gpu/tests/graph_on_device.rs`. Two facts came out
+directly on a device by `crates/lichen-compute-gpu/tests/compute_gpu/graph_on_device.rs`. Two facts came out
 of that work and belong to the design rather than to the tests:
 
 - **A staged launch's extent is the elements the fold reads, not the lanes it runs.**

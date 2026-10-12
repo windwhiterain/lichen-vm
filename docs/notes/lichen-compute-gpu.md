@@ -176,7 +176,7 @@ contract*: the section order, the declared capabilities, the decorations, and
 what the entry point's interface lists. A builder validates none of that.
 
 What removes that risk is offline validation, and it is why `spirv-val` is the
-development tool for this crate rather than a runtime hope. `tests/spirv_validation.rs`
+development tool for this crate rather than a runtime hope. `tests/compute_gpu/spirv_validation.rs`
 **runs** the validator rather than depending on it: it emits a fragment, pipes the
 words to `spirv-val --target-env vulkan1.1 -`, and asserts the module validates.
 That check needs no device, and it **skips loudly** (rather than passing quietly)
@@ -476,7 +476,7 @@ outputs, and let a write naming an **input** compile and write an output.)* They
 distinct spaces, and collapsing them into one list of buffers is a bug that
 produces **no error at all**: a write at position `0` reaches **input 0**, every
 run writes its result into its own input, and the output comes back as
-plausible-looking zeroes with no Vulkan error and no diagnostic. `tests/refusals.rs`
+plausible-looking zeroes with no Vulkan error and no diagnostic. `tests/compute_gpu/refusals.rs`
 pins the separation, including the negative case where a write names an output
 that does not exist.
 

@@ -18,7 +18,7 @@
 > (the recording, `intern`/`lookup`, `run`), `crates/lichen-compute/src/compute.rs`
 > (`ComputeOperator::Graph`/`GraphRun`, `record_launch`, `build_graph`, `run_graph`,
 > `assemble_parameter`), `crates/lichen-compute/tests/graph_jit.rs`,
-> `graph_structure.rs` and `crates/lichen-compute-gpu/tests/graph_on_device.rs`.
+> `graph_structure.rs` and `crates/lichen-compute-gpu/tests/compute_gpu/graph_on_device.rs`.
 >
 > Companions: [lichen-compute-gpu](lichen-compute-gpu.md) (the backend and the
 > pool of submission slots), [compute-buffer-wrapper](compute-buffer-wrapper.md)

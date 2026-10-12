@@ -746,10 +746,10 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
     the header, so the continue target dominates every backedge block and is
     post-dominated by them.
 
-  **Evidence.** `tests/spirv_validation.rs`'s `a_body_with_control_flow_validates`
+  **Evidence.** `tests/compute_gpu/spirv_validation.rs`'s `a_body_with_control_flow_validates`
   emits three modules and hands each to a real `spirv-val` v2024.4 — a selection,
   a loop with a carried value, and a loop whose body leaves on a conditional
-  backedge (the pass-through case above); `tests/refusals.rs`'s
+  backedge (the pass-through case above); `tests/compute_gpu/refusals.rs`'s
   `a_write_inside_a_loop_is_refused_by_name` pins `WriteInsideLoop`. The
   disassembly of the third is what the design predicted: the header's
   `OpLoopMerge %merge %body`, a `%pass` that both arms branch to and that carries
@@ -1236,7 +1236,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      branches to its body on its exit condition is a legal module, and the validator
      accepts it in both spellings — so what covers the arm order without a device is
      `a_loop_header_leaves_on_its_own_exit_arm`
-     (`crates/lichen-compute-gpu/tests/spirv_validation.rs`), which reads the
+     (`crates/lichen-compute-gpu/tests/compute_gpu/spirv_validation.rs`), which reads the
      header's `OpLoopMerge` and the labels of the branch after it. The labels now
      follow the arms — an exit arm spelled first swaps them, so the condition's
      polarity stays the spelling's own — and the acceptance case runs **both
@@ -1246,7 +1246,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      branch rather than validating: a header branching to its body on its exit
      condition is a legal module. The base-first module *is* validated, by
      `a_body_with_control_flow_validates` in
-     `crates/lichen-compute-gpu/tests/spirv_validation.rs` — not by this test, which
+     `crates/lichen-compute-gpu/tests/compute_gpu/spirv_validation.rs` — not by this test, which
      hands nothing to the validator.
 
      **What the test covers, and what it does not.** It reads the **first**
