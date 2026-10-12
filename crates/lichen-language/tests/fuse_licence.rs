@@ -13,8 +13,7 @@ use lichen_compute::compute::{
 use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    ComposeRefusal, KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId,
-    compose,
+    KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, compose,
 };
 use lichen_language::fusion_claim::{
     Instance, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id,
@@ -85,8 +84,9 @@ built = compute.graph step
 /// The chain whose consumer reads the producer's output one element on.
 ///
 /// # Invariant
-/// The read's address is `i + 1`, a value no lane's write answers, so the forwarded value is
-/// lane-dependent and the read is not in-lane: the shape read-site recomputation serves.
+/// The read's address is `i + 1`, a value no lane's write answers directly, so in-lane binding
+/// refused this shape at `78131b5a`; the last element reads past what the producer wrote, and
+/// [`SHIFTED_DEFINED`] says how much of the answer the test therefore compares.
 fn shifted() -> String {
     format!(
         "{}(scale, offset, built)\n",
@@ -94,27 +94,65 @@ fn shifted() -> String {
     )
 }
 
-/// The elements the launch reads: `1.0 … 8.0`.
-fn elements() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
 /// The chain as a recording: the two kernels and the graph they recorded, nothing run.
 fn recording() -> String {
     format!("{}(scale, offset, built)\n", program())
 }
 
-/// The chain as a program that runs its recording and answers it.
-fn running() -> String {
+/// The chain as a program that runs its recording and answers it, over `elements` data elements.
+fn running_recording(recording: &str, elements: usize) -> String {
     format!(
-        "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built (count, data))\nout\n",
-        recording(),
+        "{recording}\ncount = ({count})\ndata = (compute.buffer ([{values}] : array{{Float, \
+         {elements}}}) : (compute.Buf Float))\nout = compute.collect (compute.graphrun built \
+         (count, data))\nout\n",
         count = COUNT,
-        elements = elements(),
+        values = values(elements),
+    )
+}
+
+/// The data the launch reads: `1.0 … elements`.
+fn values(elements: usize) -> String {
+    (1..=elements)
+        .map(|position| format!("{position}.0"))
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// How much of the shifted chain's answer the program defines: its last element reads `e[COUNT]`,
+/// which no lane wrote.
+const SHIFTED_DEFINED: usize = COUNT - 1;
+
+/// The chain `e[i] = d[i] · 2` feeding `z[i] = Σ e[k]`, the elementwise one under a pack.
+///
+/// # Invariant
+/// The consumer reads `e` **at an address it computes** — `s(0) - 1`, a loop-carried index that no
+/// entry parameter is — so the shape is the one people write and the one no entry parameter
+/// answers; the consumer declares `k.in.d` beside the buffer it absorbs because the merged node's
+/// one surviving input is the producer's.
+fn folding() -> String {
+    let head = program();
+    let head = head
+        .split("In2  = struct")
+        .next()
+        .expect("the elementwise half");
+    format!(
+        r#"{head}In3  = struct{{.d (compute.Buf Float), .e (compute.Buf Float)}}
+OutT = struct{{.z (compute.Buf Float)}}
+Par3 = compute.P (compute.KT Float)(.I In3, .O OutT)
+total_raw = (k : Par3) => {{
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) ~ "element") + 1.0)) ~ "combine")
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
+}}
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
+  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
+  compute.plrun total ((compute.A In3)(.n s.n, .I In3(.d s.in.d, .e first.e)))
+}}
+built = compute.graph step
+(scale, total, built)
+"#
     )
 }
 
@@ -123,6 +161,19 @@ fn answer(bias: f32) -> Vec<f32> {
     (1..=COUNT)
         .map(|position| 2.0 * position as f32 + bias)
         .collect()
+}
+
+/// The answer `z[i] = 2 d[i + 1] + bias` has over `d = 1 … COUNT + 1`: the shifted chain's.
+fn shifted_answer(bias: f32) -> Vec<f32> {
+    (0..COUNT)
+        .map(|position| 2.0 * (position + 2) as f32 + bias)
+        .collect()
+}
+
+/// The answer `z[i] = Σ (2 d[k] + bias)` has over `d = 1 … COUNT`, the same at every index.
+fn folded_answer(bias: f32) -> Vec<f32> {
+    let total: f32 = (1..=COUNT).map(|k| 2.0 * k as f32 + bias).sum();
+    vec![total; COUNT]
 }
 
 /// The root tuple's items, read from the value the program answered.
@@ -266,26 +317,29 @@ fn consulted(
     (rewritten, lines)
 }
 
-/// The read of the absorbed buffer the consumer moved one element on.
-fn absorbed_read(consumer: &KernelFragment) -> ValueId {
-    let body = &consumer.body;
+/// The value ids of the reads of `body` addressing `position`, in table order.
+fn buffer_reads_at(body: &KernelBody, position: i64) -> Vec<ValueId> {
     body.blocks
         .iter()
         .flat_map(|block| block.instrs.iter().copied())
-        .find(|value| {
-            let ValueDef::Instr { op, args, .. } = &body.values[value.0 as usize] else {
+        .filter(|value| {
+            let ValueDef::Instr {
+                op: KernelInstr::BufferReadCall(_),
+                args,
+                ..
+            } = &body.values[value.0 as usize]
+            else {
                 return false;
             };
-            matches!(op, KernelInstr::BufferReadCall(_))
-                && matches!(
-                    &body.values[args[0].0 as usize],
-                    ValueDef::Instr {
-                        op: KernelInstr::Const(ScalarClass::Int, bits),
-                        ..
-                    } if *bits == i64::from(ABSORBED)
-                )
+            matches!(
+                &body.values[args[0].0 as usize],
+                ValueDef::Instr {
+                    op: KernelInstr::Const(ScalarClass::Int, bits),
+                    ..
+                } if *bits == position
+            )
         })
-        .expect("the consumer reads the buffer it absorbs")
+        .collect()
 }
 
 /// The merge with the consumer's `+ 1.0` constant turned into `+ 10.0`.
@@ -453,61 +507,103 @@ fn a_pack_whose_region_hash_is_not_one_is_refused_by_name() {
     );
 }
 
-/// A lane-dependent value the consumer reads at another address is refused, by name and by read.
-#[test]
-fn a_lane_dependent_value_read_at_another_address_is_refused_by_name() {
-    let (module, instances, schema, graph) = derived(&shifted());
-    let (rewritten, lines) = consulted(&module, &graph, &[pack(&schema.hash.to_string(), PACK)]);
-    assert!(
-        rewritten.is_none(),
-        "the licence does not buy past a legality condition: {lines:?}"
-    );
-    assert_eq!(lines.len(), 1, "the one region is reported once");
-    assert!(
-        lines[0].contains("refused: ReadAddressIsNotComputable:"),
-        "the pass refuses the address first, naming the read: {lines:?}"
-    );
-    let refusal = compose(&instances[0].fragment, &instances[1].fragment, ABSORBED)
-        .expect_err("and the body composer refuses it as well");
-    assert_eq!(refusal.name(), "ForwardedValueIsLaneDependent");
-    assert!(
-        matches!(
-            refusal,
-            ComposeRefusal::ForwardedValueIsLaneDependent { read, .. }
-                if read == absorbed_read(&instances[1].fragment)
-        ),
-        "the second refusal names the read that puts the value out of reach: {refusal}"
-    );
-    println!("the composer's own refusal: {refusal}");
-}
-
-/// With the pack the device answers the program's own answer, and the counterfactual moves it.
+/// A lane-dependent value the consumer reads at a computed address is recomputed, not refused.
 ///
 /// # Invariant
-/// The counterfactual is the proof here and not the equality: a two-elementwise chain computes
-/// the same numbers unfused, so only a value the recording cannot produce says which node ran.
+/// This shape earned `ReadAddressIsNotComputable` and `ForwardedValueIsLaneDependent` at
+/// `78131b5a`; both are gone because the producer's cone is copied at the address the consumer
+/// computes, and the merged fragment is the one `compose` produces from the same two fragments.
 #[test]
-fn with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves() {
-    let Some((_context, _device)) =
-        device("with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves")
-    else {
+fn a_lane_dependent_value_read_at_a_computed_address_is_recomputed() {
+    let (module, instances, schema, graph) = derived(&shifted());
+    let pack = pack(&schema.hash.to_string(), PACK);
+    let (rewritten, lines) = consulted(&module, &graph, &[pack]);
+    let rewritten = rewritten.expect("a computed address is recomputed, not refused");
+    assert_eq!(
+        (rewritten.len(), rewritten.value_count()),
+        (1, 3),
+        "the region becomes one node as the in-lane chain does: {lines:?}"
+    );
+    assert_eq!(
+        merged(&rewritten),
+        &compose(&instances[0].fragment, &instances[1].fragment, ABSORBED)
+            .expect("the recorded chain composes at a computed address"),
+        "the surviving node holds the composed fragment, element for element"
+    );
+    // The absorbed read is gone, and what replaced it reads the address the consumer computed.
+    let body = &merged(&rewritten).body;
+    let operands: Vec<String> = body
+        .values
+        .iter()
+        .filter_map(|definition| match definition {
+            ValueDef::Instr {
+                op: KernelInstr::BufferReadCall(_),
+                args,
+                ..
+            } => Some(format!("{args:?}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        operands.len(),
+        1,
+        "only the consumer's own read of `d` survives; `e` is computed: {operands:?}"
+    );
+    let reads = buffer_reads_at(body, 0);
+    assert_eq!(reads.len(), 1, "one read of the one surviving buffer");
+    for (index, definition) in body.values.iter().enumerate() {
+        println!("{index}: {definition:?}");
+    }
+    println!("blocks: {:#?}", body.blocks);
+    let address = match &body.values[reads[0].0 as usize] {
+        ValueDef::Instr { args, .. } => args[1],
+        _ => unreachable!("a buffer read names its address"),
+    };
+    assert!(
+        !matches!(
+            body.values[address.0 as usize],
+            ValueDef::Instr {
+                op: KernelInstr::Const(..),
+                ..
+            }
+        ) && !body.is_a_parameter(address),
+        "the surviving read of `d` is at the address the consumer computed, which is neither a \
+         constant nor an entry parameter: {address:?}"
+    );
+}
+
+/// Run `recording` three times on a device: as recorded, merged, and merged with the bias moved.
+///
+/// # Invariant
+/// The three answers are the whole of the evidence, and the **counterfactual is the proof**: a
+/// fused chain computes the same numbers unfused, so only an answer that moves with the composed
+/// body says which node the device dispatched. `defined` is how many leading elements the program
+/// answers; a test with no device returns without asserting.
+fn device_triple(
+    name: &str,
+    recording: &str,
+    elements: usize,
+    defined: usize,
+    expected: fn(f32) -> Vec<f32>,
+) {
+    let Some((_context, _device)) = device(name) else {
         return;
     };
     clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&running());
-    let recorded_answer = common::float_array(&base_module, &base_value);
+    let (base_module, base_value, _root) = common::run(&running_recording(recording, elements));
+    let recorded = common::float_array(&base_module, &base_value);
     assert_eq!(
-        recorded_answer,
-        answer(1.0),
+        recorded[..defined],
+        expected(1.0)[..defined],
         "with no pass installed the program runs its own two kernels"
     );
 
-    let (_module, _instances, schema, _graph) = derived(&recording());
+    let (_module, _instances, schema, _graph) = derived(recording);
     let packs = [pack(&schema.hash.to_string(), PACK)];
 
     install_region_merge_with_packs(&base_module, &packs);
-    let (merged_module, merged_value, _root) = common::run(&running());
-    let merged_answer = common::float_array(&merged_module, &merged_value);
+    let (merged_module, merged_value, _root) = common::run(&running_recording(recording, elements));
+    let merged = common::float_array(&merged_module, &merged_value);
     let report = pass_report(&merged_module);
     assert!(
         report
@@ -517,7 +613,8 @@ fn with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves() {
          {report:?}"
     );
     assert_eq!(
-        merged_answer, recorded_answer,
+        merged[..defined],
+        recorded[..defined],
         "the merged graph answers the program's answer element for element"
     );
 
@@ -526,21 +623,71 @@ fn with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves() {
         &base_module,
         &packs,
     ))));
-    let (moved_module, moved_value, _root) = common::run(&running());
-    let moved_answer = common::float_array(&moved_module, &moved_value);
+    let (moved_module, moved_value, _root) = common::run(&running_recording(recording, elements));
+    let moved = common::float_array(&moved_module, &moved_value);
     clear_graph_pass();
     println!(
-        "the device ran: recorded {recorded_answer:?}, merged {merged_answer:?}, merged with \
-         `+ 1.0` moved to `+ 10.0` {moved_answer:?}"
+        "the device ran `{name}`: recorded {recorded:?}, merged {merged:?}, `+ 1.0` moved to \
+         `+ 10.0` {moved:?}"
     );
     assert_eq!(
-        moved_answer,
-        answer(10.0),
-        "the composed body with the bias moved answers `2 d + 10`, which the recording cannot"
+        moved[..defined],
+        expected(10.0)[..defined],
+        "the composed body with the bias moved answers what the recording cannot"
     );
     assert_ne!(
-        moved_answer, merged_answer,
+        moved[..defined],
+        merged[..defined],
         "the answer moved with the composed body, so the composed node is what the run dispatched"
+    );
+}
+
+/// With the pack the device answers the program's own answer, and the counterfactual moves it.
+///
+/// # Invariant
+/// The counterfactual is the proof here and not the equality: a two-elementwise chain computes
+/// the same numbers unfused, so only a value the recording cannot produce says which node ran.
+#[test]
+fn with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves() {
+    device_triple(
+        "with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves",
+        &recording(),
+        COUNT,
+        COUNT,
+        answer,
+    );
+}
+
+/// An elementwise producer feeding a reduction consumer merges, and the device agrees.
+///
+/// # Invariant
+/// The consumer reads `e` at `s(0) - 1` inside a fold, so one copy of the producer's cone stands
+/// where a loop reads the buffer: the shape people write, and the one in-lane binding cannot serve
+/// because the address is loop-carried (`docs/notes/graph-fusion.md` §5).
+#[test]
+fn an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees() {
+    device_triple(
+        "an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees",
+        &folding(),
+        COUNT,
+        COUNT,
+        folded_answer,
+    );
+}
+
+/// A consumer that reads the producer's output at an address it computes runs on the device.
+///
+/// # Invariant
+/// `SHIFTED_DEFINED` elements are compared, because the last read is `e[COUNT]`: every element
+/// under it is one the producer wrote and one the copy recomputes at the consumer's own address.
+#[test]
+fn a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves() {
+    device_triple(
+        "a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves",
+        &shifted(),
+        COUNT + 1,
+        SHIFTED_DEFINED,
+        shifted_answer,
     );
 }
 
@@ -593,6 +740,26 @@ fn the_floor_still_merges_a_reduction_chain_with_no_pack_installed() {
     assert!(
         lines[0].contains("licensed by the floor:"),
         "and the report says the floor's own proof answered, not a pack: {lines:?}"
+    );
+    // A carried parameter is reused, never copied: the producer's own loop answers the read.
+    let body = &merged(&merged_graph).body;
+    assert!(
+        body.blocks
+            .iter()
+            .skip(body.entry)
+            .any(|block| !block.params.is_empty()),
+        "the producer's own loop is still in the merged body: a carried value is reused, not \
+         recomputed ({:?})",
+        body.blocks
+    );
+    assert!(
+        buffer_reads_at(body, 1).is_empty(),
+        "the consumer's read of the absorbed buffer is gone: the producer's own fold is what \
+         answers it, not a copy"
+    );
+    assert!(
+        !buffer_reads_at(body, 0).is_empty(),
+        "and the producer's own reads of its input survive inside the fold that computed the value"
     );
 }
 

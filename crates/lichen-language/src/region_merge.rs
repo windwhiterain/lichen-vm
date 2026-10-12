@@ -13,10 +13,7 @@ use std::fmt;
 
 use lichen_compute::compute::{GraphPass, LaunchExtent, claimed_kernels, set_graph_pass};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, ValueId as GraphValueId};
-use lichen_kernel_ir::{
-    ComposeRefusal, KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId,
-    compose,
-};
+use lichen_kernel_ir::{ComposeRefusal, KernelFragment, ScalarClass, compose};
 use lichen_lowlevel::Module;
 
 use crate::fusion_claim::{
@@ -217,13 +214,6 @@ pub enum MergeRefusal {
         /// The consumer's extent.
         consumer: Count,
     },
-    /// The consumer reads the absorbed output where the survivor cannot compute it.
-    ReadAddressIsNotComputable {
-        /// The read instruction.
-        read: ValueId,
-        /// The address it reads, as a report names it.
-        address: String,
-    },
     /// The producer's absorbed output is not the class the consumer's input expects.
     ClassesDisagree {
         /// The class the producer's output states.
@@ -277,7 +267,6 @@ impl MergeRefusal {
             MergeRefusal::ProducedValueIsReturned { .. } => "ProducedValueIsReturned",
             MergeRefusal::ProducedValueIsReadElsewhere { .. } => "ProducedValueIsReadElsewhere",
             MergeRefusal::ExtentsDiffer { .. } => "ExtentsDiffer",
-            MergeRefusal::ReadAddressIsNotComputable { .. } => "ReadAddressIsNotComputable",
             MergeRefusal::ClassesDisagree { .. } => "ClassesDisagree",
             MergeRefusal::ClassIsNotStated { .. } => "ClassIsNotStated",
             MergeRefusal::PortsDoNotCorrespond { .. } => "PortsDoNotCorrespond",
@@ -323,11 +312,6 @@ impl fmt::Display for MergeRefusal {
                 formatter,
                 "the producer dispatches over {producer:?} and the consumer over {consumer:?}, and \
                  a merged node has one extent"
-            ),
-            MergeRefusal::ReadAddressIsNotComputable { read, address } => write!(
-                formatter,
-                "the consumer reads the absorbed buffer at {address} ({read:?}), and a survivor \
-                 computes only the constant 0 or its own invocation index"
             ),
             MergeRefusal::ClassesDisagree { produced, expected } => write!(
                 formatter,
@@ -498,7 +482,6 @@ fn merge_region(
             consumer: consumer_node.count,
         });
     }
-    check_addresses(&consumer_node.fragment, absorbed as u32)?;
     let output = absorbed_value - starts[producer];
     match (
         producer_node.fragment.output_classes.get(output).copied(),
@@ -549,65 +532,6 @@ fn extents_correspond(producer: Count, consumer: Count) -> bool {
         (Count::Constant(producer), Count::Constant(consumer)) => producer == consumer,
         (Count::Value(producer), Count::Value(consumer)) => producer == consumer,
         _ => false,
-    }
-}
-
-/// Check every read of the absorbed buffer addresses a position the survivor can compute.
-///
-/// # Invariant
-/// `compose` binds the producer's written value wherever the consumer read the absorbed input, so a
-/// read at another address answers a lane's own value where the program asked for another. The
-/// invocation-index arm is a licence no program cashes: an elementwise producer's forwarded value
-/// is lane-dependent, so `compose` refuses that merge as `ForwardedValueIsLaneDependent`.
-fn check_addresses(fragment: &KernelFragment, absorbed: u32) -> Result<(), MergeRefusal> {
-    let index = fragment.body.parameters().last().copied();
-    for block in &fragment.body.blocks {
-        for &value in &block.instrs {
-            let Some(ValueDef::Instr {
-                op: KernelInstr::BufferReadCall(_),
-                args,
-                ..
-            }) = fragment.body.values.get(value.0 as usize)
-            else {
-                continue;
-            };
-            let [position, address] = args[..] else {
-                continue;
-            };
-            if !is_int_constant(&fragment.body, position, absorbed) {
-                continue;
-            }
-            if is_int_constant(&fragment.body, address, 0) || Some(address) == index {
-                continue;
-            }
-            return Err(MergeRefusal::ReadAddressIsNotComputable {
-                read: value,
-                address: describe_address(&fragment.body, address),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Whether `value` is the integer constant `wanted`.
-fn is_int_constant(body: &KernelBody, value: ValueId, wanted: u32) -> bool {
-    matches!(
-        body.values.get(value.0 as usize),
-        Some(ValueDef::Instr {
-            op: KernelInstr::Const(ScalarClass::Int, bits),
-            ..
-        }) if *bits as u64 == u64::from(wanted)
-    )
-}
-
-/// The address a refused read names, as a report reads it.
-fn describe_address(body: &KernelBody, address: ValueId) -> String {
-    match body.values.get(address.0 as usize) {
-        Some(ValueDef::Instr {
-            op: KernelInstr::Const(ScalarClass::Int, bits),
-            ..
-        }) => format!("the constant {bits}"),
-        _ => format!("{address:?}"),
     }
 }
 

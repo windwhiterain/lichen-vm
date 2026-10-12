@@ -18,8 +18,10 @@ mod plan;
 mod unary;
 
 pub use body::{
-    Barrier, BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat,
+    Barrier, BasicBlock, Br, FlatOp, KernelBody, NotIndexLocal, Terminator, ValueDef, ValueId,
+    from_flat,
 };
+pub(crate) use body::{Cone, ConeOrigin};
 pub use compose::{ComposeRefusal, compose};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};

@@ -4,8 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Barrier, BasicBlock, Br, KernelBody, KernelFragment, KernelInstr, KernelMark, KernelRoles,
-    KernelShape, ScalarClass, TargetFacts, Terminator, ValueDef, ValueId,
+    Barrier, BasicBlock, Br, Cone, ConeOrigin, KernelBody, KernelFragment, KernelInstr, KernelMark,
+    KernelRoles, KernelShape, NotIndexLocal, ScalarClass, TargetFacts, Terminator, ValueDef,
+    ValueId,
 };
 
 /// The fragment `producer` and `consumer` become, or the decision the merge cannot make.
@@ -101,46 +102,47 @@ pub fn compose(
             returns: returns.len(),
         });
     };
-    let incoming_arguments = producer.body.incoming_arguments();
-    if let Some(&lane) = producer_parameters.last()
-        && producer
-            .body
-            .depends_on(forwarded, lane, &incoming_arguments)
-    {
-        // Lane dependence is exact in-lane; only a read elsewhere needs a slice.
-        if let Some(read) = misaddressed_read(
-            &consumer.body,
-            consumer_parameters,
-            entry_parameter(producer_parameters, written_at),
-            absorbed_at,
-        ) {
-            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
-                value: forwarded,
-                read,
-            });
-        }
-    }
     if let Some(block) = branch_targeting(&consumer.body, consumer.body.entry) {
         return Err(ComposeRefusal::ConsumerEntryIsABranchTarget { block });
     }
     buffer_reads(&producer.body, "producer")?;
     let consumer_reads = buffer_reads(&consumer.body, "consumer")?;
-    let absorbed_reads: Vec<ValueId> = consumer_reads
+    let absorbed_reads: Vec<(ValueId, ValueId)> = consumer_reads
         .iter()
         .filter(|(_, position)| *position == absorbed)
-        .map(|(value, _)| *value)
+        .map(|(value, _)| (*value, read_address(&consumer.body, *value)))
         .collect();
     if absorbed_reads.is_empty() {
         return Err(ComposeRefusal::AbsorbedIsNotRead { absorbed });
     }
+    // Every absorbed read becomes one copy of the cone, at that read's own address.
+    let cone = match producer.body.index_local_cone(
+        forwarded,
+        written_at,
+        producer_parameters.last().copied(),
+    ) {
+        Ok(cone) => cone,
+        // A value that never reaches the invocation index is the same in every lane.
+        Err(_) if !lane_dependent(&producer.body, forwarded, producer_parameters) => {
+            Cone::reused(forwarded)
+        }
+        Err(blocker) => {
+            return Err(ComposeRefusal::ForwardedValueIsLaneDependent {
+                value: forwarded,
+                read: absorbed_reads[0].0,
+                blocker,
+            });
+        }
+    };
 
     // The consumer's values are renumbered past the producer's, less what is bound below.
-    let mut bound: HashMap<ValueId, ValueId> = HashMap::new();
+    let mut renumber = Renumber::default();
     for (slot, &parameter) in consumer_parameters.iter().enumerate() {
-        bound.insert(parameter, producer_parameters[slot]);
+        renumber.bind(parameter, producer_parameters[slot]);
     }
-    for read in &absorbed_reads {
-        bound.insert(*read, forwarded);
+    for &(read, _) in &absorbed_reads {
+        // The read's own id until the copy below replaces it, so it reserves no value of its own.
+        renumber.bind(read, read);
     }
     let mut body = producer.body.clone();
     // The producer's store goes: its buffer is not an output of the merged fragment.
@@ -156,24 +158,48 @@ pub fn compose(
             producer_blocks + block - usize::from(block > entry)
         }
     };
-    let mut value_map: Vec<Option<ValueId>> = vec![None; consumer.body.values.len()];
-    for (index, _) in consumer.body.values.iter().enumerate() {
-        if bound.contains_key(&ValueId(index as u32)) {
-            continue;
+    let landed: Vec<Option<ValueId>> = (0..consumer.body.values.len())
+        .map(|index| renumber.reserve(ValueId(index as u32), &mut body))
+        .collect();
+    // One copy of the cone per read, at that read's own address, spliced in where it stood.
+    let absorbed_at_address: HashMap<ValueId, ValueId> = absorbed_reads.iter().copied().collect();
+    let mut shared: HashMap<(usize, ValueId), (usize, ValueId)> = HashMap::new();
+    let mut sequences: Vec<Vec<ValueId>> = Vec::with_capacity(consumer.body.blocks.len());
+    for (index, block) in consumer.body.blocks.iter().enumerate() {
+        let mut sequence: Vec<ValueId> = Vec::with_capacity(block.instrs.len());
+        let merged_block = mapped_block(index);
+        for &value in &block.instrs {
+            let Some(&address) = absorbed_at_address.get(&value) else {
+                sequence.push(renumber.resolve(value));
+                continue;
+            };
+            // **One copy per address per block**: the return block dominates them all.
+            let address = renumber.resolve(address);
+            let key = (merged_block, address);
+            let root = match shared.get(&key) {
+                Some(&(placed, root)) if placed == return_block || placed == merged_block => root,
+                _ => {
+                    let mut fresh: HashMap<ValueId, ValueId> = HashMap::new();
+                    let root = copy_cone(
+                        &cone,
+                        forwarded,
+                        &producer.body,
+                        address,
+                        &mut body,
+                        &mut fresh,
+                        &mut sequence,
+                    );
+                    shared.insert(key, (merged_block, root));
+                    root
+                }
+            };
+            renumber.bind(value, root);
         }
-        value_map[index] = Some(ValueId(body.values.len() as u32));
-        body.values
-            .push(ValueDef::BlockParam { block: 0, index: 0 });
+        sequences.push(sequence);
     }
-    let resolve = |value: ValueId| -> ValueId {
-        bound
-            .get(&value)
-            .copied()
-            .or_else(|| value_map[value.0 as usize])
-            .unwrap_or(value)
-    };
+    // **After** the copies: an operand that read the absorbed buffer now reads the cone.
     for (index, definition) in consumer.body.values.iter().enumerate() {
-        let Some(target) = value_map[index] else {
+        let Some(target) = landed[index] else {
             continue;
         };
         body.values[target.0 as usize] = match definition {
@@ -183,33 +209,25 @@ pub fn compose(
             },
             ValueDef::Instr { op, args, classes } => ValueDef::Instr {
                 op: *op,
-                args: args.iter().map(|&arg| resolve(arg)).collect(),
+                args: args.iter().map(|&arg| renumber.resolve(arg)).collect(),
                 classes: classes.clone(),
             },
         };
     }
+    let resolve = |value: ValueId| renumber.resolve(value);
     for (index, block) in consumer.body.blocks.iter().enumerate() {
         if index == entry {
             continue;
         }
         body.blocks.push(BasicBlock {
             params: block.params.iter().map(|&param| resolve(param)).collect(),
-            instrs: block
-                .instrs
-                .iter()
-                .filter(|value| !bound.contains_key(value))
-                .map(|&value| resolve(value))
-                .collect(),
+            instrs: std::mem::take(&mut sequences[index]),
             terminator: mapped_terminator(&block.terminator, &resolve, &mapped_block),
         });
     }
-    let inlined: Vec<ValueId> = consumer.body.blocks[entry]
+    body.blocks[return_block]
         .instrs
-        .iter()
-        .filter(|value| !bound.contains_key(value))
-        .map(|&value| resolve(value))
-        .collect();
-    body.blocks[return_block].instrs.extend(inlined);
+        .extend(std::mem::take(&mut sequences[entry]));
     body.blocks[return_block].terminator = mapped_terminator(
         &consumer.body.blocks[entry].terminator,
         &resolve,
@@ -357,12 +375,14 @@ pub enum ComposeRefusal {
         /// The block that branches there.
         block: usize,
     },
-    /// The forwarded value is reachable from the lane, and a read asks for another lane's.
+    /// The forwarded value is lane-dependent, and its cone is not a function of an address.
     ForwardedValueIsLaneDependent {
         /// The value being forwarded.
         value: ValueId,
-        /// The read of the absorbed buffer that addresses somewhere else.
+        /// The first read of the absorbed buffer, as a report names it.
         read: ValueId,
+        /// What stops the cone being recomputed at that address.
+        blocker: NotIndexLocal,
     },
     /// Two of the marks a merged fragment keeps carry one text.
     DuplicatedMark {
@@ -500,13 +520,17 @@ impl std::fmt::Display for ComposeRefusal {
                 "block {block} branches to the consumer's entry block, whose parameters are bound \
                  once, so a second arrival would re-enter what is inlined away"
             ),
-            ComposeRefusal::ForwardedValueIsLaneDependent { value, read } => write!(
+            ComposeRefusal::ForwardedValueIsLaneDependent {
+                value,
+                read,
+                blocker,
+            } => write!(
                 formatter,
                 "the forwarded value {value:?} is reachable from the producer's invocation index, \
-                 so binding it in a lane's own block reads another lane's value — and the read \
-                 {read:?} addresses the absorbed buffer at an address the producer did not write \
-                 for that lane, which takes one copy of the producer's cone per read with the \
-                 address rebound (`docs/notes/graph-fusion.md` §4)"
+                 so a lane binding it in its own block reads another lane's value, and the read \
+                 {read:?} asks the absorbed buffer at an address the producer's own cone cannot \
+                 answer for: {blocker} — which is what a copy of the cone per read needs and \
+                 cannot take (`docs/notes/graph-fusion.md` §5)"
             ),
             ComposeRefusal::DuplicatedMark { text } => write!(
                 formatter,
@@ -532,44 +556,105 @@ impl std::fmt::Display for ComposeRefusal {
     }
 }
 
-/// The first read of the absorbed buffer that does not address what the producer's write did.
+/// The consumer's values as the merged body holds them.
 ///
 /// # Invariant
-/// The addresses are compared **as the bodies state them**: each is the entry's own parameter
-/// at some position, and the two parameter lists correspond position for position, so "the same
-/// position" is "the same value" in the merged body — the invocation index in every shape
-/// measured. An address that is no entry parameter at all is another lane's, and refuses.
-fn misaddressed_read(
-    consumer: &KernelBody,
-    consumer_parameters: &[ValueId],
-    written: Option<usize>,
-    absorbed: usize,
-) -> Option<ValueId> {
-    consumer
-        .blocks
-        .iter()
-        .flat_map(|block| block.instrs.iter().copied())
-        .filter(|value| {
-            let Some(ValueDef::Instr {
-                op: KernelInstr::BufferReadCall(_),
-                args,
-                ..
-            }) = consumer.values.get(value.0 as usize)
-            else {
-                return false;
-            };
-            let [position, address] = args[..] else {
-                return false;
-            };
-            consumer.constant(Some(position)) == Some(absorbed as u64)
-                && entry_parameter(consumer_parameters, address) != written
-        })
-        .next()
+/// A bound value is one the merged body already has — the producer's parameters, and each
+/// absorbed read once its copy has replaced it — and a landed value is one reserved for the
+/// consumer's own; `resolve` reads both, and an id neither map holds is the producer's own.
+#[derive(Default)]
+struct Renumber {
+    bound: HashMap<ValueId, ValueId>,
+    landed: HashMap<ValueId, ValueId>,
 }
 
-/// The entry parameter `value` is, at the position it sits, when it is one.
-fn entry_parameter(parameters: &[ValueId], value: ValueId) -> Option<usize> {
-    parameters.iter().position(|&parameter| parameter == value)
+impl Renumber {
+    /// Bind one of the consumer's values to an id the merged body already holds.
+    fn bind(&mut self, value: ValueId, target: ValueId) {
+        self.bound.insert(value, target);
+    }
+
+    /// The id `value` holds in the merged body.
+    fn resolve(&self, value: ValueId) -> ValueId {
+        self.bound
+            .get(&value)
+            .copied()
+            .or_else(|| self.landed.get(&value).copied())
+            .unwrap_or(value)
+    }
+
+    /// Reserve a value of `body` for `value`, unless it is bound to one that is already there.
+    fn reserve(&mut self, value: ValueId, body: &mut KernelBody) -> Option<ValueId> {
+        if self.bound.contains_key(&value) {
+            return None;
+        }
+        let id = ValueId(body.values.len() as u32);
+        body.values
+            .push(ValueDef::BlockParam { block: 0, index: 0 });
+        self.landed.insert(value, id);
+        Some(id)
+    }
+}
+
+/// One copy of `cone` at `address`, appended to `sequence`, and the value that answers it.
+///
+/// # Invariant
+/// `sequence` already holds every value the copy reuses, so the copy's own values are appended in
+/// the order `KernelBody::validate` reads: each one after the values it reads.
+fn copy_cone(
+    cone: &Cone,
+    root: ValueId,
+    producer: &KernelBody,
+    address: ValueId,
+    body: &mut KernelBody,
+    fresh: &mut HashMap<ValueId, ValueId>,
+    sequence: &mut Vec<ValueId>,
+) -> ValueId {
+    for &value in cone.order() {
+        if cone.origin(value) != ConeOrigin::Rebuilt {
+            continue;
+        }
+        let Some(ValueDef::Instr { op, args, classes }) = producer.values.get(value.0 as usize)
+        else {
+            continue;
+        };
+        let named: Vec<ValueId> = args
+            .iter()
+            .map(|&arg| match cone.origin(arg) {
+                ConeOrigin::Address => address,
+                ConeOrigin::Rebuilt => fresh.get(&arg).copied().unwrap_or(arg),
+                ConeOrigin::Live(value) => value,
+            })
+            .collect();
+        let id = ValueId(body.values.len() as u32);
+        body.values.push(ValueDef::Instr {
+            op: *op,
+            args: named,
+            classes: classes.clone(),
+        });
+        sequence.push(id);
+        fresh.insert(value, id);
+    }
+    match cone.origin(root) {
+        ConeOrigin::Rebuilt => fresh.get(&root).copied().unwrap_or(address),
+        ConeOrigin::Live(value) => value,
+        ConeOrigin::Address => address,
+    }
+}
+
+/// Whether `forwarded` is reachable from the producer's invocation index.
+fn lane_dependent(body: &KernelBody, forwarded: ValueId, parameters: &[ValueId]) -> bool {
+    parameters
+        .last()
+        .is_some_and(|&lane| body.depends_on(forwarded, lane, &body.incoming_arguments()))
+}
+
+/// The address the read `value` asks for.
+fn read_address(body: &KernelBody, value: ValueId) -> ValueId {
+    match body.values.get(value.0 as usize) {
+        Some(ValueDef::Instr { args, .. }) if args.len() > 1 => args[1],
+        _ => value,
+    }
 }
 
 /// The class the producer's write declares, the value it forwards, and the address it fills.

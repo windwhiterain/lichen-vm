@@ -162,6 +162,125 @@ impl KernelBody {
     }
 }
 
+/// One value of a recomputed cone: where a copy of it takes the value from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConeOrigin {
+    /// The merged body already holds this value and the copy takes it as it is.
+    Live(ValueId),
+    /// The leaf a copy rebinds: the read's own address takes its place.
+    Address,
+    /// The copy computes this value again, from the origins its own operands carry.
+    Rebuilt,
+}
+
+/// Why the producer's written value is not a function of the address it wrote.
+///
+/// # Invariant
+/// One variant per fact the merge cannot decide for itself, and each names what it met: a copy
+/// that guessed here is a merged fragment that answers another program
+/// (`docs/notes/graph-fusion.md` §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotIndexLocal {
+    /// The write fills an address that is not the invocation index, so a copy answers an address
+    /// the producer skipped.
+    WriteIsNotIndexed {
+        /// The address the write does fill.
+        written: ValueId,
+    },
+    /// A slice read in the cone: another lane's value, and observing it is staging, not a copy.
+    SliceRead {
+        /// The slice read.
+        value: ValueId,
+    },
+    /// A cross-kernel call in the cone: the callee dispatches over an index of its own.
+    KernelCall {
+        /// The call.
+        value: ValueId,
+    },
+    /// A parameter of a block other than the entry: state a loop carried, which no address
+    /// re-derives.
+    Carried {
+        /// The carried parameter.
+        value: ValueId,
+    },
+}
+
+impl NotIndexLocal {
+    /// The refusal's name, as a report reads it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            NotIndexLocal::WriteIsNotIndexed { .. } => "WriteIsNotIndexed",
+            NotIndexLocal::SliceRead { .. } => "SliceReadCall",
+            NotIndexLocal::KernelCall { .. } => "CallKernel",
+            NotIndexLocal::Carried { .. } => "NonEntryBlockParameter",
+        }
+    }
+}
+
+impl std::fmt::Display for NotIndexLocal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotIndexLocal::WriteIsNotIndexed { written } => write!(
+                formatter,
+                "the producer fills address {written:?}, which is not the invocation index, so an \
+                 address it skipped holds nothing for a copy to answer with"
+            ),
+            NotIndexLocal::SliceRead { value } => write!(
+                formatter,
+                "the cone holds the slice read {value:?}, whose value is another lane's, and \
+                 observing it at the read site is a slice and a barrier rather than a recomputation"
+            ),
+            NotIndexLocal::KernelCall { value } => write!(
+                formatter,
+                "the cone holds the call {value:?}, whose callee dispatches over an index of its \
+                 own that no address of the merged fragment names"
+            ),
+            NotIndexLocal::Carried { value } => write!(
+                formatter,
+                "the cone holds the carried parameter {value:?}, which is state a loop handed \
+                 forward and no address re-derives"
+            ),
+        }
+    }
+}
+
+/// One definition cone, planned for a copy at another address.
+///
+/// # Invariant
+/// A copy answers, at any address, what the producer stored there: `written` is the invocation
+/// index, so each lane's own address is the one its cone computes. It may be emitted **anywhere
+/// that dominates the read site**, which is `KernelBody::validate`'s scope rule to decide, and
+/// `order` holds each operand before the value reading it so a copy walks it once.
+pub(crate) struct Cone {
+    order: Vec<ValueId>,
+    origin: HashMap<ValueId, ConeOrigin>,
+}
+
+impl Cone {
+    /// A cone with one value in it, already computed where it stands.
+    pub(crate) fn reused(value: ValueId) -> Cone {
+        let mut origin = HashMap::new();
+        origin.insert(value, ConeOrigin::Live(value));
+        Cone {
+            order: vec![value],
+            origin,
+        }
+    }
+
+    /// Where a copy takes this value from; a value outside the cone is the one it already is.
+    pub(crate) fn origin(&self, value: ValueId) -> ConeOrigin {
+        self.origin
+            .get(&value)
+            .copied()
+            .unwrap_or(ConeOrigin::Live(value))
+    }
+
+    /// The cone's values, each after the values it reads.
+    pub(crate) fn order(&self) -> &[ValueId] {
+        &self.order
+    }
+}
+
 /// One step of a **hand-written** body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatOp {
@@ -776,6 +895,85 @@ impl KernelBody {
             }
         }
         false
+    }
+
+    /// `value`'s definition cone, planned for a copy at some other address — or what stops it.
+    ///
+    /// # Invariant
+    /// **Index-local**: the cone holds `written` and the entry's other parameters, and reads whose
+    /// addresses are functions of that same address. It holds no `SliceReadCall`, whose value is
+    /// another lane's and whose exchange at a read site is staging, not recomputation, no
+    /// `CallKernel`, which has an index of its own, and no parameter of a block but the entry,
+    /// which no address re-derives.
+    pub(crate) fn index_local_cone(
+        &self,
+        root: ValueId,
+        written: ValueId,
+        lane: Option<ValueId>,
+    ) -> Result<Cone, NotIndexLocal> {
+        if lane != Some(written) {
+            return Err(NotIndexLocal::WriteIsNotIndexed { written });
+        }
+        // **Operands before their users**: a value is popped only after every value it reads.
+        let mut order: Vec<ValueId> = Vec::new();
+        let mut origin: HashMap<ValueId, ConeOrigin> = HashMap::new();
+        let mut entered: HashSet<ValueId> = HashSet::new();
+        let mut work: Vec<ValueId> = vec![root];
+        while let Some(value) = work.pop() {
+            if !entered.insert(value) {
+                order.push(value);
+                continue;
+            }
+            work.push(value);
+            if let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) {
+                work.extend(args.iter().copied());
+            }
+        }
+        for &value in &order {
+            let resolved = self.cone_origin(value, written, &origin)?;
+            origin.insert(value, resolved);
+        }
+        Ok(Cone { order, origin })
+    }
+
+    /// One value's own answer to "what does a copy of this cone take for it".
+    fn cone_origin(
+        &self,
+        value: ValueId,
+        written: ValueId,
+        origin: &HashMap<ValueId, ConeOrigin>,
+    ) -> Result<ConeOrigin, NotIndexLocal> {
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::BlockParam { block, .. }) => {
+                if value == written {
+                    Ok(ConeOrigin::Address)
+                } else if *block == self.entry {
+                    Ok(ConeOrigin::Live(value))
+                } else {
+                    Err(NotIndexLocal::Carried { value })
+                }
+            }
+            Some(ValueDef::Instr { op, args, .. }) => match op {
+                KernelInstr::SliceReadCall(_) => Err(NotIndexLocal::SliceRead { value }),
+                KernelInstr::CallKernel(_) => Err(NotIndexLocal::KernelCall { value }),
+                _ => {
+                    // **A value is rebuilt when a value it reads is**: an operand the copy
+                    // recomputes, or the address leaf the copy rebinds.
+                    let rebuilt = args.iter().any(|&arg| {
+                        matches!(
+                            origin.get(&arg),
+                            Some(ConeOrigin::Rebuilt | ConeOrigin::Address)
+                        )
+                    });
+                    Ok(if rebuilt {
+                        ConeOrigin::Rebuilt
+                    } else {
+                        ConeOrigin::Live(value)
+                    })
+                }
+            },
+            None => Ok(ConeOrigin::Live(value)),
+        }
     }
 
     /// Which blocks every lane reaches, as a flag per block.

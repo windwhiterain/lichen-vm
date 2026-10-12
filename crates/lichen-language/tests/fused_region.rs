@@ -549,25 +549,33 @@ fn extents_that_do_not_correspond_are_refused_by_name_and_nothing_merges() {
     clear_graph_pass();
 }
 
-/// A region whose consumer reads the absorbed output elsewhere is refused, naming the address.
+/// A region whose consumer reads the absorbed output at a computed constant still merges.
 ///
 /// # Invariant
-/// The address is the fact `compose` does not read: it binds the producer's written value wherever
-/// the consumer read the absorbed input, so an address the survivor cannot compute is refused
-/// before the merge rather than answered with a lane's own value.
+/// The producer writes the fold at **every** address of the extent, so address 3 holds the same
+/// value address 0 does and the merged body's own computation answers it: the refusal this shape
+/// used to earn, `ReadAddressIsNotComputable`, is gone because a copy of the producer's cone
+/// answers at any address the consumer computes (`docs/notes/graph-fusion.md` §5).
 #[test]
-fn an_address_the_survivor_cannot_compute_is_refused_by_name() {
+fn an_address_the_consumer_computes_is_answered_by_the_producer_s_own_cone() {
     clear_graph_pass();
     let shifted = program(two_stage()).replace("(.from k.in.p, .at 0)", "(.from k.in.p, .at 3)");
     let (module, value, _root) = common::run(&format!("{shifted}(producer, consumer, built)\n"));
     let graph = recorded(&module, &value);
     install_region_merge(&module);
-    let lines = refuses_by_name(&graph, "ReadAddressIsNotComputable");
-    assert!(
-        lines[0].contains("at the constant 3"),
-        "the refusal names the address the consumer read: {lines:?}"
-    );
+    let merged = consult_graph_pass(&graph, &|_node| Some(COUNT))
+        .expect("the region's consumer reads an address the producer wrote");
+    let lines = take_graph_pass_lines();
     clear_graph_pass();
+    assert_eq!(
+        (merged.len(), merged.value_count()),
+        (1, 3),
+        "the region becomes one node: the floor's own proof licenses it"
+    );
+    assert!(
+        lines[0].contains("licensed by the floor:"),
+        "and nothing about the read address refused it: {lines:?}"
+    );
 }
 
 /// A region whose producer feeds two consumers is refused by the derivation's own name.

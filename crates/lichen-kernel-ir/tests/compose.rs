@@ -798,13 +798,13 @@ fn a_consumer_whose_entry_is_branched_to_is_refused() {
     );
 }
 
-/// A lane-dependent value read at the producer's own address is bound in-lane, not refused.
+/// A lane-dependent value read at the producer's own address is recomputed there, not refused.
 ///
 /// # Invariant
 /// The lane dependence is what makes the value recomputable: every lane wrote the element it
 /// computed, and the read asks for that element, so the binding needs no slice and no barrier.
 #[test]
-fn a_lane_dependent_value_read_at_its_own_address_is_bound_in_lane() {
+fn a_lane_dependent_value_read_at_its_own_address_is_recomputed_in_lane() {
     let producer = fragment(lane_producer_body(), 1, vec![ScalarClass::Float]);
     let merged = compose(&producer, &consumer(), 1).expect("the chain composes in-lane");
     merged
@@ -817,7 +817,7 @@ fn a_lane_dependent_value_read_at_its_own_address_is_bound_in_lane() {
     assert_eq!(
         read_positions(&merged.body),
         vec![0],
-        "the absorbed read is gone: the value is the lane's own, not a buffer's"
+        "the absorbed read is gone: the value is computed, not read from a buffer"
     );
     let sum = merged
         .body
@@ -849,42 +849,72 @@ fn a_lane_dependent_value_read_at_its_own_address_is_bound_in_lane() {
             } => Some(ValueId(value as u32)),
             _ => None,
         })
-        .expect("the producer's own conversion survives the merge");
+        .expect("the producer's conversion is recomputed in the merged body");
     assert!(
         sum.1.contains(&conv),
-        "the consumer's computation reads the lane's own conversion, not the buffer: {sum:?}"
+        "the consumer's computation reads the recomputed conversion, not the buffer: {sum:?}"
     );
 }
 
-/// A lane-dependent value the consumer reads at another address is refused, naming the read.
+/// A lane-dependent value the consumer reads at another address is recomputed there.
 ///
 /// # Invariant
-/// The read asks for `index + 1`, which no lane wrote: answering it in-lane would hand a lane
-/// its neighbour's value, and the shape that serves it is read-site recomputation — a later
-/// slice this crate must not fake.
+/// The read asks for `index + 1`, which is an address no entry parameter names, and the cone is
+/// `index` converted to `Float`: the copy is that conversion with the address leaf rebound, so the
+/// merged body holds one instruction per read and neither a slice nor a barrier.
 #[test]
-fn a_lane_dependent_value_read_at_another_address_is_refused() {
+fn a_lane_dependent_value_read_at_another_address_is_recomputed_there() {
     let producer = fragment(lane_producer_body(), 1, vec![ScalarClass::Float]);
     let consumer = fragment(
         consumer_reading(&[0, 1], true),
         2,
         vec![ScalarClass::Float; 2],
     );
-    let refusal = compose(&producer, &consumer, 1)
-        .expect_err("a value reachable from the lane cannot be bound in-lane");
-    assert_eq!(refusal.name(), "ForwardedValueIsLaneDependent");
-    assert!(
-        matches!(
-            refusal,
-            ComposeRefusal::ForwardedValueIsLaneDependent { read, .. } if read
-                == buffer_reads_at(&consumer.body, 1)[0]
-        ),
-        "the refusal names the read that puts it out of reach: {refusal}"
+    let merged = compose(&producer, &consumer, 1).expect("the cone is recomputed at `index + 1`");
+    merged
+        .body
+        .validate()
+        .expect("the merged body is well formed");
+    assert_eq!(
+        read_positions(&merged.body),
+        vec![0],
+        "the absorbed read is gone whatever address it asked for"
     );
-    let message = refusal.message();
-    assert!(
-        message.contains("index") && message.contains("address"),
-        "the refusal says what the value depends on and what the read asks for: {message}"
+    let conv = merged
+        .body
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(value, definition)| match definition {
+            ValueDef::Instr {
+                op:
+                    KernelInstr::Conv {
+                        from: ScalarClass::Int,
+                        to: ScalarClass::Float,
+                    },
+                args,
+                ..
+            } => Some((ValueId(value as u32), args.clone())),
+            _ => None,
+        })
+        .expect("the merged body holds the recomputed conversion");
+    let shifted = merged
+        .body
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(value, definition)| match definition {
+            ValueDef::Instr {
+                op: KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+                ..
+            } => Some(ValueId(value as u32)),
+            _ => None,
+        })
+        .expect("the consumer's own `index + 1` survives the merge");
+    assert_eq!(
+        conv.1,
+        vec![shifted],
+        "the conversion reads the address the consumer computed, not the lane's own index"
     );
 }
 
@@ -902,6 +932,137 @@ fn buffer_reads_at(body: &KernelBody, position: i64) -> Vec<ValueId> {
             _ => false,
         })
         .collect()
+}
+
+/// A producer whose forwarded value's cone is `exchange`, computed the way each asks for it.
+///
+/// # Invariant
+/// The cone reaches the invocation index through `value`, so the merge would want to copy it and
+/// only the one instruction `exchange` puts in the cone decides whether it may.
+fn producer_exchanging(
+    exchange: impl Fn(&mut KernelBody, usize, ValueId, ValueId) -> ValueId,
+) -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let index = body.add_param(entry);
+    let value = body.add_op(
+        entry,
+        KernelInstr::Conv {
+            from: ScalarClass::Int,
+            to: ScalarClass::Float,
+        },
+        vec![index],
+        vec![ScalarClass::Float],
+    );
+    let exchanged = exchange(&mut body, entry, index, value);
+    let forwarded = body.add_op(
+        entry,
+        KernelInstr::Bin(ScalarClass::Float, KernelBin::Add),
+        vec![exchanged, value],
+        vec![ScalarClass::Float],
+    );
+    let out = body.add_const(entry, ScalarClass::Int, 0);
+    body.add_op(
+        entry,
+        KernelInstr::BufferWriteCall(ScalarClass::Float),
+        vec![out, index, forwarded],
+        Vec::new(),
+    );
+    let dummy = body.add_const(entry, ScalarClass::Int, 0);
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![dummy],
+        },
+    );
+    body
+}
+
+/// A producer that stages the lane's own value into a slice and reads it back.
+fn sliced_producer() -> KernelFragment {
+    let mut fragment = fragment(
+        producer_exchanging(|body, entry, index, value| {
+            let ordinal = body.add_const(entry, ScalarClass::Int, 0);
+            let staged = body.add_op(
+                entry,
+                KernelInstr::SliceWriteCall(ScalarClass::Float),
+                vec![ordinal, index, value],
+                vec![ScalarClass::Float],
+            );
+            body.add_op(
+                entry,
+                KernelInstr::SliceReadCall(ScalarClass::Float),
+                vec![ordinal, index, staged],
+                vec![ScalarClass::Float],
+            )
+        }),
+        1,
+        vec![ScalarClass::Float],
+    );
+    fragment.slices = vec![Slice {
+        class: ScalarClass::Float,
+        count: LANES,
+        space: Space::Register,
+    }];
+    fragment
+}
+
+/// A producer that calls another kernel and adds what it answered.
+fn calling_producer() -> KernelFragment {
+    fragment(
+        producer_exchanging(|body, entry, index, _| {
+            body.add_op(
+                entry,
+                KernelInstr::CallKernel(7),
+                vec![index],
+                vec![ScalarClass::Float],
+            )
+        }),
+        1,
+        vec![ScalarClass::Float],
+    )
+}
+
+/// A slice read in the cone is refused by name: another lane's value is staging, not recomputation.
+#[test]
+fn a_cone_holding_a_slice_read_is_refused_by_name() {
+    let consumer = consumer();
+    let refusal = compose(&sliced_producer(), &consumer, 1)
+        .expect_err("a slice read cannot be recomputed at another address");
+    assert_eq!(refusal.name(), "ForwardedValueIsLaneDependent");
+    assert!(
+        matches!(
+            refusal,
+            ComposeRefusal::ForwardedValueIsLaneDependent { blocker, .. }
+                if blocker.name() == "SliceReadCall"
+        ),
+        "the refusal names the clause that refused it: {refusal}"
+    );
+    assert!(
+        matches!(
+            refusal,
+            ComposeRefusal::ForwardedValueIsLaneDependent { read, .. }
+                if read == buffer_reads_at(&consumer.body, 1)[0]
+        ),
+        "and the read it could not answer: {refusal}"
+    );
+}
+
+/// A cross-kernel call in the cone is refused by name: the callee has an index of its own.
+#[test]
+fn a_cone_holding_a_kernel_call_is_refused_by_name() {
+    let consumer = consumer();
+    let refusal = compose(&calling_producer(), &consumer, 1)
+        .expect_err("a callee's own index is not the merged fragment's address");
+    assert!(
+        matches!(
+            refusal,
+            ComposeRefusal::ForwardedValueIsLaneDependent { blocker, .. }
+                if blocker.name() == "CallKernel"
+        ),
+        "the refusal names the clause that refused it: {refusal}"
+    );
 }
 
 #[test]
