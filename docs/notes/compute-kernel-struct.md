@@ -268,3 +268,27 @@ hits the false refusal above. The decisive file is the checker's `check_named_fi
 field-naming work is actively changing; if its constant-versus-`TableGet` choice moves, the node-kind
 evidence above must be re-measured, though the behaviours would survive a shape change more readily than
 the refusal texts.
+
+
+## The requirement: arbitrary struct nesting, with `.in`/`.out` the only special case
+
+A kernel function must be able to **nest structs to any depth and read them by name** — in its body, in
+its locals, in values a call returns, and inside the parameter's own fields — and the **only** place
+where a name is treated specially is the parameter's `.in`/`.out`, which compute matches against the
+name table to find the buffers. **That special parse stays**: it is load-bearing (renaming those two
+fields refuses by name, as measured), so "normalize the names away" is neither possible nor wanted at
+this layer.
+
+**Measured today** (the diagnosis's matrix, all on the serial/`"cpu"` path): a struct local with a
+literal field, with a **computed** `Float` field, and a **depth-2** named read on a **non-parameter**
+struct all build and answer correctly; two same-typed buffers read out of name order answer per the
+**name**; a struct **returned by a cross-kernel call**, read as `s.p`, refuses by name; and an
+**anonymous** nested struct under `.in` refuses at check — as does a **named** nested group under `.in`,
+with a message that misnames the cause.
+
+**Two halves, deliberately separate.** The **parameter half** — a nested group under `.in`/`.out`, and a
+`Float` scalar inside one — is the walk descending by the field's own type at every depth instead of
+stopping where a shape element carries no element slot. The **everywhere-else half** — arbitrary nesting
+in the body, in locals, in call results, to any depth — is the next slice, because both halves change
+the same walk and two slices in one function collide. **Nothing in the tree tests any of this**: the
+matrix above is the specification to grow into, and every case it gains wants a test of its own.
