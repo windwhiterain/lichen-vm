@@ -81,15 +81,23 @@ never touch the slot). **The duplication is gone**: `e766020b` moved the guard i
 `crates/lichen-compute/tests/common/mod.rs` — one `static DEVICE`, `device_slot()` for the lock alone, and
 `device()` for the ten-copy helper — so `git grep -c 'static DEVICE' -- crates/lichen-compute/tests` went
 **nine files → one**, and ten → two across both crates. Measured after the collapse: **23 binaries ×
-8 runs at `--test-threads 2`, 207 runs, zero failures**. Four things are left, and each is stated with
-what it costs:
+8 runs at `--test-threads 2`, 207 runs, zero failures**. What is left, and what it costs:
 
-- **`tests/combine_fold.rs` still calls `install_default()` with no mutex**, justified by a comment that
-  its case owns its test binary — true today, one device test there, and exactly the older unguarded
-  shape a new device test would copy. A second device test in that file brings the 1-in-16 flake back.
-- **Five helpers build a context and never install**: `composed_chain`, `plan_staging`,
-  `reduction_chain`, `sparse_input_classes`, `tiled_reduction`. No replacement hazard, so no flake — but
-  a third spelling that can be copied.
+- **`tests/combine_fold.rs` was the last unguarded one, and `f818cc57` converted it** — it had justified
+  its own `install_default()` by "this case owns its test binary", and the comment went with the
+  function it justified. It takes `common::device()`, **not** `device_slot()`: the lock-only spelling
+  installs no backend, and since a device is reached through `ParallelBackend` the test would have
+  silently stopped exercising a device at all.
+- **`tests/compute.rs` has the only two surviving `install_default()` calls, and both are guarded** —
+  each takes `common::device_slot()` on the line above. They are deliberately not routed through
+  `device()`: one asserts `installed_backend_name() == None` after an explicit `uninstall()`, and the
+  other runs the **CPU** backend *before* installing the GPU one. Both would change behaviour, so the
+  duplication of the *call* is what remains, not a hole.
+- **Five files have a local `fn device` that takes no lock** — `composed_chain`, `plan_staging`,
+  `reduction_chain`, `sparse_input_classes`, `tiled_reduction` — and they are **not** the same hazard:
+  each builds a context with `GpuContext::new()` and **never installs the process-global backend**, so
+  they do not contend for the slot. What remains is a lookalike shape that can be copied, and one of
+  them prints `device: {name}` to stdout where the shared helper is silent.
 - **`crates/lichen-compiler/tests/pack_install.rs` keeps its own guard**, and should: a `Mutex` is
   per-process and that file is its own binary, so a shared static could not serialise it anyway, while
   its two device tests do race at `--test-threads 2`.
