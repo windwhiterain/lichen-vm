@@ -524,7 +524,10 @@ maps every span back to the original file.
   is one expression).  It computes nothing and changes no type: the scope's
   value is `e`'s value.  What it changes is `e`'s **lifetime** — `e` is
   compiled into a block of its own, and once `e` has decided its value the
-  block is released, keeping only what that value still reaches.  An `e` that
+  block is released, keeping only what that value still reaches.  Measured: a
+  block releases no nodes (every statement shares a class with the tail), and a
+  call releases the nodes its answer does not reach — so `@gc` pays on a
+  per-call basis.  An `e` that
   never decides is not released.  A scope inside a function body is one scope
   **per call**, so a `@loop` that runs many times does not accumulate one
   block per iteration; and `@gc f 41` at a call site releases the call's own

@@ -84,6 +84,31 @@ still has to follow is the operand of a node whose run stamp is zero, because a
 value written by a unification is not that operator's answer and the operator
 still reads the operand for its own.
 
+## What it actually frees, measured
+
+A block is **not** a tuple of statements — it is a tuple of the statements'
+*compiled expressions*, read at the tail's position (`Compiler::wrap`), so that
+every statement is checked and run. Those expressions are reachable only through
+the reader's operand, which the walk does not follow, so one would expect a block
+scope to release them all. It does not: a block-wide binding's placeholder is
+unified with the value the tail reads, so the **class edge** puts every statement
+back in reach.
+
+Two builds, each against its own unmarked twin:
+
+| source | nodes | blocks |
+|---|---|---|
+| `let a = 2` `let b = 3` `a + b` | 24 | 1 |
+| `x = @gc { a = 2; b = 3; a + b }` `x` | 24 | 1 |
+| `f = n => n + 1` `x = f 41` `x` | 52 | 2 |
+| `f = n => n + 1` `x = @gc f 41` `x` | 43 | 2 |
+
+So `@gc` over a **block** frees the block record and its arena and **no nodes**,
+and `@gc` over a **call** frees the nine nodes the answer's class does not reach
+— the operand array, the argument pair, and the cells nothing binds. That is the
+honest shape of the feature today: the per-call case is the one that pays, which
+is the case the call-site idiom exists for.
+
 ## What a release takes with it
 
 A released node is gone: `Module::nodes` is a `SlotMap`, so indexing a released
