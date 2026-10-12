@@ -673,7 +673,12 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
   spurious diagnostic on an edit that deleted a statement.
 - **The `dirty.rs` walk must stay exhaustive over `Expr`.** It is written as a full match
   on purpose: a new expression form that fell into a catch-all would contribute no edges,
-  and a missed edge is a stale cell.
+  and a missed edge is a stale cell. A shared `Expr::children()` accessor was built and
+  measured against this rule and rejected: it costs +136 lines in `ast.rs` and −130 in
+  `dirty.rs` (net +6), and of the **14** edit sites a new variant needs it removes exactly
+  one (`dirty.rs`'s, by turning it into a catch-all). Every other site is an exhaustive
+  match the compiler forces, and each asks a different question of the tree: a step to
+  record, a span to shift, a child to rewrite by role, a tag to hash.
 - **`retain_marked` is what keeps the store honest** (§3.3).
 - **The content key carries `cache`** (`KEY_FORMAT_VERSION` 2). Bumping the constant
   invalidates every key; today that is in-memory only (the session and the tests), so a

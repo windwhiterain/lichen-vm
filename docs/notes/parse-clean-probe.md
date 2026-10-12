@@ -94,3 +94,15 @@ The oracle renders every parse error and the parsed program for all 418 cases
 (32 corpus files, 262 string literals from the parser's own test module, 124
 malformed snippets): **byte-identical** between `dev` and this change, including
 the message above that the table-driven prefix dispatch breaks.
+
+## The same trap in a plain cleanup
+
+It is not only the precedence chain. Replacing the `=>` body rule's
+`.repeated().collect::<Vec<_>>()` with `or_not()` — the obvious reading of "the
+body is optional" — stops the chain after the first arrow, so on `x => => y` the
+second arrow is left unconsumed and the diagnostic count goes from one to three:
+`expected a separator or the end of the program, found '=>'` plus the
+program-level message. The repetition is load-bearing for the label set, so it
+stays and a `first_body` fold keeps the sequence while dropping all but the first
+body (`parse.rs`). A cleanup is not exempt from this note's rule: what a failure
+reports is part of the surface.
