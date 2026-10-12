@@ -128,10 +128,7 @@ pub fn compose(
         .map(|(_, position)| *position)
         .find(|position| *position as usize >= producer.inputs)
     {
-        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge {
-            position,
-            inputs,
-        });
+        return Err(ComposeRefusal::ProducerReadsOutsideTheMerge { position, inputs });
     }
     let consumer_reads = buffer_reads(&consumer.body, "consumer")?;
     let absorbed_reads: Vec<(ValueId, ValueId)> = consumer_reads

@@ -150,7 +150,11 @@ fn a_composed_node_is_reported_by_name_and_nothing_lands_in_it() {
          derivation that never ran"
     );
     assert_eq!(
-        (rewritten.len(), rewritten.value_count(), rewritten.returns()),
+        (
+            rewritten.len(),
+            rewritten.value_count(),
+            rewritten.returns()
+        ),
         (composed.len(), composed.value_count(), composed.returns()),
         "the node count, the value count and the return are the merge's own, so nothing about the \
          graph moved"
