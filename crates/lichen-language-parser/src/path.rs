@@ -188,11 +188,11 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             }
         }
         Expr::Arrow {
-            parameter,
+            parameter_type,
             r#return,
             ..
         } => {
-            push_index(&mut out, 0, parameter);
+            push_index(&mut out, 0, parameter_type);
             push_index(&mut out, 1, r#return);
         }
         Expr::Tuple(elements, _)
