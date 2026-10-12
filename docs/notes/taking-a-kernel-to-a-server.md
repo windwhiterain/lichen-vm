@@ -40,12 +40,15 @@ The seam rule that produced that split, and which decides the next moves:
 > **Anything that takes a `Module` belongs to the language-integration side; anything that takes only
 > IR types (`Graph`, `KernelFragment`, `Artifact`) belongs to the runtime side.**
 
-**One honest edge case, found while applying it**: `land_fused_kernel` takes `&mut Graph` — an IR name —
-so the rule says it belongs in the runtime, yet it stayed in `lichen-compute` because it mutates a
-**recorded graph** and the recording is not extracted yet. So today `read_fused_kernel` is in
-`lichen-runtime` and `land_fused_kernel` is not, and a runtime that only *reads* an artifact is
-language-free while one that lands it is not. Moving the landing is a later slice, together with the
-recording that owns it.
+**The one edge case the rule produced, and how it settled**: `land_fused_kernel` takes `&mut Graph` —
+an IR name — so the rule says it belongs in the runtime, though the first extraction left it behind
+because it mutates a **recorded graph**. The next slice moved it (`b6c9aa56`), for a reason the rule
+implies and the code forced: the tiling pass calls it, and a `Graph` is IR, so leaving it behind would
+have made the runtime depend on the language. Its own comment had claimed the opposite — "this half is
+the language side, because a graph is where a recorded dispatch is being rewritten" — and that is a
+**design statement, not a seam**. So today **both** reading and landing an artifact are language-free,
+and what stays in `lichen-compute` is exactly the `Module`-taking half: the installers, the recording,
+and the registry's filling.
 
 ## What the fused artifact carries, layer by layer
 
