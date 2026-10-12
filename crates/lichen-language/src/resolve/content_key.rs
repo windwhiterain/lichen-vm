@@ -148,6 +148,11 @@ impl KeyWriter {
             }
             Expr::Placeholder(_) => self.u(3),
             Expr::Any(_) => self.u(36),
+            // `@gc` is its own form, so it does not collide with a plain one.
+            Expr::Gc(inner, _) => {
+                self.u(38);
+                self.expr(inner);
+            }
             // The recovered-error region / an unresolved name: content-free,
             // position-only.
             Expr::Err { .. } => self.u(4),

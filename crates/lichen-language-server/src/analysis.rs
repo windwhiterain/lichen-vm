@@ -1485,7 +1485,9 @@ fn classify_token_kind(
         // `tuple` is a keyword-led type form, like `array`.
         TokenKind::KwTuple
         // `@any` is the wildcard literal — a reserved form like `_`.
-        | TokenKind::Any => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        | TokenKind::Any
+        // `@gc` opens a block whose scope is released at the `}`.
+        | TokenKind::KwGc => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
         // Operators: arrows, annotations, separators-of-fields, and math.
@@ -1738,6 +1740,8 @@ impl<'a> NameClass<'a> {
                     self.expr(&f.value);
                 }
             }
+            // `@gc` is a marker over one expression; it reaches it.
+            Expr::Gc(inner, _) => self.expr(inner),
         }
     }
 }
@@ -2058,6 +2062,8 @@ impl Walk {
                     .collect();
                 self.scope(&stmts, None);
             }
+            // `@gc` is a marker over one expression; it reaches it.
+            Expr::Gc(inner, _) => self.expr(inner),
         }
     }
 }
@@ -2393,6 +2399,8 @@ impl<'a> ScopeCapture<'a> {
                     .collect();
                 self.scope(&stmts, None);
             }
+            // `@gc` is a marker over one expression; it reaches it.
+            Expr::Gc(inner, _) => self.expr(inner),
         }
     }
 }

@@ -956,7 +956,8 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   `plrun`s inside one *live* module accumulate in that block until GC drops it —
   the editor's case is exact (P1-17 drops the `Build` per analysis, so buffer
   memory is bounded by open documents), and a long-lived single module leans on
-  `garbage_collect`.
+  `garbage_collect` — which is what the language's `@gc` marker is for
+  ([gc-block](gc-block.md)).
 
   **Kernels: the process, content-addressed.**  A fragment is not a leaf payload:
   `KernelInstr::CallKernel(KernelId)` makes it reference *other* fragments, and

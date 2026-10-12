@@ -526,6 +526,14 @@ pub enum ExprKind<L> {
     /// two plugins each registering `$jit` never collide. The checker compiles each
     /// argument and adopts the pair the plugin's builder returns.
     NativeCall { op: &'static str, args: ChildRange },
+    /// `@gc e` — `e` compiled into a scope of its own, released once `e` is
+    /// deeply decided (`docs/notes/gc-block.md`).
+    ///
+    /// # Invariant
+    /// The kind allocates no cell of its own: `inner`'s node is the scope's root
+    /// and every slot is the inner expression's, so the block boundary is the
+    /// only thing the marker adds.
+    Gc { inner: ExprId },
 }
 
 impl<L> ExprKind<L> {
@@ -573,6 +581,7 @@ impl<L> ExprKind<L> {
             }
             ExprKind::Record { value, .. } => push(*value),
             ExprKind::Assert { condition } => push(*condition),
+            ExprKind::Gc { inner } => push(*inner),
             ExprKind::Index { array, index } => {
                 push(*array);
                 push(*index);
@@ -691,6 +700,7 @@ impl<L> ExprKind<L> {
             }
             ExprKind::Record { value, .. } => fix(value),
             ExprKind::Assert { condition } => fix(condition),
+            ExprKind::Gc { inner } => fix(inner),
             ExprKind::Index { array, index } => {
                 fix(array);
                 fix(index);

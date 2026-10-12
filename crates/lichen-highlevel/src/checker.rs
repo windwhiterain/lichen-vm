@@ -26,6 +26,7 @@ use crate::shape::for_each_kind_marker;
 mod annotations;
 mod asserts;
 mod diagnostics;
+mod gc;
 mod indexing;
 mod lambda;
 mod native_call;
@@ -132,6 +133,14 @@ where
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
     /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
+    /// The `@gc` expressions this build compiled.
+    ///
+    /// # Invariant
+    ///
+    /// A non-empty list is what makes [`Checker::prune_released`] run: a
+    /// collected scope releases the nodes its root does not reach, and every
+    /// table here may name one. Empty skips the pass.
+    gc_scopes: Vec<ExprId>,
     /// The per-expression checker state — one entry per IR expression, see
     /// [`ExprState`].  Indexed by [`ExprId`].
     state: Vec<ExprState>,
@@ -468,6 +477,7 @@ where
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
+            gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             function_param_attr: HashMap::new(),
             merged_tails: HashMap::new(),
@@ -590,6 +600,10 @@ where
         if !checker.check_failed() && checker.nonterminating.is_empty() {
             checker.module.check_asserts();
         }
+        // A released scope takes the edges into it.
+        if !checker.gc_scopes.is_empty() {
+            checker.prune_released();
+        }
         // A build is not ok when a unification failed or a guard was recorded.
         let ok = !checker.check_failed()
             && checker.module.eval_errors.is_empty()
@@ -626,9 +640,32 @@ where
         }
     }
 
+    /// Drop every checker entry that names a node a `@gc` scope released.
+    ///
+    /// # Invariant
+    ///
+    /// The scope is a boundary: what it released is not part of this build's
+    /// graph any more, so an expression inside one reads as having no compiled
+    /// slot rather than naming a released node. A surviving scope's root and
+    /// every node reachable from it are still live, so only its unreachable
+    /// interior is dropped.
+    fn prune_released(&mut self) {
+        let live = |node: NodeId| self.module.nodes.contains_key(node);
+        for state in &mut self.state {
+            state.term = state.term.filter(|&node| live(node));
+            state.val = state.val.filter(|&node| live(node));
+            state.ty = state.ty.filter(|&node| live(node));
+            state.attr = state.attr.filter(|&node| live(node));
+        }
+        self.arrows.retain(|&node| live(node));
+        self.node_edges.retain(|&node, _| live(node));
+        self.apply_edges.retain(|&node, _| live(node));
+        self.user_asserts.retain(|&node| live(node));
+        self.assert_spellings.retain(|&node, _| live(node));
+    }
+
     /// Whether any check already failed: a failed unification **or** a recorded
     /// guard failure.
-    ///
     /// # Invariant
     /// A guard entry is exactly one whose [`DiaryEntry::errors`] is `None`: the
     /// kind of check it was is a recorded fact, never an inference from an
@@ -979,6 +1016,7 @@ where
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
+            | ExprKind::Gc { .. }
             | ExprKind::Index { .. }
             | ExprKind::TypeAccess { .. }
             | ExprKind::Field { .. }
@@ -1211,6 +1249,7 @@ where
                 pair
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
+            ExprKind::Gc { inner } => self.check_gc(e, inner),
         };
         // **The anchor handoff**: the one place a mark's position crosses
         // into the lowlevel as data.

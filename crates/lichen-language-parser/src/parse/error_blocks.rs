@@ -170,6 +170,8 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_expr(&f.value, out);
                 }
             }
+            // `@gc` masks nothing of its own; the error block is inside it.
+            Expr::Gc(inner, _) => walk_expr(inner, out),
         }
     }
     fn walk_stmt(s: &Stmt, out: &mut Vec<ErrorBlock>) {

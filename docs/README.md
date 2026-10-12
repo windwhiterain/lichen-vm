@@ -44,6 +44,7 @@ authority, and this table only names the state.
 |---|---|---|
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current — the graph, lazy evaluation, the unify write rules, GC |
+| [`@gc e`: an expression in a scope of its own](notes/gc-block.md) | `lichen-language-lex`/`-parser`, `lichen-highlevel` (`checker/gc`), `lichen-lowlevel` (`gc`/`evaluation`/`function`) | current |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | current |
 | [A call's clones belong to the enclosing template](notes/apply-clone-ownership.md) | `lichen-lowlevel` (`function`/`static_module`) | current |

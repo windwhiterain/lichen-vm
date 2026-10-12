@@ -31,6 +31,13 @@ pub struct ApplyError {
 /// the owner tag.
 struct ApplyCtx<'a> {
     target: BlockId,
+    /// Each template block's image in this pass; a parentless one is the
+    /// apply's own target (`docs/notes/gc-block.md`).
+    ///
+    /// # Invariant
+    /// One entry per template block per pass, so every clone of one scope
+    /// shares one block.
+    blocks: HashMap<BlockId, BlockId>,
     /// The membership anchor: the applied function.  A node belongs to it iff its
     /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
@@ -169,6 +176,7 @@ impl<P: Program> Module<P> {
         let mut minted = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
+            blocks: HashMap::new(),
             // Membership is the chain test, not a scope snapshot.
             anchor: function,
             branch_top: function,
@@ -291,6 +299,28 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// The image of `source`'s block under this pass.
+    ///
+    /// # Invariant
+    /// A parentless block (the root, or a lambda body that outlives its
+    /// enclosing scope) maps to the apply's own target; a scope maps to a fresh
+    /// child of its parent's image, so each instantiation collects its own.
+    fn clone_target(&mut self, source: BlockId, ctx: &mut ApplyCtx<'_>) -> BlockId {
+        if let Some(&image) = ctx.blocks.get(&source) {
+            return image;
+        }
+        let image = match self.blocks[source].parent {
+            // Seed the parent before this one, so a nested scope nests.
+            Some(parent) => {
+                let parent_image = self.clone_target(parent, ctx);
+                self.add_block(Some(parent_image))
+            }
+            None => ctx.target,
+        };
+        ctx.blocks.insert(source, image);
+        image
+    }
+
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
         if let Some(&clone) = ctx.remap.get(&node) {
@@ -314,14 +344,25 @@ impl<P: Program> Module<P> {
         };
         // A value holding a foreign closure is cloned too: the proof cannot see through a body.
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided);
+        // A scope's content is this call's: sharing it would collect the
+        // template.
+        let scoped = self.blocks[self.nodes[node].block].parent.is_some();
         let depends_on_parameter = node == ctx.parameter
             || !proven_concrete
+            || scoped
             || self.value_holds_foreign_function(value, ctx.applied);
         if !depends_on_parameter {
             return node;
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
-        let clone = self.add_node(ctx.target, None, None);
+        let scope = self.nodes[node].block;
+        let target = self.clone_target(scope, ctx);
+        let clone = self.add_node(target, None, None);
+        // A scope ends at its root, so the clone ends the image it landed in:
+        // each instantiation collects its own.
+        if self.blocks[scope].scope_root == Some(node) {
+            self.blocks[target].scope_root = Some(clone);
+        }
         // The clone's origin is the node it instantiates, so a reader holding the clone can
         // reach the source node.
         self.nodes[clone].origin = Some(node);
@@ -353,7 +394,7 @@ impl<P: Program> Module<P> {
         };
         // The mapping runs only for a kept value: a dropped answer must not clone a closure.
         let mapped = if carried {
-            value.map(|value| self.value_apply(value, ctx))
+            value.map(|value| self.value_apply(value, target, ctx))
         } else {
             None
         };
@@ -372,8 +413,15 @@ impl<P: Program> Module<P> {
         clone
     }
 
+    /// Map one template value onto the clones `target` holds; every payload
+    /// moves into that block.
     #[stacksafe]
-    fn value_apply(&mut self, value: P::Value, ctx: &mut ApplyCtx<'_>) -> P::Value {
+    fn value_apply(
+        &mut self,
+        value: P::Value,
+        target: BlockId,
+        ctx: &mut ApplyCtx<'_>,
+    ) -> P::Value {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
                 // Each element rides with its shallow flag; a baked static ref is referenced in place.
@@ -389,7 +437,7 @@ impl<P: Program> Module<P> {
                         ..item
                     })
                     .collect();
-                P::Value::from(LowValue::Array(self.alloc_array(&items, ctx.target)))
+                P::Value::from(LowValue::Array(self.alloc_array(&items, target)))
             }
             Some(LowValue::Table(table)) => {
                 // The entry nodes clone like array items; the stored hash travels verbatim.
@@ -409,7 +457,7 @@ impl<P: Program> Module<P> {
                         hash: item.hash,
                     })
                     .collect();
-                P::Value::from(LowValue::Table(self.alloc_table(&items, ctx.target)))
+                P::Value::from(LowValue::Table(self.alloc_table(&items, target)))
             }
             // A static function value is frozen: its captures are static, so it is referenced in
             // place.
@@ -443,7 +491,7 @@ impl<P: Program> Module<P> {
                     static_origin,
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
-                    block: ctx.target,
+                    block: target,
                     // A clone does not carry its template's `@loop` mark: an instance is expanded like
                     // any other call.
                     looping: false,
@@ -452,10 +500,10 @@ impl<P: Program> Module<P> {
                 ctx.minted.insert(function, fresh);
                 // The nested function's scope joins the clone's template, so its captures
                 // rewrite to the fresh clones.
-                let target = ctx.target;
                 let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
                     target,
+                    blocks: HashMap::new(),
                     anchor: ctx.anchor,
                     branch_top: fresh,
                     closure_scope: Some(&scope),
@@ -494,7 +542,7 @@ impl<P: Program> Module<P> {
                 // Nodes cloned into the target are re-stamped to the fresh id, so the fresh template
                 // re-instantiates per call.
                 for &id in &nodes {
-                    if self.nodes[id].block == ctx.target {
+                    if self.nodes[id].block == target {
                         self.nodes[id].function = Some(fresh);
                     }
                 }
@@ -509,7 +557,7 @@ impl<P: Program> Module<P> {
             }
             // A program-specific value may carry a handle into an arena —
             // relocate it into the target block like any other payload.
-            None => Self::copy_ext(self, value, ctx.target),
+            None => Self::copy_ext(self, value, target),
             _ => value,
         }
     }

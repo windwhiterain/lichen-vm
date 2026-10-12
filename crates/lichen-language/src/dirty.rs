@@ -273,6 +273,8 @@ fn walk(expr: &Expr, deps: &mut Deps) {
                 walk(&field.value, deps);
             }
         }
+        // `@gc` declares nothing of its own; its expression does.
+        Expr::Gc(inner, _) => walk(inner, deps),
         Expr::Int(..)
         | Expr::Float(..)
         | Expr::Str(..)

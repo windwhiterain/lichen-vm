@@ -853,6 +853,7 @@ impl Compiler {
                         | Expr::TypeArray { .. }
                         | Expr::Block { .. }
                         | Expr::RecordBlock { .. }
+                        | Expr::Gc(..)
                         | Expr::Err { .. } => {
                             ids.push(self.compile_expr(element));
                             depths.push(0);
@@ -912,6 +913,10 @@ impl Compiler {
                 // A struct-returning block: an anonymous struct of its field statements.
                 let (_, root) = self.compile_record_fields(fields, span);
                 root
+            }
+            Expr::Gc(inner, span) => {
+                let inner = self.compile_expr(inner);
+                self.alloc(ExprKind::Gc { inner }, span)
             }
         }
     }

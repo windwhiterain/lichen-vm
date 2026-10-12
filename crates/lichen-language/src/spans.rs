@@ -218,6 +218,10 @@ pub(crate) fn shift_expr(
                 shift_field(field, old_starts, new_starts, delta);
             }
         }
+        Expr::Gc(inner, span) => {
+            shift(span, old_starts, new_starts, delta);
+            shift_expr(inner, old_starts, new_starts, delta);
+        }
     }
 }
 

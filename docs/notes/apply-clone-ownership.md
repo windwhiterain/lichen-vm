@@ -64,6 +64,15 @@ first call's parameter cells are then everyone's, and the value is never rebuilt
   read as outside the template and the fresh closure's scope would be shared across
   calls. A closure's own scope is always in its own template, so membership is the
   chain test or a scope hit.
+- **A clone lands in the *image* of its template's block**, not in the apply's own
+  target. A parentless block — the root, or a lambda body that outlives its enclosing
+  scope — maps to the apply's target, as before; a `@gc` scope maps to a fresh child
+  of its parent's image, so each instantiation gets its own and the read that ends the
+  call collects that one. The memo is per template block per pass, so every clone of
+  one scope shares one block. A node inside a scope is also **never referenced in
+  place**: a scope's content is the call's, not the template's, so sharing it would
+  let one call collect the template a later call still needs. See
+  [gc-block](gc-block.md).
 
 ## 2. What a clone may carry
 

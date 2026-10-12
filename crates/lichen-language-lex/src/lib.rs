@@ -69,6 +69,9 @@ pub enum TokenKind {
     /// `@any` — the wildcard literal: it unifies with everything and constrains
     /// nothing (`compound-element-slots.md`).
     Any,
+    /// `@gc` — a block compiled into its own collectable scope, released at the
+    /// `}` (`docs/notes/gc-block.md`).
+    KwGc,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The `cache` keyword — a binding whose value is a retained cell
@@ -205,6 +208,7 @@ impl TokenKind {
             TokenKind::KwIn => "'@in'",
             TokenKind::KwShallow => "'@shallow'",
             TokenKind::Any => "'@any'",
+            TokenKind::KwGc => "'@gc'",
             TokenKind::KwPub => "'pub'",
             TokenKind::KwCache => "'cache'",
             TokenKind::KwArray => "'array'",
@@ -729,12 +733,13 @@ fn raw_to_kind(
             "in" => Some(TokenKind::KwIn),
             "shallow" => Some(TokenKind::KwShallow),
             "any" => Some(TokenKind::Any),
+            "gc" => Some(TokenKind::KwGc),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert`, `@in`, `@shallow` and `@any` are the ones that exist"
+                         `@assert`, `@in`, `@shallow`, `@any` and `@gc` are the ones that exist"
                     ),
                 });
                 None

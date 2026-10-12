@@ -38,6 +38,7 @@ impl<P: Program> Module<P> {
             extension_diagnostics: Vec::new(),
             global_ext: P::GlobalExt::default(),
             marks: HashMap::new(),
+            gc_classes: HashSet::new(),
             apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,
@@ -87,11 +88,23 @@ impl<P: Program> Module<P> {
             children: Vec::new(),
             nodes: Vec::new(),
             functions: Vec::new(),
+            scope_root: None,
         });
         if let Some(parent) = parent {
             self.blocks[parent].children.push(block);
         }
         block
+    }
+
+    /// Declare `node` the node whose evaluation collects the block it is homed in.
+    ///
+    /// # Invariant
+    ///
+    /// `node` is homed in a block with a parent, so a collect has somewhere to move
+    /// the reachable subtree to; a layer that cannot say which of its nodes ends the
+    /// scope does not call this, and that block keeps the parent-block-read rule.
+    pub fn mark_scope_root(&mut self, node: NodeId) {
+        self.blocks[self.nodes[node].block].scope_root = Some(node);
     }
 
     pub fn add_node(

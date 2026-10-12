@@ -1,23 +1,63 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId,
-    Program, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvalError, LowValue,
+    Module, NodeId, Program, ValueExt,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// move the `block_root`'s reachable subtree into its `block.parent`.
+    /// Whether `node` still names a live node; a static ref is in the frozen
+    /// module's arena, which no block owns.
+    fn ref_is_live(&self, node: AnyNodeId) -> bool {
+        match node {
+            Dyn(node) => self.nodes.contains_key(node),
+            AnyNodeId::Static(_) => true,
+        }
+    }
+
+    /// Move the `block_root`'s reachable subtree into its `block.parent`.
+    ///
+    /// # Invariant
+    ///
+    /// Nothing reachable from `block_root` may name a node this releases, so a
+    /// surviving node's every edge into `source` has to be one the walk follows:
+    /// the equality classes it aliases into, its value's items, its traced nodes,
+    /// or the operand of an operation it still owes an answer for. See
+    /// [`Self::drop_block`].
     #[stacksafe]
     pub fn garbage_collect(&mut self, block_root: NodeId) -> Option<P::Value> {
         let source = self.nodes[block_root].block;
         let Some(target) = self.blocks[source].parent else {
             return self.nodes[block_root].value; // root block: nothing to move or release
         };
+        self.gc_classes.clear();
         let value = self.garbage_collect_node(block_root, source, target);
         self.drop_block(source);
         value
+    }
+
+    /// The equality-class members of `node` that this walk has not entered yet.
+    ///
+    /// # Invariant
+    /// A class is entered once per collect, so the walk visits each member once;
+    /// the representative is inserted before the members are read, so a class
+    /// cycle terminates.
+    fn class_walk(&mut self, node: NodeId) -> Vec<NodeId> {
+        if !self
+            .gc_classes
+            .insert(disjoint::find(&mut self.nodes, node))
+        {
+            return Vec::new();
+        }
+        let mut members = Vec::new();
+        let mut current = self.nodes[node].meta().next();
+        while let Some(member) = current {
+            current = self.nodes[member].meta().next();
+            members.push(member);
+        }
+        members
     }
 
     #[stacksafe]
@@ -27,16 +67,25 @@ impl<P: Program> Module<P> {
         source: BlockId,
         target: BlockId,
     ) -> Option<P::Value> {
+        // A reader's answer lives in the class it read into, so every
+        // member the node aliases is as live as the node is.
+        let members = self.class_walk(node);
         if !self.descends_from(self.nodes[node].block, source) {
+            for member in members {
+                self.garbage_collect_node(member, source, target);
+            }
             return self.nodes[node].value; // lives outside the vacated subtree — stays put
         }
         self.nodes[node].block = target;
         self.blocks[target].nodes.push(node);
+        for member in members {
+            self.garbage_collect_node(member, source, target);
+        }
         let current = self.nodes[node].value;
         let operation = self.nodes[node].operation;
-        // An unevaluated operation still depends on its operand, which may
-        // be referenced later; a cached value means it is dead.
-        if current.is_none()
+        // The operator still owes its answer when the run stamp says
+        // so, and it reads the operand for one.
+        if self.has_no_result_yet(node)
             && let Some(operand) = operation.and_then(|operation| operation.operand)
         {
             self.garbage_collect_node(operand, source, target);
@@ -210,8 +259,56 @@ impl<P: Program> Module<P> {
         // pass walks the registry by id, so a dangling entry panics.
         self.asserts
             .retain(|entry| self.nodes.contains_key(entry.condition));
+        // A failure inside a released block goes with it, as the
+        // assert worklist above already does.
+        self.prune_released_failures();
         // A mark anchor is **not** retained: its payloads are text, and a
         // key is never reused, so a stale entry names nothing.
         self.blocks.remove(block);
+    }
+
+    /// Drop every recorded failure whose context no longer names a live node.
+    fn prune_released_failures(&mut self) {
+        // Each `retain` borrows one field mutably and the
+        // liveness test reads the module, so they are taken out first.
+        let mut failures = (
+            std::mem::take(&mut self.unify_errors),
+            std::mem::take(&mut self.eval_errors),
+            std::mem::take(&mut self.assert_errors),
+            std::mem::take(&mut self.apply_errors),
+        );
+        let live = |node: NodeId| self.nodes.contains_key(node);
+        failures.0.retain(|error| {
+            live(error.root_a)
+                && live(error.root_b)
+                && live(error.a)
+                && live(error.b)
+                && error.steps.iter().all(|step| live(step.a) && live(step.b))
+        });
+        failures.1.retain(|error| match error {
+            EvalError::Index { index, .. } => self.ref_is_live(*index),
+            EvalError::TableMiss { table, key } => {
+                self.ref_is_live(*table) && self.ref_is_live(*key)
+            }
+            EvalError::TableKeyUndecided { key } => self.ref_is_live(*key),
+            EvalError::IndexTarget { target } => self.ref_is_live(*target),
+            EvalError::IndexSubscript { subscript } => self.ref_is_live(*subscript),
+            EvalError::ApplyTarget { function } => self.ref_is_live(*function),
+        });
+        failures
+            .2
+            .retain(|error| live(error.condition) && self.ref_is_live(error.template));
+        failures.3.retain(|error| {
+            live(error.parameter_type)
+                && live(error.argument_type)
+                && live(error.argument)
+                && live(error.apply_node)
+        });
+        (
+            self.unify_errors,
+            self.eval_errors,
+            self.assert_errors,
+            self.apply_errors,
+        ) = failures;
     }
 }

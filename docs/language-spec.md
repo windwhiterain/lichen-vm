@@ -99,7 +99,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `=>`, `->`, `:`.  The
-  `@`-led keywords — `@loop`, `@assert`, `@shallow`, and the membership operator `@in` — are
+  `@`-led keywords — `@loop`, `@assert`, `@shallow`, `@gc`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
   The
   seven prefix keywords open a prefix expression and so cannot be used as
@@ -518,6 +518,17 @@ maps every span back to the original file.
   is a module whose value is that anonymous struct — the exported bindings —
   so `import "math.lichen"` gives back the module with no need to wrap the
   body in a `{ … }` (the file's top level *already is* a block).
+- **`@gc e` — a scope of its own.**  `@gc` is a prefix marker over any
+  expression, at the `@assert` level, so it takes the whole application rather
+  than one atom of it (`@gc f 41`, and `@gc { … }` for the block form — a block
+  is one expression).  It computes nothing and changes no type: the scope's
+  value is `e`'s value.  What it changes is `e`'s **lifetime** — `e` is
+  compiled into a block of its own, and once `e` has decided its value the
+  block is released, keeping only what that value still reaches.  An `e` that
+  never decides is not released.  A scope inside a function body is one scope
+  **per call**, so a `@loop` that runs many times does not accumulate one
+  block per iteration; and `@gc f 41` at a call site releases the call's own
+  clones.  See [gc-block](notes/gc-block.md).
 - **Every lambda is automatically let-polymorphic.**  Each application
   instantiates the parameter fresh — the lowlevel apply machinery clones the
   parameter per call site — so `(x => x) 5 : Int` and `(x => x) Type : Type`

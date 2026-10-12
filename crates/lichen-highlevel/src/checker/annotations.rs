@@ -105,7 +105,10 @@ where
             | ExprKind::Static { .. } => Vec::new(),
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
+            // The prefix assert is a leaf for stage 1: its own `# p` binds a slot.
             ExprKind::Assert { .. } => Vec::new(),
+            // `@gc` adds no operator, so the value is the inner expression's.
+            ExprKind::Gc { inner } => self.persp_combine_children(inner),
             // A prefix operator's operands' perspectives meet as a `BinOp`'s do.
             ExprKind::Prefix { .. } => self.range_children(e),
             ExprKind::NativeCall { .. } => self.range_children(e),

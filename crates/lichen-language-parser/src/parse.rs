@@ -539,14 +539,15 @@ fn expression<'a, Er: GrammarError<'a>>(
             })
             .boxed();
 
-        // `@assert e` — a prefix assert, tighter than every binary operator but
-        // looser than application.
+        // `@assert e` and `@gc e` — the two prefix markers, tighter than every
+        // binary operator but looser than application.
         let unary = token(TokenKind::KwAssert)
             .ignore_then(application.clone())
             .map_with(|e, me| Expr::Assert {
                 value: Box::new(e),
                 span: span_at(tokens, me.span().start),
             })
+            .or(gc_marked(tokens, application.clone()))
             // The prefix keyword operators, at the assert's level: operands by
             // juxtaposition, no infix token, so no new rung.
             .or(choice((
@@ -1464,6 +1465,19 @@ fn array_type<'a, Er: GrammarError<'a>>(
             length: Box::new(length),
             span: span_at(tokens, me.span().start),
         })
+}
+
+/// `@gc e` — `e` compiled into a scope of its own, released once `e`
+/// is deeply decided (`docs/notes/gc-block.md`).
+fn gc_marked<'a, Er: GrammarError<'a>>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone {
+    token(TokenKind::KwGc)
+        // `@gc{` glues the brace to the keyword; `@gc {` does not.
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(expr)
+        .map_with(|inner, me| Expr::Gc(Box::new(inner), span_at(tokens, me.span().start)))
 }
 
 /// `{ stmt; …; expr }` — a block: a program's statement list plus its value.

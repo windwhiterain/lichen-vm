@@ -303,7 +303,15 @@ graph fact — a 2-element array one of whose elements points back at its own cl
 
 - **Block-level GC.** Values are collected by block (`garbage_collect(block_root)`),
   following the block's reachable nodes and dropping the rest; the static arena is
-  never moved or compacted.
+  never moved or compacted. A block ends at **its declared root** when a layer says
+  which node that is (`Module::mark_scope_root`, the language's `@gc`), and at
+  whichever node the parent block reads when no layer did. A scope whose root the
+  deep pass leaves **undecided** is not collected: some reachable slot is still
+  empty, so nothing in it is proven unreachable. The walk follows the **equality
+  classes** a node aliases into as well as its value's items, because a reader's
+  answer lives in the class it read into rather than in its own slot; a class is
+  entered once per collect, so the walk is linear in the scope. See
+  [gc-block](gc-block.md).
 - **Tables** (`table(…)` / `t <== k`) are immutable and built once (`build_table`).
   Each entry stores its key's precomputed deep-content hash, the items are sorted
   by that hash, and a read binary-searches and verifies the equal-hash run with
@@ -396,7 +404,11 @@ reach at a given size, so a deep chain cannot be produced through the public API
 would take a hand-installed `parent` link, which `add_equality` refuses. When GC splices
 a block's dead members out of a class the survivors keep the binding; when the
 **representative** is the one that dies it is re-elected from the survivors and their
-parents re-point at it.
+parents re-point at it. A released node is gone — `nodes` is a `SlotMap`, so indexing
+one panics — so every registry that names a node by id is pruned with it. The assert
+worklist already was; `prune_released_failures` gives `unify_errors`, `eval_errors`,
+`assert_errors` and `apply_errors` the same rule, and a layer above prunes its own
+tables the same way (`Checker::prune_released`).
 
 ## Static modules and low types
 

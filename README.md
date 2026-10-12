@@ -161,6 +161,20 @@ a = x => (1, Int)(x)
 (a 0, a 1)
 ```
 
+### `gc.lichen`
+
+```text
+---
+  order = "2"
+  output = "[8, 16]: array{Int, 2}"
+---
+add    = x => y => x + y
+double = n => @gc { a = n + 1
+                   b = add a a
+                   b }
+@gc [double 3, double 7]
+```
+
 ### `lazy_infinite.lichen`
 
 ```text

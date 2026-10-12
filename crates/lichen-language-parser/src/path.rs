@@ -258,6 +258,8 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
                 out.push((field_step(&field.name, i, &repeated), Node::Field(field)));
             }
         }
+        // `@gc` is transparent to the path vocabulary: it reaches its expression.
+        Expr::Gc(inner, _) => out.extend(children(inner)),
     }
     out
 }

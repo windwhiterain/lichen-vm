@@ -257,6 +257,9 @@ pub enum Expr {
         fields: Vec<RecordField>,
         span: Span,
     },
+    /// `@gc e` — `e` in a scope of its own, released once it decides
+    /// (`docs/notes/gc-block.md`). A block is an expression.
+    Gc(Box<Expr>, Span),
     /// A syntactic error the parser recovered — an opaque error block; `range`
     /// is the byte span it masks.
     Err { range: (u32, u32), start: Span },
@@ -399,6 +402,7 @@ impl Expr {
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
             Expr::RecordBlock { span, .. } => *span,
+            Expr::Gc(_, s) => *s,
             Expr::Err { start, .. } => *start,
         }
     }

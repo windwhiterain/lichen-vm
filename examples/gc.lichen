@@ -1,0 +1,9 @@
+---
+  order = "2"
+  output = "[8, 16]: array{Int, 2}"
+---
+add    = x => y => x + y
+double = n => @gc { a = n + 1
+                   b = add a a
+                   b }
+@gc [double 3, double 7]

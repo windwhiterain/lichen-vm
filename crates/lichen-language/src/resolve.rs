@@ -386,6 +386,8 @@ impl Resolver {
                 self.resolve_record_fields(fields);
                 self.scopes.truncate(base);
             }
+            // `@gc` adds no binder and no scope of its own.
+            Expr::Gc(inner, _) => self.resolve_expr(inner),
             // No children/binders — nothing to resolve.
             Expr::Int(..)
             | Expr::Float(..)

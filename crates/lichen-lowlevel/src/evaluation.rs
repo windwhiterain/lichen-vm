@@ -89,11 +89,13 @@ impl<P: Program> Module<P> {
             self.blocks.contains_key(block),
             "node {node:?} references released block {block:?}"
         );
-        // A child-block root delegates whole; returning before this frame takes a mark keeps one
+        // A scope ends at its declared root; an undeclared one at the parent read.
+        let declared = self.blocks[block].scope_root;
+        let child_block_root = declared.is_none()
+            && referer.is_some_and(|referer| self.blocks[block].parent == Some(referer));
+        // A scope root delegates whole; returning before this frame takes a mark keeps one
         // attempt, one mark.
-        if let Some(referer) = referer
-            && self.blocks[block].parent == Some(referer)
-        {
+        if child_block_root || declared == Some(node) {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
@@ -589,9 +591,20 @@ impl<P: Program> Module<P> {
     }
 
     fn evaluate_block(&mut self, root: NodeId) -> Option<P::Value> {
+        // One entry per scope: the deep pass below reads the root again, and the
+        // mark is what would send it straight back here.
+        let block = self.nodes[root].block;
+        self.blocks[block].scope_root = None;
         let value = self.evaluate_node_deep(root, None);
-        // The root may not be cached (a budget refusal, or an undecided answer), so compaction has
-        // no moved value.
+        // An undecided root has an open slot, so nothing in the scope is proven
+        // unreachable; a later read may decide it.
+        let decided = self.nodes[root]
+            .evaluated_deep
+            .is_some_and(|deep| !deep.undecided);
+        if !decided {
+            self.blocks[block].scope_root = Some(root);
+            return value;
+        }
         self.garbage_collect(root).or(value)
     }
 }

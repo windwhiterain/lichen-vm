@@ -676,6 +676,9 @@ pub struct Block {
     pub nodes: Vec<NodeId>,
     /// Functions homed in this block, registered like nodes so GC drops them with it.
     pub functions: Vec<FunctionId>,
+    /// The node whose evaluation collects this block, when a layer
+    /// declared it a scope (`mark_scope_root`); `None` otherwise.
+    pub scope_root: Option<NodeId>,
 }
 
 /// The top-level function shell.
@@ -910,6 +913,13 @@ pub struct Module<P: Program> {
     /// The key is the one place a mark's *position* crosses into this layer as data
     /// (graph-fusion.md §3); a reader asks through [`Module::marks_of`].
     marks: HashMap<NodeId, Vec<String>>,
+    /// The equality classes one [`Module::garbage_collect`] walk has entered, so
+    /// each is walked once.
+    ///
+    /// # Invariant
+    /// Empty between collects: [`Module::garbage_collect`] clears it, and a walk
+    /// never re-enters another, so the set only ever holds one collect's classes.
+    gc_classes: HashSet<NodeId>,
     apply_total: usize,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
