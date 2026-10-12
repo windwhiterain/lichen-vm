@@ -227,36 +227,55 @@ The ordering constraint the measurement establishes, with the code path:
    nodes. `Lower::apply` is never entered, so `Lower::lower_loop`
    (`crates/lichen-compute/src/compute/body.rs`) never runs, the entering call's state
    is never read, and the seed literal is never lowered.
-3. **Therefore the marked *seed* is never visited, and the marked *combine* is visited but
-   answered from the pair.** `Lower::publish_mark` only ever sees nodes the walk lowers, so the
-   `identity` mark on the seed (`fold (6, 0.0 ~ "identity")`) never publishes at all — that is
-   the role `RoleNotMarked { interface, role }` names. The `combine` mark fails differently: its
-   anchor **is** lowered and its **text does publish**, but the value it is published against is
-   the pair's element 0, so what a reader bridges back is the fold's base case rather than the
-   operator. Measured, in `crates/lichen-language/examples/reduction_algebra.rs` — the only
-   program that bridges a literal-count projection: with the seed `0.0` the published `combine`
-   bridges to the constant `0`, and with a distinctive seed `3.5` it bridges to **`3.5`**, the
-   seed, never `+`. A literal-count fold therefore loses **both halves of the algebra** for one
-   cause, and the two acceptance tests that hard-code `Reduction { combine: Add, identity: 0.0 }`
-   (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) record that accurately
-   rather than lazily.
+3. **Therefore the marked *seed* is never visited, and the `combine` mark's value was the wrong
+   claimant.** `Lower::publish_mark` only ever sees nodes the walk lowers, so the `identity` mark on
+   the seed (`fold (6, 0.0 ~ "identity")`) never publishes at all — that is the role
+   `RoleNotMarked { interface, role }` names. The `combine` mark failed for a **second, different**
+   cause, found later and fixed at `cfea0d6b`: it published against the **first claimant among the
+   nodes the anchor's walk reaches** rather than the expression it was written on (the paragraph below
+   traces it), so in `crates/lichen-language/examples/reduction_algebra.rs` the literal-count `combine`
+   bridged to the seed — `0` for the seed `0.0`, **`3.5`** for a distinctive seed. **Corrected by that
+   fix**: the literal-count `combine` now bridges to the fold's own `Bin(Float, Add)`, canonical
+   `d + d + …`, so the two halves no longer fail for one cause — `combine` reads as `+` and only
+   `identity` is still missing (passage 4's scheduling constraint). The two acceptance tests that
+   hard-code `Reduction { combine: Add, identity: 0.0 }`
+   (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) were accurate when written
+   and are now only *conservative*: the algebra they state is what the program means.
 
-**And a mark on a top-level *routed operator* anchors to the wrong value — measured, unfixed.** The
-mark channel's premise is that a mark names the value its expression produced; where the expression is
-an operator the language **routes** (`compile.rs` sends `a + b` to a prelude binding), that premise does
-not hold today. Seven spellings were measured at `afc116dc`, and the pattern is: in a kernel body, a
-mark written on a top-level operator records the **left operand's value** (`(read * 2.0) ~ "element"`
-records the identity `d`, `((0.0 + read)) ~ "element"` records `0.0`), while a mark on an
-**application** (`exp (…) ~ "element"`) or one **inside a `@loop`** records the whole expression. So a
-role marked the natural way can name a value the body never computed, which is a wrong algebra rather
-than a refusal — the same class as §3's earlier measurement above, but with no definition pass and no
-loop involved, so it is a second cause and not that one. `Checker::anchor_marks` reads
-`state[e].val.or(state[e].term)` and the routing is in `lichen-highlevel`, so the fault is upstream of
-every consumer of a mark. The interface that found it
-(`crates/lichen-language/tests/elementwise_chain.rs`) marks an application and says why in its own
-invariant. **Localizing it is the next thing; its blast radius is not yet measured** — the recorded
-chains whose marks sit inside a loop (`examples/fusion_schema.rs`'s four hashes among them) anchor
-correctly and should not move, so the affected class is top-level marked operators.
+**And a mark on a top-level *routed operator* anchored to the wrong value — measured at `afc116dc`,
+fixed at `cfea0d6b`.** The mark channel's premise is that a mark names the value its expression
+produced; where the expression is an operator the language **routes** (`compile.rs` sends `a * b` to a
+prelude binding), that premise did not hold: in a kernel body a mark written on a top-level operator
+recorded the **left operand's value** (`(read * 2.0) ~ "element"` recorded the identity `d`,
+`((0.0 + read)) ~ "element"` recorded `0.0`), while a mark on an **application** (`exp (…)`) or one
+**inside a `@loop`** recorded the whole expression. **The trace, node by node**: the routing makes the
+expression an `Apply`, so `checker/lambda.rs` leaves `val = None`, `term = Some(apply)`, and
+`Checker::anchor_marks` stamps the Apply **operation** node — resolution of the anchor was never wrong.
+But the definition pass's frozen-apply instantiation attributes **every clone it makes to the
+caller-side apply** (`static_module/apply.rs`'s `static_node_apply`), so three distinct walked nodes —
+the read, the constant and the `Bin` — all carry that one origin; and `Lower::arithmetic` emits the
+left operand, the right operand and *then* the operator, while `publish_mark` de-duplicates on the
+stamped node. **First claimant won, and the operands precede the operator.** `exp (…)` is a `Prefix`
+that is never routed, which is why it was always right. The fix is emitter-local:
+`Lower` carries a `lowering` stack of the anchors currently being defined and `publish_mark` returns
+early for a source on it — **a mark is published by the lowering of the node it is anchored at, never
+by an operand of it** — with the per-stamped-node de-duplication kept, so an expanded recurrence still
+lowers one anchor once per copy.
+
+Every recorded value that moved was **wrong before**: `fusion_numbers`' literal-count producer and
+`reduction_algebra`'s three literal-count folds all moved from the fold's **seed literal** to the
+`Bin` the body computed (the distinctive-seed case now reads `3.5 + d + …` rather than `3.5`), and
+`reduction_interface`'s element kernel moved from `ValueId(0)` — the **first parameter slot**, i.e. the
+datum `d` — to the `Bin(Int, Mul)` it computes, which the bridge then refuses **by name**
+(`MachineInteger`, the class refusal this note already records for that kernel), so that example's
+"5 of 5 projections bridge" is now **4 of 5**: the count fell because it got honest.
+`examples/fusion_schema.rs` is byte-identical — all four schema hashes and fragment digests unchanged —
+because its marks sit in loops the *emitter* converts rather than in expanded prelude clones. No test
+pinned a moved value. The regression test
+(`crates/lichen-language/tests/mark_anchor.rs`) compares canonical `Expr` trees and **fails on the
+parent commit**, which is what says it catches the defect rather than describing the fix. What is still
+wrong on this path: the literal-count `identity` (passage 4), and a mark on a value `define_in`
+redirects through a **view** rather than through a frozen apply's residual is unmeasured.
 
 **The `lower_loop` path is reachable, and the discriminator is measured.** It fires when
 the checker leaves the loop *undecided* — when the entering state is a run-time value, so
