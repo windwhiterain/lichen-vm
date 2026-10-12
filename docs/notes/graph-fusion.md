@@ -680,7 +680,9 @@ that survives is a write the program never made — benign on the measured chain
 land on the same lane index), its **marks** go (they name roles of an interface that no longer exists,
 so the merged fragment speaks the consumer's), and `roles` is **empty** (a merged fragment has no single
 parameter struct for a path to name). Measured on `examples/fusion_schema.rs`'s chain: 38 values, 9
-blocks, one write, one input, three marks, and the three-way agreement — merged, the two-pass reference
+blocks, one write, **two** inputs — the union lists the one buffer the two bodies both name twice, which
+is what `composed_chain` prints as `2 input(s) [Float, Float]` — three marks, and the three-way agreement
+— merged, the two-pass reference
 and the program's own recorded graph, element for element at 8, 100 and 1024 elements against
 `n − n(n+1)/2` — plus a round trip through the fused artifact.
 
