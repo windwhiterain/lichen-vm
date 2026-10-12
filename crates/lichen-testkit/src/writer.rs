@@ -1,6 +1,7 @@
 //! Writing an [`IR`] by hand, with every expression named.
 //! See docs/notes/test-harness.md.
 
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 
 use lichen_highlevel::attr::{AttrSpec, NoAttr};
@@ -16,67 +17,73 @@ use lichen_highlevel::program::{
 /// Every allocation goes through a builder that names its result, so a
 /// [`Program`] has a name for **every** expression in it — never a node a
 /// failure message can only call `ExprId(17)`.
+///
+/// # Invariant
+/// The builders take `&self` over a `RefCell`, which is what lets a test nest
+/// them the way it reads: `w.array("k", &[w.int("a", 1), w.int("b", 2)])`. An
+/// `&mut self` builder forbids that and pushes every sub-expression into a
+/// `let` first, which is the whole point of a writer being writer-friendly.
 pub struct Writer<A = NoAttr, L = HighProgramLiteral> {
-    ir: IR<A, L>,
-    names: HashMap<ExprId, String>,
+    ir: RefCell<IR<A, L>>,
+    names: RefCell<HashMap<ExprId, String>>,
 }
 
 impl<A: AttrSpec, L> Writer<A, L> {
     pub fn new() -> Self {
         Writer {
-            ir: IR::new(),
-            names: HashMap::new(),
+            ir: RefCell::new(IR::new()),
+            names: RefCell::new(HashMap::new()),
         }
     }
 
     /// Allocate `kind` under `name`.
-    fn named(&mut self, name: &str, kind: ExprKind<L>) -> ExprId {
-        let expr = self.ir.alloc(kind);
-        self.names.insert(expr, name.to_string());
+    fn named(&self, name: &str, kind: ExprKind<L>) -> ExprId {
+        let expr = self.ir.borrow_mut().alloc(kind);
+        self.names.borrow_mut().insert(expr, name.to_string());
         expr
     }
 
     /// `name` — an identifier's use. The name is the expression's own, so a
     /// diagnostic naming it reads as the source did.
-    pub fn param(&mut self, name: &str) -> ExprId {
+    pub fn param(&self, name: &str) -> ExprId {
         self.named(name, ExprKind::Parameter)
     }
 
     /// `name = _` — a block-wide binding's reserved id, filled in by
     /// [`Self::fill`]. A recursion resolves to this id, so it must exist before
     /// the body that refers to it.
-    pub fn binding(&mut self, name: &str) -> ExprId {
+    pub fn binding(&self, name: &str) -> ExprId {
         let expr = self.named(name, ExprKind::Placeholder);
-        self.ir.block_roots.insert(expr);
+        self.ir.borrow_mut().block_roots.insert(expr);
         expr
     }
 
     /// Stamp an already-reserved `expr` with its real kind, keeping its name.
-    pub fn fill(&mut self, expr: ExprId, kind: ExprKind<L>) {
-        self.ir.set_kind(expr, kind);
+    pub fn fill(&self, expr: ExprId, kind: ExprKind<L>) {
+        self.ir.borrow_mut().set_kind(expr, kind);
     }
 
     /// `name = _` — an inference hole, distinct from [`Self::binding`]: a hole
     /// is never reserved for a forward reference.
-    pub fn hole(&mut self, name: &str) -> ExprId {
+    pub fn hole(&self, name: &str) -> ExprId {
         self.named(name, ExprKind::Placeholder)
     }
 
     /// A recovered-error region the checker skips whole.
-    pub fn error_block(&mut self, name: &str) -> ExprId {
+    pub fn error_block(&self, name: &str) -> ExprId {
         self.named(name, ExprKind::ErrorBlock)
     }
 
     // --- functions and application ----------------------------------------
 
     /// `name = \p. body`.
-    pub fn lam(&mut self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
+    pub fn lam(&self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
         self.lam_typed(name, parameter, None, body, false)
     }
 
     /// `name = \p @loop. body` — the marker is **permission**, so the build
     /// still decides whether a loop is emitted.
-    pub fn lam_looping(&mut self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
+    pub fn lam_looping(&self, name: &str, parameter: ExprId, body: ExprId) -> ExprId {
         self.lam_typed(name, parameter, None, body, true)
     }
 
@@ -87,7 +94,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// The returned id is the reserved one, so a call written against it
     /// resolves to the function this stamps rather than to a fresh sibling.
     pub fn close_binding(
-        &mut self,
+        &self,
         reserved: ExprId,
         parameter: ExprId,
         body: ExprId,
@@ -109,7 +116,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = \p : T. body` — the annotated parameter's type.
     pub fn lam_typed(
-        &mut self,
+        &self,
         name: &str,
         parameter: ExprId,
         parameter_type: Option<ExprId>,
@@ -127,7 +134,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// statement would materialize a block, so a test about the node shape must
     /// reach for this rather than for [`Self::lam`].
     pub fn lam_attributed(
-        &mut self,
+        &self,
         name: &str,
         parameter: ExprId,
         parameter_attribute: ExprId,
@@ -147,7 +154,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// cannot disagree about a field.
     #[allow(clippy::too_many_arguments)]
     fn function(
-        &mut self,
+        &self,
         name: &str,
         parameter: ExprId,
         parameter_type: Option<ExprId>,
@@ -175,7 +182,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// The enclosing id is reserved **before** the inner one is written,
     /// because the inner's parent link names the enclosing node.
     pub fn lam_nested(
-        &mut self,
+        &self,
         inner: (&str, ExprId, ExprId),
         outer: (&str, ExprId),
     ) -> (ExprId, ExprId) {
@@ -208,24 +215,24 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = f(x)`.
-    pub fn app(&mut self, name: &str, function: ExprId, argument: ExprId) -> ExprId {
+    pub fn app(&self, name: &str, function: ExprId, argument: ExprId) -> ExprId {
         self.named(name, ExprKind::Apply { function, argument })
     }
 
     // --- reads ------------------------------------------------------------
 
     /// `name = a[i]` — the container is pinned to an array.
-    pub fn index(&mut self, name: &str, array: ExprId, index: ExprId) -> ExprId {
+    pub fn index(&self, name: &str, array: ExprId, index: ExprId) -> ExprId {
         self.named(name, ExprKind::Index { array, index })
     }
 
     /// `name = a(k)` — a positional slot read over a tuple element.
-    pub fn field(&mut self, name: &str, container: ExprId, key: ExprId) -> ExprId {
+    pub fn field(&self, name: &str, container: ExprId, key: ExprId) -> ExprId {
         self.named(name, ExprKind::Field { container, key })
     }
 
     /// `name = a.<field>` — the named form, which also accepts a struct.
-    pub fn named_field(&mut self, name: &str, container: ExprId, field: &'static str) -> ExprId {
+    pub fn named_field(&self, name: &str, container: ExprId, field: &'static str) -> ExprId {
         self.named(
             name,
             ExprKind::NamedField {
@@ -241,12 +248,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// # Invariant
     /// Distinct from [`Self::named_field`]: this reads the name table off the
     /// container's own **type**, which must be a `TypeStruct`.
-    pub fn named_type_access(
-        &mut self,
-        name: &str,
-        container: ExprId,
-        field: &'static str,
-    ) -> ExprId {
+    pub fn named_type_access(&self, name: &str, container: ExprId, field: &'static str) -> ExprId {
         self.named(
             name,
             ExprKind::NamedTypeAccess {
@@ -258,19 +260,19 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = X{n}` — a positional *type* access, read without index
     /// validation.
-    pub fn type_access(&mut self, name: &str, container: ExprId, index: ExprId) -> ExprId {
+    pub fn type_access(&self, name: &str, container: ExprId, index: ExprId) -> ExprId {
         self.named(name, ExprKind::TypeAccess { container, index })
     }
 
     /// `name = a <== k` — a table read.
-    pub fn find(&mut self, name: &str, container: ExprId, key: ExprId) -> ExprId {
+    pub fn find(&self, name: &str, container: ExprId, key: ExprId) -> ExprId {
         self.named(name, ExprKind::Find { container, key })
     }
 
     // --- annotations and operators ----------------------------------------
 
     /// `name = e : T`.
-    pub fn annotate(&mut self, name: &str, value: ExprId, ty: ExprId) -> ExprId {
+    pub fn annotate(&self, name: &str, value: ExprId, ty: ExprId) -> ExprId {
         self.named(
             name,
             ExprKind::Annotation {
@@ -284,17 +286,17 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// `name = e : T # attributes…` — the slots come into existence by being
     /// annotated, which is the one asymmetry with `:`.
     pub fn annotate_with(
-        &mut self,
+        &self,
         name: &str,
         value: ExprId,
         ty: Option<ExprId>,
         attributes: &[ExprId],
     ) -> ExprId {
-        let start = self.ir.children.len() as u32;
-        self.ir.children.extend_from_slice(attributes);
+        let start = self.ir.borrow_mut().children.len() as u32;
+        self.ir.borrow_mut().children.extend_from_slice(attributes);
         let range = ChildRange {
             start,
-            end: self.ir.children.len() as u32,
+            end: self.ir.borrow_mut().children.len() as u32,
         };
         self.named(
             name,
@@ -307,7 +309,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = left op right`.
-    pub fn binop(&mut self, name: &str, operator: BinOp, left: ExprId, right: ExprId) -> ExprId {
+    pub fn binop(&self, name: &str, operator: BinOp, left: ExprId, right: ExprId) -> ExprId {
         self.named(
             name,
             ExprKind::BinOp {
@@ -319,12 +321,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = <prefix operator> operands…`.
-    pub fn prefix(&mut self, name: &str, operator: PrefixOp, operands: &[ExprId]) -> ExprId {
-        let start = self.ir.children.len() as u32;
-        self.ir.children.extend_from_slice(operands);
+    pub fn prefix(&self, name: &str, operator: PrefixOp, operands: &[ExprId]) -> ExprId {
+        let start = self.ir.borrow_mut().children.len() as u32;
+        self.ir.borrow_mut().children.extend_from_slice(operands);
         let range = ChildRange {
             start,
-            end: self.ir.children.len() as u32,
+            end: self.ir.borrow_mut().children.len() as u32,
         };
         self.named(
             name,
@@ -336,31 +338,31 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = assert(condition)`.
-    pub fn assert(&mut self, name: &str, condition: ExprId) -> ExprId {
+    pub fn assert(&self, name: &str, condition: ExprId) -> ExprId {
         self.named(name, ExprKind::Assert { condition })
     }
 
     // --- compound values and their types ---------------------------------
 
     /// `name = (a, b, …)`.
-    pub fn tuple(&mut self, name: &str, elements: &[ExprId]) -> ExprId {
+    pub fn tuple(&self, name: &str, elements: &[ExprId]) -> ExprId {
         self.range(name, elements, ExprKind::Tuple)
     }
 
     /// `name = [T1, …, Tn]` — a tuple type.
-    pub fn type_tuple(&mut self, name: &str, elements: &[ExprId]) -> ExprId {
+    pub fn type_tuple(&self, name: &str, elements: &[ExprId]) -> ExprId {
         let range = self.push_children(elements);
         self.named(name, ExprKind::TypeTuple(range))
     }
 
     /// `name = [a, b, …]` — an array literal, homogeneous by construction.
-    pub fn array(&mut self, name: &str, elements: &[ExprId]) -> ExprId {
+    pub fn array(&self, name: &str, elements: &[ExprId]) -> ExprId {
         let range = self.push_children(elements);
         self.named(name, ExprKind::Array(range))
     }
 
     /// `name = Array(T, n)`.
-    pub fn type_array(&mut self, name: &str, element_type: ExprId, length: ExprId) -> ExprId {
+    pub fn type_array(&self, name: &str, element_type: ExprId, length: ExprId) -> ExprId {
         self.named(
             name,
             ExprKind::TypeArray {
@@ -371,23 +373,23 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = set{a, b, …}`.
-    pub fn set(&mut self, name: &str, members: &[ExprId]) -> ExprId {
+    pub fn set(&self, name: &str, members: &[ExprId]) -> ExprId {
         let range = self.push_children(members);
         self.named(name, ExprKind::Set(range))
     }
 
     /// `name = set{T}`.
-    pub fn type_set(&mut self, name: &str, element: ExprId) -> ExprId {
+    pub fn type_set(&self, name: &str, element: ExprId) -> ExprId {
         self.range(name, &[element], ExprKind::TypeSet)
     }
 
     /// `name = table{K, V}`.
-    pub fn type_table(&mut self, name: &str, key: ExprId, value: ExprId) -> ExprId {
+    pub fn type_table(&self, name: &str, key: ExprId, value: ExprId) -> ExprId {
         self.range(name, &[key, value], ExprKind::TypeTable)
     }
 
     /// `name = table(k ==> v, …)` — keys and values interleaved.
-    pub fn table(&mut self, name: &str, entries: &[(ExprId, ExprId)]) -> ExprId {
+    pub fn table(&self, name: &str, entries: &[(ExprId, ExprId)]) -> ExprId {
         let interleaved: Vec<ExprId> = entries
             .iter()
             .flat_map(|&(key, value)| [key, value])
@@ -401,16 +403,17 @@ impl<A: AttrSpec, L> Writer<A, L> {
     /// # Invariant
     /// A `None` name is a field with no name-table entry, which the checker
     /// refuses rather than reads positionally.
-    pub fn struct_type(&mut self, name: &str, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
+    pub fn struct_type(&self, name: &str, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
         let elements: Vec<ExprId> = fields.iter().map(|&(element, _)| element).collect();
         let field_range = self.push_children(&elements);
-        let start = self.ir.struct_names.len() as u32;
+        let start = self.ir.borrow_mut().struct_names.len() as u32;
         self.ir
+            .borrow_mut()
             .struct_names
             .extend(fields.iter().map(|&(_, field)| field));
         let name_range = ChildRange {
             start,
-            end: self.ir.struct_names.len() as u32,
+            end: self.ir.borrow_mut().struct_names.len() as u32,
         };
         self.named(
             name,
@@ -423,17 +426,17 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// `name = S(a, b, …)` — `names` is index-aligned with `value`'s elements.
     pub fn instantiate(
-        &mut self,
+        &self,
         name: &str,
         type_expr: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
     ) -> ExprId {
-        let start = self.ir.struct_names.len() as u32;
-        self.ir.struct_names.extend_from_slice(names);
+        let start = self.ir.borrow_mut().struct_names.len() as u32;
+        self.ir.borrow_mut().struct_names.extend_from_slice(names);
         let name_range = ChildRange {
             start,
-            end: self.ir.struct_names.len() as u32,
+            end: self.ir.borrow_mut().struct_names.len() as u32,
         };
         self.named(
             name,
@@ -446,12 +449,12 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = { bindings }` — a block whose fields are its bindings.
-    pub fn record(&mut self, name: &str, value: ExprId, names: &[Option<&'static str>]) -> ExprId {
-        let start = self.ir.struct_names.len() as u32;
-        self.ir.struct_names.extend_from_slice(names);
+    pub fn record(&self, name: &str, value: ExprId, names: &[Option<&'static str>]) -> ExprId {
+        let start = self.ir.borrow_mut().struct_names.len() as u32;
+        self.ir.borrow_mut().struct_names.extend_from_slice(names);
         let name_range = ChildRange {
             start,
-            end: self.ir.struct_names.len() as u32,
+            end: self.ir.borrow_mut().struct_names.len() as u32,
         };
         self.named(
             name,
@@ -463,7 +466,7 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = T -> U` — a function type.
-    pub fn type_function(&mut self, name: &str, parameter: ExprId, return_type: ExprId) -> ExprId {
+    pub fn type_function(&self, name: &str, parameter: ExprId, return_type: ExprId) -> ExprId {
         self.named(
             name,
             ExprKind::TypeFunction {
@@ -474,32 +477,33 @@ impl<A: AttrSpec, L> Writer<A, L> {
     }
 
     /// `name = @gc e` — a scope of its own, released once `e` is decided.
-    pub fn gc(&mut self, name: &str, inner: ExprId) -> ExprId {
+    pub fn gc(&self, name: &str, inner: ExprId) -> ExprId {
         self.named(name, ExprKind::Gc { inner })
     }
 
     /// `$op(args…)` — a native call the compiling module's plugin resolves.
-    pub fn native_call(&mut self, name: &str, op: &'static str, args: &[ExprId]) -> ExprId {
+    pub fn native_call(&self, name: &str, op: &'static str, args: &[ExprId]) -> ExprId {
         let range = self.push_children(args);
         self.named(name, ExprKind::NativeCall { op, args: range })
     }
 
     /// `name = [v1, @shallow v2, @shallow(2) v3]` — each element carries its `~`
     /// depth, and the whole is typed like a tuple rather than an array.
-    pub fn shallow_array(&mut self, name: &str, elements: &[(ExprId, usize)]) -> ExprId {
+    pub fn shallow_array(&self, name: &str, elements: &[(ExprId, usize)]) -> ExprId {
         let element_range = self.push_children(
             &elements
                 .iter()
                 .map(|&(element, _)| element)
                 .collect::<Vec<_>>(),
         );
-        let start = self.ir.depths.len() as u32;
+        let start = self.ir.borrow_mut().depths.len() as u32;
         self.ir
+            .borrow_mut()
             .depths
             .extend(elements.iter().map(|&(_, depth)| depth));
         let depth_range = ChildRange {
             start,
-            end: self.ir.depths.len() as u32,
+            end: self.ir.borrow_mut().depths.len() as u32,
         };
         self.named(
             name,
@@ -514,28 +518,33 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
     /// Make `root` the program's root and hand back the IR with its names.
     pub fn finish(self, root: ExprId) -> Program<A, L> {
-        let Writer { mut ir, names } = self;
+        let Writer { ir, names } = self;
+        let mut ir = ir.into_inner();
         ir.set_root(root);
-        Program { ir, names, root }
+        Program {
+            ir,
+            names: names.into_inner(),
+            root,
+        }
     }
 
     /// The IR so far, for a test that has to stamp something the builders do
     /// not cover.
-    pub fn ir_mut(&mut self) -> &mut IR<A, L> {
-        &mut self.ir
+    pub fn ir_mut(&self) -> RefMut<'_, IR<A, L>> {
+        self.ir.borrow_mut()
     }
 
-    fn push_children(&mut self, elements: &[ExprId]) -> ChildRange {
-        let start = self.ir.children.len() as u32;
-        self.ir.children.extend_from_slice(elements);
+    fn push_children(&self, elements: &[ExprId]) -> ChildRange {
+        let start = self.ir.borrow_mut().children.len() as u32;
+        self.ir.borrow_mut().children.extend_from_slice(elements);
         ChildRange {
             start,
-            end: self.ir.children.len() as u32,
+            end: self.ir.borrow_mut().children.len() as u32,
         }
     }
 
     fn range(
-        &mut self,
+        &self,
         name: &str,
         elements: &[ExprId],
         make: fn(ChildRange) -> ExprKind<L>,
@@ -547,41 +556,41 @@ impl<A: AttrSpec, L> Writer<A, L> {
 
 impl<A: AttrSpec> Writer<A, HighProgramLiteral> {
     /// `name = <n>`.
-    pub fn int(&mut self, name: &str, value: usize) -> ExprId {
+    pub fn int(&self, name: &str, value: usize) -> ExprId {
         self.literal(name, HighProgramLiteral::from(IntLit(value)))
     }
 
     /// `name = <value>` — a float literal.
-    pub fn float(&mut self, name: &str, value: f32) -> ExprId {
+    pub fn float(&self, name: &str, value: f32) -> ExprId {
         self.literal(name, HighProgramLiteral::from(FloatLit(value)))
     }
 
     /// `name = "text"`.
-    pub fn string(&mut self, name: &str, value: &'static str) -> ExprId {
+    pub fn string(&self, name: &str, value: &'static str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(StrLit(value)))
     }
 
     /// `name = Int`.
-    pub fn int_type(&mut self, name: &str) -> ExprId {
+    pub fn int_type(&self, name: &str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(IntTypeLit))
     }
 
     /// `name = Float`.
-    pub fn float_type(&mut self, name: &str) -> ExprId {
+    pub fn float_type(&self, name: &str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(FloatTypeLit))
     }
 
     /// `name = string`.
-    pub fn string_type(&mut self, name: &str) -> ExprId {
+    pub fn string_type(&self, name: &str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(StringTypeLit))
     }
 
     /// `name = Type` — the universe, which is its own type.
-    pub fn universe(&mut self, name: &str) -> ExprId {
+    pub fn universe(&self, name: &str) -> ExprId {
         self.literal(name, HighProgramLiteral::from(TypeTypeLit))
     }
 
-    fn literal(&mut self, name: &str, lit: HighProgramLiteral) -> ExprId {
+    fn literal(&self, name: &str, lit: HighProgramLiteral) -> ExprId {
         self.named(name, ExprKind::Literal(lit))
     }
 }

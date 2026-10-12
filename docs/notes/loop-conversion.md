@@ -546,7 +546,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   `lichen-highlevel`'s `loop_marker.rs` and `checker.rs` (a raised work bound
   runs a 3_000-count loop; a raised *pair* of bounds is what a long terminating
   recursion asks for, and each bound refuses the shape it is for) and
-  `lichen-language/tests/loop_run.rs` on real programs (600 answers as a loop
+  `lichen-highlevel/tests/loop_run.rs` on real programs (600 answers as a loop
   where the same source unmarked is refused by the *nesting* guard, 3_000 is
   refused as a loop by the *work* bound, and loop and unroll agree below both).
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
@@ -1085,7 +1085,7 @@ That gives three things, and they are the whole design:
 loop walks the roles and *runs* them — one instantiation per iteration, the same
 clone-and-unify the unroll uses — so "the loop and the unroll agree" is a property
 checked on real programs (`tests/basic/host_loop.rs`,
-`lichen-language/tests/loop_run.rs`). The kernel reader walks the same roles and
+`lichen-highlevel/tests/loop_run.rs`). The kernel reader walks the same roles and
 *emits* them; if the two disagree, the conversion or a reader is wrong, and the
 host loop is the side that has been running longest.
 
