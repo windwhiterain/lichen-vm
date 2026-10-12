@@ -3,12 +3,16 @@
 
 mod common;
 
-use lichen_compute::compute::clear_graph_pass;
+use lichen_compute::compute::{GraphPass, LaunchExtent, clear_graph_pass, set_graph_pass};
 use lichen_compute::kernel_fragment;
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
 use lichen_fusion::BinaryOp;
-use lichen_kernel_ir::{KernelFragment, fragment_digest};
+use lichen_graph_ir::{Graph, Node};
+use lichen_kernel_ir::{
+    KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, fragment_digest,
+};
 use lichen_language::automatic_tiling::install_tiling;
+use lichen_language::floor::{floor_pass_with_packs, install_floor};
 use lichen_language::fusion_claim::{claim_of, kernel_id};
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_lowlevel::Module;
@@ -22,6 +26,23 @@ const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
 
 /// The per-lane answer at `out[0]`: the body folds the lane's own one element there.
 const PER_LANE: f32 = 1.0;
+
+/// The seed the counterfactual puts under the tiled fold, and what one occurrence adds.
+const RAISED: f32 = 7.0;
+
+/// The lanes a tiled fold spreads the launch over: the workgroup its tile stages.
+const LANES: usize = LOCAL_SIZE_X as usize;
+
+/// How many times the tiled fold carries the reduction's identity into `out[0]`.
+///
+/// # Invariant
+/// The tiled body stages **one seed per lane** into the shared slice and then folds that slice
+/// from a seed of its own, and `tiled.rs` states the seed once per body, so raising it by
+/// [`RAISED`] raises `out[0]` by this many times `RAISED`. The recorded per-lane body folds
+/// from one seed only, which is why the multiple itself is evidence of the tiled schedule.
+fn tiled_seeds() -> f32 {
+    LANES as f32 + 1.0
+}
 
 /// The answer a sum over `1 ..= COUNT` has, and the point of tiling it.
 ///
@@ -203,7 +224,7 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
         "and it differs from the per-lane partial, which is what says the pass's body is what ran"
     );
     assert!(
-        reports_a_tiling(&tiled_module),
+        reports_a_tiling(&pass_report(&tiled_module)),
         "the pass reports the node it tiled and the algebra its own marks declared: {:?}",
         pass_report(&tiled_module)
     );
@@ -222,7 +243,7 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
         "with the pass installed throughout, a second run answers the tiled number again"
     );
     assert!(
-        reports_a_tiling(&again_module),
+        reports_a_tiling(&pass_report(&again_module)),
         "and the pass reports its line again, because the recorded graph it was handed is still \
          the one the program wrote: {:?}",
         pass_report(&again_module)
@@ -238,7 +259,7 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
          what says the recorded entry never became the rewrite"
     );
     assert!(
-        !reports_a_tiling(&unpassed_module),
+        !reports_a_tiling(&pass_report(&unpassed_module)),
         "and no pass ran, so no tiling is reported: {:?}",
         pass_report(&unpassed_module)
     );
@@ -249,9 +270,9 @@ fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
     );
 }
 
-/// Whether a module's pass report says a node was tiled.
-fn reports_a_tiling(module: &Module<LangProgram>) -> bool {
-    pass_report(module)
+/// Whether a pass report says a node was tiled.
+fn reports_a_tiling(lines: &[String]) -> bool {
+    lines
         .iter()
         .any(|line| line.contains("tiled") && line.contains(BinaryOp::Add.name()))
 }
@@ -308,6 +329,176 @@ fn a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands() {
         fragment_digest(&registered_before),
         "a refused node's registered fragment is unchanged, so nothing landed in it"
     );
+}
+
+/// The floor's tiling pass wrapped in a mutation of the body it tiled.
+///
+/// # Invariant
+/// The mutation is inside the **tiled** body alone, so an answer that moves says the tiled body
+/// ran and an answer that does not says the pass landed nothing.
+struct RaisedSeed(Box<dyn GraphPass>);
+
+impl GraphPass for RaisedSeed {
+    fn apply(
+        &self,
+        graph: &Graph,
+        extent: &LaunchExtent<'_>,
+        lines: &mut Vec<String>,
+    ) -> Option<Graph> {
+        let rewritten = self.0.apply(graph, extent, lines)?;
+        let mut mutated = rewritten.clone();
+        let Node::Kernel(node) = &rewritten.nodes()[0];
+        let mut fragment = node.fragment.clone();
+        raise_seed(&mut fragment.body);
+        mutated
+            .replace_kernel(0, fragment)
+            .expect("a raised seed is the same shape");
+        Some(mutated)
+    }
+}
+
+/// Raise the seed the tiled fold starts from, so the tiled body answers `tiled_seeds()` higher.
+///
+/// # Invariant
+/// The one `0.0` a tiled body states is the reduction's identity — `tiled.rs` builds it once per
+/// body and every fold reads that one value — so raising it moves the answer by exactly
+/// [`tiled_seeds`] times [`RAISED`] and by nothing else.
+fn raise_seed(body: &mut KernelBody) {
+    let chosen = body
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(index, definition)| {
+            let ValueDef::Instr {
+                op: KernelInstr::Const(ScalarClass::Float, bits),
+                ..
+            } = definition
+            else {
+                return None;
+            };
+            (f32::from_bits(*bits as u32) == 0.0).then_some(index)
+        });
+    let Some(index) = chosen else {
+        panic!("the tiled body holds the fold's own identity");
+    };
+    let ValueDef::Instr { op, .. } = &mut body.values[index] else {
+        unreachable!("the index came from an instruction");
+    };
+    *op = KernelInstr::Const(ScalarClass::Float, RAISED.to_bits() as i64);
+}
+
+/// Under the floor, the tiling stage still tiles a kernel the merge stage declined.
+///
+/// # Invariant
+/// One program, whose recording holds **one** claimed kernel: the merge stage has no pair to
+/// merge and says so by name, and the chain hands the tiling stage the graph the merge left,
+/// because a stage's `None` means "leave it as it was" (`graph_pass.rs`).
+///
+/// Both lines come from the run's own report channel, and the answer is the closed form, not
+/// the per-lane partial.
+#[test]
+fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
+    let Some(_context) = device("the_floor_tiles_a_declared_reduction_the_merge_stage_declines")
+    else {
+        return;
+    };
+    let source = declared();
+
+    // The floor of the program itself: no pass, and the per-lane answer.
+    let (module, value, _root) = common::run(&source);
+    assert_eq!(
+        answer(&module, &value),
+        PER_LANE,
+        "with no pass installed the program runs its own per-lane body, whose lane zero folds the \
+         one element at position zero"
+    );
+    assert_ne!(
+        answer(&module, &value),
+        closed_form(),
+        "and the per-lane partial is not the closed form, so the landing is observable"
+    );
+
+    // The floor, installed from that program's own module, and the same program again.
+    install_floor(&module);
+    let (floored_module, floored_value, _root) = common::run(&source);
+    let report = pass_report(&floored_module);
+    println!("the floor's run reported:\n  {}", report.join("\n  "));
+
+    // The tiling stage's own line: the node it tiled, by name.
+    assert!(
+        reports_a_tiling(&report),
+        "the tiling stage reports the node it tiled and the algebra its own marks declared: \
+         {report:?}"
+    );
+    assert!(
+        report.iter().any(
+            |line| line.starts_with("node 0: no pack matched its schema")
+                && line.contains("so the automatic floor tiled")
+                && line.contains(&format!("over {LANES} lane(s)"))
+        ),
+        "and it is node 0 the engine's own choice tiled, over the tile's {LANES} lane(s): {report:?}"
+    );
+
+    // The merge stage's own line: the one-node region it declined, by its own check's name.
+    let merge_line = report
+        .iter()
+        .find(|line| line.starts_with("region 0 (nodes 0): refused:"))
+        .unwrap_or_else(|| panic!("the merge stage named the one-node region: {report:?}"));
+    assert!(
+        merge_line.contains("RegionIsNotAPair")
+            && merge_line.contains("a merge is one producer and one consumer"),
+        "the merge stage's line is its own check's refusal of a one-instance region: {merge_line}"
+    );
+    assert!(
+        report
+            .iter()
+            .all(|line| !line.contains("merged into one node")),
+        "and nothing merged, because the recording holds one claimed kernel and no pair: {report:?}"
+    );
+
+    let floored = answer(&floored_module, &floored_value);
+    assert_eq!(
+        floored,
+        closed_form(),
+        "the tiled body folds the whole extent into one element, so `out[0]` is the closed form"
+    );
+    assert_ne!(
+        floored, PER_LANE,
+        "and it is not the per-lane partial, which is what says the floor's tiling stage ran"
+    );
+
+    // **The counterfactual**: only the tiled body can answer a seed the recording cannot.
+    set_graph_pass(Box::new(RaisedSeed(floor_pass_with_packs(&module, &[]))));
+    let (raised_module, raised_value, _root) = common::run(&source);
+    let raised = answer(&raised_module, &raised_value);
+    println!(
+        "the device ran: the un-passed program answered {PER_LANE}, the floored program answered \
+         {floored}, the floored program with the tiled seed raised answered {raised}"
+    );
+    assert_eq!(
+        raised,
+        closed_form() + RAISED * tiled_seeds(),
+        "the tiled fold carries the seed into the shared slice once per lane and once more \
+         folding it, so raising the seed by {RAISED} raises the answer by {} time(s) of \
+         {RAISED} and by nothing else",
+        tiled_seeds()
+    );
+    assert_ne!(
+        raised, floored,
+        "the answer moved with the tiled body, so the body the tiling stage landed is what ran"
+    );
+    assert_ne!(
+        raised - floored,
+        RAISED,
+        "and it moved by more than one seed, which the recorded per-lane body's own single seed \
+         cannot do"
+    );
+    assert!(
+        reports_a_tiling(&pass_report(&raised_module)),
+        "and the floor's report is unchanged by the wrapper, so the tiling stage still ran: {:?}",
+        pass_report(&raised_module)
+    );
+    clear_graph_pass();
 }
 
 /// The stage a non-whole-tile launch is not reached, and the reason it is not.
