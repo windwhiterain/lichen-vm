@@ -77,10 +77,25 @@ installing one while the first runs leaves the first's buffers on a device that 
 runs on a device, and `2a62591e` converted the **three** that had not (`automatic_tiling`,
 `fused_region`, `consumer_guard`) — measured 1 failure in 16 runs before, 0 in 16 after, on the binary
 that had the defect (`lichen-compute`, not the GPU crate, whose helpers return a context by value and
-never touch the slot). **The remaining risk is duplication**: the guard and its helper now exist in ten
-copies, so a new device test that copies the *unguarded* older form reintroduces the flake silently —
-which is plausibly how the three came to miss it. Collapsing the ten into one guarded helper is the
-follow-up, not a rewrite of any test.
+never touch the slot). **The duplication is gone**: `e766020b` moved the guard into
+`crates/lichen-compute/tests/common/mod.rs` — one `static DEVICE`, `device_slot()` for the lock alone, and
+`device()` for the ten-copy helper — so `git grep -c 'static DEVICE' -- crates/lichen-compute/tests` went
+**nine files → one**, and ten → two across both crates. Measured after the collapse: **23 binaries ×
+8 runs at `--test-threads 2`, 207 runs, zero failures**. Four things are left, and each is stated with
+what it costs:
+
+- **`tests/combine_fold.rs` still calls `install_default()` with no mutex**, justified by a comment that
+  its case owns its test binary — true today, one device test there, and exactly the older unguarded
+  shape a new device test would copy. A second device test in that file brings the 1-in-16 flake back.
+- **Five helpers build a context and never install**: `composed_chain`, `plan_staging`,
+  `reduction_chain`, `sparse_input_classes`, `tiled_reduction`. No replacement hazard, so no flake — but
+  a third spelling that can be copied.
+- **`crates/lichen-compiler/tests/pack_install.rs` keeps its own guard**, and should: a `Mutex` is
+  per-process and that file is its own binary, so a shared static could not serialise it anyway, while
+  its two device tests do race at `--test-threads 2`.
+- **`lichen-compute-gpu/tests/compute_gpu/common.rs`'s `context()` is genuinely different**, not a
+  leftover: those tests never call `install_default` or `install`, so there is no process-global
+  replacement to guard against.
 
 ## The hazard, and the gate that closed the tiling half of it
 
