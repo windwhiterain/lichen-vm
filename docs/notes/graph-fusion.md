@@ -794,8 +794,13 @@ limit this work found rather than caused, and a candidate defect of its own.
 Two more facts a reader should carry: `returns() == None` forbids **every**
 merge (the runner then takes the whole value table, so a deleted value changes the answer, and the pass
 refuses rather than merging), and the surviving node is **anonymous** — a composed fragment is never
-registered, so it carries no claim and a later digest-keyed pass walks past it, which the merged report
-line now says for itself. Registering it with the consumer's claim is declined for now: a composed
+registered, so it carries no claim. That anonymity is now **spoken rather than silent**, at `9a944661`:
+the merge's own report line says the fragment is unregistered, and the tiling pass — whose join is
+digest-keyed and used to `continue` past a fragment no row holds **without a line**, against
+`GraphPass::apply`'s own contract that every node it looked at gets one — refuses it by name
+(`SchemaRefusal::NotClaimed`, a distinct answer from `AmbiguousClaim`: that one is a join that found two
+claims, this is a join that found none) and leaves it exactly as the merge left it. Registering it with
+the consumer's claim is declined for now: a composed
 fragment is not the consumer (it computes a fused reduction that is neither interface's algebra, and
 `compose` empties `roles`), and the registry is process-global and append-only, so a ghost row would be
 visible to every later join in the process.
