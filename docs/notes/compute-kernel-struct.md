@@ -301,11 +301,25 @@ level from that type's own field list and name table. `scalar_leaf_classes` read
 path. Both refusal sentences above are unreachable for these two shapes, which
 `crates/lichen-compute/tests/nested_role.rs` builds.
 
-**What the repair does not reach.** A group holding **both** a buffer and a scalar still refuses —
-"a kernel body's index cannot be placed: its target is a computation and its index is the constant 1" —
-and the refusal is **depth-independent**: it fires for `In = struct{.b (compute.Buf Float), .s Float}` at
-depth 1 just as it does for the grouped form. That is a separate limitation of `Lower::body`, not of the
-parameter-path walk, and it is the first thing to weigh against the everywhere-else half.
+**The mixed group is fixed too** (`d5993c84`). A group holding **both** a buffer and a scalar —
+`In = struct{.b (compute.Buf Float), .s Float}` — used to refuse with "a kernel body's index cannot be
+placed: its target is a computation and its index is the constant 1", depth-independently; it now builds
+and answers exactly what the flat control answers. The refusing decision was `Lower::parameter_path`'s
+offset-flattening loop (`crates/lichen-compute/src/compute/body.rs`), and the reason is worth keeping:
+**a buffer field is elided from the slot's `shape` but not from the path**, so a group's scalar sits at
+field 1 while the shape has no second level — and a scalar-only group never asks for one, which is why
+only the mixed shape broke. `KernelRoles` had recorded both all along (`scalars [[0], [1, 1]]` and
+`inputs [[1, 0]]`, and both parameter structs reduce to the same two scalar locals in the same order), so
+the ABI was never the obstacle. The walk now asks the roles for the offset the path names, with the shape
+flattening as the fallback — the rule `param_read_offset` already applied on the same slot.
+
+**What still refuses, and what is unsound.** `parameter_path` still consults a parameter's **first** slot
+only, so a multi-slot parameter's second slot is resolved by the fallback alone — pre-existing, and
+outside every defect above. And a path the roles table does not record still falls back to positional
+shape flattening, which is **unsound for any future shape where a buffer field precedes a scalar one**:
+that is the very shape this fix exists for. Nothing else in the everywhere-else half is missing —
+buffers, scalars and mixed groups all nest to any depth, and `tests/nested_role.rs` plus
+`tests/mixed_group.rs` build them.
 
 **The repair is a temporary measure.** The name→position fold belongs after the apply clone, once for
 every reader, not in one reader at compile time — see `specialize-normalize.md`.
