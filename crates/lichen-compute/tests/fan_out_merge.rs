@@ -10,18 +10,16 @@ use lichen_compute::compute::{
     GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, graph, set_graph_pass,
     take_graph_pass_lines,
 };
+use lichen_compute::fusion_claim::{
+    Instance, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id,
+};
+use lichen_compute::language::{LangProgram, LangValue};
+use lichen_compute::placement_pack::{PlacementPack, read_placement_pack};
+use lichen_compute::region_merge::{install_region_merge_with_packs, region_merge_pass_with_packs};
 use lichen_compute_gpu::{GpuContext, install_default};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, compose_fan_out,
-};
-use lichen_compute::fusion_claim::{
-    Instance, RegionSchema, claim_of, derive_regions, fragment_of, kernel_id,
-};
-use lichen_compute::placement_pack::{PlacementPack, read_placement_pack};
-use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute::region_merge::{
-    install_region_merge_with_packs, region_merge_pass_with_packs,
 };
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module};
 use lichen_utils::extend::AsEnum;
