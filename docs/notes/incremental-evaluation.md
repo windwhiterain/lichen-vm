@@ -159,7 +159,7 @@ operand's verdict (`:766-774`).
 | 4 | `checker.rs:942-954` `array_node`; `function.rs:406`; `static_module/apply.rs:209`; `table.rs:186` | the callers that mint payloads (the E-item/E-entry creation sites) | append |
 | 5 | `equality.rs:60-71` `add_equality`, called at `:522,:555,:569,:599,:622,:637,:654,:909` | **class merge** — two subgraphs become one dependency set | retroactive |
 | 6 | `equality.rs:310-366` `write_node_value` / `propagate_class_value` | `value` write **and** propagation to every operation-free class member that can take it — a member already holding a value is compared and left at its own when the two cannot be one (`class-channel.md` §1.1) | append + retroactive |
-| 7 | `gc.rs:154-165` `flatten_class` + `disjoint::rebuild` | class member list rebuilt, **representative re-elected** | destructive |
+| 7 | `gc.rs` `flatten_class` + `disjoint::rebuild` | class member list rebuilt, **representative re-elected**, and the released representative's class-routed `low_shape` joined into the survivor | destructive |
 | 8 | `gc.rs:177-223` `drop_block` | **vertex deletion**, class splice, assert-worklist prune | destructive |
 | 9 | `gc.rs:12-20`, `gc.rs:32-36` `garbage_collect_node` | `block` moves; payload re-alloc'd into the target arena | destructive (not a dataflow edge) |
 | 10 | `module.rs:285-292` `register_in_function`; `:381-388` `finish_function`; `:390-422` `add_function` | ownership tag, `Function::nodes` / `parent` / `parameter` / `r#return` / `asserts` | append |
@@ -167,7 +167,7 @@ operand's verdict (`:766-774`).
 | 12 | `function.rs:158-161`, `:499`; `module.rs:340-346` `add_assert` | assert worklist entries, re-registered per apply | append |
 | 13 | `static_module.rs:142-153` `materialize_leaf` / `as_dynamic` | new vertex holding a static value | append |
 | 14 | `evaluation.rs` verdict write / `module.rs:271` verdict clear | the verdict, and the in-progress mark | append |
-| 15 | `equality.rs:123-185` `seed`/`refine`/`observe_class_low_type`; `static_module.rs:132-136` `set_node_shape` | the per-class `low_shape` lattice | monotone refinements |
+| 15 | `equality.rs` `seed`/`refine`/`observe_class_low_type` | the per-class `low_shape` lattice | monotone refinements |
 
 Two answers this inventory settles:
 

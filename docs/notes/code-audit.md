@@ -772,6 +772,14 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   (`operation`, `function`, `block`, `visiting`, `evaluated_deep`, `equality`),
   which are `pub` with invariants of their own and no choke-point covering them.
 
+  **The `low_shape` half of that premise was false until recently.**
+  `Module::node_shape`/`set_node_shape` read and wrote `Node::low_shape` **per
+  node**, while `class_low_type`/`refine_class_low_type` route it through the class
+  representative — so a low type had a second writer and a second reader that
+  disagreed, and both had zero callers across source, tests and examples. Removing
+  them leaves `refine_class_low_type` as the single write side, which is what this
+  decision assumed all along. Any reintroduced per-node accessor re-opens it.
+
   *Chosen — privatise all six and add the accessors.* The measured cost is **119**
   `cargo check` errors (116 in `lichen-lowlevel`'s own integration tree, 3 in
   `lichen-highlevel`, plus roughly a dozen more in `lichen-compute` that the

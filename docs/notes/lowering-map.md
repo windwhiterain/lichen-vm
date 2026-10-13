@@ -11,8 +11,10 @@
 A lowlevel `NodeId` is dense, positional and meaningless: `node 41` says nothing
 about the expression that produced it. The question "which of my expressions is
 this?" had no O(1) answer anywhere in the workspace — the only general route was
-the linear scan `crates/lichen-language/src/lib.rs` performs over
-`build.state`, hand-written at each of its two call sites.
+a linear scan over `build.state`, hand-written in `crates/lichen-language/src/lib.rs`
+where a node had to answer back for a diagnostic's span. That scan is **gone**: the
+attribution now goes through `Build`'s own lookup (§"Who reads it"), which is O(1)
+and returns strictly more.
 
 ## What the map is
 
@@ -38,10 +40,13 @@ the authority wherever it knows more:
   the slot. Its **attribute** slot is the one entry it cannot place, because
   `ExprState::attr` records one node without its index in the merged tail;
   `check_ann` stamps that node itself where it does know the index.
-- **`Checker::node_edges`** — the ten sites that register an attribution
+- **`Checker::node_edges`** — the **twelve** sites that register an attribution
   explicitly: an index read's result, a table read's key, a struct's key and
-  element. These are nodes the slot layout does not own, and they carry a path
-  a unify extended past the slot it refused on.
+  element, an assert condition, an annotation tail slot. These are nodes the slot
+  layout does not own, and they carry a path a unify extended past the slot it
+  refused on. Measured over the 30-example corpus: **93.8% of what they register
+  the slot layout does not own at all**, so the two sources are **complementary,
+  not overlapping** — which is why `node_edges` keeps winning where it is present.
 - **`Module::node_origin`** — a clone an apply materialized. `lowering_of`
   resolves through it first, so a per-call clone answers for the template it
   instantiates: the same anchor handoff `Module::marks_of` makes for a mark.
@@ -49,6 +54,27 @@ the authority wherever it knows more:
 A node outside all three names no expression, and the map says so rather than
 guessing. An installed kind marker is the honest example: it is built before any
 expression exists.
+
+## Who reads it
+
+`Build::node_loc` answers for a runtime diagnostic, and it resolves in a **stated
+order**, because the order is load-bearing rather than incidental:
+
+1. the node's own entry — the map is `node_edges` **then** the slots, so a
+   deliberately registered caret (`indexing.rs` puts a type-access element at the
+   read's own type slot) structurally wins over the slot's default;
+2. the node's `origin`'s `node_edges` entry;
+3. `apply_edges[origin]` — the caller's argument, for a clone of a **frozen**
+   template, whose origin is the apply that materialized it;
+4. the origin's slot entry.
+
+Step 3 must outrank step 4. A frozen-template clone's origin **is** an apply node,
+and an apply node is `state[call_expr].term`, so the wrong order moves the caret
+from the argument `(2,5)` to the call `(3,1)`.
+
+The `ApplyError` path deliberately does **not** go through this: it already reads
+`apply_edges` itself, and routing it moves thirteen spans and drops the unify's own
+`tag_descent` path.
 
 ## The other direction
 

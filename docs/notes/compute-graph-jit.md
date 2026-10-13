@@ -701,9 +701,12 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   (`step = (s : GArg) => …` with `GArg = struct{.n Int, .in Pair}` — the language's existing
   form, because a parameterised `graph` signature steers nothing and would make the type
   required). The declared type **checks**; it does not steer, so `build_graph` still derives
-  the roles and only the refused answer changes channel: `Module::record_extension_failure`
-  fails the build (`Build::ok` counts it) and the run reports it as `DiagKind::ExtensionRule`,
-  rendering `lichen-compute`'s own sentence, so the rule and its wording stay in one place.
+  the roles and only the refused answer changes channel: the record carries
+  `fails_build: true`, `Module::has_extension_failures` counts it into `Build::ok`, and the
+  run reports it as `DiagKind::ExtensionRule`, rendering `lichen-compute`'s own sentence, so
+  the rule and its wording stay in one place. (That channel was a second vector and a
+  second record function until it was unified into one with a flag; see
+  [compiler-plugin](compiler-plugin.md) §4.)
   **The unannotated form is untouched** — only `Refusal`, never `Undecided`, reaches that
   channel, so a step whose parameter type is undecided still takes the positional fallback
   (`graph_jit.rs`'s three unannotated steps). And note what that fallback actually buys, since

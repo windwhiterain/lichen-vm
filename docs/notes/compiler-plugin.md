@@ -170,7 +170,16 @@ that cannot lower a shape, a compiler that cannot compile a body. `Module::recor
 is the general channel for it:
 
 ```rust
-fn record_extension_diagnostic(&mut self, category: &'static str, node: Option<NodeId>, message: impl Into<String>);
+fn record_extension_diagnostic(&mut self, entry: ExtensionDiagnostic);
+
+struct ExtensionDiagnostic {
+    category: &'static str,
+    node: Option<NodeId>,
+    message: String,
+    /// Whether this record **fails the build**. A note leaves it usable.
+    fails_build: bool,
+}
+fn has_extension_failures(&self) -> bool;
 ```
 
 Every other channel on a `Module` (`unify_errors`, `eval_errors`, `assert_errors`,
@@ -180,15 +189,24 @@ about what `category` means, so **a new external error kind never means a new ch
 here**. `compute.jit` uses it to say why a kernel stayed lazy instead of discarding the
 reason. What a host *renders* from these entries is the host's own decision.
 
+**One container, and `fails_build` is the whole distinction.** A refusal that fails the
+build and a note that leaves it usable are the same record with a different flag — they
+were two parallel vectors and two byte-identical record functions until this was unified.
+`has_extension_failures` is what the build verdict reads; it is deliberately a query rather
+than a field so no caller can read one vector and forget the other exists.
+
 The host here is `lichen-language`, and it renders them in two places, because a `Module`
-outlives its check in two ways: the report assembly (`lib.rs`) carries them into a failed
-build's diagnostics, and `run::render_build` reports them when the program produced no
-value — a `plrun` whose count is past the bound, whose refusal *is* the explanation for the
-`parameterized` output. A refusal is an explanation and not a verdict, so a program that
-produced a real value drops them: the checker evaluates speculatively, and a `$jit` whose
-parameter domain is not decided yet records a refusal that a later attempt supersedes.
-Recording is idempotent for an identical `(category, node, message)` — a node is deep-
-evaluated several times, and refusing twice is not two findings.
+outlives its check in two ways: the report assembly (`lib.rs`) carries the failing ones
+into a failed build's diagnostics, and `run::render_build` reports the rest when the
+program produced no value — a `plrun` whose count is past the bound, whose refusal *is* the
+explanation for the `parameterized` output. A refusal is an explanation and not a verdict,
+so a program that produced a real value drops them: the checker evaluates speculatively,
+and a `$jit` whose parameter domain is not decided yet records a refusal that a later
+attempt supersedes. Recording is idempotent for an identical `(category, node, message)` —
+a node is deep-evaluated several times, and refusing twice is not two findings. That dedup
+now spans both kinds, which is only safe because **no record appears in both**: measured
+across the suite, the two old vectors held **zero** entries sharing a
+`(category, node, message)`.
 
 ## Extension point 5: owning a payload (`ValueExt`'s ext-handle contract)
 

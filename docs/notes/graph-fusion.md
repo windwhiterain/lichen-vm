@@ -555,10 +555,11 @@ already name it), so a pack never has a composed node's claim to match against.
 own arguments (`crates/lichen-compiler/src/cli.rs`), so one option serves the bare `lichen <file>` form
 and `run`/`build` alike; `lichen_compute::packs::load_packs` reads each path and hands the text to
 `read_placement_pack`, all-or-nothing, and a bad pack prints the reader's own sentence, prefixed with
-the path, on stderr with a non-zero exit — **before anything runs**. A **pack can fire and the user
-never see it**, though: the stage lines live in `module.extension_diagnostics`, which `render_build`
-prints only when the program produced nothing, so a real `lichen --pack p.lichen prog.lichen` run is
-silent about a pack that fired (true of every floor line today; recorded as its own open item below).
+the path, on stderr with a non-zero exit — **before anything runs**. A pack's stage lines **do**
+reach a successful run: naming `--pack` switches the compiler to `PassReport::Reported(wiring.pass_categories)`,
+and `pass_lines` reads the named categories unconditionally once the refusal gate is past. (An earlier
+version of this note said a fired pack was never seen, and that was true before the gate stopped being
+the only reader.)
 
 **Where the packs are installed is not where it looks like it should be, and that is measured.** The
 obvious point — after the compile, before the run — **does not work**: for a program whose graph is

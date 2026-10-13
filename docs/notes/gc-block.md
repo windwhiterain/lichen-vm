@@ -77,6 +77,16 @@ joins them), so walking values alone would release the very node the reader
 answers from. A class is entered once per collect, so the walk visits each member
 once and stays linear in the scope's size.
 
+**The class walk starts at the representative.** The member list is headed by it,
+so entering at a member behind the head reached only the members behind *that* and
+released the ones ahead — including the representative itself, which silently split
+the class. Measured: a three-member class whose head was homed in the collected
+block, entered at a surviving member, lost its head and became two.
+
+**This keeps more of the graph alive than it used to.** A member a walked node
+aliases is now re-homed into the target block instead of being released with the
+vacated one. Before, such members died and the class lost its identity with them.
+
 The operand edge is narrower than "always follow": an operator that has already
 run keeps its answer, and following a reader's operand would keep the whole
 container it reads out of — which is exactly the garbage a scope wants. What
