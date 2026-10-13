@@ -56,6 +56,10 @@ pub enum PrefixOp {
     Sqrt,
     /// `floor x` — the largest integral `Float` not above one `Float`.
     Floor,
+    /// `sin x` — the sine of one `Float` (`crates/lichen-kernel-ir/src/unary.rs`).
+    Sin,
+    /// `cos x` — the cosine of one `Float` (`crates/lichen-kernel-ir/src/unary.rs`).
+    Cos,
 }
 
 impl PrefixOp {
@@ -70,7 +74,9 @@ impl PrefixOp {
             | PrefixOp::Float2Int
             | PrefixOp::Exp
             | PrefixOp::Sqrt
-            | PrefixOp::Floor => 1,
+            | PrefixOp::Floor
+            | PrefixOp::Sin
+            | PrefixOp::Cos => 1,
             PrefixOp::Max | PrefixOp::Min => 2,
         }
     }

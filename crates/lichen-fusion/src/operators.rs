@@ -117,8 +117,9 @@ impl BinaryOp {
 ///
 /// # Invariant
 /// `Exp` and `Ln` are inverses of one another over the reals and `Neg` is its own
-/// inverse, so all three are invertible; `Square`, `Relu` and `Sqrt` are not, which is
-/// why an element function containing them is refused rather than repaired.
+/// inverse, so all three are invertible; `Square`, `Relu`, `Sqrt`, `Sin` and `Cos` are
+/// not, which is why an element function containing them is refused rather than
+/// repaired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UnaryOp {
     /// Arithmetic negation.
@@ -129,6 +130,10 @@ pub enum UnaryOp {
     Ln,
     /// The square root, undefined on a negative operand.
     Sqrt,
+    /// The sine.
+    Sin,
+    /// The cosine.
+    Cos,
     /// The square.
     Square,
     /// The rectified linear unit, `max(operand, 0)`.
@@ -143,6 +148,8 @@ impl UnaryOp {
             UnaryOp::Exp => "exp",
             UnaryOp::Ln => "ln",
             UnaryOp::Sqrt => "sqrt",
+            UnaryOp::Sin => "sin",
+            UnaryOp::Cos => "cos",
             UnaryOp::Square => "square",
             UnaryOp::Relu => "relu",
         }
@@ -164,14 +171,19 @@ impl UnaryOp {
             UnaryOp::Neg => Some(UnaryOp::Neg),
             UnaryOp::Exp => Some(UnaryOp::Ln),
             UnaryOp::Ln => Some(UnaryOp::Exp),
-            UnaryOp::Sqrt | UnaryOp::Square | UnaryOp::Relu => None,
+            UnaryOp::Sqrt | UnaryOp::Sin | UnaryOp::Cos | UnaryOp::Square | UnaryOp::Relu => None,
         }
     }
 
     pub(crate) const fn precedence(self) -> u8 {
         match self {
             UnaryOp::Neg => 5,
-            UnaryOp::Exp | UnaryOp::Ln | UnaryOp::Sqrt | UnaryOp::Relu => 6,
+            UnaryOp::Exp
+            | UnaryOp::Ln
+            | UnaryOp::Sqrt
+            | UnaryOp::Sin
+            | UnaryOp::Cos
+            | UnaryOp::Relu => 6,
             UnaryOp::Square => 7,
         }
     }
@@ -190,6 +202,16 @@ pub fn ln(operand: Expr) -> Expr {
 /// The square root of an expression.
 pub fn sqrt(operand: Expr) -> Expr {
     UnaryOp::Sqrt.apply(operand)
+}
+
+/// The sine of an expression.
+pub fn sin(operand: Expr) -> Expr {
+    UnaryOp::Sin.apply(operand)
+}
+
+/// The cosine of an expression.
+pub fn cos(operand: Expr) -> Expr {
+    UnaryOp::Cos.apply(operand)
 }
 
 /// The square of an expression.

@@ -27,8 +27,9 @@ pub use compose::{ComposeRefusal, compose, compose_fan_out};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{
-    TRANSCENDENTALS, exp_body, exp_value, floor_body, floor_value, inlined_exp_operand,
-    inlined_sqrt_operand, sqrt_body, sqrt_value,
+    TRANSCENDENTALS, cos_body, cos_value, exp_body, exp_value, floor_body, floor_value,
+    inlined_cos_operand, inlined_exp_operand, inlined_sin_operand, inlined_sqrt_operand, sin_body,
+    sin_cos_value, sin_value, sqrt_body, sqrt_value,
 };
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`

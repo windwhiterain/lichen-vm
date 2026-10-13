@@ -179,6 +179,8 @@ fn fold_constant(operator: UnaryOp, operand: &Expr) -> Option<f64> {
         }
         UnaryOp::Square => value * value,
         UnaryOp::Relu => value.max(0.0),
+        UnaryOp::Sin => value.sin(),
+        UnaryOp::Cos => value.cos(),
     };
     folded.is_finite().then_some(folded)
 }

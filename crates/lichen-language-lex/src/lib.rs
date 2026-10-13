@@ -101,6 +101,12 @@ pub enum TokenKind {
     /// The `floor` keyword — the largest integral `Float` not above one `Float`
     /// (`docs/notes/floating-point.md` §7).
     KwFloor,
+    /// The `sin` keyword — the sine of one `Float`, at the prefix level, defined in
+    /// `crates/lichen-kernel-ir/src/unary.rs`.
+    KwSin,
+    /// The `cos` keyword — the cosine of one `Float`, at the prefix level, defined in
+    /// `crates/lichen-kernel-ir/src/unary.rs`.
+    KwCos,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -220,6 +226,8 @@ impl TokenKind {
             TokenKind::KwExp => "'exp'",
             TokenKind::KwSqrt => "'sqrt'",
             TokenKind::KwFloor => "'floor'",
+            TokenKind::KwSin => "'sin'",
+            TokenKind::KwCos => "'cos'",
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
@@ -348,6 +356,10 @@ enum RawToken {
     KwSqrt,
     #[token("floor")]
     KwFloor,
+    #[token("sin")]
+    KwSin,
+    #[token("cos")]
+    KwCos,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -769,6 +781,8 @@ fn raw_to_kind(
             "exp" => TokenKind::KwExp,
             "sqrt" => TokenKind::KwSqrt,
             "floor" => TokenKind::KwFloor,
+            "sin" => TokenKind::KwSin,
+            "cos" => TokenKind::KwCos,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -795,6 +809,8 @@ fn raw_to_kind(
         RawToken::KwExp => Some(TokenKind::KwExp),
         RawToken::KwSqrt => Some(TokenKind::KwSqrt),
         RawToken::KwFloor => Some(TokenKind::KwFloor),
+        RawToken::KwSin => Some(TokenKind::KwSin),
+        RawToken::KwCos => Some(TokenKind::KwCos),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

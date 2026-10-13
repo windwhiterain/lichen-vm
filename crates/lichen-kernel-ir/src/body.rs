@@ -417,10 +417,12 @@ impl KernelBody {
     ///
     /// # Invariant
     /// `target` **becomes** the definition's result, so every reader of the original value
-    /// reads the definition's answer without a second rewrite; the values before it are
-    /// fresh and spliced into `block` in order, so the instruction list still respects its
-    /// operands.
-    fn inline_definition(
+    /// reads the definition's answer.
+    ///
+    /// **Public because the language's own lowering inlines through it too.** `sin` and
+    /// `cos` carry no `KernelInstr` of their own, so they reach a kernel by splicing
+    /// their definitions here rather than by naming an instruction the expansion rewrites.
+    pub fn inline_definition(
         &mut self,
         definition: &KernelBody,
         block: usize,

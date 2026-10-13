@@ -288,6 +288,375 @@ fn rescale_value(value: f32, track: f32, below: bool, step: f32, track_step: f32
     }
 }
 
+/// The angle the sine and cosine definitions reduce to, and the quadrant they reduced by.
+///
+/// # Invariant
+/// **`r` is `|x| − q·(π/2)` in this class and `q` is `⌊|x|·2/π + 1/2⌋`,** so `|r| ≤ π/4`
+/// and `m` is `q` modulo four in `[0, 4)`. The two subtractions are **exact** —
+/// [`HALF_PI_HEAD`]'s own — which is why the residual does not carry the operand's `ulp`.
+fn reduce_angle(body: &mut KernelBody, block: usize, x: ValueId) -> (ValueId, ValueId) {
+    // The magnitude, so one reduction serves both.
+    let zero = constant(body, block, 0.0);
+    let negative = condition(body, block, KernelBin::Lt, x, zero);
+    let negated = float_bin(body, block, KernelBin::Sub, zero, x);
+    let magnitude = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![negated, x, negative],
+        vec![ScalarClass::Float],
+    );
+    // Past the domain edge the operand no longer determines the answer.
+    let limit = constant(body, block, ANGLE_LIMIT);
+    let inside = condition(body, block, KernelBin::Leq, magnitude, limit);
+    let magnitude = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![magnitude, limit, inside],
+        vec![ScalarClass::Float],
+    );
+
+    let inverse = constant(body, block, INVERSE_TWO_PI);
+    let scale = float_bin(body, block, KernelBin::Mul, magnitude, inverse);
+    let half = constant(body, block, 0.5);
+    let shifted = float_bin(body, block, KernelBin::Add, scale, half);
+    let quadrants = truncate(body, block, shifted);
+
+    // `⌊q/4⌋` is `trunc(q/4)`: `q` is not negative, so the round trip already holds it.
+    let quarter = constant(body, block, ONE_QUARTER);
+    let scaled = float_bin(body, block, KernelBin::Mul, quadrants, quarter);
+    let whole = truncate(body, block, scaled);
+    let four = constant(body, block, 4.0);
+    let four = float_bin(body, block, KernelBin::Mul, whole, four);
+    let residue = float_bin(body, block, KernelBin::Sub, quadrants, four);
+
+    let head_value = constant(body, block, HALF_PI_HEAD);
+    let head = float_bin(body, block, KernelBin::Mul, quadrants, head_value);
+    let tail_value = constant(body, block, HALF_PI_TAIL);
+    let tail = float_bin(body, block, KernelBin::Mul, quadrants, tail_value);
+    let r = float_bin(body, block, KernelBin::Sub, magnitude, head);
+    let r = float_bin(body, block, KernelBin::Sub, r, tail);
+    (r, residue)
+}
+
+/// The largest argument the angle reduction answers for, `2^13`.
+///
+/// # Invariant
+/// **`q` never passes `5215`**, and `5215 · HALF_PI_HEAD` is `8191.7`, below `2^13` and so
+/// a multiple of `2^-11` the class still holds. That is where the exactness of the first
+/// subtraction ends, so the domain ends with it.
+const ANGLE_LIMIT: f32 = 8192.0;
+
+/// `2/π`, the step that turns an angle into a quadrant count.
+///
+/// # Invariant
+/// The rounded quotient chooses the quadrant, so an argument within about
+/// `|x|·2^-24` of a quadrant edge may be reduced one quadrant over.
+const INVERSE_TWO_PI: f32 = 0.636_619_75;
+
+/// `π/2` as a multiple of `2^-11`, the head the exact subtraction takes.
+///
+/// # Invariant
+/// **Eleven fraction bits, so `q · HALF_PI_HEAD` is a multiple of `2^-11`**, and every
+/// such value below `2^13` is one `f32` holds. That is what makes the multiplication,
+/// and the subtraction after it, exact rather than `ulp`-losing.
+const HALF_PI_HEAD: f32 = 3217.0 / 2048.0;
+
+/// What the head leaves of `π/2`.
+///
+/// # Invariant
+/// **Rounded once from the real `π/2`, not from this class's own `π/2`**, so the pair
+/// sums to `π/2` rather than to the `1.2 × 10^-8` above it that `f32`'s `π/2` states.
+const HALF_PI_TAIL: f32 = (std::f64::consts::FRAC_PI_2 - HALF_PI_HEAD as f64) as f32;
+
+/// One quarter, the step that takes a quadrant count to a whole quadrant count.
+const ONE_QUARTER: f32 = 0.25;
+
+/// `sin`'s odd coefficients `(−1)^k /(2k+1)!`, ascending, in this class.
+///
+/// # Invariant
+/// The argument is at most `π/4` and these are the `f32` roundings of the signed
+/// coefficients, so the first omitted term is `(π/4)^13/13!` — `6.9 × 10^-12`, a
+/// hundredth of the class's resolution at one.
+const SINE_COEFFICIENTS: [f32; 6] = [
+    1.0,
+    -0.166_666_67,
+    0.008_333_333_8,
+    -0.000_198_412_7,
+    2.755_731_9e-6,
+    -2.505_210_8e-8,
+];
+
+/// `cos`'s even coefficients `(−1)^k /(2k)!`, ascending, in this class.
+///
+/// # Invariant
+/// The argument is at most `π/4` and these are the `f32` roundings of the signed
+/// coefficients, so the first omitted term is `(π/4)^12/12!` — `1.2 × 10^-10`, and the
+/// answer is near one there, so it is a thousandth of the resolution.
+const COSINE_COEFFICIENTS: [f32; 6] = [
+    1.0,
+    -0.5,
+    0.041_666_668,
+    -0.001_388_888_9,
+    2.480_158_7e-5,
+    -2.755_731_9e-7,
+];
+
+/// A value truncated toward zero and back, over `[0, 2^24)`.
+///
+/// # Invariant
+/// The round trip is the conversion [`floor_body`] performs after its own guard, and
+/// a non-negative operand's floor **is** that truncation — so this is the two
+/// instructions the guard would keep, not the whole definition.
+fn truncate(body: &mut KernelBody, block: usize, value: ValueId) -> ValueId {
+    let truncated = body.add_op(
+        block,
+        KernelInstr::Conv {
+            from: ScalarClass::Float,
+            to: ScalarClass::Int,
+        },
+        vec![value],
+        vec![ScalarClass::Int],
+    );
+    body.add_op(
+        block,
+        KernelInstr::Conv {
+            from: ScalarClass::Int,
+            to: ScalarClass::Float,
+        },
+        vec![truncated],
+        vec![ScalarClass::Float],
+    )
+}
+
+/// One of the two reduced-angle polynomials at `r²`, Horner over that square.
+///
+/// # Invariant
+/// The coefficients are the class's own roundings and the reduced argument is at most
+/// `π/4`, so the answer is the sum both targets' sequences name — no reference `sin`
+/// or `cos` stands behind it.
+fn polynomial(
+    body: &mut KernelBody,
+    block: usize,
+    square: ValueId,
+    coefficients: &[f32],
+) -> ValueId {
+    let last = coefficients.len() - 1;
+    let mut value = constant(body, block, coefficients[last]);
+    for coefficient in coefficients[..last].iter().rev() {
+        let product = float_bin(body, block, KernelBin::Mul, value, square);
+        let addend = constant(body, block, *coefficient);
+        value = float_bin(body, block, KernelBin::Add, product, addend);
+    }
+    value
+}
+
+/// The four quadrants' answers, chosen by `m`, each already signed.
+///
+/// # Invariant
+/// **`m` is `[0, 4)`**, so the three tests partition it: `0`, `1`, `2`, and everything
+/// left, which is `3`. A fourth test would be unreachable rather than wrong.
+fn quadrant(
+    body: &mut KernelBody,
+    block: usize,
+    m: ValueId,
+    first: ValueId,
+    second: ValueId,
+    third: ValueId,
+    fourth: ValueId,
+) -> ValueId {
+    let one = constant(body, block, 1.0);
+    let two = constant(body, block, 2.0);
+    let three = constant(body, block, 3.0);
+    let is_first = condition(body, block, KernelBin::Eq, m, one);
+    let is_second = condition(body, block, KernelBin::Eq, m, two);
+    let is_third = condition(body, block, KernelBin::Eq, m, three);
+    let chosen = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![second, first, is_first],
+        vec![ScalarClass::Float],
+    );
+    let chosen = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![third, chosen, is_second],
+        vec![ScalarClass::Float],
+    );
+    body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![fourth, chosen, is_third],
+        vec![ScalarClass::Float],
+    )
+}
+
+/// The sine's definition: a two-term Cody–Waite reduction, then a Horner polynomial.
+///
+/// # Invariant
+/// Straight line, one block, one parameter and one returned value — the shape
+/// [`KernelBody::expand_transcendentals`] inlines. **Every instruction here is one the
+/// two backends already emit**, because this definition is inlined by the language's
+/// own lowering rather than named as an instruction, and so it carries no operand of
+/// [`crate::TRANSCENDENTALS`] for that rewrite to expand.
+pub fn sin_body() -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let x = body.add_param(entry);
+    let (r, m) = reduce_angle(&mut body, entry, x);
+
+    let zero = constant(&mut body, entry, 0.0);
+    let square = float_bin(&mut body, entry, KernelBin::Mul, r, r);
+    let s = polynomial(&mut body, entry, square, &SINE_COEFFICIENTS);
+    let c = polynomial(&mut body, entry, square, &COSINE_COEFFICIENTS);
+    let s = float_bin(&mut body, entry, KernelBin::Mul, r, s);
+    let negative_s = float_bin(&mut body, entry, KernelBin::Sub, zero, s);
+    let negative_c = float_bin(&mut body, entry, KernelBin::Sub, zero, c);
+    let answer = quadrant(&mut body, entry, m, s, c, negative_s, negative_c);
+
+    // `sin` is odd, and the reduction ran over the magnitude.
+    let negative = condition(&mut body, entry, KernelBin::Lt, x, zero);
+    let negated = float_bin(&mut body, entry, KernelBin::Sub, zero, answer);
+    let answer = body.add_op(
+        entry,
+        KernelInstr::Select,
+        vec![negated, answer, negative],
+        vec![ScalarClass::Float],
+    );
+
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![answer],
+        },
+    );
+    body
+}
+
+/// The cosine's definition: the sine's own reduction, without its sign.
+///
+/// # Invariant
+/// Straight line, one block, one parameter and one returned value, as [`sin_body`]'s.
+pub fn cos_body() -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let x = body.add_param(entry);
+    let (r, m) = reduce_angle(&mut body, entry, x);
+
+    let zero = constant(&mut body, entry, 0.0);
+    let square = float_bin(&mut body, entry, KernelBin::Mul, r, r);
+    let s = polynomial(&mut body, entry, square, &SINE_COEFFICIENTS);
+    let c = polynomial(&mut body, entry, square, &COSINE_COEFFICIENTS);
+    let s = float_bin(&mut body, entry, KernelBin::Mul, r, s);
+    let negative_s = float_bin(&mut body, entry, KernelBin::Sub, zero, s);
+    let negative_c = float_bin(&mut body, entry, KernelBin::Sub, zero, c);
+    // Cosine is even, so the magnitude the reduction ran over is the whole answer's.
+    let answer = quadrant(&mut body, entry, m, c, negative_s, negative_c, s);
+
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![answer],
+        },
+    );
+    body
+}
+
+/// The sine and the cosine of `x`, in the order the two definitions compute them.
+///
+/// # Invariant
+/// **The definitions, not reference implementations**: the emitters run [`sin_body`]'s
+/// and [`cos_body`]'s sequences rather than call this, so the two agree because the
+/// sequences are these ones, and the interpreter has an answer without a backend.
+pub fn sin_cos_value(x: f32) -> (f32, f32) {
+    let (r, m) = reduce_angle_value(x);
+    let square = r * r;
+    let s = r * horner(&SINE_COEFFICIENTS, square);
+    let c = horner(&COSINE_COEFFICIENTS, square);
+    let quadrants = m as i64;
+    let sine = match quadrants {
+        0 => s,
+        1 => c,
+        2 => -s,
+        _ => -c,
+    };
+    let cosine = match quadrants {
+        0 => c,
+        1 => -s,
+        2 => -c,
+        _ => s,
+    };
+    if x < 0.0 {
+        (-sine, cosine)
+    } else {
+        (sine, cosine)
+    }
+}
+
+/// The number the sine's definition computes for `x`.
+///
+/// # Invariant
+/// [`Self::sin_cos_value`]'s first half, as that function's own.
+pub fn sin_value(x: f32) -> f32 {
+    sin_cos_value(x).0
+}
+
+/// The number the cosine's definition computes for `x`.
+///
+/// # Invariant
+/// [`Self::sin_cos_value`]'s second half, as that function's own.
+pub fn cos_value(x: f32) -> f32 {
+    sin_cos_value(x).1
+}
+
+/// [`reduce_angle`] evaluated in Rust, in the same order and the same arithmetic.
+///
+/// # Invariant
+/// The truncation is toward zero over a non-negative value, which is what the two
+/// conversions [`truncate`] performs give, and every operand is below `ANGLE_LIMIT`.
+fn reduce_angle_value(x: f32) -> (f32, f32) {
+    let magnitude = if x < 0.0 { -x } else { x };
+    let magnitude = if magnitude <= ANGLE_LIMIT {
+        magnitude
+    } else {
+        ANGLE_LIMIT
+    };
+    let quadrants = ((magnitude * INVERSE_TWO_PI + 0.5) as i64) as f32;
+    let whole = ((quadrants * ONE_QUARTER) as i64) as f32;
+    let m = quadrants - whole * 4.0;
+    let head = quadrants * HALF_PI_HEAD;
+    let tail = quadrants * HALF_PI_TAIL;
+    let r = (magnitude - head) - tail;
+    (r, m)
+}
+
+/// One [`polynomial`] evaluated in Rust, in the same order and the same arithmetic.
+fn horner(coefficients: &[f32], square: f32) -> f32 {
+    let last = coefficients.len() - 1;
+    let mut value = coefficients[last];
+    for coefficient in coefficients[..last].iter().rev() {
+        value = value * square + coefficient;
+    }
+    value
+}
+
+/// The operand of the sine a body value holds as an inlined definition, or `None`.
+///
+/// # Invariant
+/// **The reader's half of [`sin_body`]**, matched on the same terms as
+/// [`inlined_sqrt_operand`]: the whole of that body's instructions and constants, and
+/// `None` for anything that is not an instance of it.
+pub fn inlined_sin_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
+    inlined_operand(body, value, &sin_body())
+}
+
+/// The operand of the cosine a body value holds as an inlined definition, or `None`.
+///
+/// # Invariant
+/// **The reader's half of [`cos_body`]**, as [`inlined_sin_operand`]'s.
+pub fn inlined_cos_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
+    inlined_operand(body, value, &cos_body())
+}
+
 /// The floor's definition: truncation toward zero, corrected for a negative operand.
 ///
 /// # Invariant

@@ -205,7 +205,7 @@ where
                 self.arithmetic_class(e, ids[0], types[0], ids[1], types[1]),
                 TypeOperator::from(operator),
             ),
-            PrefixOp::Exp | PrefixOp::Sqrt | PrefixOp::Floor => {
+            PrefixOp::Exp | PrefixOp::Sqrt | PrefixOp::Floor | PrefixOp::Sin | PrefixOp::Cos => {
                 self.check_unify(
                     types[0],
                     self.float_type,

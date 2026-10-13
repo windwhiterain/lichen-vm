@@ -22,7 +22,7 @@ pub use eval::{Bindings, evaluate, max_relative_disagreement};
 pub use expr::{Expr, Variable, substitute_all};
 pub use invert::{InvertRefusal, invert};
 pub use normalize::{NORMALIZATION_BUDGET, normalize};
-pub use operators::{BinaryOp, UnaryOp, exp, ln, relu, sqrt, square};
+pub use operators::{BinaryOp, UnaryOp, cos, exp, ln, relu, sin, sqrt, square};
 pub use random::Random;
 pub use repair::{
     Assignment, FusedReduction, FusionRefusal, Origin, Reduction, RepairFunction, derive,

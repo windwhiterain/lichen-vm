@@ -1479,6 +1479,8 @@ fn classify_token_kind(
         | TokenKind::KwExp
         | TokenKind::KwSqrt
         | TokenKind::KwFloor
+        | TokenKind::KwSin
+        | TokenKind::KwCos
         | TokenKind::KwAssert
         // `@in` is the one keyword that is an *infix* operator.
         | TokenKind::KwIn

@@ -104,6 +104,10 @@ pub enum PrefixOp {
     Sqrt,
     /// `floor x` — the largest integral `Float` not above one `Float`.
     Floor,
+    /// `sin x` — the sine of one `Float`.
+    Sin,
+    /// `cos x` — the cosine of one `Float`.
+    Cos,
 }
 
 /// The [`TypeOperator`] each [`PrefixOp`] runs, as [`BinOp`] does.
@@ -117,6 +121,8 @@ impl From<PrefixOp> for TypeOperator {
             PrefixOp::Exp => TypeOperator::Exp,
             PrefixOp::Sqrt => TypeOperator::Sqrt,
             PrefixOp::Floor => TypeOperator::Floor,
+            PrefixOp::Sin => TypeOperator::Sin,
+            PrefixOp::Cos => TypeOperator::Cos,
         }
     }
 }

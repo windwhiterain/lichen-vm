@@ -234,6 +234,8 @@ impl KeyWriter {
                     crate::ast::PrefixOp::Exp => 4,
                     crate::ast::PrefixOp::Sqrt => 5,
                     crate::ast::PrefixOp::Floor => 6,
+                    crate::ast::PrefixOp::Sin => 7,
+                    crate::ast::PrefixOp::Cos => 8,
                 });
                 for operand in operands {
                     self.expr(operand);

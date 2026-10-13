@@ -583,6 +583,18 @@ fn expression<'a, Er: GrammarError<'a>>(
                 ),
                 prefix_op(
                     tokens,
+                    TokenKind::KwSin,
+                    PrefixOp::Sin,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwCos,
+                    PrefixOp::Cos,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
                     TokenKind::KwMax,
                     PrefixOp::Max,
                     operand(tokens, atom.clone()),

@@ -18,7 +18,7 @@ use lichen_lowlevel::{
 };
 use lichen_utils::extend::AsEnum;
 
-use lichen_kernel_ir::{exp_value, floor_value, sqrt_value};
+use lichen_kernel_ir::{cos_value, exp_value, floor_value, sin_value, sqrt_value};
 
 use crate::attr::{AttrSet, NoAttr};
 use crate::diagnostic::DiagKind;
@@ -578,6 +578,21 @@ pub enum TypeOperator {
     /// `Float`-only and total: both targets have the operation as an instruction and it is
     /// exactly specified, so this arm and the two emitters read one rule.
     Floor,
+    /// The sine of one `Float`, over `[value]`
+    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    ///
+    /// # Invariant
+    /// `Float`-only and total: the interpreter and every kernel compute the sequence in
+    /// [`lichen_kernel_ir::sin_body`], so the answer does not depend on which ran it. It
+    /// is a range-reduced polynomial and **not** IEEE's `sin`, so it is stated as that
+    /// sequence and never as the real function.
+    Sin,
+    /// The cosine of one `Float`, over `[value]`
+    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    ///
+    /// # Invariant
+    /// As [`Self::Sin`]'s, over [`lichen_kernel_ir::cos_body`].
+    Cos,
     /// The two **class conversions** — unary, over `[value]`. See
     /// `docs/notes/floating-point.md` §4.2.
     ///
@@ -752,6 +767,8 @@ define_type_operator_codec! {
     Floor = 23;
     IsTupleType = 24;
     IsArrayType = 25;
+    Sin = 26;
+    Cos = 27;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the structural
@@ -856,7 +873,11 @@ where
             }
             // The prefix scalar operators read the IR's one definition
             // (`docs/notes/floating-point.md` §6, §7).
-            TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => {
+            TypeOperator::Exp
+            | TypeOperator::Sqrt
+            | TypeOperator::Floor
+            | TypeOperator::Sin
+            | TypeOperator::Cos => {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a prefix scalar operator expects a one-element operand array")
                 };
@@ -875,6 +896,12 @@ where
                     }
                     (TypeOperator::Floor, Some(LowValue::Float(x))) => {
                         Some(P::Value::from(LowValue::Float(floor_value(x))))
+                    }
+                    (TypeOperator::Sin, Some(LowValue::Float(x))) => {
+                        Some(P::Value::from(LowValue::Float(sin_value(x))))
+                    }
+                    (TypeOperator::Cos, Some(LowValue::Float(x))) => {
+                        Some(P::Value::from(LowValue::Float(cos_value(x))))
                     }
                     _ => None,
                 }
@@ -1024,7 +1051,9 @@ where
                     | TypeOperator::Float2Int
                     | TypeOperator::Exp
                     | TypeOperator::Sqrt
-                    | TypeOperator::Floor => {
+                    | TypeOperator::Floor
+                    | TypeOperator::Sin
+                    | TypeOperator::Cos => {
                         unreachable!("the prefix scalar operators are unary, and handled above")
                     }
                     // The refinement's membership test; the outer arm already
@@ -1106,7 +1135,11 @@ where
             | TypeOperator::BitXor => Some(LowShape::USize),
             TypeOperator::Int2Float => Some(LowShape::Float),
             TypeOperator::Float2Int => Some(LowShape::USize),
-            TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => Some(LowShape::Float),
+            TypeOperator::Exp
+            | TypeOperator::Sqrt
+            | TypeOperator::Floor
+            | TypeOperator::Sin
+            | TypeOperator::Cos => Some(LowShape::Float),
             // A membership test answers `0`/`1`, so its own class is the machine
             // scalar whatever its operands are.
             TypeOperator::InDomain => Some(LowShape::USize),

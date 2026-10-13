@@ -3519,7 +3519,9 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         | TypeOperator::Float2Int
         | TypeOperator::Exp
         | TypeOperator::Sqrt
-        | TypeOperator::Floor => return None,
+        | TypeOperator::Floor
+        | TypeOperator::Sin
+        | TypeOperator::Cos => return None,
         // A membership test is a refinement's check, not a computation: the
         // checker registers it as an assert beside the body.
         TypeOperator::InDomain => return None,
@@ -3554,7 +3556,11 @@ fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static
 /// lowering answers a literal in the language's classes before any instruction is emitted.
 fn unary_class(operator: TypeOperator) -> Option<ScalarClass> {
     match operator {
-        TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => Some(ScalarClass::Float),
+        TypeOperator::Exp
+        | TypeOperator::Sqrt
+        | TypeOperator::Floor
+        | TypeOperator::Sin
+        | TypeOperator::Cos => Some(ScalarClass::Float),
         _ => None,
     }
 }

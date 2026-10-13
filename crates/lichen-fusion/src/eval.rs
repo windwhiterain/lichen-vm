@@ -32,6 +32,8 @@ pub fn evaluate(expr: &Expr, bindings: &Bindings) -> Option<f64> {
                 UnaryOp::Exp => operand.exp(),
                 UnaryOp::Ln => operand.ln(),
                 UnaryOp::Sqrt => operand.sqrt(),
+                UnaryOp::Sin => operand.sin(),
+                UnaryOp::Cos => operand.cos(),
                 UnaryOp::Square => operand * operand,
                 UnaryOp::Relu => operand.max(0.0),
             })

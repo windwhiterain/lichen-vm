@@ -35,6 +35,23 @@ fn param_classes_of(params: &[ParamSlot]) -> Vec<ScalarClass> {
         .collect()
 }
 
+/// The definition of the prefix operator `ty_op` is lowered from, if it is one the IR
+/// does not name as an instruction.
+///
+/// # Invariant
+/// **`sin` and `cos` only**, and they are the whole of `crates/lichen-kernel-ir/src/unary.rs`
+/// the language's own lowering splices rather than emits: they carry no `KernelInstr` of
+/// their own, because the claim schema the runtime carries is a closed list of the
+/// instruction set and widening it is not this slice's to do. Everything else is `None`
+/// and is emitted as itself.
+fn sin_cos_definition(ty_op: TypeOperator) -> Option<KernelBody> {
+    match ty_op {
+        TypeOperator::Sin => Some(lichen_kernel_ir::sin_body()),
+        TypeOperator::Cos => Some(lichen_kernel_ir::cos_body()),
+        _ => None,
+    }
+}
+
 /// How many parameter leaves the body's entry block receives — the declared
 /// shape's arity, not the domain node's.
 ///
@@ -1488,6 +1505,9 @@ where
         }
         let operand = dynamic(items[0].node)?;
         let operand = self.value(operand)?;
+        if let Some(definition) = sin_cos_definition(ty_op) {
+            return self.inline(definition, operand);
+        }
         let instruction = match ty_op {
             TypeOperator::Exp => KernelInstr::Exp,
             TypeOperator::Sqrt => KernelInstr::Sqrt,
@@ -1499,6 +1519,45 @@ where
             }
         };
         Ok(self.emit(instruction, vec![operand], class))
+    }
+
+    /// A definition's own instruction sequence, emitted over `operand`.
+    ///
+    /// # Invariant
+    /// **The IR's own inliner does the work** ([`KernelBody::inline_definition`]), so a
+    /// `sin` spliced here and an `exp` rewritten by
+    /// [`KernelBody::expand_transcendentals`] take one path. The placeholder is a constant
+    /// that becomes the definition's last step in place, so the body reads the definition
+    /// instruction for instruction — which is what the readers in `unary.rs` match against.
+    fn inline(&mut self, definition: KernelBody, operand: ValueId) -> Result<ValueId, String> {
+        let source = &definition.blocks[definition.entry];
+        if source.params.len() != 1 {
+            return Err(format!(
+                "a definition takes {} parameter(s) and is defined over one",
+                source.params.len()
+            ));
+        }
+        let Terminator::Return { values } = &source.terminator else {
+            return Err("a definition must return".into());
+        };
+        if values.len() != 1 {
+            return Err(format!(
+                "a definition returns {} values and is defined over one",
+                values.len()
+            ));
+        }
+        // The step the inliner rewrites in place; its own definition never reaches a backend.
+        let target = self.emit_const(ScalarClass::Float, 0);
+        let block = self.block;
+        let position = self.body.blocks[block]
+            .instrs
+            .iter()
+            .position(|value| *value == target)
+            .ok_or("the definition's placeholder is not in the block it was emitted into")?;
+        self.body
+            .inline_definition(&definition, block, position, target, operand)?;
+        self.value_classes.insert(target, ScalarClass::Float);
+        Ok(target)
     }
 
     /// A cross-kernel call: `compute.launch k x` / `compute.call k x`.
