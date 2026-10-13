@@ -157,16 +157,31 @@ element for element against what the **un-passed program's own body** wrote, wit
 element kinds build **equal** `KernelBody` values. A `Max` fold tiles too (`… its own marks declare `max`
 over 64 lane(s)`) and is **bit-exact**, where `+` is only re-associated.
 
-**What the gate still does not cover**, because a wrong answer is what is at stake: it reads only
-`combine`, so an **`identity` that is not the operator's unit is unchecked** — and that is the live
-landmine, because **a `max` fold's identity is `−∞`, the language cannot write it** (`Expr::Constant` is a
-finite `f64` and there is no unary minus), and the example seeds its max with `(0.0 - 1000000.0)`. So a
-`max` tile is correct **exactly when the declared seed is a real lower bound on the data**, which nothing
-verifies; a wrong seed tiles and answers wrong. Reaching a true `−∞` is a **language** change, not a
-`Folding` one. It also remains the **tiling** pass's gate rather than the **merge** pass's, it judges
-**shape, not faithfulness** (a body that marks `(+ t d)` while computing something else is a lie a claim
-can still tell), and re-associating `+`/`*` in `f32` is a standing assumption rather than a proof —
-`max`/`min` are the only newly-schedulable operators whose tiling is exact. The `element` role is
+**The identity landmine is closed, and closing it corrected a premise.** The pass does **not** read a
+claim-side literal — `KernelClaim` carries `interface` and `roles` only, and its own invariant says the
+projections *"are **not** here: each is a mark on an expression inside the kernel's own body, so a claim
+cannot diverge from what the kernel computes."* `automatic_tiling::derive()` already read the body's own
+`~ "identity"` mark (`marked_value` → `projection` → `normalize`) and seeded from its canonical form. So
+the defect was **never** a lying declaration: it was that **the language could not spell `±∞`**, and
+authors therefore wrote a finite seed that was true only for data above it — measured as a `Max` over
+`−2e6 …` seeded `-1e6` answering `-1000000` (faithful to the mark, wrong as a maximum), and a `Min`
+answering a value no element holds.
+
+`79defe18` gives the spelling, with the one contract restatement the user authorised: **`Div` of a
+literal by a zero literal folds to the signed infinity it denotes** (`BinaryOp`'s invariant rewritten;
+`infinity_of` reads both signs, so `1.0 / -0.0` is `−∞`) — while a zero or `NaN` numerator and a
+non-literal divisor keep their trees exactly as before, so `0.0 / 0.0` is still `NotAnIdentity`. The
+landed examples moved to the honest spelling: `examples/softmax.lichen` and `fold_datum.rs`'s max now
+seed `((0.0 - 1.0) / 0.0)`, and the pass's own line **names the identity it seeds with**
+(`… its own marks declare `max` over 64 lane(s), seeding the fold with `-inf``). `NotAnIdentity` and
+`MissingRole` also print their **name** now, not just their sentence.
+
+**What remains true, stated honestly:** a body that marks a *false* seed — `fold (n, (0.0 - 5.0) ~
+"identity")` over a `max` — still tiles and answers wrong, because the pass cannot check a seed against
+data it never sees; **the report naming the identity is the mitigation, not a gate**. The restatement's
+reach is real and visible rather than silent: an element function like `d / (e - e)` that used to keep
+its tree now canonicalises to a `±inf` constant. And `tile ≡ body` is **bit-for-bit only for
+`max`/`min`** — re-associating `+`/`*` in `f32` is still an assumption, not a proof.
 **untouched and still `BeyondANode`**: the datum is read from the combine, and admitting `element` would
 need a node-local producer for `r`.
 
@@ -179,8 +194,9 @@ need a node-local producer for `r`.
 - **A `Max`/`Min` fold can now be scheduled** (`9722e681`, the capability half of the `combine` gate — the
   datum-carrying slice, not a loosened gate). A `Max` combine over a describable datum tiles behind the
   same proof and is **bit-exact**, so softmax's numerically stable subtraction can finally take a
-  shared-memory reduction and a tile. What it still cannot do is know that the *seed* is right — see the
-  identity landmine above.
+  shared-memory reduction and a tile. The seed it starts from is the **body's own `~ "identity"` mark**,
+  so `tile ≡ body` holds by construction; what it cannot know is whether that mark is *true* of the data,
+  and the pass's own line naming the identity is the mitigation (`79defe18`).
 - **Non-uniform softmax is never exact in `f32` here.** Scanning 2394 four-element integer rows, **none**
   reproduce the true `f32` softmax (best gap 7 × 10⁻⁷), because this language's `exp` is a degree-10
   Taylor sum: the true `f32` answer and the program's answer differ in **every** element. So the
