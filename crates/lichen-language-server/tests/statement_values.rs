@@ -168,32 +168,33 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 19,
         })
         .expect("hover on `jit`");
-    // Twelve cells: two arguments, `.native`'s raw pair, then `.I`/`.O`
-    // repeating them — the property under test.
+    // The same twelve cells are named twice: the value's signature, then the type.
 
     // A frozen module's type lambdas claim cells first, so the letters begin
     // wherever they begin.
     let cells = type_variables(&hover);
     assert_eq!(
         cells.len(),
-        12,
-        "jit names twelve cells (four per arrow side, four in `.I`/`.O`, and the \
-         two signature sides repeated): {hover}"
+        24,
+        "jit names twelve cells twice, once per half: {hover}"
     );
-    assert_eq!(
-        (&cells[8], &cells[9]),
-        (&cells[1], &cells[2]),
-        "`.I`'s domain and codomain are the parameter's own cells: {hover}"
-    );
-    assert_eq!(
-        (&cells[10], &cells[11]),
-        (&cells[4], &cells[5]),
-        "`.O`'s domain and codomain are the return's own cells: {hover}"
-    );
-    assert_ne!(
-        cells[0], cells[1],
-        "the wrapper's two arguments are distinct cells: {hover}"
-    );
+    for half in [0, 12] {
+        assert_eq!(
+            (&cells[half + 8], &cells[half + 9]),
+            (&cells[half + 1], &cells[half + 2]),
+            "`.I`'s domain and codomain are the parameter's own cells: {hover}"
+        );
+        assert_eq!(
+            (&cells[half + 10], &cells[half + 11]),
+            (&cells[half + 4], &cells[half + 5]),
+            "`.O`'s domain and codomain are the return's own cells: {hover}"
+        );
+        assert_ne!(
+            cells[half],
+            cells[half + 1],
+            "the wrapper's two arguments are distinct cells: {hover}"
+        );
+    }
     assert!(
         hover.contains(".I") && hover.contains(".O") && !hover.contains(".sig"),
         "a kernel's signature is named as the struct's `.I`/`.O` fields: {hover}"
@@ -209,7 +210,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         })
         .expect("hover on `launch`");
     let cells = type_variables(&hover);
-    assert_eq!(cells.len(), 5, "launch names five cells: {hover}");
+    assert_eq!(cells.len(), 10, "launch names five cells twice: {hover}");
     for (index, cell) in cells.iter().enumerate() {
         assert!(
             !cells[..index].contains(cell),

@@ -127,6 +127,38 @@ impl<P: Program> Module<P> {
         })
     }
 
+    /// Apply a function's **type** where its value is not concrete yet.
+    ///
+    /// # Invariant
+    /// `f : f` — the type is the function — so an apply of an unknown value still
+    /// applies the type. The domain and codomain are this application's own
+    /// clones ([`Self::instantiate`]), so a call site never monomorphises a
+    /// polymorphic template; the body is not evaluated, so only the signature is
+    /// applied.
+    pub(super) fn apply_type(
+        &mut self,
+        function: FunctionId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<NodeId>,
+    ) {
+        let Some(instantiation) = self.instantiate(function, argument, block, node) else {
+            // A failed parameter check already recorded its error.
+            return;
+        };
+        // The result is the clone's return type, resolved before the bind; the
+        // deep pass replicates to no class member.
+        let applied = instantiation.applied;
+        let Some(codomain) = self.pair_type_half(applied) else {
+            return;
+        };
+        self.evaluate_node(Dyn(codomain), Some(block));
+        if let Some(cell) = cell {
+            self.unify(cell, codomain);
+        }
+    }
+
     /// Instantiate `function`'s template for `argument`: clone the return pair, then run
     /// the parameter check.
     ///
@@ -326,6 +358,14 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
+        // The wildcard is **one shared node**, so a clone mints a
+        // fresh undecided cell instead of carrying it.
+        if matches!(self.class_committed_value(node), Some(v) if v.as_enum() == Some(LowValue::Any))
+        {
+            let fresh = self.add_node(ctx.target, None, None);
+            ctx.remap.insert(node, fresh);
+            return fresh;
+        }
         // Membership is the anchor chain test or a closure-scope hit; otherwise the node is
         // referenced in place.
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
@@ -384,12 +424,17 @@ impl<P: Program> Module<P> {
         });
         let template_answer =
             self.nodes[node].runned != 0 && self.nodes[node].evaluated_deep.is_some();
+        // A wildcard answer is never carried: the clone's own
+        // cell is its replacement.
+        let wildcard_answer = value.is_some_and(|value| value.as_enum() == Some(LowValue::Any));
         let carried = match &operation {
-            None => true,
+            None => !wildcard_answer,
             Some(_) => {
                 // An answer holding a foreign closure is no more carriable than a bare one: mapping
                 // cannot reach inside a function body.
-                template_answer && !self.value_holds_foreign_function(value, ctx.applied)
+                template_answer
+                    && !wildcard_answer
+                    && !self.value_holds_foreign_function(value, ctx.applied)
             }
         };
         // The mapping runs only for a kept value: a dropped answer must not clone a closure.

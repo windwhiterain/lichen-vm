@@ -131,7 +131,7 @@ where
                 // module being rendered; this printer releases no block.
                 LowValue::Array(array) => self.elements(node, unsafe { array.items() }),
                 LowValue::Table(_) => "Table".to_string(),
-                LowValue::Function(_) => "Function".to_string(),
+                LowValue::Function(fid) => self.function_spelling(fid),
                 LowValue::None | LowValue::Error => "none".to_string(),
                 // The wildcard's own spelling, as the source writes it.
                 LowValue::Any => "@any".to_string(),
@@ -386,6 +386,20 @@ where
         .then_some(fid)
     }
 
+    /// A function value's own spelling: `domain => codomain`.
+    ///
+    /// # Invariant
+    ///
+    /// `Function` is the fallback for a signature the template does not state —
+    /// a hand-built function, or a frozen one with no readable cells. Printing
+    /// `?a => ?b` then would claim a shape nobody wrote.
+    pub(crate) fn function_spelling(&mut self, fid: AnyFunctionId) -> String {
+        match self.function_signature(fid) {
+            Some((domain, codomain)) => format!("{domain} => {codomain}"),
+            None => "Function".to_string(),
+        }
+    }
+
     /// The `domain -> codomain` spelling of a signature, from the template's
     /// parameter and return type cells.
     ///
@@ -394,7 +408,7 @@ where
     /// The cells read undecided for a polymorphic function (`?a -> ?a`) and
     /// bound for a monomorphic one.  `None` for a static function-type or
     /// non-pair entry points.
-    fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
+    pub(crate) fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
         match fid {
             AnyFunctionId::Dynamic(function) => {
                 let function = &self.module.functions[function];
@@ -503,6 +517,12 @@ where
 
     /// An element slot's value position, when it holds a **pin** rather than the
     /// wildcard.
+    ///
+    /// # Invariant
+    /// The wildcard is **one shared node**, so an apply's clone mints a fresh
+    /// undecided cell in its place — a slot read through a call therefore shows a
+    /// hole, not `@any`. A hole is no pin either, so the position is suppressed
+    /// the same way, and only a written `v : T` prints.
     fn slot_value_any(&self, slot: AnyNodeId) -> Option<AnyNodeId> {
         let LowValue::Array(array) = self.module.node_value(slot)?.as_enum()? else {
             return None;
@@ -510,6 +530,9 @@ where
         // SAFETY: `array` is the payload of the value read from the live node
         // `slot`.
         let value = unsafe { array.items() }.first()?.node;
+        if self.module.node_value(value).is_none() {
+            return None;
+        }
         match self
             .module
             .node_value(value)

@@ -269,7 +269,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
     // The printer recognizes a cell unified into the universe class.
     assert_eq!(
         lichen_language::run::evaluate("x : Int => x").unwrap(),
-        "Function: Int -> Int"
+        "Int => Int: Int -> Int"
     );
     assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
 }
@@ -700,7 +700,7 @@ fn operator_precedence_and_associativity() {
 
     assert_eq!(
         lichen_language::run::evaluate("x => x + 1").unwrap(),
-        "Function: Int -> Int"
+        "Int => Int: Int -> Int"
     );
     // Each new level is checked against the reading that would come out
     // wrong in the wrong place.

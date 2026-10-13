@@ -269,15 +269,17 @@ where
             }
             None => self.array_node(self.current_block, &[argument_value, argument_type]),
         };
-        // Function-ness guard: catch concretely non-function types statically;
-        // undecided ones wait for the runtime apply.
+        // The result's type cell rides in the apply's operand; the runtime apply
+        // binds it to the return pair.
+        let c = self.fresh_cell();
+        // The callee's **type** rides with the apply: `f : f`, so an apply
+        // whose value is not concrete applies the type. §7.
         let function_ty = self.state[function].ty.unwrap();
-        let concrete = self.type_is_concrete(function_ty);
-        if concrete && !self.module.is_function_type(function_ty) {
+        // A **decided** non-function callee is refused here; an
+        // undecided one waits for the runtime apply.
+        if self.type_is_concrete(function_ty) && !self.module.is_function_type(function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
-            // The guard binds the callee's type against two fresh cells of a
-            // real signature (`signature_node`).
             let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
@@ -303,10 +305,12 @@ where
                 ext.unify_slots(self, found_attr, missing, loc2);
             }
         }
-        // The result's type cell rides in the apply's operand; the runtime
-        // apply binds it to the return pair.
-        let c = self.fresh_cell();
-        let operands = self.array_node(self.current_block, &[function_value, argument_pair, c]);
+        // The result cell and the callee's type ride in the operand; element 3
+        // is what an apply of an unknown value applies. §7.
+        let operands = self.array_node(
+            self.current_block,
+            &[function_value, argument_pair, c, function_ty],
+        );
         let node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Apply),

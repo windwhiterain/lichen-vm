@@ -672,8 +672,8 @@ k
 
 #[test]
 fn wrapper_functions_render_with_named_type_variables() {
-    // The wrapper's cells are undecided at module level, so they render as `?a`/`?b`;
-    // only an applied result resolves.
+    // The cells are undecided at module level, so they render as `?a`; the value
+    // half names them again beside the type's.
     assert_eq!(
         render(
             r#"
@@ -681,7 +681,7 @@ fn wrapper_functions_render_with_named_type_variables() {
 compute.jit
 "#
         ),
-        "Function: raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]] -> struct{.native raw[?g, ?h], .I raw[?b, ?c], .O raw[?e, ?f]}",
+        "raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]] => struct{.native raw[?g, ?h], .I raw[?b, ?c], .O raw[?e, ?f]}: raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]] -> struct{.native raw[?g, ?h], .I raw[?b, ?c], .O raw[?e, ?f]}",
         "jit wrapper value/type"
     );
     // Both cells are the `.I`/`.O` field read's pair, which still marks when
@@ -693,7 +693,7 @@ compute.jit
 compute.launch
 "#
         ),
-        "Function: ?a -> raw[?b, ?c] -> raw[?d, ?e]",
+        "?a => raw[?b, ?c] -> raw[?d, ?e]: ?a -> raw[?b, ?c] -> raw[?d, ?e]",
         "launch wrapper value/type"
     );
 }

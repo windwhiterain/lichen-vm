@@ -810,6 +810,23 @@ maps every span back to the original file.
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
+- **An apply applies the callee's type.**  A function type *is* the function it
+  names (`f : f`), so an apply whose callee value is not concrete yet still
+  applies the signature: the argument's type is compared against a **fresh**
+  copy of the domain, and the result cell binds to a **fresh** copy of the
+  codomain.  The clone per call is what keeps polymorphism — with
+  `type_of = x => {t = _; x: t; t}`, `(type_of (1), type_of Int)` is
+  `(Int, Type)`, where comparing against the template's own cells answers
+  `expected Int, found Type` at the second call.  A lambda nobody applies is
+  still read: `x => { x: Int -> Int; x 1.0 }` is `expected Int, found Float`
+  with nothing run, and `x => { x: Int -> Int; x 1 }` states its result.
+- **The placeholder is inert.**  An annotation's unconstrained positions hold
+  the **wildcard**, which states nothing and binds nothing: it is one shared
+  node, and unification neither merges nor writes it, so no class can bind it
+  ([compound-element-slots](notes/compound-element-slots.md) §`Any`).  An
+  apply's **clone** mints a fresh undecided cell in its place — carrying that
+  one node would put it in a class the caller also holds, and would make every
+  unify it met return before comparing anything.
 - **The `_` placeholder.**  A `_` in any position compiles to an undecided
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow

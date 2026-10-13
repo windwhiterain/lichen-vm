@@ -1,6 +1,6 @@
 ---
   order = "3"
-  output = "Function: tuple{Type, Int} -> Int"
+  output = "tuple{Type, Int} => Int: tuple{Type, Int} -> Int"
 ---
 f1 = x => x : Int
 f2 = x => {

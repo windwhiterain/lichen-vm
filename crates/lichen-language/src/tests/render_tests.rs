@@ -165,8 +165,9 @@ fn a_set_and_a_table_value_render_their_own_syntax() {
 
 #[test]
 fn a_written_arrow_is_a_function() {
-    // A type-position arrow lowers to a real function whose type is its signature.
-    assert_eq!(output("Int -> Int"), "Function: Int -> Int");
+    // A type-position arrow lowers to a real function; the value half and the
+    // type half both state its signature.
+    assert_eq!(output("Int -> Int"), "Int => Int: Int -> Int");
 }
 
 #[test]
@@ -198,9 +199,9 @@ fn a_type_second_slot_does_not_collapse_an_array() {
 }
 
 #[test]
-fn a_function_value_prints_function() {
-    assert_eq!(output("x => x"), "Function: ?a -> ?a");
-    assert_eq!(output("f = x => x\nf"), "Function: ?a -> ?a");
+fn a_function_value_prints_its_signature() {
+    assert_eq!(output("x => x"), "?a => ?a: ?a -> ?a");
+    assert_eq!(output("f = x => x\nf"), "?a => ?a: ?a -> ?a");
 }
 
 // --- `type_of` as an ordinary lichen function ----------------------------
@@ -229,7 +230,7 @@ fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
     assert_eq!(with_type_of("f = type_of\nf 1"), "Int: Type");
     assert_eq!(with_type_of("g = x => type_of x\ng 2"), "Int: Type");
-    assert_eq!(with_type_of("type_of (x => x)"), "Function: ?a -> ?a");
+    assert_eq!(with_type_of("type_of (x => x)"), "?a => ?a: ?a -> ?a");
 }
 
 #[test]

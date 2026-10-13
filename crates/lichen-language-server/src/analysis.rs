@@ -3042,7 +3042,7 @@ mod tests {
                     line: 6,
                     character: 6,
                 },
-                "Function : Int -> Int",
+                "Int => Int : Int -> Int",
             ),
             // `.inc_twice` field access on `geo`
             (
@@ -3050,7 +3050,7 @@ mod tests {
                     line: 6,
                     character: 33,
                 },
-                "Function : Int -> Int",
+                "Int => Int : Int -> Int",
             ),
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
@@ -3077,8 +3077,10 @@ mod tests {
             !msg.contains("unresolved") && !msg.contains("field of imported module"),
             "field access hover msg = {msg}"
         );
+        // A function value prints its own signature before the type, so the type
+        // half is what follows the **last** separator.
         let rendered = msg
-            .split_once("Function : ")
+            .rsplit_once(" : ")
             .map(|(_, ty)| ty)
             .unwrap_or_else(|| panic!("the field renders as a value : type; got {msg}"));
         let sides: Vec<&str> = rendered

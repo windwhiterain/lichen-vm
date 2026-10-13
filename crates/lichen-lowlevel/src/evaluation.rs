@@ -253,6 +253,9 @@ impl<P: Program> Module<P> {
                         // SAFETY: `array` is a live operand value; its home block is not dropped.
                         let operands = unsafe { array.items() };
                         let Some(callee) = self.evaluate_node(operands[0].node, Some(block)) else {
+                            // `f : f`: the value is not concrete yet, so the
+                            // apply applies the type element 3 carries.
+                            self.apply_callee_type(operands, block, node);
                             return self.ran_undecided(node);
                         };
                         match callee.as_enum() {
@@ -386,6 +389,31 @@ impl<P: Program> Module<P> {
     fn ran_undecided(&mut self, node: NodeId) -> Option<P::Value> {
         self.stamp_node_ran(node);
         None
+    }
+
+    /// Apply the **type** an apply's operand carries, for a callee whose value is
+    /// not concrete yet.
+    ///
+    /// # Invariant
+    /// `f : f` — a function's type names the same function — so the type is
+    /// applied where the value cannot be. Element 3 is the callee's type; a
+    /// non-function one applies nothing. [`Module::apply_type`] clones the
+    /// signature per application, so this never monomorphises the template.
+    fn apply_callee_type(&mut self, operands: &[crate::ArrayItem], block: BlockId, node: NodeId) {
+        let Some(type_node) = operands
+            .get(3)
+            .map(|item| self.as_dynamic(item.node, block))
+        else {
+            return;
+        };
+        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function(type_node) else {
+            return;
+        };
+        let argument = self.as_dynamic(operands[1].node, block);
+        let cell = operands
+            .get(2)
+            .map(|item| self.as_dynamic(item.node, block));
+        self.apply_type(function, argument, block, node, cell);
     }
 
     /// Run [`Self::evaluate_node`] for every node in the reachable subtree of `id` — the only

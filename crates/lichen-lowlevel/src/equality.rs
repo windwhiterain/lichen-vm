@@ -504,7 +504,7 @@ impl<P: Program> Module<P> {
 
     /// The function a function-type node names; `None` otherwise. A read. See
     /// docs/notes/function-type-merge.md.
-    fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
+    pub(crate) fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
         let carrier = self.class_root(node);
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
             return None;
@@ -733,11 +733,18 @@ impl<P: Program> Module<P> {
                             root,
                         );
                     }
-                    // Exactly one function type against a self-cycle: refuse, or the match merges them.
-                    let other = if function_a.is_some() { rb } else { ra };
-                    if self.is_self_referential(AnyNodeId::Dynamic(other)) {
-                        self.record_error(ra, rb, steps, root);
-                        return false;
+                    // Two function types with no readable signature are
+                    // still two pairs: unify them like any other. §7.
+                    if function_a.is_some() && function_b.is_some() {
+                        // fall through to the array arms below
+                    } else {
+                        // Exactly one function type against a self-cycle: refuse, or
+                        // the match merges them.
+                        let other = if function_a.is_some() { rb } else { ra };
+                        if self.is_self_referential(AnyNodeId::Dynamic(other)) {
+                            self.record_error(ra, rb, steps, root);
+                            return false;
+                        }
                     }
                 }
                 match (x.as_enum(), y.as_enum()) {

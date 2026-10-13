@@ -523,6 +523,75 @@ fact. What does is one number per node — the value epoch it ran at
 decisions to run time would also cost the tier that expresses them (§3.2), so the
 order stays as it is.
 
+## 7. An apply applies the function's type, and a clone that will not carry the wildcard
+
+Two changes, both landed together: an apply of a callee whose **value** is not
+concrete still applies its type, and why a struct field's requirement used to go
+unchecked.
+
+### 7.1 The apply applies the function's type
+
+A function type is the function it names (`f : f`), so an apply does not have to
+wait for the callee's value: the checker carries the callee's type as the
+apply's fourth operand, and the runtime apply, finding the value undecided,
+applies that type instead. `Module::apply_type` runs the same `instantiate` a
+value apply runs — the parameter check compares the argument against a **fresh**
+domain, and the result cell binds to a **fresh** codomain — and skips only the
+body evaluation.
+
+A lambda is a value, and a value nobody applied had a body nobody checked:
+
+```lichen
+x => { x: Int -> Int; x 1.0 }    dev: Function: Int -> Int -> ?a     -- no report
+                                        expected Int, found Float      -- now
+inc = (x : Int -> Int) => x 1.0  dev: accepted, prints raw[Function, …]
+                                        expected Int, found Float      -- now
+x => { x: Int -> Int; x 1 }      dev: … -> ?a    now: Int -> Int -> Int
+(type_of (1), type_of Int)       (Int, Type)     (Int, Type)
+```
+
+**The per-call clone is what keeps it sound, and the first attempt lacked it.**
+That attempt made the same two comparisons in `check_app`, against the
+template's **own** cells, so a call site *decided* them: with
+`type_of = x => {t = _; x: t; t}`, dev answers `(Int, Type)` for
+`(type_of (1), type_of Int)` and the checker-side version answered
+`expected Int, found Type` — the template was monomorphic after its first call.
+Its failure also set `check_failed`, which skips the definition pass entirely,
+so the runtime channel's diagnostic was replaced by a check-time guard
+(measured: `unify_errors = 1, apply_errors = 0`). Nothing of it remains in
+`check_app`: there is no `written_signatures` set either, since the codomain is
+now bound by the clone rather than by a gate.
+
+A value apply reaches the same place by its own route, so the two agree: the
+value path's `wire_apply_result` binds the result cell to the **clone's** return
+type, which is what `apply_type` binds it to as well.
+
+### 7.2 A clone turns the wildcard into an undecided cell
+
+`@any` is **one shared node**, and `unify_inner` short-circuits on it before
+comparing anything. A struct field's value position is that node, so
+`check_element_pair_attributes`' unify returned at the wildcard arm and the
+declared attribute was never compared — the walk was fine, it was a walk that
+did nothing:
+
+```lichen
+S = struct{.a Int # 4}   S(.a 1 # 2)   dev: (1,): struct{.a Int # 4}
+                                     now: expected 4, found 2
+S = struct{.a 5 : Int}   S(.a 6)       dev: (6,): struct{.a 5 : Int}
+                                     now: expected 5, found 6
+```
+
+`node_apply` now mints a fresh undecided cell where a cloned node held the
+wildcard, and the `carried` gate reads a wildcard answer as *not carried* — so
+the two sides never share the class that holds the one wildcard node, and the
+unify proceeds to the attribute. The clone is still equal to its original
+(`unify` accepts a self-referential `[int, ↺]` copied this way, and merges the
+two classes), so nothing that compared types before compares differently now.
+
+An element slot's value position also stops printing a hole as a pin: a slot
+read through a call shows no pin, not `?a : Int`, so a written `v : T` remains
+the only thing that prints one.
+
 ## Recovered measurements
 
 - Every lambda's value node is deep-evaluated before any application, in the build

@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "(Function, 1, Int): tuple{?a -> ?a, Int, Type}"
+  output = "(?a => ?a, 1, Int): tuple{?a -> ?a, Int, Type}"
 ---
 f = x => x
 (f, f 1, f Int)

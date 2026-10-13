@@ -118,7 +118,7 @@ where
     /// function type is a `Function` value and closes on itself
     /// (`[Function(fid), ↺]`), every other class a type constant whose kind slot
     /// is the self-looping universe (`[Int, ↺]`, `[string, ↺]`, …).
-    fn leaf_class(&self, value: P::Value, ty: NodeId, tys: &[ArrayItem]) -> Option<String> {
+    fn leaf_class(&mut self, value: P::Value, ty: NodeId, tys: &[ArrayItem]) -> Option<String> {
         if tys.len() != 2 {
             return None;
         }
@@ -479,12 +479,12 @@ where
     /// This is the **standard** reading wherever the type chain named a class
     /// for the value ([`Self::leaf_class`]), and the marked content of a dump
     /// where it did not.
-    fn spelling(&self, value: P::Value) -> Option<String> {
+    fn spelling(&mut self, value: P::Value) -> Option<String> {
         match value.as_enum() {
             Some(LowValue::USize(n)) => Some(n.to_string()),
             Some(LowValue::Float(value)) => Some(float_literal(value)),
             Some(LowValue::Str(s)) => Some(format!("\"{s}\"")),
-            Some(LowValue::Function(_)) => Some("Function".to_string()),
+            Some(LowValue::Function(fid)) => Some(self.printer.function_spelling(fid)),
             Some(LowValue::Table(_)) => Some("Table".to_string()),
             Some(LowValue::None) | Some(LowValue::Error) => Some("none".to_string()),
             Some(LowValue::Any) => Some("@any".to_string()),

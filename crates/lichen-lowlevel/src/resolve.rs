@@ -57,7 +57,7 @@ impl<P: Program> Module<P> {
         };
         match operation.operator.as_enum() {
             // The checker's apply operands are `[function, argument,
-            // result_cell]`, and the result cell is not codegen.
+            // result_cell, callee_type]`; the last two are not codegen.
             Some(LowOperator::Apply) => self.operand_pair(operand, "Apply"),
             Some(LowOperator::Index) | Some(LowOperator::TableGet) => {
                 self.operand_pair(operand, "operator")
@@ -72,10 +72,10 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// [`Self::operand_pair`] is the two-element reading; a three-element
-    /// `[function, argument, result_cell]` has to be readable whole for a
-    /// caller that wants its third, and the two readings cannot disagree
-    /// about what the array holds.
+    /// [`Self::operand_pair`] is the two-element reading; a four-element
+    /// `[function, argument, result_cell, callee_type]` has to be readable whole
+    /// for a caller that wants its later ones, and the two readings cannot
+    /// disagree about what the array holds.
     pub fn operand_items(&self, operand: NodeId) -> Result<&'static [ArrayItem], String> {
         // SAFETY: `operand` is a live node of `self`; nothing here releases it.
         unsafe { self.array_items(operand) }.ok_or_else(|| "operand is not an array value".into())
