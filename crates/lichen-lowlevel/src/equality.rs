@@ -823,11 +823,18 @@ impl<P: Program> Module<P> {
     /// Join `reader` into `target`'s class and evaluate the target.
     ///
     /// # Invariant
-    /// The join is unconditional, and the reader keeps its operation so the operand
-    /// edge stays live for the apply clone walk. It does not report its failures:
-    /// the reader's own reconcile owns that conflict, so recording here would report
-    /// one disagreement twice. See docs/notes/lowlevel-vm.md.
+    /// The join skips a wildcard target, which is shared: merging it would write its
+    /// value into the reader. The reader keeps its operation, so the operand edge stays
+    /// live for the clone walk; a failure is not reported here, because the reader's own
+    /// reconcile owns that conflict.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
+        // A wildcard target answers no reader, so there is no class to join.
+        if matches!(
+            self.nodes[target].value.and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
+            return;
+        }
         let (_, errors) = self.try_unify(reader, target);
         self.unify_errors.truncate(errors.start);
         let block = self.nodes[target].block;
