@@ -17,7 +17,7 @@ test file.
 |---|---|
 | **RMSNorm** | **landed** (`419aab56`): a row-wise `Σ x²` reduction plus the rescale that reads it |
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
-| **softmax** | **landed** (`f8645274`): a `max` fold plus the normalise that reads it, in the RMSNorm two-kernel shape — and that pair **merges**. The walls are about *arity*, not `exp`: the textbook three-kernel form is refused `NotAReductionChain` (exactly **one incoming edge per consumer**, and softmax's final kernel reads `m` and `s` — a **diamond**, where the floor knows only a **chain**), and even a *linear* three-kernel chain is refused `RegionIsNotAPair` (**a merge is two instances, period**). `Max` as a `combine` is refused by name (`CombineIsNotAFold`) — safe, and the reason attention's stable softmax cannot be scheduled yet |
+| **softmax** | **landed** (`f8645274`): a `max` fold plus the normalise that reads it, in the RMSNorm two-kernel shape — and that pair **merges**. What still refuses is **arity**: a **chain of any length** now merges (`3f8007cc`, same floor licence, no pack — the floor was already granting it, only `merge_region` refused), but the textbook three-kernel form is **irreducibly a diamond** — the normalise step needs both `m` and `s`, and `yᵢ = exp(dᵢ − m)/s` needs `m` twice, so it is *not* expressible as a linear chain either. Fan-in is what refuses (`NotAReductionChain`, one incoming edge per consumer) |
 | **RoPE** | **language wall first**: `cos`/`sin` do not exist in the language at all |
 | **matmul** | **not close**: nothing expresses a two-dimensional launch — `compute.range` is one dimension and a parallel fragment's shape is `(config, index)` |
 | **attention** | behind both the softmax and the matmul walls |
@@ -209,11 +209,25 @@ need a node-local producer for `r`.
   line through the run report's own channel.
 - **What attention needs, in order.** (1) **A launch that is not one row** — `compute.range` is one
   dimension and a parallel fragment's shape is `(config, index)`, so matmul and attention both need a
-  two-dimensional workgroup, and matmul is nowhere near. (2) **A region that is not a pair**
-  (`region_merge.rs`: a merge is exactly two instances) — or attention expressed so every stage stays a
-  pair, keeping one producer per consumer; the fan-in that breaks it is the same `NotAReductionChain`
-  softmax's diamond hit. (3) **A `Max`/`Min` tile** — **done** (`9722e681`), with the identity caveat
-  above; (1) and (2) are what remain.
+  two-dimensional workgroup, and matmul is nowhere near. (2) **Fan-in — a region that is not a chain**
+  — **and chains themselves are done** (`3f8007cc`: any length, same licence, no pack; the earlier
+  `RegionIsNotAPair` on a linear three-kernel chain was a pure capability gap, since `licence()`'s
+  `off_chain_node()` already answered `None` for a chain and only `merge_region` refused afterwards).
+  What remains is the **diamond**: `region_edges` refuses a node two instances feed
+  (`NotAReductionChain`) and `region_schema` gives each consumer **one** `ReadRoles` from the **first**
+  edge found. Concretely it needs a symbolic variable **per input ordinal** (`r0`, `r1`) in
+  `lichen_fusion::Variable`, a per-input `ReadRoles` in the bridge, a `Between` per input, and a
+  `compose` that inlines **two** producers into one body — plus a restatement of `licence()`'s own rule
+  ("two arrive at … is not that chain"), which is why it was not taken. Attention sits behind it.
+  (3) **A `Max`/`Min` tile** — **done** (`9722e681`), with the identity caveat above; so what remains is
+  (1) and (2).
+- **Two costs the chain support carries.** `compose`'s composition is a **modelling claim, not a
+  theorem** — the merged body **recomputes the producer's cone per read** rather than storing and
+  reloading it, so each step was proven to obey every condition `compose` states, but the whole chain
+  being value-identical is evidenced by the device measurement (n = 3) rather than proved for arbitrary
+  n. And the fold is **O(n²) in body size** (`compose` clones the accumulated body per link): fine at
+  three, not what a thirty-kernel chain wants, where a single-pass generalisation would be a different
+  mechanism. A tree that is neither a chain nor a fan-out still refuses with the pair sentence.
 
 - **A transcendental bridges anywhere, not only at a marked expression's root.** The reader is consulted
   from `Walk::instruction` (`fusion-bridge/src/lower.rs`), which the walk calls for **every value it
