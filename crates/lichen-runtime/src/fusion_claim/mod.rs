@@ -15,8 +15,8 @@ mod schema;
 
 pub(crate) use schema::offsets;
 pub use schema::{
-    Between, ELEMENTWISE, Instance, Port, PortKind, REDUCTION, RegionSchema, RoleProjection,
-    SchemaHash, SchemaNode, SchemaRefusal, derive_regions, region_positions,
+    Between, DeclaredFold, ELEMENTWISE, Instance, Port, PortKind, REDUCTION, RegionSchema,
+    RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, derive_regions, region_positions,
 };
 
 /// The interface a registered kernel claims, or `None` when it claims none.

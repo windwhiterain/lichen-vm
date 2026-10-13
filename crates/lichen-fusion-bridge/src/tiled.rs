@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use lichen_fusion::{BinaryOp, Reduction};
+use lichen_fusion::{BinaryOp, Expr, Reduction, Variable};
 use lichen_kernel_ir::{
     Barrier, Br, KernelBin, KernelBody, KernelInstr, KernelMark, MarkField, ScalarClass,
     Terminator, ValueId,
@@ -17,8 +17,81 @@ use lichen_kernel_ir::{
 
 use crate::operators::lowered;
 
-/// One element of a fold: how the value a lane contributes at address `x` is computed.
+/// Whether a fold can combine with `operator`.
+///
+/// # Invariant
+/// The whole licence a re-associated fold rests on, and the one statement of what a [`Folding`]
+/// can be built over: the operator must be **associative**, because a tile splits the fold's own
+/// iteration space, and it must have a **lowered instruction**, because there is nothing to emit
+/// without one. So this is the operator half of [`computes`]' question.
+pub fn folds(operator: BinaryOp) -> bool {
+    operator.associative() && lowered(operator).is_some()
+}
+
+/// Whether a kernel body can be emitted for the datum function `expression`.
+///
+/// # Invariant
+/// [`compile`] is the whole check, so this is that function's own refusal rather than a second
+/// reading of the tree: a datum that reads one slot — the datum `d` — and whose every operator
+/// has an instruction is computable, and nothing else is.
+pub fn computes(expression: &Expr) -> bool {
+    compile(expression, ScalarClass::Float).is_some()
+}
+
+/// One step of a datum function, over the fold's single read of the datum.
+///
+/// # Invariant
+/// Operands are **earlier** steps, so a function is a straight-line program and a body replays
+/// it without re-deciding what it means. Every refusal lives in [`compile`], which runs once when
+/// the [`Folding`] is built, so replaying steps cannot fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// The datum itself: the buffer read at the loop's carried address.
+    Datum,
+    /// A literal, as the bits the fold's class carries.
+    Constant(i64),
+    /// A binary operator over two earlier steps.
+    Binary(KernelBin, usize, usize),
+}
+
+/// The steps `expression` compiles to, or `None` when no kernel body computes it.
+///
+/// # Invariant
+/// The one check on a datum function, and it is total: a slot other than the datum, a comparison
+/// and every unary operator are all `None` rather than a guess, so a body built from the steps
+/// computes the function the claim wrote and nothing else.
+fn compile(expression: &Expr, class: ScalarClass) -> Option<Box<[Step]>> {
+    let mut steps = Vec::new();
+    step_of(expression, class, &mut steps).and_then(|()| Some(steps.into_boxed_slice()))
+}
+
+/// Whether `expression` contributes a step, and which one it is the last of.
+fn step_of(expression: &Expr, class: ScalarClass, steps: &mut Vec<Step>) -> Option<()> {
+    match expression {
+        Expr::Variable(variable) if *variable == Variable::DATUM => {
+            steps.push(Step::Datum);
+            Some(())
+        }
+        // **A comparison narrows to a condition, and a unary operator has none at all.**
+        Expr::Variable(_) | Expr::Unary(..) => None,
+        Expr::Constant(value) => {
+            steps.push(Step::Constant(Identity::of(*value, class).bits()));
+            Some(())
+        }
+        Expr::Binary(operator, left, right) => {
+            let operator = lowered(*operator)?;
+            step_of(left, class, steps)?;
+            step_of(right, class, steps)?;
+            let right = steps.len() - 1;
+            let left = right - 1;
+            steps.push(Step::Binary(operator, left, right));
+            Some(())
+        }
+    }
+}
+
+/// One element of a fold: how the value a lane contributes at address `x` is computed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Element {
     /// The element one buffer holds at `x`, read at the fold's class.
     Buffer {
@@ -34,15 +107,29 @@ pub enum Element {
         /// The slice write every read of this fold observes: every read is ordered after it.
         observed: ValueId,
     },
+    /// The element a **function of the datum** contributes.
+    ///
+    /// # Invariant
+    /// The datum the body's own combine computes, carried into the fold in place of the raw
+    /// buffer read. The function is read exactly as the claim wrote it and rejected by
+    /// [`computes`] before a [`Folding`] holds it, so the fold computes what the body computes
+    /// rather than what the combine's top-level operator alone does to the buffer.
+    Function {
+        /// The buffer the datum is read from, as a position into the fragment's own.
+        position: usize,
+        /// The function, in the symbolic language the bridge reads.
+        function: Box<Expr>,
+    },
 }
 
 impl Element {
     /// The class an element of this source is computed in before the fold's own class.
-    pub const fn class(self) -> ScalarClass {
+    pub fn class(self) -> ScalarClass {
         match self {
             Element::Buffer { .. } => ScalarClass::Int,
             Element::Slice { .. } => ScalarClass::Int,
             Element::Address => ScalarClass::Int,
+            Element::Function { .. } => ScalarClass::Int,
         }
     }
 }
@@ -106,6 +193,13 @@ pub enum TileRefusal {
         /// The width the caller declared.
         lane_width: u32,
     },
+    /// The element is a function of the datum no kernel body computes.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::UnsupportedCombine`] because it is a distinct question: that
+    /// one is about the operator that joins two states, this one about the work done to the datum
+    /// before it is joined, which is algebra a fold drops when it reads the raw buffer instead.
+    UnsupportedDatum(Expr),
 }
 
 impl std::fmt::Display for TileRefusal {
@@ -135,6 +229,12 @@ impl std::fmt::Display for TileRefusal {
                 "a workgroup runs {lane_width} lane(s), and a tiled fold needs one lane to fold a \
                  tile"
             ),
+            TileRefusal::UnsupportedDatum(expression) => write!(
+                formatter,
+                "the datum `{expression}` is not a function a kernel body computes: it reads a \
+                 value the fold has no slot for, or an operator no lowered instruction carries, so \
+                 a fold that applied the raw buffer instead would answer a different sum"
+            ),
         }
     }
 }
@@ -145,12 +245,14 @@ impl std::fmt::Display for TileRefusal {
 /// **No count is carried here.** The bound a body folds is the launch's — an extent parameter for
 /// a tiled fold and the lane's own index for a per-lane one — so a count stored beside the algebra
 /// would be a number the body ignores while its caller believes it is the bound.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Folding {
     combine: KernelBin,
     class: ScalarClass,
     identity: Identity,
     element: Element,
+    /// The datum function compiled once, so a body replays it and cannot re-decide it.
+    datum: Box<[Step]>,
 }
 
 impl Folding {
@@ -159,7 +261,9 @@ impl Folding {
     /// # Invariant
     /// The combine is the declaration's, converted once, and the licence is read from the
     /// declaration: a fold this returns is re-associable, and the fold it refuses has no tiled
-    /// form however it is scheduled.
+    /// form however it is scheduled. An [`Element::Function`] datum is **compiled here and
+    /// refused here**, so every body this builds applies a function a kernel can emit and a datum
+    /// it cannot is never read raw.
     pub fn new(
         reduction: &Reduction,
         element: Element,
@@ -178,11 +282,17 @@ impl Folding {
                 identity: identity.class(),
             });
         }
+        let datum = match &element {
+            Element::Function { function, .. } => compile(function, class)
+                .ok_or_else(|| TileRefusal::UnsupportedDatum((**function).clone()))?,
+            _ => Box::default(),
+        };
         Ok(Folding {
             combine,
             class,
             identity,
             element,
+            datum,
         })
     }
 
@@ -211,7 +321,8 @@ impl Folding {
             identity,
             stride: 1,
             modulo: None,
-            element: self.element,
+            element: self.element.clone(),
+            datum: &self.datum,
             operator: self.combine,
         }
         .run(&mut builder);
@@ -268,7 +379,8 @@ impl Folding {
             identity,
             stride: u64::from(lane_width),
             modulo: None,
-            element: self.element,
+            element: self.element.clone(),
+            datum: &self.datum,
             operator: self.combine,
         }
         .run(&mut builder);
@@ -289,6 +401,7 @@ impl Folding {
                 ordinal: slice,
                 observed: write,
             },
+            datum: &[],
             operator: self.combine,
         }
         .run(&mut builder);
@@ -308,7 +421,7 @@ impl Folding {
         builder.finish(vec![dummy]);
         Ok(Tiled {
             body: builder.body,
-            element: self.element,
+            element: self.element.clone(),
             staged: write,
             staged_count: lane_width,
         })
@@ -354,7 +467,7 @@ impl Tiled {
 
     /// The element source the body folds.
     pub fn element(&self) -> Element {
-        self.element
+        self.element.clone()
     }
 
     /// The slice write's result: the value the body staged into the slice.
@@ -401,7 +514,7 @@ impl Tiled {
 }
 
 /// One fold as a body is built: how many steps it takes, and where each step reads.
-struct Fold {
+struct Fold<'a> {
     /// The value the loop leaves at: the number of steps one lane takes.
     stop: ValueId,
     /// The address the first step reads.
@@ -418,10 +531,12 @@ struct Fold {
     /// `KernelFragment::barrier_scan` refuses against the length the emitter declares.
     modulo: Option<u64>,
     element: Element,
+    /// The compiled datum function, empty for every element that is not a function of one.
+    datum: &'a [Step],
     operator: KernelBin,
 }
 
-impl Fold {
+impl Fold<'_> {
     /// Emit the fold, leaving the builder emitting into the block it exits to, and answer the
     /// value it accumulated.
     ///
@@ -460,7 +575,7 @@ impl Fold {
             }
             None => slot,
         };
-        let read = builder.element_at(self.element, address);
+        let read = builder.element_at(&self.element, address, self.datum);
         let reached = builder.push(
             header,
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
@@ -611,12 +726,14 @@ impl Builder {
     ///
     /// # Invariant
     /// The address is the **caller's**, which is the loop's own carried slot: an element that named
-    /// its own address would shadow it and every step would read one slot.
-    fn element_at(&mut self, element: Element, address: ValueId) -> ValueId {
+    /// its own address would shadow it and every step would read one slot. A datum function is
+    /// replayed over the one read it binds, so the value it yields is the last step — which
+    /// [`compile`] made the whole function.
+    fn element_at(&mut self, element: &Element, address: ValueId, datum: &[Step]) -> ValueId {
         let block = self.current();
         match element {
             Element::Buffer { position } => {
-                let position = self.constant(ScalarClass::Int, position as i64);
+                let position = self.constant(ScalarClass::Int, *position as i64);
                 self.push(
                     block,
                     KernelInstr::BufferReadCall(self.class),
@@ -624,16 +741,43 @@ impl Builder {
                 )
             }
             Element::Slice { ordinal, observed } => {
-                let ordinal = self.constant(ScalarClass::Int, ordinal as i64);
+                let ordinal = self.constant(ScalarClass::Int, *ordinal as i64);
                 let read = self.push(
                     block,
                     KernelInstr::SliceReadCall(self.class),
-                    vec![ordinal, address, observed],
+                    vec![ordinal, address, *observed],
                 );
                 self.slice_reads.push(read);
                 read
             }
             Element::Address => address,
+            Element::Function { position, .. } => {
+                let position = self.constant(ScalarClass::Int, *position as i64);
+                let read = self.push(
+                    block,
+                    KernelInstr::BufferReadCall(self.class),
+                    vec![position, address],
+                );
+                let mut values: Vec<ValueId> = Vec::with_capacity(datum.len());
+                for step in datum {
+                    let value = match step {
+                        Step::Datum => read,
+                        Step::Constant(bits) => self.constant(self.class, *bits),
+                        Step::Binary(operator, left, right) => {
+                            let operands = [values[*left], values[*right]];
+                            self.push(
+                                block,
+                                KernelInstr::Bin(self.class, *operator),
+                                operands.to_vec(),
+                            )
+                        }
+                    };
+                    values.push(value);
+                }
+                *values
+                    .last()
+                    .expect("a datum function compiles to at least one step")
+            }
         }
     }
 }

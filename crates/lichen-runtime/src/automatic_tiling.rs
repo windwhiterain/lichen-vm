@@ -21,7 +21,7 @@ use crate::fused::{
     FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, write_fused_kernel,
 };
 use crate::fusion_claim::{
-    REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, marked_value,
+    DeclaredFold, REDUCTION, RoleProjection, SchemaHash, SchemaNode, SchemaRefusal, marked_value,
 };
 use crate::graph_pass::{GraphPass, LaunchExtent};
 use crate::kernel_registry::claimed_kernels;
@@ -134,7 +134,7 @@ impl GraphPass for AutomaticTiling {
         };
         // The rows are read out first, so the graph is free to be rewritten.
         let inputs = graph.input_count();
-        let mut tiled: Vec<(usize, Instance)> = Vec::new();
+        let mut tiled: Vec<(usize, Instance, DeclaredFold)> = Vec::new();
         for (position, node) in graph.nodes().iter().enumerate() {
             let Node::Kernel(kernel) = node;
             let digest = fragment_digest(&kernel.fragment);
@@ -153,8 +153,8 @@ impl GraphPass for AutomaticTiling {
                         .message()
                     )),
                     // The row is the node's own algebra; folding it is what the claim must license.
-                    None => match instance.schema.declares_the_fold() {
-                        Ok(()) => tiled.push((position, instance.clone())),
+                    None => match instance.schema.the_fold() {
+                        Ok(fold) => tiled.push((position, instance.clone(), fold)),
                         Err(refusal) => lines.push(named(position, &refusal)),
                     },
                 },
@@ -163,11 +163,12 @@ impl GraphPass for AutomaticTiling {
                 }
             }
         }
-        for (position, instance) in tiled {
+        for (position, instance, fold) in tiled {
             lines.push(tile(
                 &mut rewritten,
                 position,
                 &instance,
+                &fold,
                 extent(position),
                 &self.packs,
             ));
@@ -259,11 +260,14 @@ fn staging_of(pack: &PlacementPack) -> &Staging {
 /// # Invariant
 /// Nothing lands when a bound is missing or the staging would not be a whole group: a launch the
 /// dispatcher would refuse is declined here rather than left to die with the tile in the graph.
-/// A pack's plan is carried into the artifact, so `check_plan` checks the fragment against it.
+///
+/// The **datum** is `fold`'s and not the raw buffer, because it is what the claim said it does to
+/// the datum before joining it, and the tiled body applies it per element.
 fn tile(
     graph: &mut Graph,
     position: usize,
     instance: &Instance,
+    fold: &DeclaredFold,
     extent: Option<usize>,
     packs: &[PlacementPack],
 ) -> String {
@@ -304,7 +308,14 @@ fn tile(
             "a fold over no input buffer has nothing to fold",
         );
     };
-    let folding = match Folding::new(&instance.reduction, Element::Buffer { position: 0 }, class) {
+    let folding = match Folding::new(
+        &instance.reduction,
+        Element::Function {
+            position: 0,
+            function: Box::new(fold.datum.clone()),
+        },
+        class,
+    ) {
         Ok(folding) => folding,
         Err(refusal) => return declined(position, &hash, decision, &refusal.to_string()),
     };
