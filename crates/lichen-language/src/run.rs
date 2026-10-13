@@ -71,17 +71,74 @@ fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>, categories: &[&st
         .collect()
 }
 
+/// Whether the program's answer carries a value a reader could call one.
+///
+/// # Invariant
+///
+/// The question is asked of the answer's **own value graph**, not of its root slot: an
+/// empty root and a container whose every demanded position is empty are one verdict —
+/// nothing arrived. A **shallow** position is a lazy region the walk never entered, so
+/// it counts neither way; a decided position beside one is. See
+/// docs/notes/language-toolchain.md.
+pub(crate) fn answer_arrived<P>(module: &Module<P>, answer: Option<P::Value>) -> bool
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+{
+    let mut entered = std::collections::HashSet::new();
+    value_arrived(module, answer, &mut entered)
+}
+
+/// [`Self::answer_arrived`] over one value, entering each node once.
+fn value_arrived<P>(
+    module: &Module<P>,
+    value: Option<P::Value>,
+    entered: &mut std::collections::HashSet<lichen_lowlevel::AnyNodeId>,
+) -> bool
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+{
+    let Some(value) = value else { return false };
+    match AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value) {
+        Some(lichen_lowlevel::LowValue::None | lichen_lowlevel::LowValue::Error) => false,
+        Some(lichen_lowlevel::LowValue::Array(array)) => {
+            // SAFETY: `array` is the payload of `value`, read from a live node of `module`;
+            // the walk releases no block.
+            unsafe { array.items() }
+                .iter()
+                .filter(|item| !item.shallow)
+                .any(|item| {
+                    entered.insert(item.node)
+                        && value_arrived(module, module.node_value(item.node), entered)
+                })
+        }
+        Some(lichen_lowlevel::LowValue::Table(table)) => {
+            // SAFETY: `table` is the payload of `value`, read from a live node of `module`;
+            // the walk releases no block.
+            unsafe { table.items() }.iter().any(|item| {
+                [item.key, item.value].into_iter().any(|node| {
+                    entered.insert(node) && value_arrived(module, module.node_value(node), entered)
+                })
+            })
+        }
+        // Every other atom is a cached value, the wildcard included: a reader may name it.
+        _ => true,
+    }
+}
+
 /// Run a checked build to its output text: `value<attributes>: type`, and the
 /// stage lines when the run reports.
 ///
 /// # Invariant
 ///
-/// A runtime refusal explains a value that never arrived, so it is reported
-/// only when evaluation produced nothing; a provisional refusal on a program
-/// that produced a value is not reported. See docs/notes/language-toolchain.md.
+/// A runtime refusal explains a value that never arrived, so it is reported only when
+/// evaluation produced nothing — [`Self::answer_arrived`]'s question. A provisional
+/// refusal on a program that produced a value is not reported.
+/// See docs/notes/language-toolchain.md.
 ///
 /// A stage line is **not a refusal**: the run reports it beside the value, so
-/// naming a pack still says whether the pack fired.
+/// naming a pack still says whether it fired.
 fn render_build<P>(build: Build<P>, pass_report: PassReport<'_>) -> Result<RunOutput, Vec<Diag<P>>>
 where
     P: LangProgramShape,
@@ -91,15 +148,7 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    // An undecided root is `None` — the empty slot — and a budget-refused one
-    // is the computed-nothing value.
-    let produced_nothing = match value {
-        None => true,
-        Some(value) => matches!(
-            AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value),
-            Some(lichen_lowlevel::LowValue::Error)
-        ),
-    };
+    let produced_nothing = !answer_arrived(&module, value);
     if produced_nothing && !module.extension_diagnostics.is_empty() {
         // The refusing layer's own text; no span. See docs/notes/compiler-plugin.md.
         return Err(module

@@ -84,12 +84,8 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    // Mirror `run::render_build`'s refusal gate: a recorded refusal means the
-    // value never arrived.
-    let produced_nothing = match value {
-        None => true,
-        Some(value) => matches!(AsEnum::<LowValue>::as_enum(&value), Some(LowValue::Error)),
-    };
+    // The run's own refusal gate, called rather than restated, so a suite agrees with the CLI.
+    let produced_nothing = !crate::run::answer_arrived(&module, value);
     assert!(
         !(produced_nothing && !module.extension_diagnostics.is_empty()),
         "a runtime refusal was recorded: {:?}",
