@@ -359,8 +359,13 @@ impl<P: Program> Module<P> {
             return clone;
         }
         // One shared node: each reach mints its own undecided cell, never a cached one.
-        if matches!(self.class_committed_value(node), Some(v) if v.as_enum() == Some(LowValue::Any))
-        {
+        let wildcard = self.nodes[node]
+            .value
+            .or_else(|| self.class_committed_value(node));
+        if matches!(
+            wildcard.and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
             return self.add_node(ctx.target, None, None);
         }
         // Membership is the anchor chain test or a closure-scope hit; otherwise the node is
@@ -434,7 +439,7 @@ impl<P: Program> Module<P> {
                     && !self.value_holds_foreign_function(value, ctx.applied)
             }
         };
-        // The mapping runs only for a kept value: a dropped answer must not clone a closure.
+        // A mapping runs only for a kept value: a dropped answer must not clone a closure.
         let mapped = if carried {
             value.map(|value| self.value_apply(value, target, ctx))
         } else {

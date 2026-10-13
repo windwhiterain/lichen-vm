@@ -121,6 +121,14 @@ impl<P: Program> Module<P> {
         applied: NodeId,
         block: BlockId,
     ) -> Option<P::Value> {
+        // The wildcard is not an answer to hand on: an apply that produced it is
+        // undecided, exactly as a read of it is.
+        if matches!(
+            result.and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
+            return None;
+        }
         match (cell, result.and_then(|value| value.as_enum())) {
             // SAFETY: `array` is `result`'s live payload; this covers both `items()` calls.
             (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
