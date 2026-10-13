@@ -187,6 +187,26 @@ need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
 
+- **A `compute.write` is the *value* of an output position, not an effect** — so a second write naming
+  the same buffer leaves the first a **dead expression**, by decision (`code-audit.md` P1-42,
+  `wontfix:D17`) rather than by accident. Measured: two independent writes to one output answer only the
+  later one (`raw[raw 0, raw 100, raw 0, raw 101]` at four lanes, uniformly at sixteen), and two writes
+  to the *same* position answer the later one alone. The authoring consequence is what matters for a
+  pairwise operator, and it is narrower than "a lane cannot write two positions": a **`.to` chain**
+  *can* fill both positions of a pair — the second write's target is the first write's **value** — and at
+  eight lanes it answers **element for element** what the independent one-lane-per-slot spelling answers.
+  What does not hold is contention: a chain's **outer** link has two lanes landing on one slot, the last
+  writer wins, and order is not a contract (`tests/compute.rs` says so in its own comment). **So one lane
+  per element is the only spelling whose answer does not depend on a schedule** — which is why
+  `examples/rope.lichen` is written that way, as a rule rather than a preference.
+- **A refused kernel can be swallowed by a tuple** — a hole that is *not* in `code-audit.md`. A body that
+  writes two outputs in the wrong order refuses on a bare `compute.collect outs.c` (naming itself: *"a
+  write fills the output its `.to` names, and the codomain's order is not that name"*), but the same
+  program ending in **`(compute.collect outs.c, compute.collect outs.s)`** answers **`(raw none, raw
+  none)`** — a **loud refusal turned silent** by the runner's laziness (likewise for a tuple of `read`s
+  and for three collects; binding the pair to a name and then reading refuses again). That is the class
+  this project treats as worst, and it is a candidate slice.
+
 - **The canonicaliser rewrites arithmetic, so a region hash can name what the body does not compute.**
   `exp(d − r)` becomes `exp(d) * exp(−r)` (`lichen-fusion/src/normalize.rs`, `exponent_product`), and the
   hashed projection is the rewritten form — while as Taylor sums the two are **not numerically equal**.
