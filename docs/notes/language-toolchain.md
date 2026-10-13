@@ -453,7 +453,13 @@ than a second scan, so the text and the `(line, col)` name the same line.
   domain known compiles the very same kernel — and that program works and has a
   value. The line between them is the outcome, not the channel: a refusal
   explains a value that never arrived, and a program that produced one has nothing
-  to explain.
+  to explain. **Ask that question of the answer's own value graph, not of its root
+  slot**: a tuple whose every position is empty is a program that produced nothing,
+  however much of a value a tuple is structurally, and a root that holds one decided
+  position has arrived. A **shallow** position is a lazy region the walk was told not
+  to enter, so it counts neither way; the test is whether *anything* arrived, not
+  whether everything is decided, which is what keeps a lazily-computed answer — and
+  `examples/lazy_infinite.lichen` — working.
 
 ### The tooling crate
 
