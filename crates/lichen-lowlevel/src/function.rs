@@ -358,13 +358,10 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
-        // The wildcard is **one shared node**, so a clone mints a
-        // fresh undecided cell instead of carrying it.
+        // One shared node: each reach mints its own undecided cell, never a cached one.
         if matches!(self.class_committed_value(node), Some(v) if v.as_enum() == Some(LowValue::Any))
         {
-            let fresh = self.add_node(ctx.target, None, None);
-            ctx.remap.insert(node, fresh);
-            return fresh;
+            return self.add_node(ctx.target, None, None);
         }
         // Membership is the anchor chain test or a closure-scope hit; otherwise the node is
         // referenced in place.
