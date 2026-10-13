@@ -12,9 +12,10 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use lichen_graph_ir::{
-    Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value, ValueId,
+    Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Scalar as GraphScalar, Value,
+    ValueId,
 };
-use lichen_kernel_ir::{KernelFragment, ScalarClass};
+use lichen_kernel_ir::{KernelFragment, ScalarClass, ScalarLeaf};
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -107,8 +108,15 @@ pub fn store(graph: &Graph) -> GraphId {
 struct Recording {
     /// One entry per recorded dispatch, in the order the body performed them.
     nodes: Vec<RecordedNode>,
-    /// Ceiling slot to the value-table index it became, or `None` for a slot never read.
-    inputs: Vec<Option<ValueId>>,
+    /// Which argument slots some dispatch read, one entry per slot up to the highest.
+    ///
+    /// # Invariant
+    /// **Occupancy, not a value number.** The numbers are assigned once in [`finish`],
+    /// in slot order, because a slot is reached when the recording reaches it and a
+    /// parameter's extents are not at slots a body visits in order — numbering as they
+    /// are reached would give slot 1 a higher number than slot 2. The width, the
+    /// numbering and the edges are then three readings of this one list.
+    inputs: Vec<bool>,
     /// Which values the source function returns, in the recording's own numbering.
     ///
     /// # Invariant
@@ -123,6 +131,19 @@ struct RecordedNode {
     fragment: KernelFragment,
     inputs: Vec<Edge>,
     count: RecordedCount,
+    scalar: Option<RecordedScalar>,
+}
+
+/// A recorded runtime scalar, in the recording's own numbering.
+///
+/// # Invariant
+/// The same two arms [`RecordedCount`] has, for the same reason: the recording numbers an
+/// edge only at [`finish`], and a scalar read from the parameter and one read from an
+/// earlier node's output land in different id spaces.
+#[derive(Debug, Clone, Copy)]
+enum RecordedScalar {
+    Constant(ScalarLeaf),
+    Value(Edge),
 }
 
 /// A recorded extent, in the recording's own numbering.
@@ -212,21 +233,24 @@ pub fn finish() -> Result<(Graph, Backend), String> {
         };
         // The width, from the slots actually read; a read past the ceiling is the VM's
         // own index refusal.
-        let width = recording
-            .inputs
+        let read = recording.inputs.iter().copied().collect::<Vec<bool>>();
+        let width = read
             .iter()
-            .rposition(Option::is_some)
+            .rposition(|occupied| *occupied)
             .map_or(0, |highest| highest + 1);
         let mut graph = Graph::with_inputs(width);
-        // One resolution for edges and counts alike: an `Input` edge is final, a `Produced`
-        // one gets `width` put in front.
-
-        // Resolving in two places is how a count read from a parameter ends up shifted as
-        // though it were a node's output.
-        let resolve = |edge: &Edge| match edge {
-            Edge::Input(slot) => {
-                recording.inputs[*slot].expect("a recorded input was allocated when it was read")
+        // One resolution for edges and counts alike, **dense over the read slots in
+        // slot order** — see [`Recording::inputs`].
+        let mut numbers: Vec<ValueId> = vec![0; read.len()];
+        let mut next = 0;
+        for (slot, occupied) in read.iter().enumerate() {
+            if *occupied {
+                numbers[slot] = next;
+                next += 1;
             }
+        }
+        let resolve = |edge: &Edge| match edge {
+            Edge::Input(slot) => numbers[*slot],
             Edge::Produced(id) => width + id,
         };
         for node in &recording.nodes {
@@ -240,6 +264,10 @@ pub fn finish() -> Result<(Graph, Backend), String> {
                             RecordedCount::Constant(count) => Count::Constant(count),
                             RecordedCount::Value(edge) => Count::Value(resolve(&edge)),
                         },
+                        scalar: node.scalar.map(|scalar| match scalar {
+                            RecordedScalar::Constant(leaf) => GraphScalar::Constant(leaf),
+                            RecordedScalar::Value(edge) => GraphScalar::Value(resolve(&edge)),
+                        }),
                     }),
                     node.fragment.outputs,
                 )
@@ -292,6 +320,22 @@ pub enum Extent {
     Value(Placed),
 }
 
+/// The runtime scalar a recorded dispatch fixes beside its extent: already known, or read
+/// when the node runs.
+///
+/// # Invariant
+/// The same two arms [`Extent`] has and for the same reason — a parameter's second leaf is
+/// a value as often as a literal is — but the number it carries is the leaf's own bits at
+/// the leaf's own class, because a leaf is a word rather than an extent. A leaf's class is
+/// read off the fragment when the graph is built, so the two cannot disagree.
+#[derive(Debug, Clone, Copy)]
+pub enum Scalar {
+    /// A literal the build already had.
+    Constant(ScalarLeaf),
+    /// A value in the table, read when the node runs.
+    Value(Placed),
+}
+
 /// Read a value the body produced as a graph value, or name what it was.
 ///
 /// # Invariant
@@ -340,6 +384,7 @@ pub fn record_dispatch(
     fragment: KernelFragment,
     backend: Backend,
     extent: Extent,
+    scalar: Option<Scalar>,
     inputs: &[Placed],
 ) -> Result<Vec<Placed>, String> {
     RECORDINGS.with(|recordings| {
@@ -368,18 +413,15 @@ pub fn record_dispatch(
             .iter()
             .map(|node| node.fragment.outputs)
             .sum::<usize>();
-        // An input slot is allocated on first read, so the graph's width is what the body
+        // An input slot is marked on first read, so the graph's width is what the body
         // read, not the placeholder cells.
 
-        // A dispatch's count allocates through the same allocator.
+        // A dispatch's count marks through the same allocator.
         let allocate = |recording: &mut Recording, slot: usize| {
             if recording.inputs.len() <= slot {
-                recording.inputs.resize_with(slot + 1, || None);
+                recording.inputs.resize(slot + 1, false);
             }
-            let next = recording.inputs.iter().flatten().count() as ValueId;
-            if recording.inputs[slot].is_none() {
-                recording.inputs[slot] = Some(next);
-            }
+            recording.inputs[slot] = true;
         };
         let edge = |recording: &mut Recording, placed: &Placed| match *placed {
             Placed::Value(id) => Edge::Produced(id),
@@ -396,10 +438,17 @@ pub fn record_dispatch(
             .iter()
             .map(|placed| edge(recording, placed))
             .collect();
+        // The runtime scalar marks through the same allocator as a count.
+        let scalar = match scalar {
+            None => None,
+            Some(Scalar::Constant(leaf)) => Some(RecordedScalar::Constant(leaf)),
+            Some(Scalar::Value(placed)) => Some(RecordedScalar::Value(edge(recording, &placed))),
+        };
         recording.nodes.push(RecordedNode {
             fragment,
             inputs: edges,
             count,
+            scalar,
         });
         Ok((0..outputs)
             .map(|offset| Placed::Value(first + offset))

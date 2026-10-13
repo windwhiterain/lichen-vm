@@ -156,6 +156,7 @@ fn landed(recorded: &KernelFragment, extent: usize) -> (KernelFragment, Vec<Stri
                 fragment: recorded.clone(),
                 inputs: vec![0],
                 count: Count::Constant(extent),
+                scalar: None,
             }),
             1,
         )

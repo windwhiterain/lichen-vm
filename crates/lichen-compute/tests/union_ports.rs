@@ -373,6 +373,7 @@ fn a_node_whose_ordinals_disagree_with_its_body_is_refused_by_name() {
                 fragment: instances[0].fragment.clone(),
                 inputs: vec![1, 2],
                 count: Count::Constant(COUNT),
+                scalar: None,
             }),
             1,
         )
@@ -383,6 +384,7 @@ fn a_node_whose_ordinals_disagree_with_its_body_is_refused_by_name() {
                 fragment: instances[1].fragment.clone(),
                 inputs: vec![produced],
                 count: Count::Constant(COUNT),
+                scalar: None,
             }),
             1,
         )

@@ -274,6 +274,12 @@ compute.collect (compute.graphrun built 3)
     );
 }
 
+/// # Invariant
+/// Every dispatch a recording contains names **both** of its kernel's scalar
+/// leaves: a recorded dispatch carries the extent and the scalar beside it as
+/// edges, so passing only `.n` is a refusal in its own right. `held` is one of
+/// those dispatches — the VM evaluates it while the recording is open — and so
+/// is as much a subject as the two inside the step.
 #[test]
 fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one() {
     let (_guard, _stub) = stub();
@@ -283,13 +289,14 @@ fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_on
   compute = import "compute.lichen"
 ---
 {KERNELS}
-held = compute.plrun k1 (3,)
-step = ins => {{
-  first = compute.plrun k1 (ins(0),)
+held = compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0)))
+GArg = struct{{.n Int, .in In1}}
+step = (s : GArg) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 (held, (first,))
 }}
 built = compute.graph step
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built (3, 0))
 "#
     ));
     let joined = messages.join(" | ");

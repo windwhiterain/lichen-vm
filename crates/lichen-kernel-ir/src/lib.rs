@@ -218,14 +218,13 @@ impl Pending for Waited {
 /// # Invariant
 /// `ordered[0]` is the root and `index` covers every fragment: a [`KernelInstr::CallKernel`]
 /// resolves to a position, so both spellings of a run read the same two facts. The leaves
-/// travel **with** the set rather than beside it: a dispatch reads its values from the launch
-/// it was handed, and a second place they could be changed in is a way to run one value as
-/// another.
+/// travel **with** the set rather than beside it, and are owned rather than borrowed
+/// because one set is built per node, from a leaf list that node's own plan produced.
 #[derive(Debug, Clone)]
 pub struct LaunchSet<'a> {
     ordered: Vec<&'a KernelFragment>,
     index: HashMap<KernelId, u32>,
-    leaves: &'a [ScalarLeaf],
+    leaves: Vec<ScalarLeaf>,
 }
 
 impl<'a> LaunchSet<'a> {
@@ -234,7 +233,7 @@ impl<'a> LaunchSet<'a> {
         Self {
             ordered: ordered.iter().collect(),
             index: index.clone(),
-            leaves: &[],
+            leaves: Vec::new(),
         }
     }
 
@@ -244,7 +243,7 @@ impl<'a> LaunchSet<'a> {
         Self {
             ordered: vec![fragment],
             index: HashMap::new(),
-            leaves: &[],
+            leaves: Vec::new(),
         }
     }
 
@@ -255,7 +254,7 @@ impl<'a> LaunchSet<'a> {
     /// leaf at the position the parameter declares, so a list of another length would place a value
     /// under a leaf the body never names. The extent is **not** here — it is the count every run is
     /// already handed — and stating it twice would be two arguments that could disagree.
-    pub fn with_leaves(mut self, leaves: &'a [ScalarLeaf]) -> Self {
+    pub fn with_leaves(mut self, leaves: Vec<ScalarLeaf>) -> Self {
         self.leaves = leaves;
         self
     }
@@ -267,7 +266,7 @@ impl<'a> LaunchSet<'a> {
 
     /// The launch's runtime scalars: the root's parameter leaves beside the extent.
     pub fn leaves(&self) -> &[ScalarLeaf] {
-        self.leaves
+        &self.leaves
     }
 
     /// Each callee [`KernelId`]'s position in [`Self::ordered`].

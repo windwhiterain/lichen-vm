@@ -1965,10 +1965,13 @@ fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
 /// Record the role of one field of a parameter type, descending into groups.
 ///
 /// # Invariant
-/// A buffer is a `Buf`-shaped struct and its recorded path ends at the `.native`
-/// slot, which is the payload the prelude's `$read`/`$write` names; any other
-/// struct is a group, walked in field order. An unresolvable leaf is refused by
-/// name with its path.
+/// A buffer is a `Buf`-shaped struct and its path ends at the `.native` slot; any
+/// other struct is a group, walked in field order. An unresolvable leaf is
+/// refused by name with its path.
+///
+/// **The role decides what a leaf the type term cannot read is, never the shape**:
+/// under `.in` it is the buffer the parameter declares, because a body reading
+/// none leaves every cell there open.
 fn walk_role<P>(
     module: &mut Module<P>,
     field: AnyNodeId,
@@ -2028,7 +2031,18 @@ where
             path,
             &format!("an output that is a {}", shape_name(&shape)),
         )),
-        (_, LowShape::USize | LowShape::Float | LowShape::Unknown) => {
+        // The buffer the parameter declares here; see the invariant above.
+        (LeafRole::Input, LowShape::Unknown) => {
+            roles.inputs.push(path.to_vec());
+            roles.input_classes.push(None);
+            Ok(())
+        }
+        // A decided number is a scalar wherever it sits: `In1 = struct{.a Int}`.
+        (_, LowShape::USize | LowShape::Float) => {
+            roles.scalars.push(path.to_vec());
+            Ok(())
+        }
+        (LeafRole::Scalar, LowShape::Unknown) => {
             roles.scalars.push(path.to_vec());
             Ok(())
         }
@@ -4607,13 +4621,110 @@ where
     unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
+/// The one runtime scalar a recorded dispatch fixes beside its extent, read at `path`.
+///
+/// # Invariant
+/// **Named at the point it is missing.** A scalar leaf has to be a number the
+/// build already has or one of this function's arguments, exactly as an extent
+/// does — the two differ in position, not in what can be one — so anything else
+/// is refused here rather than left for the run to meet as a buffer read from a
+/// number.
+fn recorded_scalar<P>(
+    module: &mut Module<P>,
+    cfg: NodeId,
+    path: &[usize],
+    fragment: &KernelFragment,
+) -> Option<graph::Scalar>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let refuse = |module: &mut Module<P>, reason: String| {
+        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            GRAPH_DIAGNOSTIC,
+            None,
+            reason,
+        ));
+    };
+    let node = match value_at_path::<P>(module, cfg, path) {
+        Some(node) => node,
+        None => {
+            refuse(
+                module,
+                "a dispatch's second scalar leaf is not a value at its own path in the argument, \
+                 so there is nothing to record for it"
+                    .into(),
+            );
+            return None;
+        }
+    };
+    // The class the parameter field declared, so the number crosses at the leaf's width.
+    let class = fragment
+        .param_shape
+        .leaf_classes()
+        .get(fragment.scalar_leaves().saturating_sub(1))
+        .copied()
+        .unwrap_or(ScalarClass::Int);
+    let found = module
+        .node_value(node)
+        .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+        .and_then(|value| match value {
+            ComputeValue::GraphInput(slot) => Some(graph::Placed::Input(slot)),
+            ComputeValue::GraphValue(id) => Some(graph::Placed::Value(id)),
+            _ => None,
+        });
+    if let Some(placed) = found {
+        return Some(graph::Scalar::Value(placed));
+    }
+    // A literal only: inventing a node that produces a computed one writes nothing.
+    let literal = module
+        .node_value(node)
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        .and_then(|value| scalar_bits(class, &value));
+    if let Some(bits) = literal {
+        return Some(graph::Scalar::Constant(ScalarLeaf { class, bits }));
+    }
+    let described = module
+        .node_value(node)
+        .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+        .map(|value| graph::describe(&value).to_string())
+        .or_else(|| {
+            module
+                .node_value(node)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+                .map(|value| format!("{value:?}"))
+        })
+        .unwrap_or_else(|| "not a value at all".to_string());
+    refuse(
+        module,
+        format!(
+            "a dispatch's second scalar leaf is {described}, and a runtime scalar is a number the \
+             build already has or one of this function's arguments: a graph's value table holds \
+             nothing else, so there is no edge to record it on"
+        ),
+    );
+    None
+}
+
+/// The bits a literal carries at `class`, or `None` for a literal of another class.
+fn scalar_bits(class: ScalarClass, value: &LowValue) -> Option<i64> {
+    match (class, value) {
+        (ScalarClass::Int, LowValue::USize(number)) => {
+            usize::try_from(*number).ok().map(|n| n as i64)
+        }
+        (ScalarClass::Float, LowValue::Float(number)) => Some(number.to_bits() as i64),
+        _ => None,
+    }
+}
+
 /// Record one dispatch into the graph being built, in place of running it.
 ///
 /// # Invariant
-/// The argument is read for its placeholders, not its data: the extent and each
-/// buffer sit at the paths the role walk found, so the body is walked exactly as a
-/// run would walk it. A value that is neither a placeholder nor an input is refused
-/// by name rather than coerced.
+/// The argument is read for its placeholders, not its data: the extent, the
+/// runtime scalar and each buffer sit at the paths the role walk found, so the
+/// body is walked exactly as a run would walk it. A value that is neither a
+/// placeholder nor an input is refused by name rather than coerced.
 fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> Option<P::Value>
 where
     P: Program,
@@ -4734,19 +4845,28 @@ where
             return None;
         }
     };
-    // The argument's leaves are the parameter's, whatever shape the author wrote.
+    // **The rule: the extent, then at most one runtime scalar, then the buffers.**
+    // See [`recorded_scalar`].
     let scalar_leaves = roles.scalars.len().saturating_sub(1);
     if scalar_leaves > 1 {
         refuse(
             module,
             format!(
-                "this dispatch's kernel parameter declares {scalar_leaves} runtime scalars, and a \
-                 recorded body carries the extent alone: a runtime scalar would have to be an \
-                 edge of the recording, and that is not written yet"
+                "this dispatch's kernel parameter declares {scalar_leaves} runtime scalars after \
+                 the extent, and a recorded dispatch carries the extent and one scalar beside it: \
+                 the second one would be an edge of the recording, and the graph's scalar leaves \
+                 are one long. Split the extra leaves into a second dispatch"
             ),
         );
         return None;
     }
+    let scalar = match scalar_leaves {
+        0 => None,
+        _ => match recorded_scalar::<P>(module, cfg, roles.scalars[1].as_slice(), &fragment) {
+            Some(scalar) => Some(scalar),
+            None => return None,
+        },
+    };
     let mut inputs: Vec<Placed> = Vec::new();
     for (position, path) in roles.inputs.iter().enumerate() {
         // An input path names the `Buf` the caller passes; the placeholder rides in
@@ -4778,7 +4898,7 @@ where
             }
         }
     }
-    let placed = match graph::record_dispatch(fragment, backend, extent, &inputs) {
+    let placed = match graph::record_dispatch(fragment, backend, extent, scalar, &inputs) {
         Ok(placed) => placed,
         Err(reason) => {
             refuse(module, reason);
@@ -5626,7 +5746,7 @@ fn run_on_installed_backend(
         .zip(&leaf_classes[1..])
         .map(|(&bits, &class)| ScalarLeaf { class, bits })
         .collect();
-    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index).with_leaves(&runtime_scalars);
+    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index).with_leaves(runtime_scalars);
     // The class check runs first: a host slot is raw bits, so a wrong class would
     // reach the device as the wrong numbers.
     check_input_classes(&fragment.input_classes, inputs)?;

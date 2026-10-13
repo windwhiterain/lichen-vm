@@ -1096,13 +1096,13 @@ fn a_launch_scalar_reaches_the_shader_at_its_own_width() {
 
     let mut answers = Vec::new();
     for scalar in [7i64, 1000] {
-        let leaves = [ScalarLeaf {
+        let leaves = vec![ScalarLeaf {
             class: ScalarClass::Int,
             bits: scalar,
         }];
         let resident = context
             .run(
-                &LaunchSet::single(&fragment).with_leaves(&leaves),
+                &LaunchSet::single(&fragment).with_leaves(leaves),
                 &[BufferSlot::Host(&packed)],
                 count,
             )
@@ -1156,13 +1156,13 @@ fn a_float_scalar_is_pushed_beside_a_narrower_extent() {
     let input: Vec<f32> = (0..count).map(|value| value as f32 - 20.0).collect();
     let packed: Vec<u8> = input.iter().flat_map(|value| value.to_le_bytes()).collect();
     let alpha = 2.5f32;
-    let leaves = [ScalarLeaf {
+    let leaves = vec![ScalarLeaf {
         class: ScalarClass::Float,
         bits: alpha.to_bits() as i64,
     }];
     let resident = context
         .run(
-            &LaunchSet::single(&scales_by_a_runtime_float()).with_leaves(&leaves),
+            &LaunchSet::single(&scales_by_a_runtime_float()).with_leaves(leaves),
             &[BufferSlot::Host(&packed)],
             count,
         )

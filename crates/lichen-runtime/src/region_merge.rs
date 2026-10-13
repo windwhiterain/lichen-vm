@@ -943,6 +943,10 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
                     fragment: fragment.clone(),
                     inputs: reads,
                     count,
+                    scalar: kernel
+                        .scalar
+                        .map(|scalar| scalar.map_value(|v| map[v]))
+                        .flatten(),
                 }),
                 fragment.outputs,
             )

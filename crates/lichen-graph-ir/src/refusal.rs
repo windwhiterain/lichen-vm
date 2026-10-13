@@ -133,6 +133,18 @@ pub enum GraphRefusal {
     /// because a number is asked for as an extent by a node *or* handed back as a return
     /// value nobody asked for; naming one would invent a node where the mistake is in none.
     CountNegative { number: i64 },
+    /// A node's runtime scalar resolved to something that is not a number.
+    ///
+    /// # Invariant
+    /// The third arm of "a node asks a value table for something", beside
+    /// [`Self::NotBufferData`] and [`Self::CountNotANumber`]: a scalar leaf is handed to a
+    /// launch as one word, and a buffer read as one would put a word of data nobody wrote
+    /// under the field the body names. It carries the node and the value like the other two.
+    ScalarNotANumber {
+        node: usize,
+        value: usize,
+        found: &'static str,
+    },
     /// An extent named a value that is not a buffer the device is holding.
     ///
     /// # Invariant
@@ -286,6 +298,12 @@ impl fmt::Display for GraphRefusal {
             GraphRefusal::CountNegative { number } => {
                 write!(f, "a count is {number}, and a count cannot be negative.")
             }
+            GraphRefusal::ScalarNotANumber { node, value, found } => write!(
+                f,
+                "node {node} reads its runtime scalar from value {value}, and that value is \
+                 {found}. A runtime scalar is a leaf of the kernel's parameter, so the only \
+                 thing that can be one is a number."
+            ),
             GraphRefusal::ExtentNotADevice { node, value, found } => write!(
                 f,
                 "node {node} takes its extent from element of value {value}, and that value is \

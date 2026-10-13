@@ -209,6 +209,7 @@ fn two_node_graph(
                 fragment: producer.clone(),
                 inputs: vec![0],
                 count: Count::Constant(producer_extent),
+                scalar: None,
             }),
             1,
         )
@@ -219,6 +220,7 @@ fn two_node_graph(
                 fragment: consumer.clone(),
                 inputs: vec![0, first],
                 count: Count::Constant(consumer_extent),
+                scalar: None,
             }),
             1,
         )

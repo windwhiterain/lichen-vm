@@ -1,6 +1,6 @@
 //! The graph: nodes, and the edges between them.
 
-use lichen_kernel_ir::KernelFragment;
+use lichen_kernel_ir::{KernelFragment, ScalarClass, ScalarLeaf};
 
 use crate::refusal::FragmentShape;
 
@@ -229,6 +229,54 @@ pub struct KernelNode {
     pub inputs: Vec<ValueId>,
     /// The index range `[0, count)`.
     pub count: Count,
+    /// The one runtime scalar beside the extent, when the parameter declares one.
+    ///
+    /// # Invariant
+    /// `None` or exactly one, because that is what [`KernelFragment::runtime_scalars`]
+    /// allows a launch to fix: the extent is the [`Self::count`] and the index is the
+    /// lane's. A node that declared two would be a shape no backend reads, so the
+    /// recording refuses it there rather than dropping one.
+    pub scalar: Option<Scalar>,
+}
+
+/// One runtime scalar a dispatch fixes beside its extent.
+///
+/// # Invariant
+/// The same two arms [`Count`] has for a host-held number, and for the same reason: a
+/// scalar is routinely read from the graph's parameter, and collapsing the literal into
+/// an edge would invent a value the graph never had. There is no device arm, because a
+/// scalar is read when the node runs and not out of a buffer on the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scalar {
+    /// A number the build already had.
+    Constant(ScalarLeaf),
+    /// A value in the table, read when the node runs.
+    Value(ValueId),
+}
+
+impl Scalar {
+    /// This scalar with a value edge renumbered by `map`, and `None` where the map
+    /// cannot place it.
+    ///
+    /// # Invariant
+    /// A constant is its own renumbering: a literal the build had names no value, so
+    /// there is nothing a rebuilt graph's numbering could move.
+    pub fn map_value(self, map: impl Fn(usize) -> Option<usize>) -> Option<Self> {
+        match self {
+            Self::Constant(leaf) => Some(Self::Constant(leaf)),
+            Self::Value(value) => map(value).map(Self::Value),
+        }
+    }
+
+    /// The class this scalar's parameter leaf declared.
+    ///
+    /// # Invariant
+    /// Read from the fragment rather than carried beside the value: the class is a property
+    /// of the parameter field the leaf sits at, so a value and a class read in two places
+    /// are two answers to one question.
+    pub fn class(&self, fragment: &KernelFragment) -> ScalarClass {
+        fragment.param_shape.leaf_classes()[fragment.scalar_leaves() - 1]
+    }
 }
 
 /// The extent of a dispatch: a number the build already had, or one the value table

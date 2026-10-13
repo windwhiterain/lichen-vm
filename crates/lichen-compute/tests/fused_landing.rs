@@ -101,6 +101,7 @@ fn graph_over(fragment: KernelFragment) -> Graph {
                 fragment,
                 inputs: vec![0],
                 count: Count::Constant(4),
+                scalar: None,
             }),
             1,
         )

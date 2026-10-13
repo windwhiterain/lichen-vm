@@ -193,6 +193,7 @@ fn two_pass_graph(producer: &KernelFragment, consumer: &KernelFragment, extent: 
                 fragment: producer.clone(),
                 inputs: vec![0],
                 count: Count::Constant(extent),
+                scalar: None,
             }),
             1,
         )
@@ -203,6 +204,7 @@ fn two_pass_graph(producer: &KernelFragment, consumer: &KernelFragment, extent: 
                 fragment: consumer.clone(),
                 inputs: vec![0, first],
                 count: Count::Constant(extent),
+                scalar: None,
             }),
             1,
         )
@@ -227,6 +229,7 @@ fn merged_graph(fragment: &KernelFragment, extent: usize) -> Graph {
                 fragment: fragment.clone(),
                 inputs: vec![0, 0],
                 count: Count::Constant(extent),
+                scalar: None,
             }),
             1,
         )

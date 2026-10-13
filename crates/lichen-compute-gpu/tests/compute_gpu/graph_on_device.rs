@@ -1224,6 +1224,7 @@ fn chained(count: usize) -> Graph {
                 fragment: adds(),
                 inputs: vec![0],
                 count: Count::Constant(count),
+                scalar: None,
             }),
             1,
         )
@@ -1234,6 +1235,7 @@ fn chained(count: usize) -> Graph {
                 fragment: sums(),
                 inputs: vec![first, 1],
                 count: Count::Constant(count),
+                scalar: None,
             }),
             1,
         )
@@ -1378,6 +1380,7 @@ fn a_graph_too_long_for_one_submission_is_refused_by_name() {
                     fragment: adds(),
                     inputs: vec![0],
                     count: Count::Constant(count),
+                    scalar: None,
                 }),
                 1,
             )
@@ -1432,6 +1435,7 @@ fn an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent() {
                 // caller tell them apart.
                 inputs: vec![0],
                 count: Count::Value(1),
+                scalar: None,
             }),
             1,
         )
@@ -1482,6 +1486,7 @@ fn a_graph_node_carrying_a_runtime_scalar_is_refused_by_name() {
                 fragment: with_a_runtime_scalar(),
                 inputs: vec![0],
                 count: Count::Constant(8),
+                scalar: None,
             }),
             1,
         )
@@ -1616,6 +1621,7 @@ fn a_staged_exchange_answers_the_value_derived_by_hand() {
                 fragment: stages_between_lanes(),
                 inputs: Vec::new(),
                 count: Count::Constant(count),
+                scalar: None,
             }),
             1,
         )

@@ -1,6 +1,8 @@
 # A launch that is not one row: a proposal
 
-> Status: **proposal.** Nothing here is implemented. This is the measured case for the last
+> Status: **proposal, first slice landed.** Nothing here is implemented except §6's first
+> slice, which is written up in §8 and carries the trace §7 left open. This is the measured case
+> for the last
 > wall named in [llm-operators](llm-operators.md) §"What attention needs, in order", and the
 > standing rule for a slice this size is to measure and propose first.
 > Points at: `crates/lichen-kernel-ir` (`KernelFragment`, `TargetFacts`, `Plan`, `ParallelBackend`),
@@ -136,11 +138,17 @@ Three graph-path probes over the *same* signature `Par = struct{.n Int, .cols In
 The last two rows are the control, and they are the finding: with the parameter type held
 **identical**, whether the second extent is admitted is a function of **which input buffers the
 body reads**. `record_launch` counts `roles.scalars.len() - 1`
-(`compute.rs:4738`), and a buffer the body never reads does not stay where the role walk put
-it — it is counted as a runtime scalar instead. So the rule the recording actually enforces is
+(`compute.rs:4738`), and a buffer the body never reads is counted as a runtime scalar instead.
+So the rule the recording actually enforces is
 not "a config may carry one extent plus one scalar"; it is "a config may carry one extent, plus
 whatever number of leaves the body's read pattern leaves over", which is not a stated rule and
 cannot be intended.
+
+> **Corrected in §8, and the gate was not the cause.** The walk does not *move* an unread
+> buffer — it reads a **different type term**. A body that reads nothing under `.in` leaves
+> every cell in that group undecided, and the walk's `Unknown` arm read every one of them as a
+> runtime scalar. A body that reads even one buffer there resolves the whole group, which is
+> why the two rows above disagree with the parameter held identical.
 
 **This is a defect worth its own line in `code-audit.md`**, independent of any two-dimensional
 work: an admitted config silently loses a value.
@@ -355,11 +363,12 @@ class that note says is currently unspellable rather than diagnosed after the fa
 
 **What I could not determine from the code, stated plainly:**
 
-- **Why** the role walk leaves an unread input buffer among the scalars. The measured behaviour
-  is solid (§2.2's control) and the count is `roles.scalars.len() - 1` at `compute.rs:4738`,
-  but I did not trace which step turns a `Buf`-shaped field the body never reads into a
-  runtime scalar. This should be read before the gate is changed, because the gate is not where
-  the cause is.
+- ~~**Why** the role walk leaves an unread input buffer among the scalars.~~ **Traced; see
+  §8.** The short form: the walk is not read-driven at all, but the *type term it reads* is
+  only decided for the fields a body touches, and `walk_role`'s `Unknown` arm read an
+  undecided leaf as a runtime scalar. A body that reads one buffer under `.in` resolves the
+  whole group, so its unread siblings decode as buffers; a body that reads none leaves every
+  cell open, so every one of them became a scalar.
 - Whether the `vec3` the emitter already binds is **sufficient** for a real 2-D workgroup. It
   carries `x`/`y` of the *global* invocation id, which is what a flattened launch wants; a
   workgroup-shaped stage wants `LocalInvocationId` and `WorkgroupId`, which are not bound at
@@ -370,3 +379,32 @@ class that note says is currently unspellable rather than diagnosed after the fa
   is a migration or a break depends on a cache layout I did not read.
 - Whether `Policy::Batch` (`graph-ir/src/run.rs:33-40`) can record two extents in one
   submission without the refusal at `run_batch`'s `BatchRefusal::Cannot`. Not probed.
+
+## 8. §6's first slice, landed
+
+**What it is.** One runtime scalar now travels as a graph edge. `record_launch` reads
+`roles.scalars[1]` into an `Edge`, `KernelNode` carries it beside `count` as
+`KernelNode::scalar: Option<Scalar>`, and `Runner::plan` hands it to the backend the way it
+hands `inputs` — as a `ScalarLeaf` on the `LaunchSet` that already carried `inputs`, which is
+what `dispatch.rs:1480` was already reading. **No backend signature changed**, because
+`LaunchSet::with_leaves` and `KernelFragment::runtime_scalars` were already in the contract and
+already one long.
+
+**The §2.1 measurement, both backends.** The probe of §2.1 — `Par = struct{.n Int, .cols Int,
+.in In, .out Out}` over `n = 6`, `cols = 3`, reading `in.a[r * 2 + c]` — answers
+`[1, 2, 3, 3, 4, 5]` on the `"cpu"` backend, on the device through `compute.plrun`, **and now
+through `compute.graphrun` on the device**, which is the first time a two-extent shape has been
+recorded rather than merely run. A graph on the `"cpu"` backend is refused by the runner's own
+rule (`graph.rs`), so the graph leg is device-only; the CPU leg is the direct path.
+
+**The rule, stated.** `compute.rs`, at the gate: *the extent, then at most one runtime scalar,
+then the buffers.* Two or more is refused by name; one is read at its own path and refused
+there, by name, if it is not a number the build had or an argument.
+
+**The silent drop, and one more.** §2.3's refusal is gone — the extent arrives and is used.
+But the **allocator** was the deeper cause, and §2.3 did not name it: `Recording::inputs`
+numbered a slot's value *as it was allocated*, so a parameter whose extents sit at slots a body
+does not visit in order gave slot 1 a higher number than slot 2. The numbers are now assigned
+once, in slot order, in `finish`. §2.2's control answered the same way in all three rows (a
+body reading both buffers, only one, or neither), because the role table no longer depends on
+the read pattern.

@@ -2,10 +2,10 @@
 
 use lichen_kernel_ir::{
     BatchExtent, BatchInput, BatchRefusal, BufferSlot, DeviceExtent, Dispatch, LaunchSet,
-    ParallelBackend, ResidentId, ScalarClass,
+    ParallelBackend, ResidentId, ScalarClass, ScalarLeaf,
 };
 
-use crate::graph::{Count, Graph, KernelNode, Node};
+use crate::graph::{Count, Graph, KernelNode, Node, Scalar};
 use crate::refusal::GraphRefusal;
 use crate::value::Value;
 
@@ -329,7 +329,8 @@ impl<'backend> Runner<'backend> {
         };
 
         Ok(Planned {
-            launch: LaunchSet::single(&kernel.fragment),
+            launch: LaunchSet::single(&kernel.fragment)
+                .with_leaves(leaves_of(index, kernel, values)?),
             inputs,
             extent,
             classes: &kernel.fragment.output_classes,
@@ -415,6 +416,38 @@ impl<'backend> Runner<'backend> {
                     ids,
                 ))
             }
+        }
+    }
+}
+
+/// The runtime scalar a node fixes beside its extent, resolved against the value table.
+///
+/// # Invariant
+/// **Empty or one, never more**: [`KernelFragment::runtime_scalars`] is the length a
+/// launch set's leaves must have, and this is the one place that length is met for a
+/// graph. The value is read here rather than carried as a slot, because a scalar is a
+/// number the host already holds, not a buffer a dispatch reads through.
+fn leaves_of(
+    node: usize,
+    kernel: &KernelNode,
+    values: &[Value<'_>],
+) -> Result<Vec<ScalarLeaf>, GraphRefusal> {
+    let Some(scalar) = kernel.scalar else {
+        return Ok(Vec::new());
+    };
+    let class = scalar.class(&kernel.fragment);
+    match scalar {
+        Scalar::Constant(leaf) => Ok(vec![ScalarLeaf { class, ..leaf }]),
+        Scalar::Value(value) => {
+            let number = values
+                .get(value)
+                .ok_or(GraphRefusal::UnknownValue { node, value })?
+                .as_number()
+                .map_err(|found| GraphRefusal::ScalarNotANumber { node, value, found })?;
+            Ok(vec![ScalarLeaf {
+                class,
+                bits: number,
+            }])
         }
     }
 }

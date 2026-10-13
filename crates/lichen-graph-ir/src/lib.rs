@@ -19,7 +19,7 @@ pub mod run;
 /// and one that is not.
 pub mod value;
 
-pub use graph::{Count, Graph, KernelNode, Node, ValueId};
+pub use graph::{Count, Graph, KernelNode, Node, Scalar, ValueId};
 pub use refusal::{FragmentShape, GraphRefusal};
 pub use run::{Policy, Runner};
 pub use value::Value;
