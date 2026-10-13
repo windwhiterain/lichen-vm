@@ -109,7 +109,12 @@ impl<P: Program> Module<P> {
             if self.has_no_result_yet(node) && !self.nodes[node].visiting {
                 let guard = self.retain_node(node);
                 guard.run(|module, node| module.evaluate_node_operation(node));
-                return self.nodes[node].value;
+                // The run can write the wildcard into a slot — the operator's class may
+                // hold it — and it answers no reader either.
+                return match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                    Some(LowValue::Any) => None,
+                    _ => self.nodes[node].value,
+                };
             }
             return Some(value);
         }
@@ -193,7 +198,15 @@ impl<P: Program> Module<P> {
                                                     {
                                                         let rep =
                                                             self.equality_representative(node);
-                                                        self.class_committed_value(rep)
+                                                        // The wildcard answers no reader: a read of it
+                                                        // is undecided, never the value `Any`.
+                                                        match self
+                                                            .class_committed_value(rep)
+                                                            .and_then(|value| value.as_enum())
+                                                        {
+                                                            Some(LowValue::Any) => None,
+                                                            _ => self.class_committed_value(rep),
+                                                        }
                                                     } else {
                                                         self.evaluate_node(
                                                             Dyn(element),
