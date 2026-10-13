@@ -158,9 +158,7 @@ impl GraphPass for AutomaticTiling {
                         Err(refusal) => lines.push(named(position, &refusal)),
                     },
                 },
-                Err(refusal) => {
-                    lines.push(format!("node {position}: refused: {}", refusal.message()));
-                }
+                Err(refusal) => lines.push(named(position, &refusal)),
             }
         }
         for (position, instance, fold) in tiled {
@@ -205,8 +203,9 @@ fn unclaimed(position: usize) -> String {
 ///
 /// # Invariant
 /// The name as well as the sentence, for the reason [`landing_reason`] gives: the report is the
-/// only place a caller reads which check refused a node, and this one tells an operator author
-/// what their claim has to describe, which the projection alone does not.
+/// only place a caller reads which check refused a node. **Every arm states its refusal here** —
+/// [`SchemaNode::the_fold`]'s and [`derive`]'s alike — because one printing only the sentence
+/// made `NotAnIdentity` and `MissingRole` unmatchable against their variants.
 fn named(position: usize, refusal: &SchemaRefusal) -> String {
     format!(
         "node {position}: refused: {}: {}",
@@ -351,10 +350,11 @@ fn tile(
     if let Err(refusal) = land_fused_kernel(graph, position, &artifact) {
         return declined(position, &hash, decision, &landing_reason(&refusal));
     }
+    let seeded = seeded(&instance.reduction, lane_width);
     match decision {
         Decision::Fires(pack, staging) => format!(
             "node {position}: pack \"{}\" fired for schema {hash}: its plan stages `{}` in \
-             {:?} over {} lane(s)",
+             {:?} over {} lane(s), and {seeded}",
             pack.name(),
             staging.name,
             staging.space,
@@ -362,17 +362,31 @@ fn tile(
         ),
         Decision::Inert(pack, refusal) => format!(
             "node {position}: pack \"{}\" was consulted and its constraints did not hold ({}), \
-             so the automatic floor tiled: its own marks declare `{}` over {lane_width} lane(s)",
+             so the automatic floor tiled: {seeded}",
             pack.name(),
             refusal.message(),
-            instance.reduction.combine.name(),
         ),
         Decision::Unmatched => format!(
             "node {position}: no pack matched its schema {hash}, so the automatic floor tiled: \
-             its own marks declare `{}` over {lane_width} lane(s)",
-            instance.reduction.combine.name(),
+             {seeded}"
         ),
     }
+}
+
+/// The algebra a tiled node's line names: the combine its own marks declared, and the seed its
+/// own body started from.
+///
+/// # Invariant
+/// **The identity is on every line a tile landed**: a fold seeds with whatever its body marked
+/// and nothing checks that it is the operator's unit, so a `max` fold seeded
+/// `(0.0 - 1000000.0)` answers wrong over data below it and only the report says so. It is
+/// printed as a `Debug` literal so a sum's `0.0` and an order's `inf` are told apart.
+fn seeded(reduction: &Reduction, lane_width: u32) -> String {
+    format!(
+        "its own marks declare `{}` over {lane_width} lane(s), seeding the fold with `{:?}`",
+        reduction.combine.name(),
+        reduction.identity
+    )
 }
 
 /// Why a tiled body did not land, with the plan check's own name where one refused it.

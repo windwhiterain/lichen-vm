@@ -7,11 +7,12 @@ use crate::expr::{Expr, Variable};
 /// A binary operator of the symbolic scalar language.
 ///
 /// # Invariant
-/// `Add`, `Sub`, `Mul`, `Div`, `Max` and `Min` are the operators a reduction's `combine`
-/// and an element function are written in; the comparisons are here because masking and
-/// clipping are ordinary attention logic, and a language that cannot name them would
-/// refuse a masked kernel. `Div` on a zero divisor folds nowhere: the canonicalizer
-/// keeps the tree rather than invent an infinity.
+/// `Add`, `Sub`, `Mul`, `Div`, `Max` and `Min` are a reduction's `combine` and an element
+/// function's operators; the comparisons are for masks.
+///
+/// `Div` of a **literal by a zero literal folds to the signed infinity it denotes**: a `max`
+/// fold's identity is `−∞` and an `Expr::Constant` its only seed, so a tree left in place denies
+/// `max` and `min` any identity a claim could state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BinaryOp {
     /// Addition, the combine of a sum reduction.
@@ -20,7 +21,7 @@ pub enum BinaryOp {
     Sub,
     /// Multiplication.
     Mul,
-    /// Division, undefined on a zero divisor.
+    /// Division, whose quotient by a zero divisor is an infinity.
     Div,
     /// The larger of two values, the combine of a maximum reduction.
     Max,

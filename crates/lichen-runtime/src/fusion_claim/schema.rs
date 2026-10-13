@@ -175,9 +175,9 @@ impl SchemaNode {
     /// The reduction this node's `combine` and `identity` projections declare.
     ///
     /// # Invariant
-    /// One role each, read as §6's engine reads them: the combine's operator is the one the
-    /// body wrote, and the identity is read from the canonical form, where a spelled
-    /// `0.0 - 1000000.0` is the literal it denotes.
+    /// One role each, read as §6's engine reads them. **The identity is the seed the body's own
+    /// `~ "identity"` mark holds** — a [`KernelClaim`] names the role and never the value — read
+    /// from the canonical form, where a spelled `((0.0 - 1.0) / 0.0)` is the `−∞` it denotes.
     pub fn reduction(&self) -> Result<Reduction, SchemaRefusal> {
         if self.interface != REDUCTION {
             return Err(SchemaRefusal::UnknownInterface {

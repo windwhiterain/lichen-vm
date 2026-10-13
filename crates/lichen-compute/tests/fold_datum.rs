@@ -57,15 +57,15 @@ out
     source.replace("COUNT", &COUNT.to_string())
 }
 
-/// A `max` fold over the raw datum, seeded the way `examples/softmax.lichen` seeds its own.
+/// A `max` fold over the raw datum, seeded with the unit of `max` itself.
 ///
 /// # Invariant
-/// A maximum's own identity is `-inf` and the language cannot write one, so the seed is
-/// `softmax.lichen`'s own `(0.0 - 1000000.0)`: below every element here, so the fold's answer is
-/// the row maximum either way. **The pass carries the seed the claim declared and invents no
-/// sentinel**, which is what makes the tile right for this data and not for any data.
+/// A maximum's own identity is `−∞` and `examples/softmax.lichen` now **writes it**, as the
+/// literal `(0.0 - 1.0)` over the literal `0.0`. The earlier `(0.0 - 1000000.0)` moved with the
+/// example: it was a stand-in that happened to sit below every element here, and
+/// `identity_from_body.rs` is where the data below it is the case.
 fn maximum() -> String {
-    fold_over("(max s(1) (READ))", "(0.0 - 1000000.0)")
+    fold_over("(max s(1) (READ))", "((0.0 - 1.0) / 0.0)")
 }
 
 /// A fold whose datum is a comparison, which no kernel body computes.

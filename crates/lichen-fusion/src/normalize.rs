@@ -97,16 +97,17 @@ fn build_binary(
         BinaryOp::Div => {
             let left = build(left, remaining)?;
             let right = build(right, remaining)?;
-            match (left.as_constant(), right.as_constant()) {
-                (Some(value), Some(divisor)) if divisor != 0.0 => {
-                    spend(remaining)?;
-                    Some(Expr::Constant(value / divisor))
-                }
-                _ => {
-                    spend(remaining)?;
-                    Some(Expr::Binary(operator, Box::new(left), Box::new(right)))
-                }
-            }
+            let quotient = match (left.as_constant(), right.as_constant()) {
+                (Some(value), Some(divisor)) if divisor != 0.0 => Some(value / divisor),
+                // **A literal over a zero literal is an infinity**, so it folds to one.
+                (Some(value), Some(divisor)) => infinity_of(value, divisor),
+                _ => None,
+            };
+            spend(remaining)?;
+            Some(quotient.map_or_else(
+                || Expr::Binary(operator, Box::new(left), Box::new(right)),
+                Expr::Constant,
+            ))
         }
         _ => build_comparison(operator, left, right, remaining),
     }
@@ -180,6 +181,27 @@ fn fold_constant(operator: UnaryOp, operand: &Expr) -> Option<f64> {
         UnaryOp::Relu => value.max(0.0),
     };
     folded.is_finite().then_some(folded)
+}
+
+/// The infinity a quotient of two literals is, when the divisor is zero.
+///
+/// # Invariant
+/// Both signs are read, because a **negative zero divisor is a value IEEE arithmetic
+/// produces** and `1.0 / -0.0` is `−∞`: a rule on the numerator alone would name the other
+/// infinity for it. A zero or `NaN` numerator is `None` and its tree stands, because `0 / 0` is
+/// a `NaN` rather than an infinity and folding one would state a value the arithmetic does not
+/// produce.
+fn infinity_of(numerator: f64, divisor: f64) -> Option<f64> {
+    if numerator == 0.0 || numerator.is_nan() {
+        return None;
+    }
+    Some(
+        if numerator.is_sign_positive() == divisor.is_sign_positive() {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        },
+    )
 }
 
 /// A relation has no inverse, only an order: a key adds into its operands rather than

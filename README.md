@@ -570,13 +570,15 @@ compute.collect out.y : array{Float, 4}
   doc = "Row softmax: y[i] = exp(x[i] - max(x)) / sum_j exp(x[j] - max(x)), the entry of attention. It \
    is two kernels because the surface wants two — a `max` reduction over the row, then one kernel \
    that folds `sum exp` and divides by that fold on the way out — and the two claims are what lets \
-   the floor see the pair as one region. The row is `1, 2, 3, 4`, so the row's maximum is `4` and \
-   the exponents are `-3, -2, -1, 0`; dividing every `exp` by the common factor `exp(-3)` leaves \
-   the closed form `e^k / (1 + e + e² + e³)` for `k = 0…3`, and `1 + e + e² + e³` is \
-   `31.1928748505774` in exact arithmetic. The answer is **not** that closed form rounded to f32: \
-   the language's `exp` is the degree-10 Taylor sum of `docs/notes/floating-point.md` §6, whose f32 \
-   relative error is a few parts in 10⁶, so the declared output is the sum this arithmetic \
-   computes."
+   the floor see the pair as one region. The `max` kernel seeds its fold with `((0.0 - 1.0) / 0.0)`, \
+   which **is** the unit of `max`: the language has no unary minus, so `−∞` is written as a \
+   literal over a zero literal. A finite stand-in for it is a claim that holds only for rows above \
+   it. The row is `1, 2, 3, 4`, so the row's maximum is `4` and the exponents are `-3, -2, -1, 0`; \
+   dividing every `exp` by the common factor `exp(-3)` leaves the closed form `e^k / (1 + e + e² + \
+   e³)` for `k = 0…3`, and `1 + e + e² + e³` is `31.1928748505774` in exact arithmetic. The answer \
+   is **not** that closed form rounded to f32: the language's `exp` is the degree-10 Taylor sum of \
+   `docs/notes/floating-point.md` §6, whose f32 relative error is a few parts in 10⁶, so the \
+   declared output is the sum this arithmetic computes."
   output = "[0.03205853, 0.08714417, 0.23688345, 0.6439139]: array{Float, 4}"
 ---
 Row  = struct{.x (compute.Buf Float)}
@@ -585,7 +587,7 @@ ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
 }
 rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
 Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}

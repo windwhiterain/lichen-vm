@@ -270,8 +270,8 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// # Invariant
 /// The graph is built from the **registry**'s own two fragments, so both nodes hold exactly the
 /// bodies the pass is handed, and the pass is consulted before any dispatch: the digests it
-/// answers are the ones a run would dispatch. The refusal is asserted as the whole line the schema
-/// refusal renders, so a reworded message fails rather than a substring that happens to survive.
+/// answers are the ones a run would dispatch. The refusal is asserted as the whole line, and
+/// that line **now carries the check's name**, because every arm states its refusal by name.
 #[test]
 fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
     let Some((_context, _device)) =
@@ -317,14 +317,16 @@ fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
     );
 
     let refused = format!(
-        "node 1: refused: the instance at {} claims the role(s) element beyond `combine` and \
-         `identity`, whose code reads the value another node produced, and this reader names no \
-         producer",
+        "node 1: refused: BeyondANode: the instance at {} claims the role(s) element beyond \
+         `combine` and `identity`, whose code reads the value another node produced, and this \
+         reader names no producer",
         recorded.kernels[1].kernel,
     );
     assert!(
         lines.contains(&refused),
-        "the pass refuses the consumer in the schema refusal's own words: {lines:?}"
+        "the pass refuses the consumer in the schema refusal's own words, **with the check's \
+         name**: the derivation's refusals used to reach the report through an arm that printed \
+         the sentence alone, which left `BeyondANode` unmatchable against its variant: {lines:?}"
     );
     assert!(
         lines
