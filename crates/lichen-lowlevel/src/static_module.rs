@@ -9,9 +9,9 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
-    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
-    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
-    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation, PendingAssert,
+    Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule,
+    StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -189,22 +189,6 @@ impl<P: Program> Module<P> {
         self.nodes.get(node).is_some_and(|node| {
             node.operation.is_some() && (node.value.is_none() || node.runned == 0)
         })
-    }
-
-    /// The optional [`LowShape`] a layer above computed for `node`, kept with
-    /// the node's value, not in a side table.
-    pub fn node_shape(&self, node: NodeId) -> Option<&LowShape> {
-        self.nodes
-            .get(node)
-            .and_then(|node| node.low_shape.as_ref())
-    }
-
-    /// Record `node`'s [`LowShape`]: only the layer above that has the type, never the
-    /// checker at lowering time.
-    pub fn set_node_shape(&mut self, node: NodeId, shape: Option<LowShape>) {
-        if let Some(node) = self.nodes.get_mut(node) {
-            node.low_shape = shape;
-        }
     }
 
     /// The dynamic node behind `id`: a static ref becomes a fresh leaf in
