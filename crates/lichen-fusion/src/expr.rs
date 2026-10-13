@@ -21,6 +21,10 @@ impl Variable {
     pub const DATUM: Variable = Variable("d");
     /// The producer reduction's value `r_N`, the parameter the element function is a
     /// function of.
+    ///
+    /// # Invariant
+    /// It is [`Self::producer`]'s `0`, because the name is the whole identity: a consumer of one
+    /// producer reads the slot it always has, so a pair's canonical form does not move.
     pub const PRODUCER: Variable = Variable("r");
     /// The consumer reduction's rolling state `t`, the slot the loop carries.
     pub const CONSUMER_STATE: Variable = Variable("t");
@@ -44,7 +48,46 @@ impl Variable {
     pub const fn name(self) -> &'static str {
         self.0
     }
+
+    /// The value the `ordinal`-th absorbed input's producer forwards, or `None` past the table.
+    ///
+    /// # Invariant
+    /// **One slot per absorbed input ordinal**, and `0` is [`Self::PRODUCER`] — the pair's own
+    /// spelling — so the shape widens without moving anything a chain already read. `None` past
+    /// [`FAN_IN_INPUTS`] rather than a name the table does not hold.
+    pub const fn producer(ordinal: usize) -> Option<Variable> {
+        if ordinal < PRODUCERS.len() {
+            Some(PRODUCERS[ordinal])
+        } else {
+            None
+        }
+    }
 }
+
+/// The producer slots a fan-in's consumer reads its inputs as.
+///
+/// # Invariant
+/// [`Variable::PRODUCER`] is the first, so one producer is the chain's own spelling, and the width
+/// is [`FAN_IN_INPUTS`]: a region reader refuses a wider consumer by name rather than naming a slot
+/// this table does not hold.
+const PRODUCERS: [Variable; FAN_IN_INPUTS] = [
+    Variable::PRODUCER,
+    Variable("r1"),
+    Variable("r2"),
+    Variable("r3"),
+    Variable("r4"),
+    Variable("r5"),
+    Variable("r6"),
+    Variable("r7"),
+];
+
+/// How many of a fan-in consumer's inputs the symbolic language names.
+///
+/// # Invariant
+/// It is the width of [`PRODUCERS`], and it is a capability bound rather than a licence: a region
+/// that reads more producers than this is refused by name, never admitted with two of them read as
+/// one.
+pub const FAN_IN_INPUTS: usize = 8;
 
 impl std::fmt::Display for Variable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

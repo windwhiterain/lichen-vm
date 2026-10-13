@@ -179,10 +179,11 @@ impl Walk<'_> {
                 if self.reads.parameter_leaves.is_some() {
                     return Err(BridgeRefusal::ReadsABuffer);
                 }
-                Ok(Expr::Variable(match self.reads.producer_input {
-                    Some(producer) if producer == position => Variable::PRODUCER,
-                    _ => Variable::DATUM,
-                }))
+                // Each producer has its own slot, so two are two values and never
+                // one value and a datum.
+                Ok(Expr::Variable(
+                    self.reads.producer_at(position).unwrap_or(Variable::DATUM),
+                ))
             }
             KernelInstr::BufferReadCall(ScalarClass::Int) => {
                 Err(BridgeRefusal::MachineInteger { value: id })

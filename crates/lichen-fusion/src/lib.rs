@@ -19,7 +19,7 @@ mod repair;
 
 pub use abstraction::{Abstraction, abstract_element_function};
 pub use eval::{Bindings, evaluate, max_relative_disagreement};
-pub use expr::{Expr, Variable, substitute_all};
+pub use expr::{Expr, FAN_IN_INPUTS, Variable, substitute_all};
 pub use invert::{InvertRefusal, invert};
 pub use normalize::{NORMALIZATION_BUDGET, normalize};
 pub use operators::{BinaryOp, UnaryOp, cos, exp, ln, relu, sin, sqrt, square};

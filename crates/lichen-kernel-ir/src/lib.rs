@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod barrier;
 mod body;
 mod compose;
+mod fan_in;
 mod marks;
 mod plan;
 mod unary;
@@ -24,6 +25,7 @@ pub use body::{
 };
 pub(crate) use body::{Cone, ConeOrigin};
 pub use compose::{ComposeRefusal, compose, compose_fan_out};
+pub use fan_in::{Producer, compose_fan_in};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{

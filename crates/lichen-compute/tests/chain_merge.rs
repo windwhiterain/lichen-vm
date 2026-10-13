@@ -457,31 +457,37 @@ fn a_returned_middle_output_is_refused_by_name_and_nothing_merges() {
     );
 }
 
-/// A consumer reading two producers is still refused by name: the fan-in wall is untouched.
+/// The hand-wired consumer that reads **both** earlier outputs is a fan-in now, and merges.
 ///
 /// # Invariant
-/// The graph is hand-wired so the third node reads **both** earlier outputs, which is what
-/// attention's `softmax(QKᵀ)V` and the textbook softmax need and what one `ReadRoles` per input
-/// does not yet serve. The refusal is the derivation's, before any merge is attempted.
+/// **This test moved.** It pinned `NotAReductionChain` on this graph — the fan-in wall — and that
+/// wall is what came down: a region two edges arrive at is served once each input is named. What is
+/// kept is the evidence, because it is the chain's own kernels rewired rather than a program that
+/// spells softmax: the shape is a property of the **edges**, not of an operator.
 #[test]
-fn a_consumer_that_reads_two_producers_is_still_refused_by_name() {
+fn a_consumer_that_reads_two_producers_is_a_fan_in_and_merges() {
     clear_graph_pass();
     let (module, value, _root) = common::run(&recording());
     let instances = instances(&module, &value);
     let graph = chain_graph(&instances, &[&[0], &[0, 1], &[1, 2]], &[2]);
     install_region_merge(&module);
     let (rewritten, lines) = consulted(&graph);
-    assert!(
-        rewritten.is_none(),
-        "a refused fan-in changes nothing, so the pass answers no graph: {lines:?}"
+    let rewritten = rewritten.expect("a proved fan-in is licensed by the floor's own proof");
+    assert_eq!(
+        (rewritten.len(), rewritten.value_count()),
+        (1, 2),
+        "the fan-in becomes one node, and the renumbering drops both producers' outputs"
     );
     assert_eq!(
         lines,
-        vec![
-            "region 0 (nodes 0, 1, 2): refused: NotAReductionChain: graph node 2's edges inside \
-             the region do not make one producer-to-consumer chain"
-                .to_string()
-        ],
-        "the fan-in is refused by its own name, and nothing merged"
+        vec![format!(
+            "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
+             position {ABSORBED} of node 1 and input position 0 of node 2 and input position \
+             {ABSORBED} of node 2, licensed by the floor: every node of the region claims Reduction \
+             and nothing else; the merged fragment is unregistered, so it carries no claim and a \
+             later digest-keyed pass cannot name it"
+        )],
+        "the consumer's own two absorbed positions are both named, each with the node it is an \
+         input of"
     );
 }

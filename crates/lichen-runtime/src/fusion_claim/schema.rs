@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{self, Write as _};
 
-use lichen_fusion::{BinaryOp, Expr, Reduction, Variable, normalize};
+use lichen_fusion::{BinaryOp, Expr, FAN_IN_INPUTS, Reduction, Variable, normalize};
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, computes, folds, projection};
 use lichen_graph_ir::{Count, Graph, Node, ValueId as GraphValueId};
 use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId, ScalarClass, fragment_digest};
@@ -353,26 +353,32 @@ pub struct RegionSchema {
 }
 
 impl RegionSchema {
-    /// The region-local node whose edges are not a chain's, or `None` when the region is one.
+    /// The region-local node whose edges are not a shape the floor's own proof holds, or `None`
+    /// when they are.
     ///
     /// # Invariant
-    /// **One producer and one consumer per node**: a node two edges leave, or two arrive at, is not
-    /// the producer→code→consumer shape §6 matches. The derivation already refuses a node two
-    /// instances feed, so what this names is the **producer a fan-out reads from** — and a fan-out
-    /// is not a chain, so the floor's own proof cannot hold it however its nodes are claimed.
+    /// **A chain, where a node may read an earlier producer as well**: the edges beyond
+    /// that chain's own are the fan-in's, and each is a [`Between`] this derivation holds.
+    ///
+    /// A node that does **not** read the one before it is the fan-out, and a fan-out is not
+    /// this: so this names the producer such a region leaves twice for.
     pub fn off_chain_node(&self) -> Option<usize> {
+        let chain = (1..self.nodes.len()).all(|local| {
+            self.between
+                .iter()
+                .any(|edge| edge.producer + 1 == local && edge.consumer == local)
+        });
+        if chain {
+            return None;
+        }
         let mut leaving: BTreeMap<usize, usize> = BTreeMap::new();
-        let mut arriving: BTreeMap<usize, usize> = BTreeMap::new();
         for edge in &self.between {
             *leaving.entry(edge.producer).or_default() += 1;
-            *arriving.entry(edge.consumer).or_default() += 1;
         }
-        let fanning = leaving
+        leaving
             .iter()
-            .chain(arriving.iter())
             .find(|(_, count)| **count > 1)
-            .map(|(node, _)| *node);
-        fanning
+            .map(|(node, _)| *node)
     }
 
     /// The canonical text the hash is taken over.
@@ -486,6 +492,27 @@ pub enum SchemaRefusal {
         /// The graph node whose edges are not a chain's.
         node: usize,
     },
+    /// One producer reaches one consumer at more than one input position.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::NotAReductionChain`] because it is a distinct fact and the
+    /// two are decided by different evidence: that one is a node's edges, this one **two slots
+    /// for one value**. The symbolic language names one producer once, so the second read would
+    /// be either the same variable or a datum — and a fan-in is admitted only where every input
+    /// has a name of its own.
+    ProducerFeedsTwice {
+        /// The region-local position of the producer whose output arrives twice.
+        producer: usize,
+        /// The region-local position of the consumer that reads it twice.
+        consumer: usize,
+    },
+    /// One node reads more producers than the symbolic language names.
+    InputsAreNotNamed {
+        /// The region-local position of the consumer.
+        node: usize,
+        /// How many producers reach it.
+        inputs: usize,
+    },
     /// A consumer declares no `element` role for the code between the two instances.
     NoElementRole {
         /// The region-local position of the producer.
@@ -597,6 +624,8 @@ impl SchemaRefusal {
             SchemaRefusal::BeyondANode { .. } => "BeyondANode",
             SchemaRefusal::ReadsAnotherNode { .. } => "ReadsAnotherNode",
             SchemaRefusal::NotAReductionChain { .. } => "NotAReductionChain",
+            SchemaRefusal::ProducerFeedsTwice { .. } => "ProducerFeedsTwice",
+            SchemaRefusal::InputsAreNotNamed { .. } => "InputsAreNotNamed",
             SchemaRefusal::NoElementRole { .. } => "NoElementRole",
             SchemaRefusal::ElementWithoutProducer { .. } => "ElementWithoutProducer",
             SchemaRefusal::EdgeOutOfOrder { .. } => "EdgeOutOfOrder",
@@ -654,6 +683,17 @@ impl fmt::Display for SchemaRefusal {
                 formatter,
                 "graph node {node}'s edges inside the region do not make one \
                  producer-to-consumer chain"
+            ),
+            SchemaRefusal::ProducerFeedsTwice { producer, consumer } => write!(
+                formatter,
+                "the instance at {consumer} reads the one at {producer} at more than one input \
+                 position, and the symbolic language names one producer once, so the second read \
+                 has no slot of its own"
+            ),
+            SchemaRefusal::InputsAreNotNamed { node, inputs } => write!(
+                formatter,
+                "the instance at {node} reads {inputs} producers' outputs and this reader names \
+                 one variable per input ordinal, at most {FAN_IN_INPUTS}"
             ),
             SchemaRefusal::NoElementRole { producer, consumer } => write!(
                 formatter,
@@ -803,14 +843,13 @@ fn region_schema(
         }
     }
     let edges = region_edges(graph, starts, positions)?;
+    // Each node's roles are decided once, from the edges that arrive at it.
+    let roles: Vec<ReadRoles> = (0..positions.len())
+        .map(|consumer| roles_of(&edges, consumer))
+        .collect();
     let mut nodes = Vec::with_capacity(positions.len());
     for (local, instance) in matched.iter().enumerate() {
-        let reads = edges
-            .iter()
-            .find(|edge| edge.consumer == local)
-            .map_or(ReadRoles::DATUM_ONLY, |edge| {
-                ReadRoles::consumer(edge.input)
-            });
+        let reads = roles[local];
         let mut projections = Vec::with_capacity(instance.claim.roles.len());
         for role in sorted_roles(&instance.claim) {
             let marked = marked_value(&instance.fragment, &instance.claim.interface, &role)
@@ -851,7 +890,11 @@ fn region_schema(
                 consumer: edge.consumer,
             });
         };
-        if !element.variables().contains(&Variable::PRODUCER) {
+        // **Every absorbed input's own slot**: a producer the element never names is refused.
+        let slot = roles[edge.consumer]
+            .producer_at(edge.input)
+            .expect("an edge's own input is one of that consumer's named positions");
+        if !element.variables().contains(&slot) {
             return Err(SchemaRefusal::ElementWithoutProducer {
                 producer: edge.producer,
                 consumer: edge.consumer,
@@ -888,15 +931,32 @@ struct Edge {
     input: usize,
 }
 
+/// The roles one node's projection is read under: every input a region's producer fills.
+///
+/// # Invariant
+/// **In input-ordinal order**, so the slot a producer is read as is decided by the body's
+/// own parameter order and not by the order the edges were met in: two readers of one
+/// consumer cannot disagree about which producer a second slot names.
+///
+/// The first region reads every input as a datum; a consumer wider than
+/// [`FAN_IN_INPUTS`] is refused by [`region_edges`] first.
+fn roles_of(edges: &[Edge], consumer: usize) -> ReadRoles {
+    let mut inputs: Vec<usize> = edges
+        .iter()
+        .filter(|edge| edge.consumer == consumer)
+        .map(|edge| edge.input)
+        .collect();
+    inputs.sort_unstable();
+    ReadRoles::consumers(&inputs).expect("region_edges admits no consumer wider than the table")
+}
+
 /// The producer-to-consumer edges among a region's nodes.
 ///
 /// # Invariant
-/// **One consumer per node**: a node two region instances feed names no single code between it
-/// and either producer, so it is refused by name here. A node feeding **two** is not: the
-/// **licence** is where the floor declines a fan-out.
-///
-/// The first node has no incoming edge, so nothing here reads its own element: only a
-/// consumer's element must name the producer.
+/// **One edge per producer and consumer**: one producer reaching a consumer twice names
+/// one value at two slots, and the symbolic language has one slot per producer, so the
+/// region is refused by that name. Several **distinct** producers is a fan-in: each
+/// arrival carries its own [`roles_of`] slot and its own [`Between`].
 fn region_edges(
     graph: &Graph,
     starts: &[usize],
@@ -904,7 +964,7 @@ fn region_edges(
 ) -> Result<Vec<Edge>, SchemaRefusal> {
     let nodes = graph.nodes();
     let mut edges: Vec<Edge> = Vec::new();
-    let mut consumers: Vec<usize> = vec![0; positions.len()];
+    let mut arrivals: Vec<Vec<usize>> = vec![Vec::new(); positions.len()];
     for (consumer, &position) in positions.iter().enumerate() {
         let Node::Kernel(node) = &nodes[position];
         for (input, value) in node.inputs.iter().copied().enumerate() {
@@ -914,7 +974,7 @@ fn region_edges(
             if producer >= consumer {
                 return Err(SchemaRefusal::EdgeOutOfOrder { consumer, value });
             }
-            consumers[consumer] += 1;
+            arrivals[consumer].push(producer);
             edges.push(Edge {
                 producer,
                 consumer,
@@ -922,10 +982,21 @@ fn region_edges(
             });
         }
     }
-    if let Some(consumer) = consumers.iter().position(|count| *count > 1) {
-        return Err(SchemaRefusal::NotAReductionChain {
-            node: positions[consumer],
-        });
+    for (consumer, producers) in arrivals.iter().enumerate() {
+        if let Some(producer) = producers
+            .iter()
+            .enumerate()
+            .find(|(ordinal, producer)| producers[..*ordinal].contains(producer))
+            .map(|(_, producer)| *producer)
+        {
+            return Err(SchemaRefusal::ProducerFeedsTwice { producer, consumer });
+        }
+        if producers.len() > FAN_IN_INPUTS {
+            return Err(SchemaRefusal::InputsAreNotNamed {
+                node: consumer,
+                inputs: producers.len(),
+            });
+        }
     }
     Ok(edges)
 }

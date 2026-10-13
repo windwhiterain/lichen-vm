@@ -208,6 +208,7 @@ pub fn compose_fan_out(
                             &cone,
                             forwarded,
                             &producer.body,
+                            &|value| value,
                             address,
                             &mut body,
                             &mut fresh,
@@ -436,6 +437,60 @@ fn consumer_edge<'a>(
 pub enum ComposeRefusal {
     /// The composition names no consumer, so there is nothing to inline into the producer.
     NoConsumerToInline,
+    /// The fan-in names no body, so there is nothing to inline into a merged fragment.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::NoConsumerToInline`] because it is a distinct question and it
+    /// carries a distinct fact: that one is the composition's consumer list, this one the fan-in's
+    /// body list — a caller that built a chain asked the other question and gets the other name.
+    NoProducerToInline,
+    /// A fan-in of one body is not a fan-in: nothing absorbs from the only body.
+    ///
+    /// # Invariant
+    /// Refused rather than answered with the body itself, because the name a report prints is the
+    /// check that fired and "the composition is a fan-in of one" is not what a caller meant.
+    OneBodyIsNotAFanIn {
+        /// How many bodies the list holds.
+        bodies: usize,
+    },
+    /// An absorbed input names a body that does not come before the one reading it.
+    AbsorbedIsNotAnEarlierBody {
+        /// The body's index in the composition's own list.
+        body: usize,
+        /// The index it named.
+        producer: usize,
+        /// The input ordinal the value was to reach.
+        input: usize,
+    },
+    /// One input of one body is filled twice, so the union drops it once and reads it twice.
+    OneInputIsFilledTwice {
+        /// The body's index in the composition's own list.
+        body: usize,
+        /// The input ordinal both entries named.
+        input: usize,
+    },
+    /// One producer's value reaches one body at more than one input position.
+    ///
+    /// # Invariant
+    /// The pair's [`Self::AbsorbedEdgeIsNotOne`] is about **one** producer and **one** consumer;
+    /// this is the same fact inside a fan-in, where the reader has several producers to choose
+    /// between, so it carries the two indices that disagree.
+    OneProducerFeedsTwoInputs {
+        /// The body's index in the composition's own list.
+        body: usize,
+        /// The producer both inputs named.
+        producer: usize,
+    },
+    /// A body of a fan-in returns from more than one block, or from none.
+    ///
+    /// # Invariant
+    /// Each body lands on the block the body before it returns from, so the block a body returns
+    /// from is where the next one's entry goes: a body that returns from two has no single such
+    /// block, and one that returns from none is not a body the merged body can continue past.
+    BodyDoesNotReturnInOneBlock {
+        /// How many return blocks the body holds.
+        returns: usize,
+    },
     /// The producer's body is not one this crate reads.
     ProducerIsNotWellFormed {
         /// What `KernelBody::validate` refused.
@@ -569,6 +624,12 @@ impl ComposeRefusal {
     pub fn name(&self) -> &'static str {
         match self {
             ComposeRefusal::NoConsumerToInline => "NoConsumerToInline",
+            ComposeRefusal::NoProducerToInline => "NoProducerToInline",
+            ComposeRefusal::OneBodyIsNotAFanIn { .. } => "OneBodyIsNotAFanIn",
+            ComposeRefusal::AbsorbedIsNotAnEarlierBody { .. } => "AbsorbedIsNotAnEarlierBody",
+            ComposeRefusal::OneInputIsFilledTwice { .. } => "OneInputIsFilledTwice",
+            ComposeRefusal::OneProducerFeedsTwoInputs { .. } => "OneProducerFeedsTwoInputs",
+            ComposeRefusal::BodyDoesNotReturnInOneBlock { .. } => "BodyDoesNotReturnInOneBlock",
             ComposeRefusal::ProducerIsNotWellFormed { .. } => "ProducerIsNotWellFormed",
             ComposeRefusal::ConsumerIsNotWellFormed { .. } => "ConsumerIsNotWellFormed",
             ComposeRefusal::ShapesDiffer { .. } => "ShapesDiffer",
@@ -604,6 +665,39 @@ impl std::fmt::Display for ComposeRefusal {
                     "the composition names no consumer, so there is nothing to inline"
                 )
             }
+            ComposeRefusal::NoProducerToInline => write!(
+                formatter,
+                "the fan-in names no body, so there is nothing to inline into one fragment"
+            ),
+            ComposeRefusal::OneBodyIsNotAFanIn { bodies } => write!(
+                formatter,
+                "the fan-in names {bodies} body(ies), and a fan-in is one consumer of several \
+                 producers"
+            ),
+            ComposeRefusal::AbsorbedIsNotAnEarlierBody {
+                body,
+                producer,
+                input,
+            } => write!(
+                formatter,
+                "body {body} reads at input position {input} the value body {producer} forwards, \
+                 and a body reads only what a body **before** it forwarded"
+            ),
+            ComposeRefusal::OneInputIsFilledTwice { body, input } => write!(
+                formatter,
+                "body {body} fills its input position {input} twice, so the union drops it once \
+                 and two producers' values answer one read"
+            ),
+            ComposeRefusal::OneProducerFeedsTwoInputs { body, producer } => write!(
+                formatter,
+                "body {producer}'s value reaches body {body} at more than one input position, and \
+                 one value has one slot in the merged fragment"
+            ),
+            ComposeRefusal::BodyDoesNotReturnInOneBlock { returns } => write!(
+                formatter,
+                "a body of the fan-in returns from {returns} block(s), and the next body lands in \
+                 the block the one before it returns from"
+            ),
             ComposeRefusal::ProducerIsNotWellFormed { cause } => {
                 write!(formatter, "the producer's body is not well formed: {cause}")
             }
@@ -719,20 +813,28 @@ impl std::fmt::Display for ComposeRefusal {
 /// A bound value is one the merged body already has — the producer's parameters, and each
 /// absorbed read once its copy has replaced it — and a landed value is one reserved for the
 /// consumer's own; `resolve` reads both, and an id neither map holds is the producer's own.
-#[derive(Default)]
-struct Renumber {
+pub(crate) struct Renumber {
     bound: HashMap<ValueId, ValueId>,
     landed: HashMap<ValueId, ValueId>,
 }
 
+impl Default for Renumber {
+    fn default() -> Self {
+        Renumber {
+            bound: HashMap::new(),
+            landed: HashMap::new(),
+        }
+    }
+}
+
 impl Renumber {
     /// Bind one of the consumer's values to an id the merged body already holds.
-    fn bind(&mut self, value: ValueId, target: ValueId) {
+    pub(crate) fn bind(&mut self, value: ValueId, target: ValueId) {
         self.bound.insert(value, target);
     }
 
     /// The id `value` holds in the merged body.
-    fn resolve(&self, value: ValueId) -> ValueId {
+    pub(crate) fn resolve(&self, value: ValueId) -> ValueId {
         self.bound
             .get(&value)
             .copied()
@@ -741,7 +843,7 @@ impl Renumber {
     }
 
     /// Reserve a value of `body` for `value`, unless it is bound to one that is already there.
-    fn reserve(&mut self, value: ValueId, body: &mut KernelBody) -> Option<ValueId> {
+    pub(crate) fn reserve(&mut self, value: ValueId, body: &mut KernelBody) -> Option<ValueId> {
         if self.bound.contains_key(&value) {
             return None;
         }
@@ -757,11 +859,13 @@ impl Renumber {
 ///
 /// # Invariant
 /// `sequence` already holds every value the copy reuses, so the copy's own values are appended in
-/// the order `KernelBody::validate` reads: each one after the values it reads.
-fn copy_cone(
+/// the order `KernelBody::validate` reads. **A `Live` value is read through `live`**, the identity
+/// when the producer's numbering is the merged body's own and a renumbering when it was spliced in.
+pub(crate) fn copy_cone(
     cone: &Cone,
     root: ValueId,
     producer: &KernelBody,
+    live: &impl Fn(ValueId) -> ValueId,
     address: ValueId,
     body: &mut KernelBody,
     fresh: &mut HashMap<ValueId, ValueId>,
@@ -780,7 +884,7 @@ fn copy_cone(
             .map(|&arg| match cone.origin(arg) {
                 ConeOrigin::Address => address,
                 ConeOrigin::Rebuilt => fresh.get(&arg).copied().unwrap_or(arg),
-                ConeOrigin::Live(value) => value,
+                ConeOrigin::Live(value) => live(value),
             })
             .collect();
         let id = ValueId(body.values.len() as u32);
@@ -794,20 +898,24 @@ fn copy_cone(
     }
     match cone.origin(root) {
         ConeOrigin::Rebuilt => fresh.get(&root).copied().unwrap_or(address),
-        ConeOrigin::Live(value) => value,
+        ConeOrigin::Live(value) => live(value),
         ConeOrigin::Address => address,
     }
 }
 
 /// Whether `forwarded` is reachable from the producer's invocation index.
-fn lane_dependent(body: &KernelBody, forwarded: ValueId, parameters: &[ValueId]) -> bool {
+pub(crate) fn lane_dependent(
+    body: &KernelBody,
+    forwarded: ValueId,
+    parameters: &[ValueId],
+) -> bool {
     parameters
         .last()
         .is_some_and(|&lane| body.depends_on(forwarded, lane, &body.incoming_arguments()))
 }
 
 /// The address the read `value` asks for.
-fn read_address(body: &KernelBody, value: ValueId) -> ValueId {
+pub(crate) fn read_address(body: &KernelBody, value: ValueId) -> ValueId {
     match body.values.get(value.0 as usize) {
         Some(ValueDef::Instr { args, .. }) if args.len() > 1 => args[1],
         _ => value,
@@ -815,7 +923,7 @@ fn read_address(body: &KernelBody, value: ValueId) -> ValueId {
 }
 
 /// The class the producer's write declares, the value it forwards, and the address it fills.
-fn write_edge(
+pub(crate) fn write_edge(
     body: &KernelBody,
     write: ValueId,
 ) -> Result<(ScalarClass, ValueId, ValueId), ComposeRefusal> {
@@ -841,7 +949,7 @@ fn write_edge(
 }
 
 /// Every buffer write this body lists.
-fn write_sites(body: &KernelBody) -> Vec<ValueId> {
+pub(crate) fn write_sites(body: &KernelBody) -> Vec<ValueId> {
     body.blocks
         .iter()
         .flat_map(|block| block.instrs.iter())
@@ -859,7 +967,7 @@ fn write_sites(body: &KernelBody) -> Vec<ValueId> {
 }
 
 /// Every buffer read this body lists, with the position it addresses.
-fn buffer_reads(
+pub(crate) fn buffer_reads(
     body: &KernelBody,
     side: &'static str,
 ) -> Result<Vec<(ValueId, u32)>, ComposeRefusal> {
@@ -887,7 +995,7 @@ fn buffer_reads(
 }
 
 /// The block that branches to `target`, when one does.
-fn branch_targeting(body: &KernelBody, target: usize) -> Option<usize> {
+pub(crate) fn branch_targeting(body: &KernelBody, target: usize) -> Option<usize> {
     body.blocks.iter().position(|block| {
         block
             .branches()
@@ -897,7 +1005,7 @@ fn branch_targeting(body: &KernelBody, target: usize) -> Option<usize> {
 }
 
 /// The lowest slice ordinal this body's accesses address.
-fn first_slice_ordinal(body: &KernelBody) -> u32 {
+pub(crate) fn first_slice_ordinal(body: &KernelBody) -> u32 {
     body.blocks
         .iter()
         .flat_map(|block| block.instrs.iter())
@@ -914,7 +1022,7 @@ fn first_slice_ordinal(body: &KernelBody) -> u32 {
 }
 
 /// The text the surviving marks carry twice, when one does.
-fn duplicated_mark(marks: &[KernelMark]) -> Result<(), ComposeRefusal> {
+pub(crate) fn duplicated_mark(marks: &[KernelMark]) -> Result<(), ComposeRefusal> {
     let mut seen: HashSet<&str> = HashSet::new();
     for mark in marks {
         let Some(text) = mark.text() else {
@@ -930,7 +1038,7 @@ fn duplicated_mark(marks: &[KernelMark]) -> Result<(), ComposeRefusal> {
 }
 
 /// A terminator with every value and block named through the maps.
-fn mapped_terminator(
+pub(crate) fn mapped_terminator(
     terminator: &Terminator,
     value: &impl Fn(ValueId) -> ValueId,
     block: &impl Fn(usize) -> usize,
@@ -960,23 +1068,44 @@ fn mapped_terminator(
 ///
 /// # Invariant
 /// The union puts the producer's inputs first, then each consumer's survivors after the ones
-/// already there, so a consumer's ordinal `c` lands at `base + c - (1 if c > absorbed else 0)`;
-/// the absorbed read is dropped and takes none, and each surviving read gets a fresh constant
-/// **value**, because a read's position is a value and not an offset.
+/// already there, so a consumer's ordinal `c` lands at `base + c - (the absorbed ordinals below
+/// it)`; an absorbed read is dropped and takes none, and each surviving read gets a fresh
+/// constant **value**, because a read's position is a value and not an offset.
 fn shifted_positions(
     merged: &mut KernelBody,
     consumer_reads: &[(ValueId, u32)],
     base: usize,
     absorbed: usize,
 ) -> HashMap<ValueId, ValueId> {
+    shifted_past(merged, consumer_reads, base, &[absorbed])
+}
+
+/// [`shifted_positions`] over several absorbed ordinals, as a fan-in's consumer declares.
+///
+/// # Invariant
+/// The `absorbed` ordinals are the body's **own** and in no order, so the count below an ordinal
+/// is what the formula asks and a caller that lists one of them twice shifts a surviving read once
+/// — which is why [`compose_fan_in`](crate::compose_fan_in) refuses a duplicated ordinal first.
+pub(crate) fn shifted_past(
+    merged: &mut KernelBody,
+    consumer_reads: &[(ValueId, u32)],
+    base: usize,
+    absorbed: &[usize],
+) -> HashMap<ValueId, ValueId> {
     let mut shifted = HashMap::new();
     for &(read, position) in consumer_reads {
         let position = position as usize;
-        if position == absorbed {
+        if absorbed.contains(&position) {
             continue;
         }
-        let at =
-            i64::try_from(base + position - usize::from(position > absorbed)).unwrap_or(i64::MAX);
+        let at = i64::try_from(
+            base + position
+                - absorbed
+                    .iter()
+                    .filter(|ordinal| **ordinal < position)
+                    .count(),
+        )
+        .unwrap_or(i64::MAX);
         let constant = ValueId(merged.values.len() as u32);
         merged.values.push(ValueDef::Instr {
             op: KernelInstr::Const(ScalarClass::Int, at),
@@ -993,7 +1122,7 @@ fn shifted_positions(
 /// # Invariant
 /// The merged fragment declares the consumers' outputs **summed**, so a consumer starting at `base`
 /// names its own output `p` at `base + p`. A position that does not move takes **no** fresh value.
-fn shifted_write_positions(
+pub(crate) fn shifted_write_positions(
     merged: &mut KernelBody,
     consumer: &KernelBody,
     base: usize,
@@ -1030,7 +1159,7 @@ fn shifted_write_positions(
 /// A block parameter nothing reads is removed with the branch argument that feeds it — an orphan
 /// parameter passes `KernelBody::validate` and is refused only when the artifact is read, which
 /// re-derives a parameter's index from the block that receives it.
-fn compact(body: &mut KernelBody, marks: &mut [KernelMark]) {
+pub(crate) fn compact(body: &mut KernelBody, marks: &mut [KernelMark]) {
     let count = body.values.len();
     let mut live = vec![false; count];
     let mut pending: Vec<ValueId> = Vec::new();

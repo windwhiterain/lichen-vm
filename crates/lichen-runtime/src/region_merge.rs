@@ -12,7 +12,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, ValueId as GraphValueId};
-use lichen_kernel_ir::{ComposeRefusal, KernelFragment, ScalarClass, compose, compose_fan_out};
+use lichen_kernel_ir::{
+    ComposeRefusal, KernelFragment, Producer, ScalarClass, compose, compose_fan_in, compose_fan_out,
+};
 
 use crate::fusion_claim::{
     Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, SchemaRefusal, derive_regions,
@@ -67,21 +69,22 @@ struct Merge {
     absorbed: Vec<usize>,
     /// The graph position of the node whose body survives: the region's last node.
     survivor: usize,
-    /// One absorbed input position per link, in region order.
-    absorbed_input: Vec<usize>,
+    /// One link per absorbed input, in the order the reader's own input is read in.
+    links: Vec<Link>,
     /// The graph values the merged fragment's outputs fill, in the order the composition wrote them.
     outputs: Vec<GraphValueId>,
     /// The fragment the surviving node holds.
     fragment: KernelFragment,
-    /// The surviving node's inputs: the first node's, then each later node's but the absorbed one.
+    /// The surviving node's inputs: the first node's, then each later node's but the absorbed ones.
     inputs: Vec<GraphValueId>,
 }
 
 /// One edge of a region the merge inlines: `from`'s output reaches `to` at `input`.
 ///
 /// # Invariant
-/// **One link per node but the region's first**, in evaluation order, so a link's index is the
-/// region-local position of its reader less one — the position the merged line reports it at.
+/// **One link per absorbed input**, in (reader, input ordinal) order, so a node reading two
+/// producers is two links rather than one choice between them, and the position the merged line
+/// reports a link at is the reader's own input ordinal.
 #[derive(Debug, Clone, Copy)]
 struct Link {
     /// The graph position whose output the edge carries.
@@ -92,18 +95,21 @@ struct Link {
     input: usize,
 }
 
-/// The two shapes one composition inlines.
+/// The three shapes one composition inlines.
 ///
 /// # Invariant
-/// **One producer, one consumer at a time**: a `compose` inlines a consumer *of one producer*, so a
-/// region is either a chain — every node reading the one before it — or a fan-out, every node
-/// reading the first. A tree that is neither names no single code the composition serves.
+/// **One producer, one consumer at a time**: a `compose` inlines a consumer *of one producer*, so
+/// a region is either a chain — every node reading the one before it — a fan-out, every node
+/// reading the first, or a **fan-in**, that chain with a node reading an earlier producer as well.
+/// A tree that is none of these names no single code the composition serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     /// Every node but the first reads the first.
     FanOut,
-    /// Every node but the first reads the one before it.
+    /// Every node but the first reads the one before it, and no node reads two producers.
     Chain,
+    /// Every node but the first reads the one before it, and some node reads an earlier one too.
+    FanIn,
 }
 
 impl GraphPass for RegionMerge {
@@ -199,14 +205,19 @@ impl GraphPass for RegionMerge {
 /// guessed here would be a node that runs and answers another program.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MergeRefusal {
-    /// The region is neither a chain of consumers nor one producer's several consumers.
+    /// The region is neither a chain of consumers, a fan-in of one, nor one producer's consumers.
     RegionIsNotAPair {
         /// How many instances the region holds.
         nodes: usize,
     },
-    /// The consumer does not read the producer's output at exactly one input position.
+    /// One producer's output reaches the consumer at more than one input position.
+    ///
+    /// # Invariant
+    /// A merge binds **one producer's value to one input slot**, so a producer reaching one reader
+    /// twice has no second slot in the merged fragment: the two reads would answer one value, and a
+    /// fan-in is admitted only where every input has a producer of its own.
     AbsorbedEdgeIsNotOne {
-        /// How many of the consumer's input positions hold a producer output.
+        /// How many of the consumer's input positions hold that one producer's output.
         inputs: usize,
     },
     /// The graph records no return, so a caller takes every value the merge would delete.
@@ -266,7 +277,8 @@ pub enum MergeRefusal {
     /// # Invariant
     /// A distinct arm from [`Self::InterfacesAreNotProved`] because it is a distinct fact: that
     /// one is what a node **claims**, this one how the region's values **flow**. A fan-out of
-    /// reductions is refused here and not there, because the floor's own proof is the chain.
+    /// reductions is refused here and not there, because the floor's own proof is the shape it can
+    /// serve and a fan-out is not it — a fan-in **is**, once every one of its inputs is named.
     NotAReductionChain {
         /// The graph node whose edges are not a chain's.
         node: usize,
@@ -323,8 +335,8 @@ impl fmt::Display for MergeRefusal {
             ),
             MergeRefusal::AbsorbedEdgeIsNotOne { inputs } => write!(
                 formatter,
-                "the consumer reads the producer's output at {inputs} of its input position(s), and \
-                 a merge absorbs exactly one"
+                "the consumer reads one producer's output at {inputs} of its input position(s), and \
+                 one value has one slot in the merged fragment"
             ),
             MergeRefusal::GraphReturnsEveryValue { value } => write!(
                 formatter,
@@ -430,11 +442,11 @@ fn skipped(graph: &Graph, positions: &[Vec<usize>]) -> Vec<usize> {
 /// decided it does.
 ///
 /// # Invariant
-/// The floor's licence is the reduction **chain**: a claim states what a kernel computes, not
-/// that inlining pays. A region two edges leave, or two arrive at, is not that chain whatever
-/// its nodes claim, so it is attempted **only** where a pack's `fuse` names its hash.
-///
-/// A pack changes which regions are attempted, never what must hold.
+/// The floor's licence is the reduction **shape this pass can serve**. A region two edges
+/// **leave** towards two readers is a fan-out, attempted only under a pack's `fuse`. A
+/// region two edges **arrive at** is that shape exactly when **every one of those inputs is
+/// named and proven**: a [`Between`](crate::fusion_claim::Between) per arrival, each over a
+/// slot of its own.
 fn licence<'a>(
     schema: &RegionSchema,
     positions: &[usize],
@@ -457,7 +469,7 @@ fn licence<'a>(
             }
         }
     }
-    // The chain first: a fan-out is refused by the shape's own name, not by its interfaces.
+    // The shape first: a fan-out is refused by the shape's own name, not by its interfaces.
     if let Some(local) = schema.off_chain_node() {
         return Err(MergeRefusal::NotAReductionChain {
             node: positions[local],
@@ -499,10 +511,10 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 /// The merge one region's nodes decide, or why they do not.
 ///
 /// # Invariant
-/// **A chain, or one producer's consumers**, in evaluation order, and every condition below is the
-/// pair's own: the shape is decided first, then one absorbed position per link, and a merge that
-/// slipped past either would be a node reading a buffer the program never wired to it — the union
-/// cannot make one, and `PortsDoNotCorrespond` is where that stops.
+/// **A chain, a fan-in of it, or one producer's consumers**, in evaluation order, and every
+/// condition below is the pair's own: the shape is decided first, then one absorbed position per
+/// edge, and a merge that slipped past either would be a node reading a buffer the program never
+/// wired to it — the union cannot make one, and `PortsDoNotCorrespond` is where that stops.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
@@ -513,7 +525,7 @@ fn merge_region(
     let survivor = *positions
         .last()
         .expect("a shape is decided over two or more");
-    let links = links(graph, starts, positions, shape)?;
+    let links = links(graph, starts, positions)?;
     let (outputs, deleted) = written_and_deleted(graph, starts, positions, &links, shape);
     let Some(returns) = graph.returns() else {
         return Err(MergeRefusal::GraphReturnsEveryValue {
@@ -550,11 +562,24 @@ fn merge_region(
             consumer: count(graph, *disagreeing),
         });
     }
-    // The merged node's inputs are the union: the first node's, then each link's reader but the
-    // absorbed one.
+    // The union: the first node's inputs, then each later node's but what a producer fills.
+    let absorbed: Vec<Vec<usize>> = absorbed_positions(positions, &links);
     let mut inputs: Vec<GraphValueId> = first_node.inputs.clone();
-    let mut bodies: Vec<(&KernelFragment, u32)> = Vec::with_capacity(links.len());
     let mut ports = first_node.fragment.inputs;
+    for (index, position) in positions.iter().enumerate().skip(1) {
+        let Node::Kernel(node) = &graph.nodes()[*position];
+        inputs.extend(
+            node.inputs
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(ordinal, _)| !absorbed[index].contains(ordinal))
+                .map(|(_, value)| value),
+        );
+        ports = ports
+            .saturating_add(node.fragment.inputs)
+            .saturating_sub(absorbed[index].len());
+    }
     for link in &links {
         let Node::Kernel(node) = &graph.nodes()[link.to];
         let output = absorbed_value(graph, link) - starts[link.from];
@@ -573,16 +598,6 @@ fn merge_region(
                 return Err(MergeRefusal::ClassIsNotStated { produced, expected });
             }
         }
-        inputs.extend(
-            node.inputs
-                .iter()
-                .copied()
-                .enumerate()
-                .filter(|(ordinal, _)| *ordinal != link.input)
-                .map(|(_, value)| value),
-        );
-        bodies.push((&node.fragment, link.input as u32));
-        ports = ports.saturating_add(node.fragment.inputs).saturating_sub(1);
     }
     // Past the merged ports, a position names another body's buffer: the union cannot fix it.
     if inputs.len() > ports {
@@ -592,12 +607,12 @@ fn merge_region(
             merged: None,
         });
     }
-    let fragment = composed(graph, positions[0], shape, &links)
+    let fragment = composed(graph, positions, shape, &links)
         .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
     Ok(Merge {
         absorbed: positions[..positions.len() - 1].to_vec(),
         survivor,
-        absorbed_input: links.iter().map(|link| link.input).collect(),
+        links,
         outputs,
         fragment,
         inputs,
@@ -607,10 +622,10 @@ fn merge_region(
 /// The shape the region's edges make, or the refusal naming what they do not.
 ///
 /// # Invariant
-/// **One producer, one consumer at a time**, read off the edges and not off the node count: a chain
-/// is every node reading the one before it and a fan-out is every node reading the first, so a
-/// pair is a chain of one link and a tree is neither. A node that reaches a region value as its
-/// **extent** reads nothing at an input position, and no composition absorbs an edge like that.
+/// **One producer, one consumer at a time**, read off the edges and not off the node count: a
+/// chain is every node reading the one before it, a fan-in is that chain with a node reading an
+/// earlier producer as well, and a fan-out is every node reading the first. A node that reaches
+/// a region value as its **extent** reads nothing at an input position.
 fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, MergeRefusal> {
     let refused = MergeRefusal::RegionIsNotAPair {
         nodes: positions.len(),
@@ -623,7 +638,12 @@ fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, 
         .enumerate()
         .all(|(index, position)| reads(graph, starts, positions[index], *position));
     if chain {
-        return Ok(Shape::Chain);
+        // **A node reading two producers is a fan-in of the chain**: one reading one is the
+        // chain itself.
+        let several = positions
+            .iter()
+            .any(|position| absorbed_count(graph, starts, positions, *position) > 1);
+        return Ok(if several { Shape::FanIn } else { Shape::Chain });
     }
     let fan_out = positions[1..]
         .iter()
@@ -631,38 +651,100 @@ fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, 
     fan_out.then_some(Shape::FanOut).ok_or(refused)
 }
 
-/// The region's edges, one per node but the first, in evaluation order.
+/// The input positions one node fills from a producer of the region.
 ///
 /// # Invariant
-/// **One absorbed position per node**: a node reading two of its producer's outputs names no single
-/// buffer to inline, and the region is refused by that name rather than merged against either.
-fn links(
-    graph: &Graph,
-    starts: &[usize],
-    positions: &[usize],
-    shape: Shape,
-) -> Result<Vec<Link>, MergeRefusal> {
-    let mut links = Vec::with_capacity(positions.len().saturating_sub(1));
+/// **Sorted by the input ordinal**, which is the order the composition counts them in when it
+/// shifts a surviving read, so the two cannot disagree about how many absorbed inputs sit below one.
+fn absorbed_positions(positions: &[usize], links: &[Link]) -> Vec<Vec<usize>> {
+    let mut absorbed: Vec<Vec<usize>> = vec![Vec::new(); positions.len()];
+    for link in links {
+        let at = positions.iter().position(|position| *position == link.to);
+        if let Some(at) = at {
+            absorbed[at].push(link.input);
+        }
+    }
+    for ordinals in &mut absorbed {
+        ordinals.sort_unstable();
+    }
+    absorbed
+}
+
+/// How many of a node's input positions hold a value the region produced.
+fn absorbed_count(graph: &Graph, starts: &[usize], positions: &[usize], position: usize) -> usize {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    node.inputs
+        .iter()
+        .filter(|value| {
+            positions
+                .iter()
+                .any(|earlier| *earlier < position && produced_by(graph, starts, *earlier, **value))
+        })
+        .count()
+}
+
+/// Whether the node at `position` produces `value`.
+fn produced_by(graph: &Graph, starts: &[usize], position: usize, value: GraphValueId) -> bool {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    let produced = starts[position]..starts[position] + node.fragment.outputs;
+    produced.contains(&value)
+}
+
+/// The region's edges, one per absorbed input, in (reader, input ordinal) order.
+///
+/// # Invariant
+/// **One absorbed position per edge**, each naming the producer whose value fills it, and read off
+/// the graph's own table rather than off the shape: a node that reads a producer twice names no
+/// slot to inline, and the region is refused by that name rather than merged against either. The
+/// shape has already been decided, so every edge here is one the composition can serve.
+fn links(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Vec<Link>, MergeRefusal> {
+    let mut links: Vec<Link> = Vec::with_capacity(positions.len().saturating_sub(1));
     for (index, &to) in positions.iter().enumerate().skip(1) {
-        let from = match shape {
-            Shape::Chain => positions[index - 1],
-            Shape::FanOut => positions[0],
-        };
         let Node::Kernel(node) = &graph.nodes()[to];
-        let produced = starts[from]..starts[from] + fragment_at(graph, from).outputs;
-        let read: Vec<usize> = node
+        let read: Vec<(usize, usize)> = node
             .inputs
             .iter()
             .enumerate()
-            .filter(|(_, value)| produced.contains(value))
-            .map(|(ordinal, _)| ordinal)
+            .filter_map(|(ordinal, value)| {
+                let from = region_producer(graph, starts, positions, index, *value)?;
+                Some((ordinal, from))
+            })
             .collect();
-        let [input] = read[..] else {
-            return Err(MergeRefusal::AbsorbedEdgeIsNotOne { inputs: read.len() });
-        };
-        links.push(Link { from, to, input });
+        // **One value per producer**: two inputs taking one output ask one value for two slots.
+        let repeated = read
+            .iter()
+            .enumerate()
+            .find(|(at, (_, from))| read[..*at].iter().any(|(_, other)| other == from));
+        if repeated.is_some() {
+            return Err(MergeRefusal::AbsorbedEdgeIsNotOne { inputs: 2 });
+        }
+        links.extend(
+            read.into_iter()
+                .map(|(input, from)| Link { from, to, input }),
+        );
     }
+    links.sort_by_key(|link| (link.to, link.input));
     Ok(links)
+}
+
+/// The region-local position of the node that produced `value` for the consumer at `consumer`.
+fn region_producer(
+    graph: &Graph,
+    starts: &[usize],
+    positions: &[usize],
+    consumer: usize,
+    value: GraphValueId,
+) -> Option<usize> {
+    let mut found = None;
+    for (index, position) in positions.iter().enumerate() {
+        if index >= consumer {
+            break;
+        }
+        if produced_by(graph, starts, *position, value) {
+            found = Some(index);
+        }
+    }
+    found
 }
 
 /// The graph value one link carries: what its reader holds at the absorbed position.
@@ -674,10 +756,10 @@ fn absorbed_value(graph: &Graph, link: &Link) -> GraphValueId {
 /// The graph values the merged fragment fills, and the ones the merge deletes.
 ///
 /// # Invariant
-/// **A fan-out writes every consumer's outputs and a chain writes the survivor's**, because
-/// `compose_fan_out` declares the consumers' outputs summed while each `compose` of a chain declares
-/// its consumer's alone. Every other value a region node produces is deleted, and a deleted value
-/// that is returned or read elsewhere is what the two refusals below name.
+/// **A fan-out writes every consumer's outputs; a chain and a fan-in write the survivor's**:
+/// `compose_fan_out` sums the consumers' outputs, `compose` and `compose_fan_in` declare one.
+/// Every other value a region node produces is deleted, and one that is returned or read
+/// elsewhere is what the two refusals below name.
 fn written_and_deleted(
     graph: &Graph,
     starts: &[usize],
@@ -692,7 +774,7 @@ fn written_and_deleted(
             links.iter().flat_map(|link| produced(link.to)).collect(),
             produced(positions[0]).collect(),
         ),
-        Shape::Chain => (
+        Shape::Chain | Shape::FanIn => (
             produced(positions[positions.len() - 1]).collect(),
             positions[..positions.len() - 1]
                 .iter()
@@ -705,17 +787,17 @@ fn written_and_deleted(
 /// The fragment the region's links compose into one.
 ///
 /// # Invariant
-/// **A fan-out is one `compose_fan_out`, and a chain is one `compose` per link**: from the second
-/// link on, the producer is the fragment the last step composed, so every condition `compose`
-/// states — one write, one return block, the shape, the target, the cone — is asked again of that
-/// fragment rather than assumed of it, and it is refused by the same name if it fails.
+/// **A fan-out is one `compose_fan_out`, a chain one `compose` per link, and a fan-in one
+/// `compose_fan_in` over the region's own bodies**: from the second link on, the producer is the
+/// fragment the last step composed, so every condition `compose` states is asked again of it.
+/// A fan-in's bodies are the region's **own**, since each link names a different producer.
 fn composed(
     graph: &Graph,
-    producer: usize,
+    positions: &[usize],
     shape: Shape,
     links: &[Link],
 ) -> Result<KernelFragment, ComposeRefusal> {
-    let first = fragment_at(graph, producer);
+    let first = fragment_at(graph, positions[0]);
     match shape {
         Shape::FanOut => compose_fan_out(
             first,
@@ -727,6 +809,30 @@ fn composed(
         Shape::Chain => links.iter().try_fold(first.clone(), |merged, link| {
             compose(&merged, fragment_at(graph, link.to), link.input as u32)
         }),
+        Shape::FanIn => {
+            let steps: Vec<Producer<'_>> = positions
+                .iter()
+                .map(|position| Producer {
+                    fragment: fragment_at(graph, *position),
+                    // **The producer is the body's index in this list**, so the list is
+                    // topologically ordered.
+                    absorbs: links
+                        .iter()
+                        .filter(|link| link.to == *position)
+                        .map(|link| {
+                            (
+                                positions
+                                    .iter()
+                                    .position(|earlier| *earlier == link.from)
+                                    .expect("a link's producer is a position of the region"),
+                                link.input,
+                            )
+                        })
+                        .collect(),
+                })
+                .collect();
+            compose_fan_in(&steps)
+        }
     }
 }
 
@@ -889,30 +995,25 @@ fn licensed_by(licensed: &Licence<'_>, region: &SchemaHash) -> String {
 ///
 /// # Invariant
 /// The licence is named in the line and not left to the graph: a runner reading a report has to
-/// know whether a pack's `fuse` decided this merge or the engine's own proof did, because the
-/// two are not the same claim about the same region. A fan-out names **every** node and every
-/// absorbed position, because it is a shape the chain's line would under-report.
+/// know whether a pack's `fuse` decided this merge or the engine's own proof did. A region of
+/// more than two nodes names **every** node and **every** absorbed position, each with the node
+/// it is an input of rather than by its rank.
 fn merged_line(index: usize, merge: &Merge, licensed: &Licence<'_>, region: &SchemaHash) -> String {
     let licence = licensed_by(licensed, region);
     let unregistered = "the merged fragment is unregistered, so it carries no claim and a later \
                         digest-keyed pass cannot name it";
-    if merge.absorbed.len() == 1 {
+    if merge.absorbed.len() == 1 && merge.links.len() == 1 {
         return format!(
             "region {index}: nodes {} and {} merged into one node at {} (the survivor), absorbing \
              input position {} of node {}, {licence}; {unregistered}",
-            merge.absorbed[0],
-            merge.survivor,
-            merge.survivor,
-            merge.absorbed_input[0],
-            merge.survivor,
+            merge.absorbed[0], merge.survivor, merge.survivor, merge.links[0].input, merge.survivor,
         );
     }
     let nodes = merge.absorbed.iter().copied().chain([merge.survivor]);
     let absorbing = merge
-        .absorbed_input
+        .links
         .iter()
-        .zip(nodes.clone().skip(1))
-        .map(|(position, node)| format!("input position {position} of node {node}"))
+        .map(|link| format!("input position {} of node {}", link.input, link.to))
         .collect::<Vec<_>>()
         .join(" and ");
     format!(
