@@ -522,9 +522,15 @@ impl<P: Program> Module<P> {
             })
     }
 
-    /// The parameter pair and return type cell a function's type is, or `None` when it is not one.
-    fn function_signature(&mut self, node: NodeId) -> Option<(NodeId, NodeId)> {
-        let (parameter, return_type) = match self.function_type_function(node)? {
+    /// The parameter pair and return type cell a function itself states, or `None`
+    /// when the template states neither.
+    ///
+    /// # Invariant
+    /// These are the template's own cells, so only a **clone** may descend them:
+    /// a caller that descended the template would decide its signature by the
+    /// first reader.
+    fn function_cells(&mut self, function: AnyFunctionId) -> Option<(NodeId, NodeId)> {
+        match function {
             AnyFunctionId::Dynamic(function) => {
                 let (parameter, return_type) = {
                     let function = &self.functions[function];
@@ -532,15 +538,13 @@ impl<P: Program> Module<P> {
                 };
                 // A hand-built function (a lowlevel test) may leave
                 // `return_type` unset, so its signature is not readable.
-                if !self.nodes.contains_key(return_type) {
-                    return None;
-                }
-                (parameter, return_type)
+                self.nodes
+                    .contains_key(return_type)
+                    .then_some((parameter, return_type))
             }
             // A frozen template is immutable, so its signature is copied into fresh leaves.
-            AnyFunctionId::Static(sref) => return self.materialize_static_signature(sref),
-        };
-        Some((parameter, return_type))
+            AnyFunctionId::Static(sref) => self.materialize_static_signature(sref),
+        }
     }
 
     /// The domain and codomain type cells of the function type `node` names; a read, never cloned.
@@ -596,28 +600,6 @@ impl<P: Program> Module<P> {
                 LowValue::Function(function) => Some(function),
                 _ => None,
             })
-    }
-
-    /// Unify two function types by descending their signature cells. See docs/notes/function-type-merge.md.
-    fn unify_function_types(
-        &mut self,
-        ra: NodeId,
-        rb: NodeId,
-        signature_a: (NodeId, NodeId),
-        signature_b: (NodeId, NodeId),
-        steps: &mut Vec<UnifyStep>,
-        root: (NodeId, NodeId),
-    ) -> bool {
-        let pre = self.unify_errors.len();
-        self.unify(signature_a.0, signature_b.0);
-        self.unify(signature_a.1, signature_b.1);
-        if self.unify_errors.len() > pre {
-            self.record_error(ra, rb, steps, root);
-            return false;
-        }
-        // The elements agree, so the types are one; no value is written back — both carry one.
-        self.add_equality(ra, rb);
-        true
     }
 
     /// Recursive core of [`Self::unify`]; `path` guards class pairs, `depth` the node-less ones.
@@ -698,9 +680,9 @@ impl<P: Program> Module<P> {
         if ra == rb {
             return true;
         }
+        // A pair already on the descent is one structure, not a disagreement.
         if path.contains(ra, rb) {
-            self.record_error(ra, rb, steps, root);
-            return false;
+            return true;
         }
         // Ask each class's value once, of the class: the representative may be a valueless node.
         match (va, vb) {
@@ -717,36 +699,6 @@ impl<P: Program> Module<P> {
             }
             // Both sides know a value: they must be the same; for an array the elements decide it.
             (Some(x), Some(y)) => {
-                // Two function types descend into their own cells, not into the self-cycle shape.
-                let function_a = self.function_type_function(ra);
-                let function_b = self.function_type_function(rb);
-                if function_a.is_some() || function_b.is_some() {
-                    if let (Some(signature_a), Some(signature_b)) =
-                        (self.function_signature(ra), self.function_signature(rb))
-                    {
-                        return self.unify_function_types(
-                            ra,
-                            rb,
-                            signature_a,
-                            signature_b,
-                            steps,
-                            root,
-                        );
-                    }
-                    // Two function types with no readable signature are
-                    // still two pairs: unify them like any other. §7.
-                    if function_a.is_some() && function_b.is_some() {
-                        // fall through to the array arms below
-                    } else {
-                        // Exactly one function type against a self-cycle: refuse, or
-                        // the match merges them.
-                        let other = if function_a.is_some() { rb } else { ra };
-                        if self.is_self_referential(AnyNodeId::Dynamic(other)) {
-                            self.record_error(ra, rb, steps, root);
-                            return false;
-                        }
-                    }
-                }
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
                         // SAFETY: both payloads come from live nodes of this module, so their home
@@ -755,11 +707,6 @@ impl<P: Program> Module<P> {
                         if left.len() != right.len() {
                             self.record_error(ra, rb, steps, root);
                             return false;
-                        }
-                        // Two self-referential universes are one value, even from a static module.
-                        if self.is_self_referential(Dyn(ra)) && self.is_self_referential(Dyn(rb)) {
-                            self.add_equality(ra, rb);
-                            return true;
                         }
                         path.insert(ra, rb);
                         let mut ok = true;
@@ -791,12 +738,52 @@ impl<P: Program> Module<P> {
                         }
                         ok
                     }
-                    // A materialized static closure and its frozen function name one logical function.
-                    (Some(LowValue::Function(a)), Some(LowValue::Function(b)))
-                        if self.function_identity_equal(a, b) =>
-                    {
-                        self.add_equality(ra, rb);
-                        true
+                    // A function's own cells, as an array's elements are the array's:
+                    // `[parameter, return]` decides it.
+                    (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
+                        let (Some((parameter_a, return_a)), Some((parameter_b, return_b))) =
+                            (self.function_cells(a), self.function_cells(b))
+                        else {
+                            // A template that states no signature states nothing: only
+                            // the values themselves can decide.
+                            return if self.function_identity_equal(a, b) {
+                                self.add_equality(ra, rb);
+                                true
+                            } else {
+                                self.record_error(ra, rb, steps, root);
+                                false
+                            };
+                        };
+                        path.insert(ra, rb);
+                        let mut ok = true;
+                        for (i, (na, nb)) in [(parameter_a, parameter_b), (return_a, return_b)]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            steps.push(UnifyStep {
+                                index: i,
+                                a: na,
+                                b: nb,
+                            });
+                            let child_ok = self.unify_inner(
+                                Side::of(Dyn(na), self.node_value(Dyn(na))),
+                                Side::of(Dyn(nb), self.node_value(Dyn(nb))),
+                                path,
+                                depth + 1,
+                                steps,
+                                root,
+                            );
+                            steps.pop();
+                            if !child_ok {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        path.remove(ra, rb);
+                        if ok {
+                            self.add_equality(ra, rb);
+                        }
+                        ok
                     }
                     // Fully equal by content ([`ValueExt::value_eq`]), not the cheap [`PartialEq`].
                     _ if x.value_eq(&y) => {
