@@ -604,3 +604,50 @@ conditional scalings is not the same thing as a loop:
 What unblocks it, in one sentence: **a multi-block definition the inliner can splice
 — a loop with a backedge and carried state — after which `ln` is the same kind of
 object `exp`, `sqrt` and `floor` are.**
+
+## 8. `sin` and `cos`
+
+**These two do not carry a `KernelInstr`.** The runtime's instruction list is closed by the
+artifact schema, so `sin a` / `cos a` are language keywords whose definitions live in
+`crates/lichen-kernel-ir/src/unary.rs` and are spliced in by the lowerer through
+`KernelBody::inline_definition`. The fusion bridge reads the spliced definition the same way it
+reads the inlined `exp` and `sqrt` (`inlined_sin_operand` / `inlined_cos_operand`), so a marked
+`sin` in a body bridges like any other operator.
+
+**The reduction is Cody–Waite**, with `π/2` split into an 11-fraction-bit head
+(`HALF_PI_HEAD = 3217/2048`) plus a tail rounded once **from the `f64` constant**. A
+single-rounded `π/2` leaves `q × 1.2e-8` of drift, which at the domain edge is about 1000 ulp;
+splitting it makes `q·HEAD` a multiple of `2^-11` (exact below `2^13`) and the first subtraction
+Sterbenz-exact. Measured before and after: the worst gap went from **1912 ulp to 0.5 ulp at unit
+scale across the whole domain**. The polynomials are degree-11 sine and degree-10 cosine over
+`r²`, whose first omitted terms are `6.9e-12` and `1.2e-10`.
+
+**The domain is `|x| ≤ 8192`, correct to the last bit** against a model written from the
+algorithm — measured over 24 angles spanning `q = 0 … 5215`, all four quadrant residues, both
+signs, whole turns and the clamp edge. Two things to know about the edges:
+
+- **The clamp is a `Select`, not a refusal.** Above `ANGLE_LIMIT` the answer is silently
+  `sin`/`cos` **of 8192**, not of the operand; that is stated in `ANGLE_LIMIT`'s own invariant and
+  a test pins it, so it is behaviour rather than an oversight — but it is silent, which is worth
+  knowing before declaring an operator whose angles are unbounded.
+- **Against `f64` the residual is ≤ ~1 ulp** at the points sampled, from the Cody–Waite tail
+  rounding. That loss is inherent to a two-term reduction, not to any fix.
+
+**The defect that cost two slices is worth recording as a lesson.** Two `Select`s in the
+definitions listed their arms in the **reverse** order — `Select` carries
+`[then, otherwise, condition]` in both emitters — so the magnitude came out `−|x|`. Below `π/4`
+the two sign errors cancelled exactly (`q = 0`, `r² = x²`), which is why the defect presented as
+"the reduction is only valid below `π/4`"; above it the negative magnitude reached the float→int
+conversion, whose unsigned truncation **traps** on a negative operand. What makes it a lesson is
+that **the definitions' own doc invariants said the right thing and the Rust mirror was right**
+(`reduce_angle_value` computes `if x < 0 { -x } else { x }`) — the emitted body contradicted
+**both**. A mirror is not a reference for the body: it agrees with `f64` whether or not the body
+does, and only a check of **emitted against modelled** catches the difference. That check is
+`crates/lichen-compute/tests/trig_domain.rs`, and it fails on the commit that had the reversed
+arms.
+
+**What is not proven.** The **SPIR-V** path for a spliced `sin`/`cos` body is untested: the two
+emitters agree on `Select`'s operand convention by inspection and the GPU suite passes, but no
+test feeds an inlined `sin_body` through the SPIR-V emitter, because every example runs on the
+`"cpu"` backend. And accuracy against `f64` was **sampled, not swept** — emitted against modelled
+is exactly 0 ulp at the sampled angles; modelled against `f64` was checked only there.
