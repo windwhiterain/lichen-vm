@@ -43,19 +43,21 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// A class is entered once per collect, so the walk visits each member once;
     /// the representative is inserted before the members are read, so a class
-    /// cycle terminates.
+    /// cycle terminates. The list is headed by the representative, so the walk
+    /// starts there: entered at a member behind the head, it would reach only
+    /// the members behind *it* and release the ones ahead.
     fn class_walk(&mut self, node: NodeId) -> Vec<NodeId> {
-        if !self
-            .gc_classes
-            .insert(disjoint::find(&mut self.nodes, node))
-        {
+        let representative = disjoint::find(&mut self.nodes, node);
+        if !self.gc_classes.insert(representative) {
             return Vec::new();
         }
         let mut members = Vec::new();
-        let mut current = self.nodes[node].meta().next();
+        let mut current = Some(representative);
         while let Some(member) = current {
             current = self.nodes[member].meta().next();
-            members.push(member);
+            if member != node {
+                members.push(member);
+            }
         }
         members
     }
