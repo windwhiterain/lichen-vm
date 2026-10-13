@@ -829,8 +829,11 @@ impl<P: Program> Module<P> {
     /// reconcile owns that conflict.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
         // A wildcard target answers no reader, so there is no class to join.
+        let wildcard = self.nodes[target]
+            .value
+            .or_else(|| self.class_committed_value(target));
         if matches!(
-            self.nodes[target].value.and_then(|value| value.as_enum()),
+            wildcard.and_then(|value| value.as_enum()),
             Some(LowValue::Any)
         ) {
             return;
