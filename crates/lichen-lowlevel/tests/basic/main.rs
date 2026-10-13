@@ -4,6 +4,7 @@ mod assert;
 mod compaction;
 mod equality;
 mod evaluation;
+mod extension_channel;
 mod function;
 mod gc_class_shape;
 mod gc_class_walk;

@@ -22,9 +22,9 @@ use lichen_kernel_ir::{
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowShape,
-    LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticModule,
-    ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, ExtensionDiagnostic, FunctionId,
+    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
+    Release, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -612,7 +612,7 @@ where
     match parsed {
         Ok(backend) => Some(backend),
         Err(reason) => {
-            module.record_extension_diagnostic(category, None, reason);
+            module.record_extension_diagnostic(ExtensionDiagnostic::note(category, None, reason));
             None
         }
     }
@@ -1004,7 +1004,11 @@ where
             if graph::is_recording()
                 && let Some(reason) = unrecordable(self, module, &operand)
             {
-                module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                    GRAPH_DIAGNOSTIC,
+                    None,
+                    reason,
+                ));
                 return None;
             }
             match self {
@@ -1042,7 +1046,11 @@ where
                         Err(err) => {
                             // Outside the kernel-safe subset, or an undecided
                             // domain: a lazy value plus the reason.
-                            module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                JIT_DIAGNOSTIC,
+                                None,
+                                err,
+                            ));
                             None
                         }
                     }
@@ -1066,11 +1074,11 @@ where
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(args) => args,
                         Err(reason) => {
-                            module.record_extension_diagnostic(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 reason,
-                            );
+                            ));
                             return None;
                         }
                     };
@@ -1079,7 +1087,11 @@ where
                         Err(err) => {
                             // Whatever the wasm run said is recorded as it stands,
                             // not replaced by a summary that names none of them.
-                            module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                err,
+                            ));
                             None
                         }
                     }
@@ -1101,11 +1113,11 @@ where
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(collected) => collected,
                         Err(reason) => {
-                            module.record_extension_diagnostic(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 reason,
-                            );
+                            ));
                             return None;
                         }
                     };
@@ -1114,7 +1126,11 @@ where
                         Err(err) => {
                             // As in `Launch`: the run's own message is this
                             // refusal's cause, so it is recorded as it stands.
-                            module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                err,
+                            ));
                             None
                         }
                     }
@@ -1161,11 +1177,11 @@ where
                             match err {
                                 RoleUnread::Undecided => return None,
                                 RoleUnread::Refusal(why) => {
-                                    module.record_extension_diagnostic(
+                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                         PARALLEL_DIAGNOSTIC,
                                         None,
                                         why,
-                                    );
+                                    ));
                                     None
                                 }
                             }
@@ -1205,7 +1221,11 @@ where
                     let leaf_classes = match parallel_leaf_classes(id) {
                         Ok(classes) => classes,
                         Err(err) => {
-                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                PARALLEL_DIAGNOSTIC,
+                                None,
+                                err,
+                            ));
                             return None;
                         }
                     };
@@ -1227,7 +1247,7 @@ where
                             (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
                             (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
                             (ScalarClass::Int, Some(LowValue::Float(_))) => {
-                                module.record_extension_diagnostic(
+                                module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                     PARALLEL_DIAGNOSTIC,
                                     None,
                                     if position == 0 {
@@ -1237,16 +1257,16 @@ where
                                         "a parallel parameter's scalar leaf is Int here and the \
                                      launch passes a Float for it: Int and Float do not convert"
                                     },
-                                );
+                                ));
                                 return None;
                             }
                             (ScalarClass::Float, Some(LowValue::USize(_))) => {
-                                module.record_extension_diagnostic(
+                                module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                     PARALLEL_DIAGNOSTIC,
                                     None,
                                     "a parallel parameter's scalar leaf is Float here and the \
                                  launch passes an Int for it: Int and Float do not convert",
-                                );
+                                ));
                                 return None;
                             }
                             _ => {
@@ -1399,7 +1419,11 @@ where
                         Err(err) => {
                             // The refusal is recorded: `BudgetExhausted`'s renderings
                             // would say "never terminates", which is false here.
-                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                PARALLEL_DIAGNOSTIC,
+                                None,
+                                err,
+                            ));
                             None
                         }
                     }
@@ -1478,11 +1502,11 @@ where
                                 Err(err) => {
                                     // A failed fetch is a refusal like any other:
                                     // it is recorded and the read stays undecided.
-                                    module.record_extension_diagnostic(
+                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                         PARALLEL_DIAGNOSTIC,
                                         None,
                                         err,
-                                    );
+                                    ));
                                     return None;
                                 }
                             }
@@ -1541,11 +1565,11 @@ where
                             match fetch_resident(resident, 0) {
                                 Ok(data) => data,
                                 Err(err) => {
-                                    module.record_extension_diagnostic(
+                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
                                         PARALLEL_DIAGNOSTIC,
                                         None,
                                         err,
-                                    );
+                                    ));
                                     return None;
                                 }
                             }
@@ -4402,7 +4426,7 @@ where
     P: Program,
     P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
 {
-    module.record_extension_diagnostic(
+    module.record_extension_diagnostic(ExtensionDiagnostic::note(
         PARALLEL_DIAGNOSTIC,
         None,
         format!(
@@ -4410,7 +4434,7 @@ where
              `compute.graphrun` hands back, or what `compute.buffer` makes of an array",
             what_this_is(module, node)
         ),
-    );
+    ));
     None
 }
 
@@ -4436,7 +4460,7 @@ where
             .node_value(item.node)
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
         else {
-            module.record_extension_diagnostic(
+            module.record_extension_diagnostic(ExtensionDiagnostic::note(
                 BUFFER_DIAGNOSTIC,
                 None,
                 format!(
@@ -4444,14 +4468,14 @@ where
                      elements whose class it can read: give the array a value before it is \
                      handed over"
                 ),
-            );
+            ));
             return None;
         };
         let (position_class, word) = match value {
             LowValue::USize(word) => (ScalarClass::Int, word as i64),
             LowValue::Float(word) => (ScalarClass::Float, float_bits(word)),
             _ => {
-                module.record_extension_diagnostic(
+                module.record_extension_diagnostic(ExtensionDiagnostic::note(
                     BUFFER_DIAGNOSTIC,
                     None,
                     format!(
@@ -4459,14 +4483,14 @@ where
                          are: an `Int` array becomes an `Int` buffer and a `Float` array a \
                          `Float` one"
                     ),
-                );
+                ));
                 return None;
             }
         };
         match class {
             None => class = Some(position_class),
             Some(fixed) if fixed != position_class => {
-                module.record_extension_diagnostic(
+                module.record_extension_diagnostic(ExtensionDiagnostic::note(
                     BUFFER_DIAGNOSTIC,
                     None,
                     format!(
@@ -4476,7 +4500,7 @@ where
                         class_name(position_class),
                         class_name(fixed)
                     ),
-                );
+                ));
                 return None;
             }
             Some(_) => {}
@@ -4502,14 +4526,14 @@ where
     P: Program,
     P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
 {
-    module.record_extension_diagnostic(
+    module.record_extension_diagnostic(ExtensionDiagnostic::note(
         BUFFER_DIAGNOSTIC,
         None,
         format!(
             "`compute.buffer` copies an array's elements, and its argument holds {}",
             what_this_is(module, node)
         ),
-    );
+    ));
     None
 }
 
@@ -4597,7 +4621,11 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            GRAPH_DIAGNOSTIC,
+            None,
+            reason,
+        ));
     };
     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
         unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
@@ -4824,7 +4852,11 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator> + From<LowOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            GRAPH_DIAGNOSTIC,
+            None,
+            reason,
+        ));
     };
     // A check, not a resolution: `Apply` addresses its callee as a node, so this
     // only asks if the operand is a function.
@@ -4855,7 +4887,11 @@ where
                     AnyNodeId::Dynamic(node) => Some(node),
                     AnyNodeId::Static(_) => None,
                 };
-                module.record_extension_failure(GRAPH_DIAGNOSTIC, at, why);
+                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+                    GRAPH_DIAGNOSTIC,
+                    at,
+                    why,
+                ));
                 return None;
             }
             // A "not yet", and only that: the flat tuple below is the honest reading.
@@ -5172,7 +5208,11 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            GRAPH_DIAGNOSTIC,
+            None,
+            reason,
+        ));
     };
     let (id, backend) = match module
         .node_value(graph_node)
@@ -5284,7 +5324,11 @@ where
     }
     lines.extend(take_graph_pass_lines());
     for line in lines {
-        module.record_extension_diagnostic(LANDING_DIAGNOSTIC, None, line);
+        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            LANDING_DIAGNOSTIC,
+            None,
+            line,
+        ));
     }
     let values = match graph::run(
         &graph,

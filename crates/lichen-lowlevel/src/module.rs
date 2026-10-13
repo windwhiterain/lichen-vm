@@ -36,7 +36,6 @@ impl<P: Program> Module<P> {
             apply_errors: Vec::new(),
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
-            extension_failures: Vec::new(),
             global_ext: P::GlobalExt::default(),
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
@@ -385,63 +384,30 @@ impl<P: Program> Module<P> {
         self.functions[function].nodes.push(node);
     }
 
-    /// Record a diagnostic a **layer above the lowlevel** produced.
+    /// Record a diagnostic a **layer above the lowlevel** produced. See
+    /// [`ExtensionDiagnostic::fails_build`].
     ///
     /// # Invariant
     ///
-    /// A record is not an error state and never changes what the VM does next. An identical
-    /// `(category, node, message)` entry is dropped: a node is deep-evaluated more than once,
-    /// so one refusal is one fact. The linear scan is right because this channel holds only
-    /// the handful of things a layer declined to do, unlike `apply_errors`.
-    pub fn record_extension_diagnostic(
-        &mut self,
-        category: &'static str,
-        node: Option<NodeId>,
-        message: impl Into<String>,
-    ) {
-        let message = message.into();
-        let duplicate = self
-            .extension_diagnostics
-            .iter()
-            .any(|e| e.category == category && e.node == node && e.message == message);
+    /// One record is one fact: `fails_build` rides the entry rather than naming which
+    /// list it went to. An identical `(category, node, message)` entry is dropped
+    /// across **both** kinds, because a node is deep-evaluated more than once. The
+    /// linear scan is right because this channel holds only the handful of things a
+    /// layer declined to do, unlike `apply_errors`.
+    pub fn record_extension_diagnostic(&mut self, entry: ExtensionDiagnostic) {
+        let duplicate = self.extension_diagnostics.iter().any(|e| {
+            e.category == entry.category && e.node == entry.node && e.message == entry.message
+        });
         if duplicate {
             return;
         }
-        self.extension_diagnostics.push(ExtensionDiagnostic {
-            category,
-            node,
-            message,
-        });
+        self.extension_diagnostics.push(entry);
     }
 
-    /// Record a refusal a **layer above the lowlevel** produced that is an error
-    /// rather than a note.
-    ///
-    /// # Invariant
-    ///
-    /// A record here **fails the build**, so a program is never handed a module
-    /// whose own definition a downstream refused. The same
-    /// `(category, node, message)` entry is dropped as a duplicate, because the
-    /// definition pass and the run both walk a node.
-    pub fn record_extension_failure(
-        &mut self,
-        category: &'static str,
-        node: Option<NodeId>,
-        message: impl Into<String>,
-    ) {
-        let message = message.into();
-        let duplicate = self
-            .extension_failures
-            .iter()
-            .any(|e| e.category == category && e.node == node && e.message == message);
-        if duplicate {
-            return;
-        }
-        self.extension_failures.push(ExtensionDiagnostic {
-            category,
-            node,
-            message,
-        });
+    /// Whether any recorded entry **fails the build**; see
+    /// [`ExtensionDiagnostic::fails_build`].
+    pub fn has_extension_failures(&self) -> bool {
+        self.extension_diagnostics.iter().any(|e| e.fails_build)
     }
 
     /// Register `condition` as an assert: a constraint, not a unification, so an

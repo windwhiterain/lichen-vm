@@ -421,14 +421,21 @@ where
                 })
                 .collect::<Vec<_>>(),
         );
-        // A layer above the lowlevel renders its own refusals here; no span.
+        // Notes only: a build-failing record was already rendered above, with its span.
         // See docs/notes/compiler-plugin.md.
-        diagnostics.extend(build.module.extension_diagnostics.iter().map(|entry| {
-            Diag::unattributed(
-                Stage::Check,
-                format!("{}: {}", entry.category, entry.message),
-            )
-        }));
+        diagnostics.extend(
+            build
+                .module
+                .extension_diagnostics
+                .iter()
+                .filter(|entry| !entry.fails_build)
+                .map(|entry| {
+                    Diag::unattributed(
+                        Stage::Check,
+                        format!("{}: {}", entry.category, entry.message),
+                    )
+                }),
+        );
         // A failed build carries at least one diagnostic: synthesise one here so
         // `Err` never renders nothing.
         if diagnostics.is_empty() {

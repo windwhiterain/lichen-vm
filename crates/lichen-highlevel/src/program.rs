@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, BlockId, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
-    OperatorExt, Program, StaticModule, ValueExt,
+    AnyNodeId, BlockId, ExtensionDiagnostic, GlobalExt, LowOperator, LowShape, LowValue, Module,
+    ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -1163,11 +1163,11 @@ where
     P::Value: ValueType,
 {
     let operation = if remainder { "remainder" } else { "division" };
-    module.record_extension_diagnostic(
+    module.record_extension_diagnostic(ExtensionDiagnostic::note(
         DIVIDE_BY_ZERO,
         None,
         format!("the divisor of this {operation} evaluated to 0, and there is no value for a {operation} by zero"),
-    );
+    ));
     None
 }
 
@@ -1191,11 +1191,11 @@ where
     } else {
         "at or past the widest machine integer"
     };
-    module.record_extension_diagnostic(
+    module.record_extension_diagnostic(ExtensionDiagnostic::note(
         OUT_OF_RANGE,
         None,
         format!("this float2int operand evaluated to {value}, which is {reason}, and there is no Int for it to truncate toward"),
-    );
+    ));
     None
 }
 

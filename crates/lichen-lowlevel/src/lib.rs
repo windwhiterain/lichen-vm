@@ -897,22 +897,13 @@ pub struct Module<P: Program> {
     pub apply_errors: Vec<ApplyError>,
     /// The apply nodes [`Self::apply_errors`] already holds an entry for; the dedup's test.
     apply_error_nodes: HashSet<NodeId>,
-    /// Diagnostics recorded by layers above the lowlevel. See [`ExtensionDiagnostic`].
+    /// Diagnostics and refusals a layer above the lowlevel recorded; see
+    /// [`ExtensionDiagnostic`].
     ///
     /// # Invariant
     /// Append-only and never cleared, so a second pass sees the first pass's records.
     /// Recording the same fact twice is declined: a node is deep-evaluated more than once.
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
-    /// Refusals a layer above the lowlevel produced that **fail the build**.
-    /// See [`Module::record_extension_failure`].
-    ///
-    /// # Invariant
-    ///
-    /// Append-only and never cleared, and held apart from
-    /// [`Self::extension_diagnostics`] because the two differ in what they mean:
-    /// a note leaves the build usable, a failure does not. The duplicate rule is
-    /// the note channel's, for the same reason it holds there.
-    pub extension_failures: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     /// The **mark anchors** each lowered marked expression reached, keyed by the
@@ -954,6 +945,40 @@ pub struct ExtensionDiagnostic {
     pub node: Option<NodeId>,
     /// The message, rendered by the layer that recorded it — the lowlevel never parses it.
     pub message: String,
+    /// Whether this record **fails the build** rather than noting and leaving it usable.
+    ///
+    /// # Invariant
+    /// It is set by the recording layer, never inferred: only
+    /// [`Module::has_extension_failures`] and a reader naming the two kinds consume it,
+    /// so the lowlevel itself never branches on it. It is deliberately **not** part of
+    /// the duplicate test — the same sentence is one fact whichever way it was recorded.
+    pub fails_build: bool,
+}
+
+impl ExtensionDiagnostic {
+    /// A record that leaves the build usable. See [`Self::fails_build`].
+    pub fn note(category: &'static str, node: Option<NodeId>, message: impl Into<String>) -> Self {
+        ExtensionDiagnostic {
+            category,
+            node,
+            message: message.into(),
+            fails_build: false,
+        }
+    }
+
+    /// A record that fails the build. See [`Self::fails_build`].
+    pub fn failure(
+        category: &'static str,
+        node: Option<NodeId>,
+        message: impl Into<String>,
+    ) -> Self {
+        ExtensionDiagnostic {
+            category,
+            node,
+            message: message.into(),
+            fails_build: true,
+        }
+    }
 }
 
 /// One entry of the [`Registry`]: a registered static module plus per-key state.

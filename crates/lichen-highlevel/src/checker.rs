@@ -615,7 +615,7 @@ where
         let ok = !checker.check_failed()
             && checker.module.eval_errors.is_empty()
             && checker.module.assert_errors.is_empty()
-            && checker.module.extension_failures.is_empty()
+            && !checker.module.has_extension_failures()
             && checker.nonterminating.is_empty();
         let root_val = checker.value_of(root);
         let root_schema_tail = checker.schema_tail(root).to_vec();

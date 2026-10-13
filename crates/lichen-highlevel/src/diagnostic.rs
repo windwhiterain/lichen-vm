@@ -164,8 +164,9 @@ pub enum DiagKind {
     /// # Invariant
     /// `field` carries the refusing layer's own sentence, prefixed by its
     /// category, verbatim: the highlevel names no rule of its own here. A
-    /// refusal only a **run** can reach belongs on
-    /// `Module::extension_diagnostics`, which leaves the build usable.
+    /// refusal only a **run** can reach is the same kind of record with
+    /// [`lichen_lowlevel::ExtensionDiagnostic::fails_build`] cleared, and leaves the
+    /// build usable.
     ExtensionRule,
     /// A failed build that [`Build::diagnostics`] could attribute *nothing* to.
     ///
@@ -400,7 +401,12 @@ where
         out.extend(attributed.into_iter().map(|(_, diag)| diag));
         // A downstream's refusal, on which the build already failed: its own
         // sentence, at the node it named.
-        for entry in &self.module.extension_failures {
+        for entry in self
+            .module
+            .extension_diagnostics
+            .iter()
+            .filter(|entry| entry.fails_build)
+        {
             let loc = entry
                 .node
                 .and_then(|node| self.node_loc(AnyNodeId::Dynamic(node)));
