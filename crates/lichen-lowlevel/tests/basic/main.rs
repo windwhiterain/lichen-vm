@@ -5,6 +5,7 @@ mod compaction;
 mod equality;
 mod evaluation;
 mod function;
+mod gc_class_shape;
 mod host_loop;
 mod loop_conversion;
 mod recursion;

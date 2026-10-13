@@ -182,12 +182,14 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// No live member's chain passes through a removed node. The class value
-    /// needs no migration: [`Module::bind`] already replicated it to every
-    /// member, and a class whose members all die with the block is left
-    /// alone. This runs before the block's nodes are removed, because the
-    /// walk reads the `next` pointers of the members being removed.
+    /// No live member's chain passes through a removed node. The value needs
+    /// no migration: [`Module::propagate_class_value`] replicated it. The low
+    /// type is class-routed through the representative alone, so the released
+    /// one's is joined into the re-elected one. This runs before the removal
+    /// reads the members' `next` pointers.
     fn flatten_class(&mut self, rep: NodeId, dropped: BlockId) {
+        // Class-routed and stored nowhere else: `docs/notes/lowlevel-low-types.md`.
+        let low_shape = self.nodes[rep].low_shape.clone();
         let mut survivors = Vec::new();
         let mut current = Some(rep);
         while let Some(member) = current {
@@ -208,6 +210,9 @@ impl<P: Program> Module<P> {
             .find_map(|&member| self.nodes.get(member).and_then(|node| node.value))
         {
             self.fill_class_holes(representative, value);
+        }
+        if let Some(shape) = low_shape {
+            self.refine_class_low_type(representative, shape);
         }
     }
 
