@@ -1417,6 +1417,27 @@ fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
     );
 }
 
+/// The failure names the value it is about.
+///
+/// # Invariant
+/// The callee is a per-apply clone the checker never saw, and `Build::node_loc`
+/// resolves it through its origin to the compiled value slot it instantiates,
+/// so the caret lands on the parameter rather than nowhere.
+#[test]
+fn an_apply_of_a_deferred_non_function_reports_where_to_look() {
+    let report = compile("f = g => g 1\nf 5");
+    let check = report.diagnostics[0]
+        .check
+        .as_ref()
+        .expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeApplyTarget);
+    assert_eq!(
+        report.diagnostics[0].span,
+        Some((1, 5)),
+        "the caret is on the parameter `g` it applied"
+    );
+}
+
 #[test]
 fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
     // The instance is a `LowValue::Array` — a compute kernel's

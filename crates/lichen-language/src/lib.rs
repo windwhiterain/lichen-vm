@@ -38,7 +38,7 @@ use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
 };
 use lichen_highlevel::{NativeOps, no_native_ops};
-use lichen_lowlevel::{Registry, StaticNodeId};
+use lichen_lowlevel::{AnyNodeId, Registry, StaticNodeId};
 
 use crate::cells::CellStore;
 use crate::path::Path;
@@ -385,61 +385,17 @@ where
                                 .as_ref()
                                 .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                         })
-                        // A unify error recorded outside the checker's checks
-                        // carries no `Loc`: resolve it through `node_edges`/`state`.
+                        // A unify error no check owns carries no `Loc`: ask the
+                        // build, which resolves a clone through its origin.
                         .or_else(|| {
-                            // A node the GC released is absent; `node_origin`'s
-                            // contract is that the caller checks liveness first.
-                            let origin = |node: lichen_lowlevel::NodeId| {
-                                build
-                                    .module
-                                    .nodes
-                                    .contains_key(node)
-                                    .then(|| build.module.node_origin(node))
-                                    .flatten()
-                            };
-                            let resolve = |node: lichen_lowlevel::NodeId| {
-                                build
-                                    .node_edges
-                                    .get(&node)
-                                    .map(|loc| loc.expr.0 as usize)
-                                    .or_else(|| {
-                                        origin(node).and_then(|origin| {
-                                            build
-                                                .node_edges
-                                                .get(&origin)
-                                                .map(|loc| loc.expr.0 as usize)
-                                        })
-                                    })
-                            };
-                            let by_state = |node: lichen_lowlevel::NodeId| {
-                                let node = origin(node).unwrap_or(node);
-                                build.state.iter().position(|state| {
-                                    state.term == Some(node)
-                                        || state.val == Some(node)
-                                        || state.ty == Some(node)
+                            build
+                                .node_loc(AnyNodeId::Dynamic(d.a))
+                                .or_else(|| build.node_loc(AnyNodeId::Dynamic(d.b)))
+                                .and_then(|loc| {
+                                    span_index
+                                        .as_ref()
+                                        .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                                 })
-                            };
-                            let span_of = |expr: usize| {
-                                span_index
-                                    .as_ref()
-                                    .and_then(|s| s.get(expr).copied().flatten())
-                            };
-                            let span = resolve(d.a)
-                                .or_else(|| resolve(d.b))
-                                .or_else(|| by_state(d.a))
-                                .or_else(|| by_state(d.b))
-                                .and_then(span_of);
-                            if std::env::var_os("LICHEN_DIAG_TRACE").is_some() {
-                                eprintln!(
-                                    "PROBE span lookup: a={:?} origin_a={:?} b={:?} origin_b={:?} -> {span:?}",
-                                    d.a,
-                                    origin(d.a),
-                                    d.b,
-                                    origin(d.b),
-                                );
-                            }
-                            span
                         });
                     // A failure cloned out of a **static** module belongs to that
                     // module's source; no kept source, no diagnostic.

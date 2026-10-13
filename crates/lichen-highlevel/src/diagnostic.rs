@@ -515,7 +515,10 @@ where
                 out.push(Diag {
                     assert_value: Some(err.value),
                     assert_spelling,
-                    ..Diag::factual(DiagKind::Assert, self.node_edges.get(&template).cloned())
+                    ..Diag::factual(
+                        DiagKind::Assert,
+                        self.node_loc(AnyNodeId::Dynamic(template)),
+                    )
                 });
             }
         }
@@ -583,24 +586,39 @@ where
         }
     }
 
-    /// The structured location for a node, or `None` for a static ref (which has
-    /// no importer expression).
+    /// The structured location a runtime failure at `node` is attributed to.
     ///
     /// # Invariant
-    /// A failure inside an applied function names a **per-apply clone**: the
-    /// checker never saw it, so its edge is the node the clone was attributed
-    /// through ([`Module::node_origin`]) — a checker-attributed node for a
-    /// dynamic template, or the apply that materialized a frozen one, which
-    /// `Build::apply_edges` attributes to the caller's argument.  A node's own
-    /// edge wins.
-    fn node_loc(&self, node: AnyNodeId) -> Option<Loc> {
+    /// The order is **the node's own entry, then its origin's registered edge,
+    /// then the apply that cloned it, then the origin's compiled slot**.  An
+    /// apply node *is* the call expression's own pair, so `apply_edges` has to
+    /// outrank the slot layout there: a frozen-template clone names the caller's
+    /// argument, not the call.
+    ///
+    /// # Invariant
+    /// Every entry `node_edges` registered is read before any compiled slot, so
+    /// a site that chose a caret on purpose — a type access's element at the
+    /// read's type slot, an annotation's attribute tail — keeps it.  The slot
+    /// steps **can only fill a miss**, so a located failure keeps its span and
+    /// an unlocated one is located more often.
+    ///
+    /// # Invariant
+    /// A node a `@gc` scope released is out of this build's graph, and
+    /// `Module::node_origin` indexes `Module::nodes`, so liveness is tested
+    /// before it is asked.
+    pub fn node_loc(&self, node: AnyNodeId) -> Option<Loc> {
         let AnyNodeId::Dynamic(node) = node else {
             return None;
         };
-        if let Some(loc) = self.node_edges.get(&node) {
+        if !self.module.nodes.contains_key(node) {
+            return None;
+        }
+        // `lowerings` holds `node_edges` first: the edge registered for
+        // this node, else the slot it is.
+        if let Some(loc) = self.lowerings().get(&node) {
             return Some(loc.clone());
         }
-        // One step suffices: the origin reaches a node the checker attributed
+        // One step suffices: the origin reaches a node this build attributed
         // (see `Module::node_origin`).
         let origin = self.module.node_origin(node)?;
         if !self.module.nodes.contains_key(origin) {
@@ -611,10 +629,14 @@ where
         }
         // The origin is the apply that materialized a clone of a frozen
         // template: the caller's argument is the location.
-        self.apply_edges.get(&origin).map(|edge| Loc {
-            expr: edge.argument_expr,
-            path: Vec::new(),
-        })
+        if let Some(edge) = self.apply_edges.get(&origin) {
+            return Some(Loc {
+                expr: edge.argument_expr,
+                path: Vec::new(),
+            });
+        }
+        // A dynamic template: the slot it lowered from.
+        self.lowerings().get(&origin).cloned()
     }
 
     /// Whether `loc` was registered by one of the type accesses for its
@@ -634,6 +656,12 @@ where
     }
 
     /// One unification-failure diagnostic: the `unify_errors` entry at `i`.
+    ///
+    /// # Invariant
+    /// The apply-time parameter check reads `apply_edges` itself rather than
+    /// [`Self::node_loc`]: the apply node is the call expression's own pair slot,
+    /// so the slot layout would answer with the call, and the apply edge alone
+    /// names the argument without the unify's descent into it.
     fn mismatch(&self, i: usize, index: &UnifyErrorIndex) -> Diag<P> {
         let err = &self.module.unify_errors[i];
         // An apply-time parameter-check failure: attribute to the argument.
