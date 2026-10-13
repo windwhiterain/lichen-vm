@@ -17,7 +17,7 @@ test file.
 |---|---|
 | **RMSNorm** | **landed** (`419aab56`): a row-wise `Σ x²` reduction plus the rescale that reads it |
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
-| **softmax** | **landed** (`f8645274`): a `max` fold plus the normalise that reads it, in the RMSNorm two-kernel shape — and that pair **merges**. What still refuses is **arity**: a **chain of any length** now merges (`3f8007cc`, same floor licence, no pack — the floor was already granting it, only `merge_region` refused), but the textbook three-kernel form is **irreducibly a diamond** — the normalise step needs both `m` and `s`, and `yᵢ = exp(dᵢ − m)/s` needs `m` twice, so it is *not* expressible as a linear chain either. Fan-in is what refuses (`NotAReductionChain`, one incoming edge per consumer) |
+| **softmax** | **landed** (`f8645274`) and its **textbook three-kernel form now merges too** (`d364f547`): the diamond — the normalise step reading both `m` and `s`, with `m` also read by the sum — is a **fan-in**, and a fan-in is licensed now. A **chain of any length** landed earlier (`3f8007cc`). The licence was restated once, in the two places it was stated: *"a region two edges **arrive at** is that shape exactly when every one of those inputs is named and proven: a `Between` per arrival, each over a slot of its own"* — a diamond needs **both** halves (two arrive and two leave), and `m` read twice is why it can never be a chain |
 | **RoPE** | **landed** (`2f7214af`): `cos`/`sin` added to the language (definitions spliced by the lowerer, read by the bridge like `exp`/`sqrt`), then the pairwise rotation as three elementwise kernels. It is **one lane per element** — a rule, not a preference: a `.to` chain can fill both positions of a pair, but its outer link is contended and order is not a contract. Domain `|x| ≤ 8192`, bit-exact against a model; the clamp above that is a **silent `Select`**, so an unbounded angle gets `sin(8192)` |
 | **matmul** | **not close**: nothing expresses a two-dimensional launch — `compute.range` is one dimension and a parallel fragment's shape is `(config, index)` |
 | **attention** | behind both the softmax and the matmul walls |
@@ -229,16 +229,25 @@ need a node-local producer for `r`.
   line through the run report's own channel.
 - **What attention needs, in order.** (1) **A launch that is not one row** — `compute.range` is one
   dimension and a parallel fragment's shape is `(config, index)`, so matmul and attention both need a
-  two-dimensional workgroup, and matmul is nowhere near. (2) **Fan-in — a region that is not a chain**
-  — **and chains themselves are done** (`3f8007cc`: any length, same licence, no pack; the earlier
-  `RegionIsNotAPair` on a linear three-kernel chain was a pure capability gap, since `licence()`'s
-  `off_chain_node()` already answered `None` for a chain and only `merge_region` refused afterwards).
-  What remains is the **diamond**: `region_edges` refuses a node two instances feed
-  (`NotAReductionChain`) and `region_schema` gives each consumer **one** `ReadRoles` from the **first**
-  edge found. Concretely it needs a symbolic variable **per input ordinal** (`r0`, `r1`) in
-  `lichen_fusion::Variable`, a per-input `ReadRoles` in the bridge, a `Between` per input, and a
-  `compose` that inlines **two** producers into one body — plus a restatement of `licence()`'s own rule
-  ("two arrive at … is not that chain"), which is why it was not taken. Attention sits behind it.
+  two-dimensional workgroup, and matmul is nowhere near. **This is the only wall left before attention.**
+  (2) **Fan-in** — **done** (`d364f547`), together with chains (`3f8007cc`). The diamond merges: the
+  normalise step reading both `m` and `s` is a fan-in, and `m` read twice is why it can never be a chain.
+  The licence was restated **once, in the two places it was stated** (`licence()` and
+  `RegionSchema::off_chain_node`): a region two edges *arrive at* is served "exactly when **every one of
+  those inputs is named and proven**: a `Between` per arrival, each over a slot of its own". Per input
+  there is now one named slot — `Variable::producer(ordinal)` over `r, r1, r2, …`, where **ordinal 0 stays
+  `PRODUCER`** so that no existing pack and no region hash moves — and `region_edges` refuses
+  `ProducerFeedsTwice` (one value, two slots, no spelling) and `InputsAreNotNamed` (wider than
+  `FAN_IN_INPUTS = 8`), while a consumer whose `element` does not contain an absorbed slot refuses
+  `ElementWithoutProducer`. **Measured on the device**: three kernels against one merged node, the same
+  eight values **bit for bit**, with a counterfactual edit inside the composed body (`+100` → `+10000`)
+  answering a number no recording computes — so the merged node is what dispatched.
+  **Three honest limits.** A fan-in's licence is **structural** — "`compose_fan_in` can serve this" —
+  and **not** the reduction-chain algebra the symbolic engine derives for a chain, so a fan-in has a
+  schema and a body but no fused-loop derivation. The composed body **recomputes** each producer's cone
+  per read rather than storing and reloading it, so value-identity is evidenced at one device shape, not
+  proved for arbitrary width. And the body grows **O(n²)** in size — fine at three, not what a
+  thirty-kernel fan-in wants.
   (3) **A `Max`/`Min` tile** — **done** (`9722e681`), with the identity caveat above; so what remains is
   (1) and (2).
 - **Two costs the chain support carries.** `compose`'s composition is a **modelling claim, not a
