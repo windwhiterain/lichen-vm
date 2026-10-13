@@ -13,6 +13,24 @@ use crate::shape;
 use super::Checker;
 use super::annotations::ElementWalk;
 
+/// What a named instantiation decided.
+struct NamedInstance {
+    /// The field values, in the definition's order.
+    value: NodeId,
+    /// The arguments' types in that order, which the field-list unify compares.
+    value_shape: NodeId,
+    /// Whether the named arguments matched the definition; a mismatch was
+    /// recorded, so the caller skips the field-list unify.
+    valid: bool,
+    /// `assign[position]` = the call-order argument index filling it.
+    ///
+    /// # Invariant
+    /// Empty when nothing was assigned, so the reconciliation walks nothing:
+    /// every early return here is one that recorded a mismatch or deferred the
+    /// whole reorder.
+    assign: Vec<Option<usize>>,
+}
+
 impl<P: HighProgram> Checker<P>
 where
     P::Value: ValueType,
@@ -488,7 +506,9 @@ where
                 }
             };
         let (value_node, value_shape, valid) = if any_named {
-            self.named_instantiate(e, type_expr, type_pair, callee_ty, value, arg_names)
+            let named = self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
+            self.unify_named_instantiate_elements(type_expr, value, &named.assign);
+            (named.value, named.value_shape, named.valid)
         } else {
             // A positional instantiation keeps the value's own shape: a tuple's
             // element-type list, or the type itself.
@@ -564,6 +584,36 @@ where
         }
     }
 
+    /// Reconcile a **named** instantiation's arguments against what the fields
+    /// state, through the reorder's own map.
+    ///
+    /// # Invariant
+    /// The pairing is the **definition's** order: the IR keeps `S(.b …, .a …)`
+    /// in call order, so pairing by position would take the wrong field. An
+    /// empty map is every early return's — a recorded mismatch or a deferred
+    /// reorder — so the walk pairs nothing there.
+    fn unify_named_instantiate_elements(
+        &mut self,
+        type_expr: ExprId,
+        value: ExprId,
+        assign: &[Option<usize>],
+    ) {
+        let (Some(fields), Some(arguments)) = (
+            self.written_struct_fields(type_expr),
+            self.compound_children(value),
+        ) else {
+            return;
+        };
+        let mut seen = ElementWalk::default();
+        for (field, supplied) in fields.into_iter().zip(assign.iter().copied()) {
+            let Some(argument) = supplied.and_then(|index| arguments.get(index)) else {
+                continue;
+            };
+            self.check_element_pair_attributes(field, *argument, &mut seen);
+            self.check_element_pair_values(field, *argument, &mut seen);
+        }
+    }
+
     /// A written struct type's field expressions, or `None` for any other callee.
     ///
     /// # Invariant
@@ -580,19 +630,19 @@ where
     ///
     /// # Invariant
     /// `valid` is `false` once a structural mismatch is recorded, and the caller
-    /// then skips the field-list unify. A concrete callee tells an anonymous
-    /// struct (refused) from an unresolved one, whose reorder is deferred
-    /// ([`Self::lazy_named_instantiate`]).
+    /// then skips the field-list unify. `callee_concrete` tells an anonymous
+    /// struct (refused) from an unresolved callee, whose reorder is deferred
+    /// ([`Self::lazy_named_instantiate`]); the caller owns it because **its own
+    /// pin makes every callee concrete** — read before the pin, never after.
     fn named_instantiate(
         &mut self,
         e: ExprId,
-        type_expr: ExprId,
         type_pair: NodeId,
         callee_ty: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
-    ) -> (NodeId, NodeId, bool) {
-        let callee_concrete = self.type_is_concrete(callee_ty);
+        callee_concrete: bool,
+    ) -> NamedInstance {
         // The value's elements are the arguments in call order.
         let elem_ids = self.range_children(value);
         let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
@@ -610,9 +660,15 @@ where
         .is_none()
         {
             if !callee_concrete {
-                return self.lazy_named_instantiate(
+                let (value, value_shape, valid) = self.lazy_named_instantiate(
                     type_pair, callee_ty, &elem_ids, arg_names, &vals, &tys,
                 );
+                return NamedInstance {
+                    value,
+                    value_shape,
+                    valid,
+                    assign: Vec::new(),
+                };
             }
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
@@ -625,7 +681,12 @@ where
                     );
                 }
             }
-            return (self.value_of(value), self.state[value].ty.unwrap(), false);
+            return NamedInstance {
+                value: self.value_of(value),
+                value_shape: self.state[value].ty.unwrap(),
+                valid: false,
+                assign: Vec::new(),
+            };
         }
         // The definition's field count; `None` mid-recursion, which defers the
         // missing/excess checks to the probe unify.
@@ -724,19 +785,12 @@ where
         if !valid {
             // The mismatch is the recorded diagnostic; return the call-order
             // value so the descent stays total.
-            return (self.value_of(value), self.state[value].ty.unwrap(), false);
-        }
-        // Each field's requirement and pin, against the argument that fills it — the
-        // definition's order, never the call's.
-        if let Some(fields) = self.written_struct_fields(type_expr) {
-            let mut seen = ElementWalk::default();
-            for (field, supplied) in fields.into_iter().zip(assign.iter().copied()) {
-                let Some(argument) = supplied else {
-                    continue;
-                };
-                self.check_element_pair_attributes(field, elem_ids[argument], &mut seen);
-                self.check_element_pair_values(field, elem_ids[argument], &mut seen);
-            }
+            return NamedInstance {
+                value: self.value_of(value),
+                value_shape: self.state[value].ty.unwrap(),
+                valid: false,
+                assign: Vec::new(),
+            };
         }
         // Reorder the values and their types into definition order, so the
         // instance reads positionally against the field list.
@@ -744,7 +798,12 @@ where
         let order_ty: Vec<NodeId> = assign.iter().map(|&a| tys[a.unwrap()]).collect();
         let value_node = self.array_node(self.current_block, &order);
         let value_shape = self.array_node(self.current_block, &order_ty);
-        (value_node, value_shape, true)
+        NamedInstance {
+            value: value_node,
+            value_shape,
+            valid: true,
+            assign,
+        }
     }
 
     /// The deferred named instantiation: an unresolved struct type, so the
