@@ -142,14 +142,33 @@ un-passed one. The wrong value is no longer reachable, and neither is any other 
 A legitimate `Σ x` still tiles byte for byte (its `Shared` slice and barrier still run, and the
 seed-raised counterfactual still moves by `65 × 7`).
 
-**What the gate does not cover**, because a wrong answer is what is at stake: it does **not** carry the
-datum function into `Folding` — a `combine` that *is* `Add(t, d)` while the body computes the datum
-differently elsewhere is still tiled from the raw datum (that is the deferred slice); it reads only
-`combine`, so an `identity` that is not the operator's unit is unchecked; it is the **tiling** pass's
-gate, not the **merge** pass's, so a producer claiming `Reduction(combine, identity, element)` still
-merges (`rmsnorm_denominator` exercises exactly that and passes unchanged); and it judges **shape, not
-faithfulness** — a body that marks `(+ t d)` while computing something else is still a lie a claim can
-tell.
+**The capability half closed the hazard properly** (`9722e681`). The datum is now the combine's **own
+non-state operand**, read from the canonical form (`SchemaNode::the_fold() -> DeclaredFold { operator,
+datum }`), carried as `Element::Function { position, function }` and compiled **once** into a `Vec<Step>`
+over the fold's one buffer read, which `Builder::element_at` replays inside the loop header — so every
+refusal happens at compile time and replaying cannot fail. **Schedulable now**: the combines `+ * max
+min`, and datums made of `d`, constants and `+ - * / max min` over them. **Still refused, by name**: a
+combine of `Sub`/`Div`/a comparison (`CombineIsNotAFold` — and in practice `Sub` never reaches that arm
+because `normalize` rewrites `(t − d)` as `(+ t (−d))`, whose negation no body computes), a comparison or
+any unary operator as the datum (`DatumIsNotAReadableFunction`), and any free variable but `d`.
+**Measured on the RTX 3060**, `x = 1.0 … 192.0`: `Σ x²` now tiles and answers `Σ x² = 2377760` — asserted
+element for element against what the **un-passed program's own body** wrote, with `Σ x = 18528` asserted
+*not* to be the answer — and `Σ x` still tiles **byte for byte**, pinned by a host test that the two
+element kinds build **equal** `KernelBody` values. A `Max` fold tiles too (`… its own marks declare `max`
+over 64 lane(s)`) and is **bit-exact**, where `+` is only re-associated.
+
+**What the gate still does not cover**, because a wrong answer is what is at stake: it reads only
+`combine`, so an **`identity` that is not the operator's unit is unchecked** — and that is the live
+landmine, because **a `max` fold's identity is `−∞`, the language cannot write it** (`Expr::Constant` is a
+finite `f64` and there is no unary minus), and the example seeds its max with `(0.0 - 1000000.0)`. So a
+`max` tile is correct **exactly when the declared seed is a real lower bound on the data**, which nothing
+verifies; a wrong seed tiles and answers wrong. Reaching a true `−∞` is a **language** change, not a
+`Folding` one. It also remains the **tiling** pass's gate rather than the **merge** pass's, it judges
+**shape, not faithfulness** (a body that marks `(+ t d)` while computing something else is a lie a claim
+can still tell), and re-associating `+`/`*` in `f32` is a standing assumption rather than a proof —
+`max`/`min` are the only newly-schedulable operators whose tiling is exact. The `element` role is
+**untouched and still `BeyondANode`**: the datum is read from the combine, and admitting `element` would
+need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
 
@@ -157,11 +176,11 @@ tell.
   `exp(d − r)` becomes `exp(d) * exp(−r)` (`lichen-fusion/src/normalize.rs`, `exponent_product`), and the
   hashed projection is the rewritten form — while as Taylor sums the two are **not numerically equal**.
   A digest therefore identifies an algebra, not the body's own expression tree.
-- **A `Max`/`Min` fold cannot be scheduled at all** (`CombineIsNotAFold` admits `Add | Mul` only). That
-  is safe — softmax's `max` runs as the program's own per-lane body — but it is also why attention's
-  numerically stable subtraction has no shared-memory reduction and no tile: the reduction it needs is
-  exactly the one the floor refuses. Teaching `Folding` `Max`/`Min` behind the same proof is the
-  capability half of the `combine` gate, and it is the datum-carrying slice, not a loosened gate.
+- **A `Max`/`Min` fold can now be scheduled** (`9722e681`, the capability half of the `combine` gate — the
+  datum-carrying slice, not a loosened gate). A `Max` combine over a describable datum tiles behind the
+  same proof and is **bit-exact**, so softmax's numerically stable subtraction can finally take a
+  shared-memory reduction and a tile. What it still cannot do is know that the *seed* is right — see the
+  identity landmine above.
 - **Non-uniform softmax is never exact in `f32` here.** Scanning 2394 four-element integer rows, **none**
   reproduce the true `f32` softmax (best gap 7 × 10⁻⁷), because this language's `exp` is a degree-10
   Taylor sum: the true `f32` answer and the program's answer differ in **every** element. So the
@@ -177,7 +196,8 @@ tell.
   two-dimensional workgroup, and matmul is nowhere near. (2) **A region that is not a pair**
   (`region_merge.rs`: a merge is exactly two instances) — or attention expressed so every stage stays a
   pair, keeping one producer per consumer; the fan-in that breaks it is the same `NotAReductionChain`
-  softmax's diamond hit. (3) **A `Max`/`Min` tile**, which is the bullet above.
+  softmax's diamond hit. (3) **A `Max`/`Min` tile** — **done** (`9722e681`), with the identity caveat
+  above; (1) and (2) are what remain.
 
 - **A transcendental bridges anywhere, not only at a marked expression's root.** The reader is consulted
   from `Walk::instruction` (`fusion-bridge/src/lower.rs`), which the walk calls for **every value it
