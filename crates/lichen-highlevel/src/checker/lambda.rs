@@ -43,7 +43,8 @@ where
         if looping {
             self.module.mark_looping(function);
         }
-        let value_cell = self.fresh_cell();
+        // The parameter's value position is unconstrained: the call supplies it.
+        let value_cell = self.any_cell();
         let type_cell = self.fresh_cell();
         // The parameter *is* the pair `[value, type]`, its cells in scope so the
         // clone yields fresh ones per call.
@@ -208,13 +209,15 @@ where
             self.function_of.insert(e, function);
         }
         self.function_stack.push((function, e));
-        let parameter_value = self.fresh_cell();
+        // Both value positions are unconstrained: a signature states types, and
+        // the wildcard is what an unstated value is.
+        let parameter_value = self.any_cell();
         let parameter_type = self.fresh_cell();
         let parameter = self.array_node(return_block, &[parameter_value, parameter_type]);
         // The domain is unified *into* the parameter's type slot, so a function
         // unified against it binds the two.
         self.module.unify(parameter_type, domain);
-        let return_value = self.fresh_cell();
+        let return_value = self.any_cell();
         let body = self.array_node(return_block, &[return_value, codomain]);
         self.module.finish_function(function, body, parameter);
         self.module.functions[function].return_type = codomain;
