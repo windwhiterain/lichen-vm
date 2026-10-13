@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, ValueId as GraphValueId};
-use lichen_kernel_ir::{ComposeRefusal, KernelFragment, ScalarClass, compose_fan_out};
+use lichen_kernel_ir::{ComposeRefusal, KernelFragment, ScalarClass, compose, compose_fan_out};
 
 use crate::fusion_claim::{
     Instance, PortKind, REDUCTION, RegionSchema, SchemaHash, SchemaRefusal, derive_regions,
@@ -63,19 +63,47 @@ struct Decision {
 /// One region's merge, as the rebuild reads it.
 #[derive(Clone)]
 struct Merge {
-    /// The graph positions of the deleted nodes: the producer, and in a fan-out every consumer
-    /// but the last.
+    /// The graph positions of the deleted nodes: every node of the region but the survivor.
     absorbed: Vec<usize>,
-    /// The graph position of the node whose body survives: the region's last consumer.
+    /// The graph position of the node whose body survives: the region's last node.
     survivor: usize,
-    /// One absorbed input position per consumer, in region order.
+    /// One absorbed input position per link, in region order.
     absorbed_input: Vec<usize>,
-    /// The graph values the merged fragment's outputs fill, in the order the consumers were named.
+    /// The graph values the merged fragment's outputs fill, in the order the composition wrote them.
     outputs: Vec<GraphValueId>,
     /// The fragment the surviving node holds.
     fragment: KernelFragment,
-    /// The surviving node's inputs: the producer's, then each consumer's but the absorbed one.
+    /// The surviving node's inputs: the first node's, then each later node's but the absorbed one.
     inputs: Vec<GraphValueId>,
+}
+
+/// One edge of a region the merge inlines: `from`'s output reaches `to` at `input`.
+///
+/// # Invariant
+/// **One link per node but the region's first**, in evaluation order, so a link's index is the
+/// region-local position of its reader less one — the position the merged line reports it at.
+#[derive(Debug, Clone, Copy)]
+struct Link {
+    /// The graph position whose output the edge carries.
+    from: usize,
+    /// The graph position that reads it.
+    to: usize,
+    /// The reading node's input ordinal the output arrives at.
+    input: usize,
+}
+
+/// The two shapes one composition inlines.
+///
+/// # Invariant
+/// **One producer, one consumer at a time**: a `compose` inlines a consumer *of one producer*, so a
+/// region is either a chain — every node reading the one before it — or a fan-out, every node
+/// reading the first. A tree that is neither names no single code the composition serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Every node but the first reads the first.
+    FanOut,
+    /// Every node but the first reads the one before it.
+    Chain,
 }
 
 impl GraphPass for RegionMerge {
@@ -171,7 +199,7 @@ impl GraphPass for RegionMerge {
 /// guessed here would be a node that runs and answers another program.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MergeRefusal {
-    /// The region is not one producer and one consumer.
+    /// The region is neither a chain of consumers nor one producer's several consumers.
     RegionIsNotAPair {
         /// How many instances the region holds.
         nodes: usize,
@@ -471,96 +499,71 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 /// The merge one region's nodes decide, or why they do not.
 ///
 /// # Invariant
-/// **A producer and the consumers that read it**, in evaluation order: every position but the
-/// first must read the first, because `compose` inlines consumers *of one producer* and no other
-/// edge is a shape it serves. A merge that slipped past a condition would be a node reading a
-/// buffer the program never wired to it, and the union cannot make one — `PortsDoNotCorrespond`.
+/// **A chain, or one producer's consumers**, in evaluation order, and every condition below is the
+/// pair's own: the shape is decided first, then one absorbed position per link, and a merge that
+/// slipped past either would be a node reading a buffer the program never wired to it — the union
+/// cannot make one, and `PortsDoNotCorrespond` is where that stops.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
     positions: &[usize],
 ) -> Result<Merge, MergeRefusal> {
-    let producer = *positions
-        .first()
-        .ok_or(MergeRefusal::RegionIsNotAPair { nodes: 0 })?;
-    let consumers = &positions[1..];
-    if consumers.is_empty()
-        || !consumers
-            .iter()
-            .all(|position| reads(graph, starts, producer, *position))
-    {
-        return Err(MergeRefusal::RegionIsNotAPair {
-            nodes: positions.len(),
-        });
-    }
-    let Node::Kernel(producer_node) = &graph.nodes()[producer];
-    let produced = starts[producer]..starts[producer] + producer_node.fragment.outputs;
-    // One absorbed position per consumer, and the value each of them reads there.
-    let mut absorbed_input: Vec<usize> = Vec::with_capacity(consumers.len());
-    let mut absorbed_value: Vec<GraphValueId> = Vec::with_capacity(consumers.len());
-    for &position in consumers {
-        let Node::Kernel(consumer_node) = &graph.nodes()[position];
-        let absorbed: Vec<usize> = consumer_node
-            .inputs
-            .iter()
-            .enumerate()
-            .filter(|(_, value)| produced.contains(value))
-            .map(|(ordinal, _)| ordinal)
-            .collect();
-        let [ordinal] = absorbed[..] else {
-            return Err(MergeRefusal::AbsorbedEdgeIsNotOne {
-                inputs: absorbed.len(),
-            });
-        };
-        absorbed_input.push(ordinal);
-        absorbed_value.push(consumer_node.inputs[ordinal]);
-    }
+    let shape = shape(graph, starts, positions)?;
+    // Two or more nodes, so a survivor and a first node are both named.
+    let survivor = *positions
+        .last()
+        .expect("a shape is decided over two or more");
+    let links = links(graph, starts, positions, shape)?;
+    let (outputs, deleted) = written_and_deleted(graph, starts, positions, &links, shape);
     let Some(returns) = graph.returns() else {
         return Err(MergeRefusal::GraphReturnsEveryValue {
-            value: absorbed_value[0],
+            value: absorbed_value(graph, &links[0]),
         });
     };
-    if let Some(value) = produced.clone().find(|value| returns.contains(value)) {
-        return Err(MergeRefusal::ProducedValueIsReturned { value });
+    if let Some(value) = deleted.iter().find(|value| returns.contains(value)) {
+        return Err(MergeRefusal::ProducedValueIsReturned { value: *value });
     }
-    // A deleted value is read at exactly the consumers that absorb it, and at no other node.
-    for value in produced.clone() {
+    // A deleted value is read at exactly the links that absorb it, and at no other node.
+    for value in deleted {
         let read = readers(graph, value);
-        let expected: Vec<usize> = consumers
+        let expected: Vec<usize> = links
             .iter()
-            .zip(&absorbed_value)
-            .filter(|(_, absorbed)| **absorbed == value)
-            .map(|(&position, _)| position)
+            .filter(|link| absorbed_value(graph, link) == value)
+            .map(|link| link.to)
             .collect();
         if read != expected {
             return Err(MergeRefusal::ProducedValueIsReadElsewhere {
                 value,
-                node: read.first().copied().unwrap_or(consumers[0]),
+                node: read.first().copied().unwrap_or(links[0].to),
             });
         }
     }
-    // The first consumer whose extent is not the producer's is the one named: a merged node
-    // dispatches over one extent.
-    if let Some(disagreeing) = consumers
+    // The first node's extent is the merged node's, and the first that differs from it is the one
+    // named.
+    let Node::Kernel(first_node) = &graph.nodes()[positions[0]];
+    if let Some(disagreeing) = positions[1..]
         .iter()
-        .find(|position| !extents_correspond(producer_node.count, count(graph, **position)))
+        .find(|position| !extents_correspond(first_node.count, count(graph, **position)))
     {
         return Err(MergeRefusal::ExtentsDiffer {
-            producer: producer_node.count,
+            producer: first_node.count,
             consumer: count(graph, *disagreeing),
         });
     }
-    // The merged node's inputs are the union: the producer's, then each consumer's survivors.
-    let mut inputs: Vec<GraphValueId> = producer_node.inputs.clone();
-    let mut bodies: Vec<(&KernelFragment, u32)> = Vec::with_capacity(consumers.len());
-    let mut outputs: Vec<GraphValueId> = Vec::new();
-    let mut ports = producer_node.fragment.inputs;
-    for (&position, &absorbed) in consumers.iter().zip(&absorbed_input) {
-        let Node::Kernel(consumer_node) = &graph.nodes()[position];
-        let output = absorbed_value[bodies.len()] - starts[producer];
+    // The merged node's inputs are the union: the first node's, then each link's reader but the
+    // absorbed one.
+    let mut inputs: Vec<GraphValueId> = first_node.inputs.clone();
+    let mut bodies: Vec<(&KernelFragment, u32)> = Vec::with_capacity(links.len());
+    let mut ports = first_node.fragment.inputs;
+    for link in &links {
+        let Node::Kernel(node) = &graph.nodes()[link.to];
+        let output = absorbed_value(graph, link) - starts[link.from];
         match (
-            producer_node.fragment.output_classes.get(output).copied(),
-            consumer_node.fragment.input_classes.get(absorbed).copied(),
+            fragment_at(graph, link.from)
+                .output_classes
+                .get(output)
+                .copied(),
+            node.fragment.input_classes.get(link.input).copied(),
         ) {
             (Some(produced), Some(expected)) if produced == expected => {}
             (Some(produced), Some(expected)) => {
@@ -571,19 +574,15 @@ fn merge_region(
             }
         }
         inputs.extend(
-            consumer_node
-                .inputs
+            node.inputs
                 .iter()
                 .copied()
                 .enumerate()
-                .filter(|(ordinal, _)| *ordinal != absorbed)
+                .filter(|(ordinal, _)| *ordinal != link.input)
                 .map(|(_, value)| value),
         );
-        outputs.extend(starts[position]..starts[position] + consumer_node.fragment.outputs);
-        bodies.push((&consumer_node.fragment, absorbed as u32));
-        ports = ports
-            .saturating_add(consumer_node.fragment.inputs)
-            .saturating_sub(1);
+        bodies.push((&node.fragment, link.input as u32));
+        ports = ports.saturating_add(node.fragment.inputs).saturating_sub(1);
     }
     // Past the merged ports, a position names another body's buffer: the union cannot fix it.
     if inputs.len() > ports {
@@ -593,18 +592,142 @@ fn merge_region(
             merged: None,
         });
     }
-    let fragment = compose_fan_out(&producer_node.fragment, &bodies)
+    let fragment = composed(graph, positions[0], shape, &links)
         .map_err(|refusal| MergeRefusal::CompositionRefused { refusal })?;
     Ok(Merge {
-        absorbed: std::iter::once(producer)
-            .chain(consumers[..consumers.len() - 1].iter().copied())
-            .collect(),
-        survivor: consumers[consumers.len() - 1],
-        absorbed_input,
+        absorbed: positions[..positions.len() - 1].to_vec(),
+        survivor,
+        absorbed_input: links.iter().map(|link| link.input).collect(),
         outputs,
         fragment,
         inputs,
     })
+}
+
+/// The shape the region's edges make, or the refusal naming what they do not.
+///
+/// # Invariant
+/// **One producer, one consumer at a time**, read off the edges and not off the node count: a chain
+/// is every node reading the one before it and a fan-out is every node reading the first, so a
+/// pair is a chain of one link and a tree is neither. A node that reaches a region value as its
+/// **extent** reads nothing at an input position, and no composition absorbs an edge like that.
+fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, MergeRefusal> {
+    let refused = MergeRefusal::RegionIsNotAPair {
+        nodes: positions.len(),
+    };
+    if positions.len() < 2 {
+        return Err(refused);
+    }
+    let chain = positions[1..]
+        .iter()
+        .enumerate()
+        .all(|(index, position)| reads(graph, starts, positions[index], *position));
+    if chain {
+        return Ok(Shape::Chain);
+    }
+    let fan_out = positions[1..]
+        .iter()
+        .all(|position| reads(graph, starts, positions[0], *position));
+    fan_out.then_some(Shape::FanOut).ok_or(refused)
+}
+
+/// The region's edges, one per node but the first, in evaluation order.
+///
+/// # Invariant
+/// **One absorbed position per node**: a node reading two of its producer's outputs names no single
+/// buffer to inline, and the region is refused by that name rather than merged against either.
+fn links(
+    graph: &Graph,
+    starts: &[usize],
+    positions: &[usize],
+    shape: Shape,
+) -> Result<Vec<Link>, MergeRefusal> {
+    let mut links = Vec::with_capacity(positions.len().saturating_sub(1));
+    for (index, &to) in positions.iter().enumerate().skip(1) {
+        let from = match shape {
+            Shape::Chain => positions[index - 1],
+            Shape::FanOut => positions[0],
+        };
+        let Node::Kernel(node) = &graph.nodes()[to];
+        let produced = starts[from]..starts[from] + fragment_at(graph, from).outputs;
+        let read: Vec<usize> = node
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| produced.contains(value))
+            .map(|(ordinal, _)| ordinal)
+            .collect();
+        let [input] = read[..] else {
+            return Err(MergeRefusal::AbsorbedEdgeIsNotOne { inputs: read.len() });
+        };
+        links.push(Link { from, to, input });
+    }
+    Ok(links)
+}
+
+/// The graph value one link carries: what its reader holds at the absorbed position.
+fn absorbed_value(graph: &Graph, link: &Link) -> GraphValueId {
+    let Node::Kernel(node) = &graph.nodes()[link.to];
+    node.inputs[link.input]
+}
+
+/// The graph values the merged fragment fills, and the ones the merge deletes.
+///
+/// # Invariant
+/// **A fan-out writes every consumer's outputs and a chain writes the survivor's**, because
+/// `compose_fan_out` declares the consumers' outputs summed while each `compose` of a chain declares
+/// its consumer's alone. Every other value a region node produces is deleted, and a deleted value
+/// that is returned or read elsewhere is what the two refusals below name.
+fn written_and_deleted(
+    graph: &Graph,
+    starts: &[usize],
+    positions: &[usize],
+    links: &[Link],
+    shape: Shape,
+) -> (Vec<GraphValueId>, Vec<GraphValueId>) {
+    let produced =
+        |position: usize| starts[position]..starts[position] + fragment_at(graph, position).outputs;
+    match shape {
+        Shape::FanOut => (
+            links.iter().flat_map(|link| produced(link.to)).collect(),
+            produced(positions[0]).collect(),
+        ),
+        Shape::Chain => (
+            produced(positions[positions.len() - 1]).collect(),
+            positions[..positions.len() - 1]
+                .iter()
+                .flat_map(|&position| produced(position))
+                .collect(),
+        ),
+    }
+}
+
+/// The fragment the region's links compose into one.
+///
+/// # Invariant
+/// **A fan-out is one `compose_fan_out`, and a chain is one `compose` per link**: from the second
+/// link on, the producer is the fragment the last step composed, so every condition `compose`
+/// states — one write, one return block, the shape, the target, the cone — is asked again of that
+/// fragment rather than assumed of it, and it is refused by the same name if it fails.
+fn composed(
+    graph: &Graph,
+    producer: usize,
+    shape: Shape,
+    links: &[Link],
+) -> Result<KernelFragment, ComposeRefusal> {
+    let first = fragment_at(graph, producer);
+    match shape {
+        Shape::FanOut => compose_fan_out(
+            first,
+            &links
+                .iter()
+                .map(|link| (fragment_at(graph, link.to), link.input as u32))
+                .collect::<Vec<_>>(),
+        ),
+        Shape::Chain => links.iter().try_fold(first.clone(), |merged, link| {
+            compose(&merged, fragment_at(graph, link.to), link.input as u32)
+        }),
+    }
 }
 
 /// The extent the node at `position` dispatches over.
@@ -613,7 +736,13 @@ fn count(graph: &Graph, position: usize) -> Count {
     node.count
 }
 
-/// Whether the node at `consumer` reads a value the node at `producer` produced.
+/// The fragment the node at `position` dispatched.
+fn fragment_at(graph: &Graph, position: usize) -> &KernelFragment {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    &node.fragment
+}
+
+/// Whether the node at `consumer` reads a value the node at `producer` produced, at an input.
 fn reads(graph: &Graph, starts: &[usize], producer: usize, consumer: usize) -> bool {
     let Node::Kernel(producer_node) = &graph.nodes()[producer];
     let produced = starts[producer]..starts[producer] + producer_node.fragment.outputs;
