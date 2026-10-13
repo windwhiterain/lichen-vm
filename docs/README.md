@@ -95,7 +95,8 @@ authority, and this table only names the state.
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current — a whole graph in one submission, per backend |
 | [Taking a kernel to a server](notes/taking-a-kernel-to-a-server.md) | `lichen-compute` (the fused artifact), `lichen-registry` (the frozen one) | current — the deployment unit is partly unbuilt, and the two artifacts are told apart |
 | [Specialize-then-normalize: a named access should become a tuple index](notes/specialize-normalize.md) | lichen-highlevel (the choice), lichen-compute (the stand-in) | proposal - nothing implements it |
-| [LLM inference operators, and what the machinery says about them](notes/llm-operators.md) | xamples/rmsnorm.lichen, lichen-runtime (the passes), lichen-fusion-bridge | current - one operator landed, and the friction is the roadmap |
+| [A launch that is not one row](notes/two-dimensional-launch.md) | `lichen-kernel-ir`, `lichen-compute`, `lichen-runtime`, `lichen-compute-gpu` (the emitters) | proposal - measured, nothing implemented |
+| [LLM inference operators, and what the machinery says about them](notes/llm-operators.md) | `examples/rmsnorm.lichen`, `lichen-runtime` (the passes), `lichen-fusion-bridge` | current - three operators landed, and the friction is the roadmap |
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-language-lex`/`-parser`, `lichen-highlevel`, `lichen-kernel-ir`, `lichen-lowlevel`, `lichen-compute`, `lichen-compute-gpu` | in progress — §8 is the handoff |
 | [The wasm backend: handoff](notes/wasm-backend-handoff.md) | `lichen-compute` (`compute/wasm/`), `lichen-kernel-ir` | in progress — read first for wasm code generation |

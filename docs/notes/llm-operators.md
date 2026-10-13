@@ -19,8 +19,8 @@ test file.
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
 | **softmax** | **landed** (`f8645274`) and its **textbook three-kernel form now merges too** (`d364f547`): the diamond — the normalise step reading both `m` and `s`, with `m` also read by the sum — is a **fan-in**, and a fan-in is licensed now. A **chain of any length** landed earlier (`3f8007cc`). The licence was restated once, in the two places it was stated: *"a region two edges **arrive at** is that shape exactly when every one of those inputs is named and proven: a `Between` per arrival, each over a slot of its own"* — a diamond needs **both** halves (two arrive and two leave), and `m` read twice is why it can never be a chain |
 | **RoPE** | **landed** (`2f7214af`): `cos`/`sin` added to the language (definitions spliced by the lowerer, read by the bridge like `exp`/`sqrt`), then the pairwise rotation as three elementwise kernels. It is **one lane per element** — a rule, not a preference: a `.to` chain can fill both positions of a pair, but its outer link is contended and order is not a contract. Domain `|x| ≤ 8192`, bit-exact against a model; the clamp above that is a **silent `Select`**, so an unbounded angle gets `sin(8192)` |
-| **matmul** | **not close**: nothing expresses a two-dimensional launch — `compute.range` is one dimension and a parallel fragment's shape is `(config, index)` |
-| **attention** | behind both the softmax and the matmul walls |
+| **matmul** | **not close, and what is missing is a spelling rather than a capability.** Measured: a two-extent config `(n, cols)` with `r = i/cols`, `c = i%cols` **already runs, bit-identically on both backends**, and a transposed write works — so `compute.range`'s one dimension and the `(config, index)` shape are a **convention** over 25 sites, not a construction; see [two-dimensional-launch](two-dimensional-launch.md), which is the measured proposal. Matmul still needs the plumbing (a second extent carried as a graph edge) plus the workgroup geometry |
+| **attention** | behind the matmul wall and the softmax licence — the licence is now there (`d364f547`), so matmul's plumbing is what is left |
 
 ## What RMSNorm measured
 
@@ -227,9 +227,12 @@ need a node-local producer for `r`.
   RTX 3060 and answered exactly the CPU result, which is the claim the floating-point note makes about
   the shared `exp` body; with the tiling pass installed the same run reported the `CombineIsNotAFold`
   line through the run report's own channel.
-- **What attention needs, in order.** (1) **A launch that is not one row** — `compute.range` is one
-  dimension and a parallel fragment's shape is `(config, index)`, so matmul and attention both need a
-  two-dimensional workgroup, and matmul is nowhere near. **This is the only wall left before attention.**
+- **What attention needs, in order.** (1) **A launch that is not one row** — and the measurement says this
+  is a **naming** problem, not a capability one: a two-extent config already runs, bit-identically on both
+  backends, and what is missing is that the second extent is **carried** rather than dropped. The proposal
+  with the sites, the measurement and the plan is [two-dimensional-launch](two-dimensional-launch.md);
+  its recommended first slice is to carry **one runtime scalar as a graph edge**, which is plumbing only
+  and leaves the workgroup geometry for the next slice. **This is the only wall left before attention.**
   (2) **Fan-in** — **done** (`d364f547`), together with chains (`3f8007cc`). The diamond merges: the
   normalise step reading both `m` and `s` is a fan-in, and `m` read twice is why it can never be a chain.
   The licence was restated **once, in the two places it was stated** (`licence()` and
