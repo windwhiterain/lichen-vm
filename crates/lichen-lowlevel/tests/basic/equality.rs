@@ -396,7 +396,7 @@ fn different_function_values_record_an_error() {
 }
 
 #[test]
-fn mutually_self_referential_arrays_record_an_error_instead_of_looping() {
+fn mutually_self_referential_arrays_unify_instead_of_looping() {
     let mut m = Module::new();
     let block = m.add_block(None);
     let a = undecided_node(&mut m, block);
@@ -408,8 +408,10 @@ fn mutually_self_referential_arrays_record_an_error_instead_of_looping() {
     m.write_node_value(a, val_a);
     m.write_node_value(b, val_b);
     m.unify(a, b);
-    assert_eq!(m.unify_errors.len(), 1);
-    assert_ne!(m.equality_representative(a), m.equality_representative(b));
+    // A repeated pair is one structure, not a disagreement — the shape a
+    // function type's `[Function(fid), ↺]` has.
+    assert!(m.unify_errors.is_empty());
+    assert_eq!(m.equality_representative(a), m.equality_representative(b));
 }
 
 #[test]

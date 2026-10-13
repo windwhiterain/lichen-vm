@@ -49,7 +49,10 @@ membership is removed on the way out. What the guard accepts is distinct (the ca
 tests before it inserts), so a set answers the same question under the same
 insert/remove discipline. `AncestorNodes` is the one-node form and `AncestorPairs` the
 unordered-pair form; both orientations of a pair are stored, which is what lets one
-probe answer the symmetric test.
+probe answer the symmetric test. The **unification** comparison is the one walk that
+*agrees* with a pair it meets again — two cyclic values agree exactly when their
+elements do — which is what lets a function type's `↺` slot be read at all; the
+others cut.
 
 ### Why a node list is not SSA
 
