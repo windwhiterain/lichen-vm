@@ -3,6 +3,8 @@
 
 use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
+use std::collections::HashSet;
+
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind, Loc};
@@ -11,6 +13,22 @@ use crate::shape;
 
 use super::Checker;
 use crate::diagnostic::AssertSpelling;
+
+/// The element pairs one reconciliation walk has already visited — one set per
+/// walk, so neither suppresses the other.
+///
+/// # Invariant
+/// A compound type may be **recursive** (`A = struct{.g B}`, `B = struct{.g
+/// A}`), and a pair's whole effect is the class merges it states, so visiting
+/// it once is the whole of that effect. The two sets are separate because the
+/// attribute and the pin walks are different effects over the same pair.
+#[derive(Default)]
+pub(super) struct ElementWalk {
+    /// The pairs [`Checker::check_element_pair_attributes`] has reconciled.
+    attributes: HashSet<(ExprId, ExprId)>,
+    /// The pairs [`Checker::check_element_pair_values`] has reconciled.
+    values: HashSet<(ExprId, ExprId)>,
+}
 
 impl<P: HighProgram> Checker<P>
 where
@@ -270,13 +288,37 @@ where
     /// annotation's is, and the same walk the function kind does for a declared
     /// parameter attribute. See docs/notes/compound-element-slots.md.
     fn unify_element_attributes(&mut self, type_expr: ExprId, value: ExprId) {
+        let mut seen = ElementWalk::default();
         for (type_el, value_el) in self.element_pairs(type_expr, value) {
-            if !self.schema_tail(type_el).is_empty() || !self.schema_tail(value_el).is_empty() {
-                let loc = self.loc(value_el, shape::PAIR_ATTR_BASE);
-                self.unify_type_attributes(type_el, value_el, loc);
-            }
-            // A nested compound carries its own elements' requirements.
-            self.unify_element_attributes(type_el, value_el);
+            self.check_element_pair_attributes(type_el, value_el, &mut seen);
+        }
+    }
+
+    /// One element pair's attribute reconciliation, descending into the nested
+    /// compounds beneath it.
+    ///
+    /// # Invariant
+    /// This is [`Self::unify_element_attributes`]'s body, so a caller that pairs
+    /// by its own rule — the struct instantiation's definition order — gets the
+    /// same walk the positional pairing gives.
+    ///
+    /// `seen` terminates a **recursive** type: a pair's reconciliation is a
+    /// fixed set of class merges, so visiting one once is all of its effect.
+    pub(super) fn check_element_pair_attributes(
+        &mut self,
+        type_el: ExprId,
+        value_el: ExprId,
+        seen: &mut ElementWalk,
+    ) {
+        if !seen.attributes.insert((type_el, value_el)) {
+            return;
+        }
+        if !self.schema_tail(type_el).is_empty() || !self.schema_tail(value_el).is_empty() {
+            let loc = self.loc(value_el, shape::PAIR_ATTR_BASE);
+            self.unify_type_attributes(type_el, value_el, loc);
+        }
+        for (nested_type, nested_value) in self.element_pairs(type_el, value_el) {
+            self.check_element_pair_attributes(nested_type, nested_value, seen);
         }
     }
 
@@ -311,25 +353,50 @@ where
     /// its arm vacuous — which is exactly why `@any : T` is no pin.
     /// See docs/notes/compound-element-slots.md.
     fn unify_element_values(&mut self, type_expr: ExprId, value: ExprId) {
+        let mut seen = ElementWalk::default();
         for (type_el, value_el) in self.element_pairs(type_expr, value) {
-            match self.ir[type_el].kind {
-                ExprKind::Annotation {
-                    value: pin,
-                    r#type: Some(inner),
-                    ..
-                } => {
-                    let pin = self.value_of(pin);
-                    let actual = self.value_of(value_el);
-                    self.check_unify(
-                        actual,
-                        pin,
-                        self.loc(value_el, shape::PAIR_VALUE_SLOT),
-                        DiagKind::Annotation,
-                    );
-                    self.unify_element_values(inner, value_el);
-                }
-                _ => self.unify_element_values(type_el, value_el),
+            self.check_element_pair_values(type_el, value_el, &mut seen);
+        }
+    }
+
+    /// One element pair's pin: the `: ` its type element spells, against the
+    /// value that fills the position.
+    ///
+    /// # Invariant
+    /// This is [`Self::unify_element_values`]'s body, so a caller that pairs by
+    /// its own rule gets the same walk the positional pairing gives. `seen`
+    /// terminates a recursive type, as
+    /// [`Self::check_element_pair_attributes`]'s does.
+    pub(super) fn check_element_pair_values(
+        &mut self,
+        type_el: ExprId,
+        value_el: ExprId,
+        seen: &mut ElementWalk,
+    ) {
+        if !seen.values.insert((type_el, value_el)) {
+            return;
+        }
+        if let ExprKind::Annotation {
+            value: pin,
+            r#type: Some(inner),
+            ..
+        } = self.ir[type_el].kind
+        {
+            let pin = self.value_of(pin);
+            let actual = self.value_of(value_el);
+            self.check_unify(
+                actual,
+                pin,
+                self.loc(value_el, shape::PAIR_VALUE_SLOT),
+                DiagKind::Annotation,
+            );
+            for (nested_type, nested_value) in self.element_pairs(inner, value_el) {
+                self.check_element_pair_values(nested_type, nested_value, seen);
             }
+            return;
+        }
+        for (nested_type, nested_value) in self.element_pairs(type_el, value_el) {
+            self.check_element_pair_values(nested_type, nested_value, seen);
         }
     }
 
@@ -337,11 +404,14 @@ where
     /// children once any annotation is peeled off.
     ///
     /// # Invariant
-    /// Only the compound kinds answer; other children, such as an apply's
-    /// operands, are not element positions. A set's and a table's type forms
-    /// write their elements directly, so a matching value pairs one for one; an
-    /// array's is the single element serving every value element.
-    fn compound_children(&self, e: ExprId) -> Option<Vec<ExprId>> {
+    /// Only the compound kinds answer; an apply's operands are not elements. A
+    /// set's and a table's type form write their elements directly, so a value
+    /// pairs one for one; an array's is one element serving every value element.
+    ///
+    /// A **named** instantiation answers `None`: its IR keeps the call's order,
+    /// so a positional pairing would take the wrong field (see
+    /// `unify_instantiate_elements`).
+    pub(super) fn compound_children(&self, e: ExprId) -> Option<Vec<ExprId>> {
         let mut expr = e;
         while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
             expr = value;
@@ -359,6 +429,19 @@ where
             ExprKind::TypeSet(_) => Some(self.range_children(expr)),
             ExprKind::TypeTable(_) => Some(self.range_children(expr)),
             ExprKind::TypeArray { element_type, .. } => Some(vec![element_type]),
+            // A struct's field types are element positions like a tuple's.
+            ExprKind::TypeStruct { .. } => Some(self.range_children(expr)),
+            // A struct instance's arguments, positional call only.
+            ExprKind::Instantiate { value, names, .. } => {
+                let named = self.ir.struct_names[names.start as usize..names.end as usize]
+                    .iter()
+                    .any(|name| name.is_some());
+                if named {
+                    None
+                } else {
+                    self.compound_children(value)
+                }
+            }
             _ => None,
         }
     }

@@ -11,6 +11,7 @@ use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
 use super::Checker;
+use super::annotations::ElementWalk;
 
 impl<P: HighProgram> Checker<P>
 where
@@ -487,7 +488,7 @@ where
                 }
             };
         let (value_node, value_shape, valid) = if any_named {
-            self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete)
+            self.named_instantiate(e, type_expr, type_pair, callee_ty, value, arg_names)
         } else {
             // A positional instantiation keeps the value's own shape: a tuple's
             // element-type list, or the type itself.
@@ -528,6 +529,9 @@ where
                 DiagKind::Annotation,
             );
         }
+        if !any_named {
+            self.unify_instantiate_elements(type_expr, value);
+        }
         let pair = self.pair_of(value_node, type_pair);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -535,23 +539,60 @@ where
         pair
     }
 
+    /// Reconcile a **positional** instantiation's arguments against the
+    /// requirements the fields state.
+    ///
+    /// # Invariant
+    /// The field-type unify compares **types**; a field's `# n` and its `v : T`
+    /// ride in the field slot, so this is the only place they are checked.
+    ///
+    /// The pairing is the call's order, which is the definition's for a
+    /// positional call. An argument list that is **not** an element list — a
+    /// bare literal in hand-built IR — answers no children, so the walk skips
+    /// it.
+    fn unify_instantiate_elements(&mut self, type_expr: ExprId, value: ExprId) {
+        let (Some(fields), Some(arguments)) = (
+            self.written_struct_fields(type_expr),
+            self.compound_children(value),
+        ) else {
+            return;
+        };
+        let mut seen = ElementWalk::default();
+        for (field, argument) in fields.into_iter().zip(arguments) {
+            self.check_element_pair_attributes(field, argument, &mut seen);
+            self.check_element_pair_values(field, argument, &mut seen);
+        }
+    }
+
+    /// A written struct type's field expressions, or `None` for any other callee.
+    ///
+    /// # Invariant
+    /// The reconciliation is **syntactic**: only a source-level `struct{…}`
+    /// spells the requirements, so a callee that does not has nothing to walk
+    /// and the walk skips it by construction.
+    fn written_struct_fields(&self, type_expr: ExprId) -> Option<Vec<ExprId>> {
+        matches!(self.ir[type_expr].kind, ExprKind::TypeStruct { .. })
+            .then(|| self.range_children(type_expr))
+    }
+
     /// A named instantiation: validates the `.name` arguments against the
     /// name table and reorders into definition order.
     ///
     /// # Invariant
     /// `valid` is `false` once a structural mismatch is recorded, and the caller
-    /// then skips the field-list unify. `callee_concrete` tells an anonymous
-    /// struct (refused) from an unresolved callee, whose reorder is deferred
+    /// then skips the field-list unify. A concrete callee tells an anonymous
+    /// struct (refused) from an unresolved one, whose reorder is deferred
     /// ([`Self::lazy_named_instantiate`]).
     fn named_instantiate(
         &mut self,
         e: ExprId,
+        type_expr: ExprId,
         type_pair: NodeId,
         callee_ty: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
-        callee_concrete: bool,
     ) -> (NodeId, NodeId, bool) {
+        let callee_concrete = self.type_is_concrete(callee_ty);
         // The value's elements are the arguments in call order.
         let elem_ids = self.range_children(value);
         let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
@@ -684,6 +725,18 @@ where
             // The mismatch is the recorded diagnostic; return the call-order
             // value so the descent stays total.
             return (self.value_of(value), self.state[value].ty.unwrap(), false);
+        }
+        // Each field's requirement and pin, against the argument that fills it — the
+        // definition's order, never the call's.
+        if let Some(fields) = self.written_struct_fields(type_expr) {
+            let mut seen = ElementWalk::default();
+            for (field, supplied) in fields.into_iter().zip(assign.iter().copied()) {
+                let Some(argument) = supplied else {
+                    continue;
+                };
+                self.check_element_pair_attributes(field, elem_ids[argument], &mut seen);
+                self.check_element_pair_values(field, elem_ids[argument], &mut seen);
+            }
         }
         // Reorder the values and their types into definition order, so the
         // instance reads positionally against the field list.

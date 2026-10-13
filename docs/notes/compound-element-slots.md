@@ -16,8 +16,10 @@
 >
 > Points at: `crates/lichen-lowlevel/src/{lib,codec,equality,evaluation,table}.rs`
 > (`Any`), `crates/lichen-highlevel/src/checker/tuples.rs` (both construction
-> sites), `crates/lichen-highlevel/src/shape.rs` (the element-slot readers),
-> `crates/lichen-render/src/render/{type_printer,value_printer}.rs` (`@any`).
+> sites), `crates/lichen-highlevel/src/checker/structs.rs` (the instantiation's
+> own reconciliation), `crates/lichen-highlevel/src/shape.rs` (the element-slot
+> readers), `crates/lichen-render/src/render/{type_printer,value_printer}.rs`
+> (`@any`), `crates/lichen-language/tests/struct_element_attributes.rs`.
 
 ## `Any`, the wildcard
 
@@ -181,6 +183,44 @@ is now the same slot list, with three consequences worth recording:
   kind, instead of through the apply's argument unify — the requirement it states
   is the instantiation's, and a non-struct actual is refused per call either way
   (`docs/language-spec.md` §Structs).
+
+## The struct's element reconciliation
+
+The field-type unify compares **types**; a field's `# n` and its `v : T` ride in
+the field's own slot, where the value side is `@any`, so the reconciliation walk
+(`checker::unify_element_attributes` / `unify_element_values`) is the only thing
+that can enforce them. It walks tuple, array, set and table elements — and, as of
+this change, **a struct's own fields**: `compound_children` answers the field
+list of a written `struct{…}` and the argument list of a **positional**
+instantiation, so an annotation meeting an instance reaches the fields. Measured
+before the change, all of these were **accepted**:
+
+```text
+S = struct{.a Int # 4};  S(.a 1 # 2)    (1,): struct{.a Int # 4}
+S = struct{.a 5 : Int};  S(.a 6)        (6,): struct{.a 5 : Int}
+S = struct{.a tuple{Int # 4}}; S(.a (1 # 2))
+```
+
+and each is refused after it, the way the same tuple spelled on its own is.
+
+Two things the walk has to state about itself:
+
+- **A named call pairs by the definition's order, not the call's.** The IR keeps
+  `S(.b …, .a …)` in call order while the checker reorders the graph, so a
+  positional pairing would check the wrong argument against the wrong field.
+  `compound_children` therefore answers `None` for a named instantiation and
+  `checker::unify_instantiate_elements` / the reorder's own `assign` map own it.
+- **A pair is visited once.** A struct type may name itself or a cycle of
+  siblings (`A = struct{.g B}`, `B = struct{.g A}`), and descending a field's own
+  compound type is unbounded without a visited set — it overflowed the stack. One
+  set per walk, because the attribute and the pin walks are different effects over
+  the same pair and neither may suppress the other.
+
+What the walk does **not** reach is a callee the checker never saw at the source:
+a parameter, a placeholder, a nested instantiation spells no field requirement, so
+there is nothing to reconcile and the argument's own requirement travels with it
+through the apply. That is the same syntactic discipline the rest of the
+reconciliation runs on.
 
 ## The read path
 

@@ -755,6 +755,20 @@ maps every span back to the original file.
   instance is refused by it (see *Indexing*) — nor is `s(1, 2)[0]`, which is the
   array read.  Values of struct type beyond the wrapped
   tuple are future work.
+- **A field's requirement and its pin.**  A field is a **slot**, so it states
+  what a tuple element states: a `# n` on it is a *requirement* and a `v : T` on
+  it is a **pin**, both checked against the argument that fills the position, the
+  way the same spelling on a tuple element is
+  (`docs/notes/compound-element-slots.md`).  `S = struct{.a Int # 4}; S(.a 1 # 2)`
+  is refused `expected 4, found 2`, and `S = struct{.a 5 : Int}; S(.a 6)` is
+  refused `expected 5, found 6` — the field-type unify compares types only, so
+  this reconciliation is the whole of the check.  A **named** argument is checked
+  against the field it supplies, not against the position it was written at: in
+  `S = struct{.a 5 : Int, .b 7 : Int}`, `S(.b 8, .a 6)` is refused on `.a`.  A
+  callee the checker never saw at the source — a parameter, a placeholder, a
+  nested instantiation — spells no field requirement, so there is nothing to
+  check there and the argument's own requirement travels with it through the
+  apply.
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct{…}` definition
   uses: `S = struct{.x Int, .y Type}; S(.y Int, .x 1)`.  The names ride the
