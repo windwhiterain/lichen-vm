@@ -208,6 +208,14 @@ what made per-call freshness.
   (`FN-ARM depth=1 a=Function(3) origin=Some(NodeId(30)) b=Function(4) …` under
   `mk 1` / `mk 2`). Code agrees in both cases because a closure's identity here is its
   code half; the captured environment lives outside the two cells the arm compares.
+  **Verified by intervention, not only by correlation**: with the arm's `add_equality`
+  gated on the two ids being equal — distinct closures then agree and keep their own
+  classes — `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers
+  `[1, 2, 3, 4]` and `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers
+  `(1, 2)`, while every other measured program keeps its answer (including this
+  branch's repaired refusals `n1`, `k3`, `k5`) and
+  `a_nested_function_captures_the_applied_outer_parameter` passes. The gate was a
+  diagnostic and is reverted; it decides nothing about what the repair should be.
 - **The diagnostic shape.** `an_unannotated_lambda_has_an_undecided_arrow_type`
   pins the recorded value side of `(\x. x) : Type` to the function-type array; the
   arm now records the `Function` leaf, which is nearer the disagreement but is a
