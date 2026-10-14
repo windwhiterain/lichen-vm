@@ -137,18 +137,29 @@ what made per-call freshness.
   2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
   `[1, 2, 3, 4]`, pinned by
   `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`),
-  and `examples/gc.lichen` answers `[none, none]` where dev refuses it. **The apply
-  computes and writes the right closure** — a trace on the inner apply reads
-  `applied_slot0=Function(3) result_slot0=Function(3)`, the minted generation — so
-  the answer is not what is lost. What the earlier trace shows instead is **one
-  binding, two clones**: the parameter check binds the clone of the parameter pair's
-  value cell (`cloned=97 … after=(98 slot=Some(USize(3)))`) while the executed body
-  reads a *different* clone of the same captured cell (`node 109, origin 49, slot
-  None`), so the read is empty. Two nodes stand for the capture inside the template,
-  and `instantiate_stamped`'s `regroup_clones`/`unify_clone_groups` did not make
-  their clones one class. To measure next: whether the two *template* nodes are one
-  class (`equality_representative` equality), which decides between the checker's
-  encoding and the regroup's grouping key.
+  and `examples/gc.lichen` answers `[none, none]` where dev refuses it. Two traces,
+  and they say the answer is not what is lost but what is *asked for*:
+  - The inner apply computes and writes the minted generation:
+    `WIRE node=NodeId(78) applied=NodeId(87) applied_slot0=Function(3) result_slot0=Function(3)`.
+  - The outer apply then instantiates **the template**: `instantiate_stamped`'s clone
+    dump reads `CLONES function=FunctionId(2) node=NodeId(86) …`, i.e. `Function(2)`,
+    so it reads a callee whose class carries the *template's* closure rather than the
+    apply node that holds `Function(3)`. (`check_app` sets `state[e].val = None` for an
+    apply, so the callee operand is a **read** node, and the checker's `f : f` wiring —
+    the callee type's codomain — puts that read in the template closure's class.)
+  - The capture is therefore cloned inside a *template* instantiation, where nothing
+    binds it: the parameter check binds the clone in the `f1 3` instantiation
+    (`cloned=97 … after=(98 slot=Some(USize(3)))`) while the executed body reads the
+    `f2` instantiation's clone (`109`, `origin=49`, empty).
+  - The re-establishment itself is **not** at fault: the capture's two template nodes
+    are one class (`26->98 rep=49` and `49->100 rep=49`), so `regroup_clones` groups
+    them. What the dump also shows is a template whose representative is a *clone*
+    from the previous instantiation (`43->113 rep=94`, where 94 is `f1 3`'s clone of
+    43) — a class merged across instantiations, which is the same question one level
+    down.
+  - So the place to fix is the **checker's callee wiring** (the apply's callee must
+    read the apply node, not the callee type's codomain value), and matching the
+    merge that lets a template node's class take a clone as its representative.
 - **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
   mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev refuses: the signature descent
   sees `[parameter, return]`, and a capture is in neither cell, so two closures with
