@@ -7,7 +7,14 @@
 > recording a conflict. The wildcard experiments (a lambda's value positions
 > holding `@any`) are **rejected and reverted**, with the measurements below.
 > Two suite failures remain: one diagnostic-shape pin and one closure that reads
-> `none` for a captured parameter.
+> `none` for a captured parameter. Measured on this branch: lowlevel 160/0,
+> highlevel 86/1, language pipeline 140/1, the two reds being those two.
+>
+> **Checkpoint decision (with the maintainer): the branch stays unmerged until the
+> repair lands.** The workspace rule is to merge at each checkpoint so parallel work
+> stays in sync; merging now would take the two reds above into `dev`, and the
+> capture loss is a direct consequence of the function arm this branch adds, so the
+> repair comes first and the merge follows it.
 >
 > This note is the branch's coordination document; it records the maintainer's
 > proposals as they are made, and what each one measured.
