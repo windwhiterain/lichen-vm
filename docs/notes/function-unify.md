@@ -200,6 +200,14 @@ what made per-call freshness.
   mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev refuses: the signature descent
   sees `[parameter, return]`, and a capture is in neither cell, so two closures with
   different captures look equal. The same one-carrier question.
+- **One rule behind both merges.** The arm decides "same value" from `[parameter,
+  return]` alone, and that is measured on both symptoms: for the capture loss the pair
+  it declares equal is a clone against its template
+  (`FN-ARM depth=2 a=44(Function(2) …) b=91(Function(3) …)`), and for the capture merge
+  it is two *calls* of one function
+  (`FN-ARM depth=1 a=Function(3) origin=Some(NodeId(30)) b=Function(4) …` under
+  `mk 1` / `mk 2`). Code agrees in both cases because a closure's identity here is its
+  code half; the captured environment lives outside the two cells the arm compares.
 - **The diagnostic shape.** `an_unannotated_lambda_has_an_undecided_arrow_type`
   pins the recorded value side of `(\x. x) : Type` to the function-type array; the
   arm now records the `Function` leaf, which is nearer the disagreement but is a
