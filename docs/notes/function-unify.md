@@ -137,8 +137,7 @@ what made per-call freshness.
   2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
   `[1, 2, 3, 4]`, pinned by
   `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`).
-  Every link of
-  the chain is measured on this branch:
+  Every link of the chain is measured on this branch:
   - The inner apply computes and writes the minted generation:
     `WIRE node=78 applied=87 applied_slot0=Function(3) result_slot0=Function(3)`.
   - `unify_clone_groups` of that instantiation unifies two *clones*, and they are not
@@ -149,16 +148,26 @@ what made per-call freshness.
     instantiation that made each: `CLONE-WRITE applied=Function(2) epoch=24 template=45
     clone=95 items=[91,46]` and `CLONE-WRITE applied=Function(1) epoch=39 template=46
     clone=106 items=[91,106]`.
-  - **Why one walk embedded the template and the other did not: the clone decision is
-    context-dependent.** `node_apply`'s `depends_on_parameter` includes
+  - **Why two shapes exist: the clone decision is context-dependent, and one call's
+    remap covers both contexts.** `node_apply`'s `depends_on_parameter` includes
     `value_holds_foreign_function(value, ctx.applied)`, and the closure inside the pair
-    is `Function(2)` — which *is* the applied function in one instantiation and a
-    foreign closure in the other. Measured on the same node: `DECIDE node=46
-    applied=Function(2) epoch=24 holds_foreign=false depends=false` (referenced **in
-    place**, so the sibling clone's type slot kept naming it) against `DECIDE node=46
-    applied=Function(1) epoch=39 holds_foreign=true depends=true` (cloned, so 106 is
-    self-referential). One node, one template class, two shapes.
-  - The group unify therefore compares a *clone* with a *template*: descending `[91,
+    is `Function(2)` — which *is* the applied function in one context and a foreign
+    closure in the other. `value_apply`'s closure branch builds the nested walk
+    (`applied` = the closure, `closure_scope = Some(scope)`, `branch_top` = the fresh id)
+    that **shares the parent's `remap`**, so the closure's scope is cloned first, in the
+    context where that closure is not foreign, and the pair node is then reached again by
+    the outer walk, where it is. Measured on the one node, every line carrying
+    `remap=592092280928`: `DECIDE node=46 applied=Function(2) branch_top=Function(3)
+    closure_scope=true epoch=24 depends=false` and `CLONE-WRITE applied=Function(2)
+    epoch=24 template=45 clone=95 items=[91,46]` (nested walk: referenced in place, so the
+    sibling clone's type slot kept naming the template), then `DECIDE node=46
+    applied=Function(1) closure_scope=false epoch=39 depends=true` and `CLONE-WRITE
+    applied=Function(1) epoch=39 template=46 clone=106 items=[91,106]` (outer walk:
+    cloned, self-referential). One call, one remap, two treatments of one node.
+  - The group therefore holds both shapes, and `regroup_clones`' key is sound where the
+    capture is concerned: the capture's two template nodes are one class (`26->98 rep=49`,
+    `49->100 rep=49`).
+  - Its descent then compares a *clone* with a *template*: descending `[91,
     46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
     closure `Function(2)`. The recursion's own depth counter shows the nesting:
@@ -194,23 +203,6 @@ what made per-call freshness.
     the parameter check binds the `f1 3` instantiation's clone (`cloned=97 …
     after=(98 slot=Some(USize(3)))`) while the executed body reads the template
     instantiation's clone (`109`, `origin=49`, empty).
-  - The two shapes come out of **one remap, one call**: `value_apply`'s closure branch
-    builds a nested walk (`applied` = the closure being cloned, `closure_scope =
-    Some(scope)`, `branch_top` = the fresh id) that **shares the parent's `remap`**
-    (`function.rs`, the `inner` context it builds), so the closure's scope is cloned
-    first — in a context where the pair's own closure *is* `ctx.applied` — and the pair
-    node is then reached again by the outer walk, where it is foreign. Every line
-    carries the one map: `DECIDE node=46 applied=Function(2) branch_top=Function(3)
-    closure_scope=true epoch=24 depends=false` and `CLONE-WRITE applied=Function(2)
-    epoch=24 template=45 clone=95 items=[91,46]` (nested walk, in place), then
-    `DECIDE node=46 applied=Function(1) closure_scope=false epoch=39 depends=true` and
-    `CLONE-WRITE applied=Function(1) epoch=39 template=46 clone=106 items=[91,106]`
-    (outer walk, cloned), then `GROUP-PAIR function=Function(1) node=78 epoch=42
-    first=95[91,46] clone=106[91,106]` — all with `remap=592092280928`. One call, one
-    remap, two treatments of one node, which is why a single group unify holds both
-    shapes.
-  - `regroup_clones`' key is sound where the capture is concerned: the capture's two
-    template nodes are one class (`26->98 rep=49`, `49->100 rep=49`).
   - **The mechanism predicts which positions lose their values.** Three programs written
     from the cause (not from the measured set) and then run: `a = 1; f1 = x => { b = 2;
     f2 = y => { c = 3; f3 = z => [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
@@ -220,15 +212,12 @@ what made per-call freshness.
     answers `[1, 2, 3, none, 5]`, losing exactly `y`. So the loss tracks captured cells
     one per level, and the capture-free control is intact. All three are refusals on
     `dev`.
-- **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
-  mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev refuses: the signature descent
-  sees `[parameter, return]`, and a capture is in neither cell, so two closures with
-  different captures look equal. The same one-carrier question.
 - **One rule behind both merges.** The arm decides "same value" from `[parameter,
   return]` alone, and that is measured on both symptoms: for the capture loss the pair
   it declares equal is a clone against its template
-  (`FN-ARM depth=2 a=44(Function(2) …) b=91(Function(3) …)`), and for the capture merge
-  it is two *calls* of one function
+  (`FN-ARM depth=2 a=44(Function(2) …) b=91(Function(3) …)`), and for the capture merge —
+  `mk = x => y => x; a = [mk 1, mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev
+  refuses — it is two *calls* of one function
   (`FN-ARM depth=1 a=Function(3) origin=Some(NodeId(30)) b=Function(4) …` under
   `mk 1` / `mk 2`). Code agrees in both cases because a closure's identity here is its
   code half; the captured environment lives outside the two cells the arm compares.
