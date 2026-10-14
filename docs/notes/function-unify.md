@@ -228,6 +228,13 @@ what made per-call freshness.
   `k3` (three) merge clones against clones only. So a clone-against-template merge is
   present exactly where the capture is lost, and taken away exactly there the answer
   returns.
+  **A second diagnostic isolates the trigger.** With the closure test inside
+  `depends_on_parameter` made context-free (`ctx.anchor` in place of `ctx.applied`), the
+  capture loss also disappears (`[1, 2, 3, 4]`) while the capture merge does not move
+  (`(1, 1)`) and no other measured answer changes. The two diagnostics therefore separate
+  the two links: the context-dependent in-place decision is what makes the mixed shape,
+  hence the merge that loses the capture; the comparison rule alone is what merges two
+  calls' closures. Both gates were diagnostics and are reverted.
 - **The same `none`, without a function merge.** `mk = x => y => x; f = n => mk n 1;
   f 3` (three spellings of it in the scratch set) answers `none` as well, and it is
   **not** this cause. Measured on the clone merges that carry a closure: u3 has a
