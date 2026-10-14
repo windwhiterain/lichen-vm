@@ -145,11 +145,19 @@ what made per-call freshness.
     the same shape: `GROUP-PAIR first=106 value_items=[91,106] clone=95
     value_items=[91,46]`. Both stand for the closure's self-referential pair (their
     templates 46 and 45 are one class), but only 106 is self-referential — **95's second
-    element is the template node 46**, because `node_apply(46)` returned it **in place**
-    (`IN-PLACE node=46 reason=no-parameter mate=true`): 46 has a decided deep
-    evaluation, is not the parameter, is not scoped and holds no foreign closure, so
-    that reach treated it as not depending on the call, while its class-mate 45 was
-    cloned.
+    element is the template node 46**. The two writes that made them, tagged with the
+    instantiation that made each: `CLONE-WRITE applied=Function(2) epoch=24 template=45
+    clone=95 items=[91,46]` and `CLONE-WRITE applied=Function(1) epoch=39 template=46
+    clone=106 items=[91,106]`.
+  - **Why one walk embedded the template and the other did not: the clone decision is
+    context-dependent.** `node_apply`'s `depends_on_parameter` includes
+    `value_holds_foreign_function(value, ctx.applied)`, and the closure inside the pair
+    is `Function(2)` — which *is* the applied function in one instantiation and a
+    foreign closure in the other. Measured on the same node: `DECIDE node=46
+    applied=Function(2) epoch=24 holds_foreign=false depends=false` (referenced **in
+    place**, so the sibling clone's type slot kept naming it) against `DECIDE node=46
+    applied=Function(1) epoch=39 holds_foreign=true depends=true` (cloned, so 106 is
+    self-referential). One node, one template class, two shapes.
   - The group unify therefore compares a *clone* with a *template*: descending `[91,
     46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
@@ -167,6 +175,11 @@ what made per-call freshness.
     the parameter check binds the `f1 3` instantiation's clone (`cloned=97 …
     after=(98 slot=Some(USize(3)))`) while the executed body reads the template
     instantiation's clone (`109`, `origin=49`, empty).
+  - One detail of the instrumentation is not yet accounted for: both 95 and 106 are
+    entries of the **same** `unify_clone_groups` call, yet their `CLONE-WRITE` lines
+    carry different `applied` tags (2 and 1). Whether a clone can enter a later
+    instantiation's remap, or the tag is read at a nested instantiation, is the next
+    thing to measure here — it does not change the merge's cause above.
   - `regroup_clones`' key is sound where the capture is concerned: the capture's two
     template nodes are one class (`26->98 rep=49`, `49->100 rep=49`).
 - **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
