@@ -167,6 +167,16 @@ what made per-call freshness.
   - The group therefore holds both shapes, and `regroup_clones`' key is sound where the
     capture is concerned: the capture's two template nodes are one class (`26->98 rep=49`,
     `49->100 rep=49`).
+  - **How common the merge is, and why the harm is narrow.** Counting one run's full merge
+    log (433 merges): 97 are template-against-clone merges — the walk's normal texture
+    rather than an anomaly — and of those 48 carry an array and only 2 carry a closure. An
+    array's two sides denote the same value unless an element is a capture-bearing closure,
+    which is what the `ARR depth=1` → `FN-ARM depth=2` descent reaches; a closure's two
+    sides denote different values as soon as the call bound its captures. Which side the
+    merged class answers is decided by which committed first: the closure was written at
+    check time (74 of the 76 `SET-FN` writes), so the template wins there, while an empty
+    template node in a pair merge adopts its clone's value through `fill_class_holes` —
+    which is why template nodes are seen holding clone values in the dumps above.
   - Its descent then compares a *clone* with a *template*: descending `[91,
     46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
