@@ -389,10 +389,11 @@ impl<P: Program> Module<P> {
         // A scope's content is this call's: sharing it would collect the
         // template.
         let scoped = self.blocks[self.nodes[node].block].parent.is_some();
+        // Judged against the call's anchor, so one call gives a node one answer.
         let depends_on_parameter = node == ctx.parameter
             || !proven_concrete
             || scoped
-            || self.value_holds_foreign_function(value, ctx.applied);
+            || self.value_holds_foreign_function(value, ctx.anchor);
         if !depends_on_parameter {
             return node;
         }
@@ -642,16 +643,16 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Whether `value`'s tree holds a **foreign** closure: a dynamic function that is
-    /// neither applied nor enclosing.
+    /// Whether `value`'s tree holds a closure foreign to `against`.
     ///
     /// # Invariant
-    /// Attribution belongs here, where the scope being instantiated is known: the applied
-    /// function's self-reference and an enclosing function stay in place, and a static
-    /// function is frozen and never foreign.
-    fn value_holds_foreign_function(&self, value: Option<P::Value>, applied: FunctionId) -> bool {
+    /// Attribution belongs here, where the scope being instantiated is known: `against`'s
+    /// own self-reference and an enclosing function stay in place, and a static function is
+    /// frozen and never foreign. Callers pass the call's anchor, so one call judges a node
+    /// once however deep the walk is.
+    fn value_holds_foreign_function(&self, value: Option<P::Value>, against: FunctionId) -> bool {
         let foreign = |function: FunctionId| {
-            function != applied && !self.function_descends_from(Some(applied), function)
+            function != against && !self.function_descends_from(Some(against), function)
         };
         let held = |node: AnyNodeId| match node {
             AnyNodeId::Static(_) => None,
