@@ -229,7 +229,13 @@ what made per-call freshness.
     is the template's (`PARAMCHECK function=Function(2) node=86 param=113 argument=83` →
     `PARAM-BOUND … param_slot0_now=USize(4)`) — it binds only the closure's *own* parameter,
     so the captured cell is in none of its bindings and the answer loses exactly that
-    position: `[1, 2, none, 4]`.
+    position: `[1, 2, none, 4]`. The reason the loss lands on those positions is measured
+    too: **the binding lands on the clone, and the template's own parameter cell is never
+    bound** — `PARAM-BOUND function=Function(1) node=78 param=97 param_slot0_now=USize(3)
+    template_param_slot0=undecided:NodeId(26)`, and `undecided:NodeId(41)` for the f2
+    instantiation the outer apply runs — so the template instantiation computes `none` for
+    everything derived from the parameter while whatever the body's own statements write
+    stays: constant locals survive, the parameter and what depends on it do not.
   - **The mechanism predicts which positions lose their values.** Three programs written
     from the cause (not from the measured set) and then run: `a = 1; f1 = x => { b = 2;
     f2 = y => { c = 3; f3 = z => [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
