@@ -136,8 +136,8 @@ what made per-call freshness.
 - **A closure that reads `none` for a captured parameter.** `a = 1; f1 = x => { b =
   2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
   `[1, 2, 3, 4]`, pinned by
-  `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`),
-  and `examples/gc.lichen` answers `[none, none]` where dev refuses it. Every link of
+  `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`).
+  Every link of
   the chain is measured on this branch:
   - The inner apply computes and writes the minted generation:
     `WIRE node=78 applied=87 applied_slot0=Function(3) result_slot0=Function(3)`.
@@ -257,6 +257,11 @@ what made per-call freshness.
   clone (`a=63(origin=Some(30) Function(4)) b=92(origin=Some(30) Function(4))` and
   friends). The diagnostic gate that repairs the capture loss above therefore leaves
   its answer unchanged, and its `none` comes from a different path.
+- **`examples/gc.lichen` is also outside this cause**, and it was measured the same way:
+  it makes six merges of decided closures and **none** of them has an `origin=None` side,
+  and the gate that repairs the capture loss leaves its `[none, none]` unchanged (`u3` and
+  `p1` do change under that gate, as controls). The README's `[8, 16]` and this `[none,
+  none]` are therefore a different defect from the one this section measures.
 - **The diagnostic shape.** `an_unannotated_lambda_has_an_undecided_arrow_type`
   pins the recorded value side of `(\x. x) : Type` to the function-type array; the
   arm now records the `Function` leaf, which is nearer the disagreement but is a
