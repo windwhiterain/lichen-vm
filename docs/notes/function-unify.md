@@ -175,11 +175,21 @@ what made per-call freshness.
     the parameter check binds the `f1 3` instantiation's clone (`cloned=97 …
     after=(98 slot=Some(USize(3)))`) while the executed body reads the template
     instantiation's clone (`109`, `origin=49`, empty).
-  - One detail of the instrumentation is not yet accounted for: both 95 and 106 are
-    entries of the **same** `unify_clone_groups` call, yet their `CLONE-WRITE` lines
-    carry different `applied` tags (2 and 1). Whether a clone can enter a later
-    instantiation's remap, or the tag is read at a nested instantiation, is the next
-    thing to measure here — it does not change the merge's cause above.
+  - The two shapes come out of **one remap, one call**: `value_apply`'s closure branch
+    builds a nested walk (`applied` = the closure being cloned, `closure_scope =
+    Some(scope)`, `branch_top` = the fresh id) that **shares the parent's `remap`**
+    (`function.rs`, the `inner` context it builds), so the closure's scope is cloned
+    first — in a context where the pair's own closure *is* `ctx.applied` — and the pair
+    node is then reached again by the outer walk, where it is foreign. Every line
+    carries the one map: `DECIDE node=46 applied=Function(2) branch_top=Function(3)
+    closure_scope=true epoch=24 depends=false` and `CLONE-WRITE applied=Function(2)
+    epoch=24 template=45 clone=95 items=[91,46]` (nested walk, in place), then
+    `DECIDE node=46 applied=Function(1) closure_scope=false epoch=39 depends=true` and
+    `CLONE-WRITE applied=Function(1) epoch=39 template=46 clone=106 items=[91,106]`
+    (outer walk, cloned), then `GROUP-PAIR function=Function(1) node=78 epoch=42
+    first=95[91,46] clone=106[91,106]` — all with `remap=592092280928`. One call, one
+    remap, two treatments of one node, which is why a single group unify holds both
+    shapes.
   - `regroup_clones`' key is sound where the capture is concerned: the capture's two
     template nodes are one class (`26->98 rep=49`, `49->100 rep=49`).
 - **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
