@@ -1359,6 +1359,15 @@ five previously correct programs into `expected Type, found Int` and the four in
 types. The repair therefore belongs where that clone is minted or where its reader is chosen, not in the
 type application's post-processing, which is where all three attempts lived.
 
+**And the mint is measured.** `apply_type` clones the function's return, and inside `node_apply` a clone is
+published into the remap **before** its operation is assigned (`remap.insert` and then, later,
+`self.nodes[clone].operation = operation`). A clone reached again during its own construction therefore
+copies a node that has no operation yet, and the hole is inherited down the chain. Instrumenting exactly
+that state — a node that is a clone whose own origin carries an operation while it does not — fires
+**forty-six times** in `g3` and **zero times** in `m4`, the program that answers correctly, which is the
+discrimination the earlier inference lacked. The repair this points at is to initialise a clone's operation
+before publishing it, or to patch the revisiting clone afterwards.
+
 | option | what it changes | pros | cons |
 | --- | --- | --- | --- |
 | **A. Run the pass without pinning** — evaluate the return for its checks but mark what it computes unpinnable, so the generation it mints cannot be copied into the run | the pinning rule the pass relies on ("the deep pass pins what the clone copies") | keeps the pass's stated purpose, the narrowest change, and the failing programs keep their checks | touches the pinning invariant, which other notes rely on; needs a rule for *which* results are unpinnable and a reason that is not "this shape" |
