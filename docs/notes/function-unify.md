@@ -195,15 +195,16 @@ what made per-call freshness.
     pair, on the clone/template boundary.
   - **The `LowValue::Function` arm is what merges them.** Two functions are one value
     when their `[parameter, return]` cells agree, and a clone's cells agree with its
-    template's by construction. `add_equality` then merges the classes, and **which value
-    a reader gets is decided by the merged class's representative, not by the merge's
-    argument order**: measured, `PRE-ADD a=44 va=Function(2) b=91 vb=Function(3)` gives
-    `POST-ADD rep=38 rep_class=Function(2) a_slot=Function(2) b_slot=Function(3)`. The
-    representative is 38, a node that has carried the template's `Function(2)` since
-    check time (its class already held 44 and 71), and `fill_class_holes` writes only
-    into members that hold nothing — so the clone's own slot keeps `Function(3)` while
-    the class answers `Function(2)`. That is why every run answered the same way even
-    though the merge's two sides swapped order between runs. The value's provenance is
+    template's by construction. `add_equality` then merges the classes, and **a class is
+    multi-valued in its members' slots: what a reader gets is the *root's own slot*** —
+    `class_value` walks to the root and returns its value — while `fill_class_holes` writes
+    only into members that hold nothing. Measured on the decisive merge:
+    `PRE-ADD a=44(origin=None) va=Function(2) b=91(origin=Some(44)) vb=Function(3)` gives
+    `POST-ADD rep=38 rep_slot=Function(2) members=[38=F2 44=F2 71=F2 91=F3 88=F3]`. The class
+    therefore carries the template's closure in its root and in two other members and the
+    minted clone in two more, and answers the root — so the merge's argument order does not
+    decide it, which is why every run answered the same way while the two sides swapped
+    order between runs. The value's provenance is
     measured as well: every closure value is written into a template node during check —
     `SET-FN node=… origin=None epoch=5/8/10/… value=Function(1)/Function(2)/…`, epochs 5
     to 33 — while the walk that makes the clones runs from epoch 39, so the class's answer
