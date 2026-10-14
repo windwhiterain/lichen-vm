@@ -169,9 +169,15 @@ what made per-call freshness.
     pair, on the clone/template boundary.
   - **The `LowValue::Function` arm is what merges them.** Two functions are one value
     when their `[parameter, return]` cells agree, and a clone's cells agree with its
-    template's by construction. `add_equality` then gives the merged class its *one*
-    value — the first committed, which for `{91, 44}` is the template's `Function(2)`,
-    written during check.
+    template's by construction. `add_equality` then merges the classes, and **which value
+    a reader gets is decided by the merged class's representative, not by the merge's
+    argument order**: measured, `PRE-ADD a=44 va=Function(2) b=91 vb=Function(3)` gives
+    `POST-ADD rep=38 rep_class=Function(2) a_slot=Function(2) b_slot=Function(3)`. The
+    representative is 38, a node that has carried the template's `Function(2)` since
+    check time (its class already held 44 and 71), and `fill_class_holes` writes only
+    into members that hold nothing — so the clone's own slot keeps `Function(3)` while
+    the class answers `Function(2)`. That is why every run answered the same way even
+    though the merge's two sides swapped order between runs.
   - Everything after that is consequence: the class answers `Function(2)`, the caller's
     callee read joins it (an apply's `check_app` leaves `state[e].val` empty, so the
     callee operand is an operation node), the outer apply instantiates the template, and
