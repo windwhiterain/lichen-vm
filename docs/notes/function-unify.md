@@ -211,7 +211,11 @@ what made per-call freshness.
     correct; and the variant capturing only the middle parameter (`[a, b, c, y, z]`)
     answers `[1, 2, 3, none, 5]`, losing exactly `y`. So the loss tracks captured cells
     one per level, and the capture-free control is intact. All three are refusals on
-    `dev`.
+    `dev`. The prediction extends to repetition and holds: `(f1 3 4, f1 5 6)` answers
+    `([1, 2, none, 4], [1, 2, none, 6])` — each call loses *its own* capture — and
+    `r = f1 3 4; f1 5 6` answers `[1, 2, none, 6]`, the observed call being the second
+    one. The merge therefore poisons the class for every later call through it, which is
+    what "the class answers the template" means once the class is shared.
 - **One rule behind both merges.** The arm decides "same value" from `[parameter,
   return]` alone, and that is measured on both symptoms: for the capture loss the pair
   it declares equal is a clone against its template
