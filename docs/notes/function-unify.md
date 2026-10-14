@@ -310,6 +310,33 @@ what made per-call freshness.
 
 ## 6. Repairs, and what each one is measured to do
 
+### The root, at the design level
+
+Three premises, each reasonable on its own, collide:
+
+1. `f : f` — a lambda's term *is* its type. A closure is a self-referential pair
+   `[function node, that pair]` inside a **class**, and the class carries the function
+   leaf value, so "what type is this" and "which closure is this" share one structure.
+2. The function kind's rule descends `[parameter, return]` — the **signature** — while a
+   closure's *meaning* is its code **plus the environment of the call that made it**. The
+   environment is not part of what is compared, so a template, any instance of it, and two
+   calls of it are all "one value" by the rule.
+3. A class answers **one** value, chosen by topology rather than by the reader's need: its
+   members may each hold a different value, but a read answers the **root's own slot**, and
+   the root is the node the check-time merge left in place. So an instance merged into its
+   template's class is absorbed — its own, correctly bound value stays in its own slot and
+   is never the one answered.
+
+The machinery then makes the collision necessary rather than incidental: an apply must
+instantiate, an instantiation must reconcile the images of a class within the call, and one
+of those images *is* the template. In one sentence: **closures are unified by their code
+and given one class-wide meaning, but a closure's meaning is its code plus the environment
+of its call, and the environment is outside unification — so an instance that meets its own
+template is absorbed into it and the environment that distinguished it is lost.** The
+function arm applies a *type-level* rule (equal signatures) to a *value-level* question
+(which closure), which is the category error underneath; the capture loss and the capture
+merge are its two visible faces.
+
 Nothing here is decided: the cause above is measured, and these are the candidate repairs
 with what is already known about each. Two of them were run as diagnostics (reverted), so
 their effect on the programs is measured; **none has been run against the suites**, which is
