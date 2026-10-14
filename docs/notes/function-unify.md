@@ -9,7 +9,8 @@
 > One suite failure remains: the diagnostic-shape pin, which is a pin to move
 > deliberately. The closure that read `none` for a captured parameter is **repaired** —
 > the fix and its measurements are in §6 — and the pipeline test that pinned it passes.
-> Measured on this branch after the repair: lowlevel 160/0, highlevel 86/1.
+> Measured on this branch after the repair: lowlevel 160/0, highlevel 86/1, and
+> `lichen-language` 335/0 — the pipeline binary that pinned the capture loss included.
 >
 > **Checkpoint decision (with the maintainer): the branch stays unmerged until the
 > repair lands.** The repair has landed; what remains before the merge is the diagnostic
