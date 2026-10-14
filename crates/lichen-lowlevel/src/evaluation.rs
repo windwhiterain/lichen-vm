@@ -286,7 +286,13 @@ impl<P: Program> Module<P> {
                                         self.function_apply(function, argument, block, node, cell)
                                     }
                                     AnyFunctionId::Static(sref) => {
-                                        self.static_function_apply(sref, argument, block, node)
+                                        // Element 2 is the checker-wired result cell.
+                                        let cell = operands
+                                            .get(2)
+                                            .map(|item| self.as_dynamic(item.node, block));
+                                        self.static_function_apply(
+                                            sref, argument, block, node, cell,
+                                        )
                                     }
                                 }
                             }

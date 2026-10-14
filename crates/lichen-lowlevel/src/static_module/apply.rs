@@ -11,6 +11,7 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
+        cell: Option<NodeId>,
     ) -> Option<P::Value> {
         // The nesting guard: the apply node's own depth, which a materialization
         // deepens by one.
@@ -78,6 +79,14 @@ impl<P: Program> Module<P> {
                 }
             }
             let result = module.evaluate_node(Dyn(applied), Some(block));
+            // The type slot is applied here too: a static callee's type resolves to a
+            // static function, which the dynamic path's guard refuses.
+            if let Some(cell) = cell
+                && let Some(codomain) = module.pair_type_half(applied)
+            {
+                module.evaluate_node(Dyn(codomain), Some(block));
+                module.unify(cell, codomain);
+            }
             module.wire_apply_result(node, result, applied, block)
         });
         self.stamp_depth = stamp;
