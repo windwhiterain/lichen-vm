@@ -11,7 +11,6 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
-        cell: Option<NodeId>,
     ) -> Option<P::Value> {
         // The nesting guard: the apply node's own depth, which a materialization
         // deepens by one.
@@ -79,7 +78,7 @@ impl<P: Program> Module<P> {
                 }
             }
             let result = module.evaluate_node(Dyn(applied), Some(block));
-            module.wire_apply_result(node, cell, result, applied, block)
+            module.wire_apply_result(node, result, applied, block)
         });
         self.stamp_depth = stamp;
         result

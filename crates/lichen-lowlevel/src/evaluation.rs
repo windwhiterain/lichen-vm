@@ -279,12 +279,15 @@ impl<P: Program> Module<P> {
                                 let cell = operands
                                     .get(2)
                                     .map(|item| self.as_dynamic(item.node, block));
+                                // Both slots are applied: the type's, then the value's.
+                                self.apply_callee_type(operands, block, node);
                                 match function {
                                     AnyFunctionId::Dynamic(function) => {
                                         self.function_apply(function, argument, block, node, cell)
                                     }
-                                    AnyFunctionId::Static(sref) => self
-                                        .static_function_apply(sref, argument, block, node, cell),
+                                    AnyFunctionId::Static(sref) => {
+                                        self.static_function_apply(sref, argument, block, node)
+                                    }
                                 }
                             }
                             // A scalar, string, table or unit value can never be callable: the apply is refused and

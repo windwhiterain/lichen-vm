@@ -33,6 +33,23 @@ let call = w.app("call", id, five);
 readings a test makes, and each reports in the program's words: an unknown name
 panics listing the names the program *does* have.
 
+**For an investigation, three readings report instead of panicking**, because the
+state they describe is the finding rather than a failure:
+
+- `try_value_of` / `try_node_of` — an undecided value is a finding, and an apply's
+  `state.val` is empty by construction, so its answer lives in its pair's own value
+  slot rather than in the apply's value;
+- `class_of(name)` — a class's members each keep their own slot value, which can
+  differ from the class's answer, so a probe can read the members rather than the
+  verdict (the name also appears in the compute and GPU crates, where
+  `scalar_class_of` and `buffer_class_of` are unrelated symbols);
+- `Module::class_members_with_values(node)` in `lichen-lowlevel` — the same reading
+  at the lowlevel, for a node that no name reaches.
+
+The prose for a running investigation is
+[nested-apply-none](nested-apply-none.md), which is where these three were added and
+what they were added for.
+
 The builders take `&self` over a `RefCell`, not `&mut self`. That is what lets
 `w.array("key", &[w.int("one", 1), w.int("two", 2)])` compile — the way IR is
 actually written. With `&mut self` every sub-expression has to be hoisted into a

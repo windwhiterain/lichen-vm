@@ -162,11 +162,37 @@ where
 
     /// The named expression's evaluated value, forcing it if it is still lazy.
     pub fn value_of(&mut self, name: &str) -> P::Value {
-        let node = self.node_of(name);
-        self.build
-            .module
-            .evaluate_node_deep(node, None)
+        self.try_value_of(name)
             .unwrap_or_else(|| panic!("{name:?} has no value: the deep pass left it undecided"))
+    }
+
+    /// The named expression's value, or `None` where the deep pass leaves it undecided.
+    ///
+    /// # Invariant
+    /// The reading a `value_of` panic would hide: an undecided node is a finding, not a
+    /// failure. An expression with no value slot — an apply, whose value the operation
+    /// carries — answers `None` too.
+    pub fn try_value_of(&mut self, name: &str) -> Option<P::Value> {
+        let node = self.try_node_of(name)?;
+        self.build.module.evaluate_node_deep(node, None)
+    }
+
+    /// The **value** node the named expression lowered to, or `None` when it has none.
+    pub fn try_node_of(&self, name: &str) -> Option<NodeId> {
+        let expr = self.expr_named(name)?;
+        self.build.state[expr].val
+    }
+
+    /// The named expression's class: every member with its own slot value, representative
+    /// first.
+    ///
+    /// # Invariant
+    /// A member's slot can differ from the class's answer, which is the representative's:
+    /// this reading exists to show both. An expression with no value node answers empty.
+    pub fn class_of(&mut self, name: &str) -> Vec<(NodeId, Option<P::Value>)> {
+        self.try_node_of(name)
+            .map(|node| self.build.module.class_members_with_values(node))
+            .unwrap_or_default()
     }
 
     // --- a node's origin ---------------------------------------------------

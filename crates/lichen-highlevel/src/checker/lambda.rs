@@ -308,17 +308,28 @@ where
                 ext.unify_slots(self, found_attr, missing, loc2);
             }
         }
-        // The result cell and the callee's type ride in the operand; element 3
-        // is what an apply of an unknown value applies. §7.
-        let operands = self.array_node(
+        // Both slots' applications carry the four elements the apply arm reads.
+        let value_operands = self.array_node(
             self.current_block,
             &[function_value, argument_pair, c, function_ty],
         );
-        let node = self.op_node(
+        let value_apply = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Apply),
-            Some(operands),
+            Some(value_operands),
         );
+        let type_operands = self.array_node(
+            self.current_block,
+            &[function_ty, argument_pair, c, function_ty],
+        );
+        let type_apply = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Apply),
+            Some(type_operands),
+        );
+        // The two applications stay separate: neither carries the other's attribute.
+        let _ = type_apply;
+        let node = value_apply;
         // The checker alone knows this application's argument span; the
         // edge is per-application even when the node is shared.
         self.apply_edges.insert(

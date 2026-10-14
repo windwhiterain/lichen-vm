@@ -130,6 +130,21 @@ impl<P: Program> Module<P> {
         self.nodes[root].value
     }
 
+    /// Every member of `node`'s class with its own slot value, representative first.
+    ///
+    /// # Invariant
+    /// A read: the walk compresses nothing, and a member's slot may differ from
+    /// [`Self::class_value`], which answers with the representative's.
+    pub fn class_members_with_values(&self, node: NodeId) -> Vec<(NodeId, Option<P::Value>)> {
+        let mut root = node;
+        while let Some(parent) = self.nodes[root].equality.parent() {
+            root = parent;
+        }
+        self.class_members(root)
+            .map(|member| (member, self.nodes[member].value))
+            .collect()
+    }
+
     /// The class's **low type** through its representative. See docs/notes/lowlevel-low-types.md.
     pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
         self.nodes.get(self.class_root(node))?.low_shape.as_ref()

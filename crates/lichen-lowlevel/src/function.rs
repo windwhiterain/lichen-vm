@@ -123,7 +123,7 @@ impl<P: Program> Module<P> {
                 return None;
             };
             let result = module.evaluate_node(Dyn(instantiation.applied), Some(block));
-            module.wire_apply_result(node, cell, result, instantiation.applied, block)
+            module.wire_apply_result(node, result, instantiation.applied, block)
         })
     }
 
@@ -150,6 +150,8 @@ impl<P: Program> Module<P> {
         // The result is the clone's return type, resolved before the bind; the
         // deep pass replicates to no class member.
         let applied = instantiation.applied;
+        // An apply-bodied return *is* an operation, so the clone is evaluated first.
+        self.evaluate_node(Dyn(applied), Some(block));
         let Some(codomain) = self.pair_type_half(applied) else {
             return;
         };

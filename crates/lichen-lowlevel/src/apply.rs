@@ -110,13 +110,13 @@ impl<P: Program> Module<P> {
     /// node.
     ///
     /// # Invariant
-    /// The result cell binds to the return type, resolved before the bind: the deep
-    /// pass resolves later and does not replicate to class members.  Element 1 is
-    /// the type slot of a 2-wide or a 3-wide pair.
+    /// This level learns nothing about which element of a pair is the value and which is
+    /// the type: it caches the pair it produced and stops. A caller that needs an element
+    /// bound binds it itself, and the two applications an apply encodes are one class
+    /// because the caller unifies them.
     pub(super) fn wire_apply_result(
         &mut self,
         node: NodeId,
-        cell: Option<NodeId>,
         result: Option<P::Value>,
         applied: NodeId,
         block: BlockId,
@@ -129,20 +129,19 @@ impl<P: Program> Module<P> {
         ) {
             return None;
         }
-        match (cell, result.and_then(|value| value.as_enum())) {
-            // SAFETY: `array` is `result`'s live payload; this covers both `items()` calls.
-            (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
-                let items = unsafe { array.items() };
+        match result.and_then(|value| value.as_enum()) {
+            // SAFETY: `array` is `result`'s live payload; this covers the `items()` call.
+            Some(LowValue::Array(array)) if unsafe { array.items() }.len() >= 2 => {
                 // The result is written only into a class that holds nothing.
                 if self.class_value(node).is_none() {
                     self.write_node_value(node, result);
                 }
                 self.unify(node, applied);
-                // Resolve the return type first — the deep pass does not replicate
-                // to class members.
-                let item = self.as_dynamic(items[1].node, block);
-                self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
-                self.unify(cell, item);
+                // Every element is resolved; the deep pass replicates to no member.
+                for item in unsafe { array.items() } {
+                    let item = self.as_dynamic(item.node, block);
+                    self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
+                }
                 result
             }
             _ => result,
