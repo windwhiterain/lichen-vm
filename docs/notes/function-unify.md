@@ -177,7 +177,12 @@ what made per-call freshness.
     check time (its class already held 44 and 71), and `fill_class_holes` writes only
     into members that hold nothing — so the clone's own slot keeps `Function(3)` while
     the class answers `Function(2)`. That is why every run answered the same way even
-    though the merge's two sides swapped order between runs.
+    though the merge's two sides swapped order between runs. The value's provenance is
+    measured as well: every closure value is written into a template node during check —
+    `SET-FN node=… origin=None epoch=5/8/10/… value=Function(1)/Function(2)/…`, epochs 5
+    to 33 — while the walk that makes the clones runs from epoch 39, so the class's answer
+    predates every clone. (Node ids quoted in this note name one run; read them by
+    `origin` and value, not by number.)
   - Everything after that is consequence: the class answers `Function(2)`, the caller's
     callee read joins it (an apply's `check_app` leaves `state[e].val` empty, so the
     callee operand is an operation node), the outer apply instantiates the template, and
