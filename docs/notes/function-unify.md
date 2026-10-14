@@ -201,11 +201,14 @@ what made per-call freshness.
     leaves `state[e].val` empty, so the callee operand is an operation node):
     `CALLEE apply=NodeId(86) operand=NodeId(82) slot=Function(2) class=Function(2)` for the
     outer apply, against the inner one's `CALLEE apply=NodeId(78) operand=NodeId(29)
-    slot=Function(1)`. The outer apply therefore instantiates the template, and the capture
-    is cloned inside that *template* instantiation where nothing binds it — the parameter
-    check binds the `f1 3` instantiation's clone (`cloned=97 …
-    after=(98 slot=Some(USize(3)))`) while the executed body reads the template
-    instantiation's clone (`109`, `origin=49`, empty).
+    slot=Function(1)`. The outer apply therefore instantiates the template, and both
+    parameter checks are current-state measurements: the `f1 3` instantiation binds its own
+    clone (`PARAMCHECK function=Function(1) node=78 param=97 argument=75` →
+    `PARAM-BOUND … param_slot0_now=USize(3)`), while the instantiation the outer apply runs
+    is the template's (`PARAMCHECK function=Function(2) node=86 param=113 argument=83` →
+    `PARAM-BOUND … param_slot0_now=USize(4)`) — it binds only the closure's *own* parameter,
+    so the captured cell is in none of its bindings and the answer loses exactly that
+    position: `[1, 2, none, 4]`.
   - **The mechanism predicts which positions lose their values.** Three programs written
     from the cause (not from the measured set) and then run: `a = 1; f1 = x => { b = 2;
     f2 = y => { c = 3; f3 = z => [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
