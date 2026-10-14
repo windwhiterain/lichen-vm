@@ -222,6 +222,12 @@ what made per-call freshness.
   branch's repaired refusals `n1`, `k3`, `k5`) and
   `a_nested_function_captures_the_applied_outer_parameter` passes. The gate was a
   diagnostic and is reverted; it decides nothing about what the repair should be.
+  The merge is also **unique to the failing case in the measured set**: counting every
+  merge of two decided closures, `u3` has two and one of them has an `origin=None` side
+  (the template), while `v4`, `v5` and `q4` have none and `n1` (seven), `o2` (three) and
+  `k3` (three) merge clones against clones only. So a clone-against-template merge is
+  present exactly where the capture is lost, and taken away exactly there the answer
+  returns.
 - **The same `none`, without a function merge.** `mk = x => y => x; f = n => mk n 1;
   f 3` (three spellings of it in the scratch set) answers `none` as well, and it is
   **not** this cause. Measured on the clone merges that carry a closure: u3 has a
