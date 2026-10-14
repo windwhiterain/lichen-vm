@@ -308,7 +308,61 @@ what made per-call freshness.
   named — tag `write_node_value`'s call sites, or take a backtrace, rather than
   adding another reader-side filter.
 
-## 6. Reproductions
+## 6. Repairs, and what each one is measured to do
+
+Nothing here is decided: the cause above is measured, and these are the candidate repairs
+with what is already known about each. Two of them were run as diagnostics (reverted), so
+their effect on the programs is measured; **none has been run against the suites**, which is
+the first step for whichever one is chosen.
+
+- **A. Make the clone decision context-free.** `depends_on_parameter`'s closure test would
+  be evaluated against the call rather than against the function currently being walked, so
+  one node could not be referenced in place in one context and cloned in another.
+  - Measured (as the `ctx.anchor` diagnostic, §5): the capture loss disappears
+    (`[1, 2, 3, 4]`), the capture merge does not move (`(1, 1)`), and no other measured
+    program changes.
+  - Pros: smallest change; it removes the context dependence that creates the mixed shape
+    at all; it stays inside the walk this branch added, so no documented invariant moves.
+  - Cons: it repairs only the capture loss, leaving two calls' closures merging; the
+    diagnostic substituted `ctx.anchor` as a stand-in, so the repair owes a principled
+    statement of what "foreign" is foreign *to*, and of the branch's intent for that term.
+- **B. Let the function arm agree without merging when the two ids differ.** Two distinct
+  closures would compare equal without their classes becoming one.
+  - Measured (as the `a == b` gate, §5): the capture loss disappears (`[1, 2, 3, 4]`), the
+    capture merge is repaired (`(1, 2)`), the pinned pipeline test passes, and every other
+    measured program keeps its answer, including this branch's repaired refusals.
+  - Pros: repairs both symptoms at the one place that decides them.
+  - Cons: it changes what "two functions are one value" means — agreement without a shared
+    class — so propagation through a function-valued class weakens, and the `f : f` cases
+    this branch exists for would have to be re-measured against the suites; it also makes
+    `add_equality`'s "where both sides are decided, they are one value" hold only per
+    identity, which is a contract worth stating explicitly if it is chosen.
+- **C. Let the Apply arm prefer the callee node's own slot.** Unmeasured.
+  - Pros: it targets the harm where it happens — a reader taking a class-wide answer where
+    the call's own instance matters — without touching unification.
+  - Cons: it contradicts the class model ("a class answers its committed value"), so it
+    needs its own decision record and permission before it is even tried.
+- **D. Narrow `regroup_clones`' key to the template node instead of its class.** Unmeasured.
+  - Pros: it stops exactly the pairing measured in §5 — the two clones whose templates are
+    one class would land in separate groups.
+  - Cons: reconciling a class's images in one call is what the regroup is for; narrowing the
+    key would leave images unreconciled and plausibly break the `f : f` repairs, so it may
+    trade one loss for another.
+- **E. Compare captures in the function arm.** Unmeasured, and a design change.
+  - Pros: it addresses the criterion itself rather than its consequence.
+  - Cons: a capture environment is not part of the `[parameter, return]` pair, so it needs a
+    representation; comparing captures by class would still call two calls' closures equal
+    (the capture merge), and comparing them by instance would also block a clone from
+    unifying with its template, which is what `f : f` needs — so as stated it is likely
+    wrong.
+
+Whichever is chosen, the decision needs the same four measurements first: the three
+influenced suites against the recorded 160/0, 86/1, 140/1; the program set above against its
+recorded answers; the branch's own repaired refusals (`n1`, `k3`, `k5`,
+`prelude_reads`, `wildcard_positions`); and the two known reds, of which the capture loss
+must turn green and the diagnostic pin must be moved deliberately.
+
+## 7. Reproductions
 
 Scratch programs (gitignored, `C:\resource\lichen-vm\.scratch-core\`): `n1` (the
 minimal refusal), `u3` (the capture loss), `p1` (the capture merge), `v1`–`v5`,
