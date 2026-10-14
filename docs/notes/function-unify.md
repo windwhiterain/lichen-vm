@@ -144,7 +144,21 @@ what made per-call freshness.
   2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
   `[1, 2, 3, 4]`, pinned by
   `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`).
-  Every link of the chain is measured on this branch:
+  Every link of the chain is measured on this branch. **The process, in order:** check time
+  gives each closure a class that already holds the template's function value. A call then
+  copies the template into that call's nodes and binds the argument into the *copy's*
+  parameter cell, while the template's own parameter cell is never written. The copying is
+  not uniform — a node can be referenced in place in one walk and copied in another, and a
+  call's walk runs nested walks that share its image map — so one class's images come out in
+  different shapes, one of them still naming the template. Reconciling those images within
+  the call walks into the two closure values, and the function kind compares only
+  `[parameter, return]`, so it declares the template and the instance one value and merges
+  their classes. The merged class keeps both values in its members, but a read answers the
+  class root's own slot, which holds the template. The caller therefore applies the
+  *template*, whose parameter cell is the one never bound: everything derived from the
+  parameter stays undecided — what a reader sees as `none` — while constants the body writes
+  itself survive. That one class then serves every later call, so each loses its own
+  parameter-derived captures.
   - The inner apply computes and writes the minted generation:
     `WIRE node=78 applied=87 applied_slot0=Function(3) result_slot0=Function(3)`.
   - `unify_clone_groups` of that instantiation unifies two *clones*, and they are not
