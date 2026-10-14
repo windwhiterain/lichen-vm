@@ -195,7 +195,11 @@ what made per-call freshness.
     b=55(origin=None value=Function(2))` — the closure node joining an undecided node of
     its use site — which is why the class the clone later joins already answers
     `Function(2)`. (Node ids quoted in this note name one run; read them by
-    `origin` and value, not by number.)
+    `origin` and value, not by number.) Both structural claims were then re-run **twice**
+    on the committed state with identical counts: two merges of decided closures per run,
+    one of them with an `origin=None` side; in both runs the clone's slot keeps its own
+    value (two of two); and 76 `SET-FN` writes per run over epochs 5 to 224, only two of
+    which carry an origin — the check-time writes into template nodes are 74 of the 76.
   - Everything after that is consequence: the class answers `Function(2)`, and the caller's
     callee read resolves to it. Re-measured on the committed state (an apply's `check_app`
     leaves `state[e].val` empty, so the callee operand is an operation node):
