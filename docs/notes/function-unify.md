@@ -207,6 +207,15 @@ what made per-call freshness.
     shapes.
   - `regroup_clones`' key is sound where the capture is concerned: the capture's two
     template nodes are one class (`26->98 rep=49`, `49->100 rep=49`).
+  - **The mechanism predicts which positions lose their values.** Three programs written
+    from the cause (not from the measured set) and then run: `a = 1; f1 = x => { b = 2;
+    f2 = y => { c = 3; f3 = z => [a, b, c, x, y, z]; f3 }; f2 }; f1 3 4 5` answers
+    `[1, 2, 3, none, none, 5]` — one lost cell per captured level, `x` and `y`; the same
+    shape whose innermost body captures nothing (`[a, b, c, z]`) answers `[1, 2, 3, 5]`,
+    correct; and the variant capturing only the middle parameter (`[a, b, c, y, z]`)
+    answers `[1, 2, 3, none, 5]`, losing exactly `y`. So the loss tracks captured cells
+    one per level, and the capture-free control is intact. All three are refusals on
+    `dev`.
 - **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
   mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev refuses: the signature descent
   sees `[parameter, return]`, and a capture is in neither cell, so two closures with
