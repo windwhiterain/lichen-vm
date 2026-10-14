@@ -196,11 +196,14 @@ what made per-call freshness.
     its use site — which is why the class the clone later joins already answers
     `Function(2)`. (Node ids quoted in this note name one run; read them by
     `origin` and value, not by number.)
-  - Everything after that is consequence: the class answers `Function(2)`, the caller's
-    callee read joins it (an apply's `check_app` leaves `state[e].val` empty, so the
-    callee operand is an operation node), the outer apply instantiates the template, and
-    the capture is cloned inside that *template* instantiation where nothing binds it —
-    the parameter check binds the `f1 3` instantiation's clone (`cloned=97 …
+  - Everything after that is consequence: the class answers `Function(2)`, and the caller's
+    callee read resolves to it. Re-measured on the committed state (an apply's `check_app`
+    leaves `state[e].val` empty, so the callee operand is an operation node):
+    `CALLEE apply=NodeId(86) operand=NodeId(82) slot=Function(2) class=Function(2)` for the
+    outer apply, against the inner one's `CALLEE apply=NodeId(78) operand=NodeId(29)
+    slot=Function(1)`. The outer apply therefore instantiates the template, and the capture
+    is cloned inside that *template* instantiation where nothing binds it — the parameter
+    check binds the `f1 3` instantiation's clone (`cloned=97 …
     after=(98 slot=Some(USize(3)))`) while the executed body reads the template
     instantiation's clone (`109`, `origin=49`, empty).
   - **The mechanism predicts which positions lose their values.** Three programs written
