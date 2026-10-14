@@ -173,10 +173,17 @@ what made per-call freshness.
     *closure*-carrying ones does **not** separate a failing program from a correct one.
     Measured: `w2` (the capture-free control, which answers correctly) has 6, `w3` (loses
     one) 6, `u3` (loses one) 2, `n1`, `k3` and `q4` (all correct) 1 each, `v4` (correct) 0.
-    What fits every measured program is **how many captured cells the merged closure's body
-    reads**: u3 one (one lost), `w1` two (two lost), `w3` one (one lost), the two calls of
-    `x1` one each (two lost), `w2` none (nothing lost). Whole-log counts also vary a few
-    percent between runs — the walk is hash-ordered — so they are indicative, not exact.
+    What fits every measured program is **which captured cells the call must clone** — the
+    ones `depends_on_parameter` is true for, i.e. the parameter itself or a cell that is not
+    proven concrete — read by a closure whose class merged with its template's: u3 loses `x`
+    while its `b = 2` survives, so the criterion is not "any captured cell read".
+    `y2 = a = 1; f1 = x => { b = 2; f2 = y => [a, b, c, x, y]; c = 3; f2 }; f1 3 4` answers
+    `[1, 2, 3, none, 4]` — both constant captures survive and only the parameter is lost —
+    and `y1 = a = 1; f1 = x => { b = x + 1; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers
+    `[1, none, none, 4]`, losing a captured local that must be cloned as well, so the rule is
+    not parameter-specific. `dev` answers all three correctly (`[1, 2, 3, 4]`, `[1, 2, 3, 3,
+    4]`, `[1, 4, 3, 4]`). Whole-log counts also vary a few percent between runs — the walk is
+    hash-ordered — so they are indicative, not exact.
   - Its descent then compares a *clone* with a *template*: descending `[91,
     46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
