@@ -137,12 +137,18 @@ what made per-call freshness.
   2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
   `[1, 2, 3, 4]`, pinned by
   `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`),
-  and `examples/gc.lichen` answers `[none, none]` where dev refuses it. Measurement on
-  this branch: the outer apply's callee operand is a node whose **class holds the
-  template's** closure `Function(2)` rather than the call's `Function(3)`, so the
-  apply instantiates the template and the body's clone of the captured cell is never
-  bound. This is [function-type-merge](function-type-merge.md)'s *sub-typing /
-  one-carrier* open item, reached with a value.
+  and `examples/gc.lichen` answers `[none, none]` where dev refuses it. **The apply
+  computes and writes the right closure** — a trace on the inner apply reads
+  `applied_slot0=Function(3) result_slot0=Function(3)`, the minted generation — so
+  the answer is not what is lost. What the earlier trace shows instead is **one
+  binding, two clones**: the parameter check binds the clone of the parameter pair's
+  value cell (`cloned=97 … after=(98 slot=Some(USize(3)))`) while the executed body
+  reads a *different* clone of the same captured cell (`node 109, origin 49, slot
+  None`), so the read is empty. Two nodes stand for the capture inside the template,
+  and `instantiate_stamped`'s `regroup_clones`/`unify_clone_groups` did not make
+  their clones one class. To measure next: whether the two *template* nodes are one
+  class (`equality_representative` equality), which decides between the checker's
+  encoding and the regroup's grouping key.
 - **A closure with a different capture merges.** `mk = x => y => x; a = [mk 1,
   mk 2]; (a[0] 0, a[1] 0)` answers `(1, 1)` where dev refuses: the signature descent
   sees `[parameter, return]`, and a capture is in neither cell, so two closures with
