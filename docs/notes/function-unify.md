@@ -181,7 +181,11 @@ what made per-call freshness.
     measured as well: every closure value is written into a template node during check —
     `SET-FN node=… origin=None epoch=5/8/10/… value=Function(1)/Function(2)/…`, epochs 5
     to 33 — while the walk that makes the clones runs from epoch 39, so the class's answer
-    predates every clone. (Node ids quoted in this note name one run; read them by
+    predates every clone. The class *membership* is a check-time merge too: the first
+    `Function`-valued merge of the run is `EQ a=49(origin=None value=None)
+    b=55(origin=None value=Function(2))` — the closure node joining an undecided node of
+    its use site — which is why the class the clone later joins already answers
+    `Function(2)`. (Node ids quoted in this note name one run; read them by
     `origin` and value, not by number.)
   - Everything after that is consequence: the class answers `Function(2)`, the caller's
     callee read joins it (an apply's `check_app` leaves `state[e].val` empty, so the
