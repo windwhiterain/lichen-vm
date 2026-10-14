@@ -161,8 +161,12 @@ what made per-call freshness.
   - The group unify therefore compares a *clone* with a *template*: descending `[91,
     46]` against `[91, 106]` reaches element 1 = `(106, 46)`, and inside that pair
     element 0 = `(91, 44)` — the minted closure `Function(3)` against the template
-    closure `Function(2)`. The observed merge series is exactly that descent:
-    `92↔41`, `93↔42`, `94↔43` (the two cells' interiors), then `91↔44`, then `106↔46`.
+    closure `Function(2)`. The recursion's own depth counter shows the nesting:
+    `ARR depth=0 a=95[91,46] b=106[91,106]`, `ARR depth=1 a=46[44,46] b=106[91,106]`,
+    `FN-ARM depth=2 a=44(Function(2) param=43 ret=57) b=91(Function(3) …)`, then
+    `ARR depth=3 a=43[41,42] b=94[92,93]` for the cell interiors whose elements are the
+    `92↔41`, `93↔42`, `94↔43` merges. The decision sits two levels inside the group
+    pair, on the clone/template boundary.
   - **The `LowValue::Function` arm is what merges them.** Two functions are one value
     when their `[parameter, return]` cells agree, and a clone's cells agree with its
     template's by construction. `add_equality` then gives the merged class its *one*
