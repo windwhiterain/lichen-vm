@@ -216,6 +216,14 @@ what made per-call freshness.
   branch's repaired refusals `n1`, `k3`, `k5`) and
   `a_nested_function_captures_the_applied_outer_parameter` passes. The gate was a
   diagnostic and is reverted; it decides nothing about what the repair should be.
+- **The same `none`, without a function merge.** `mk = x => y => x; f = n => mk n 1;
+  f 3` (three spellings of it in the scratch set) answers `none` as well, and it is
+  **not** this cause. Measured on the clone merges that carry a closure: u3 has a
+  clone-against-template pair — `a=44(origin=None Function(2)) b=91(origin=Some(44)
+  Function(3))` — while this program has none, every `Function`-valued side being a
+  clone (`a=63(origin=Some(30) Function(4)) b=92(origin=Some(30) Function(4))` and
+  friends). The diagnostic gate that repairs the capture loss above therefore leaves
+  its answer unchanged, and its `none` comes from a different path.
 - **The diagnostic shape.** `an_unannotated_lambda_has_an_undecided_arrow_type`
   pins the recorded value side of `(\x. x) : Type` to the function-type array; the
   arm now records the `Function` leaf, which is nearer the disagreement but is a
