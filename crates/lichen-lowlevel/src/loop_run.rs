@@ -118,7 +118,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
     ) -> Iteration {
-        let Some(instantiation) = self.instantiate(function, argument, block, node) else {
+        let Some(instantiation) = self.instantiate(function, argument, block, node, true) else {
             return Iteration::Refused;
         };
         let mut index = 0;

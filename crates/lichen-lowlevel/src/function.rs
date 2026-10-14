@@ -117,7 +117,8 @@ impl<P: Program> Module<P> {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
         self.with_apply_frame(|module| {
-            let Some(instantiation) = module.instantiate(function, argument, block, node) else {
+            let Some(instantiation) = module.instantiate(function, argument, block, node, true)
+            else {
                 // A failed parameter check leaves the apply's result unknown:
                 // the body must not run under a mismatched argument.
                 return None;
@@ -143,8 +144,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) {
-        let Some(instantiation) = self.instantiate(function, argument, block, node) else {
-            // A failed parameter check already recorded its error.
+        let Some(instantiation) = self.instantiate(function, argument, block, node, false) else {
             return;
         };
         // The result is the clone's return type, resolved before the bind; the
@@ -174,10 +174,12 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
+        check_parameter: bool,
     ) -> Option<Instantiation> {
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(node) + 1;
-        let instantiation = self.instantiate_stamped(function, argument, block, node);
+        let instantiation =
+            self.instantiate_stamped(function, argument, block, node, check_parameter);
         self.stamp_depth = stamp;
         instantiation
     }
@@ -189,6 +191,7 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
+        check_parameter: bool,
     ) -> Option<Instantiation> {
         let (r#return, parameter, assert_count) = {
             let function = &self.functions[function];
@@ -228,8 +231,8 @@ impl<P: Program> Module<P> {
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
-        // Walked by index: the loop body needs `&mut self`, and the registry lives on it.
-        for index in 0..assert_count {
+        // The type side registers nothing: the value side reports each assert.
+        for index in 0..assert_count * usize::from(check_parameter) {
             let condition = self.functions[function].asserts[index];
             let instantiated = self.node_apply(condition, &mut ctx);
             if instantiated != condition {
@@ -253,14 +256,20 @@ impl<P: Program> Module<P> {
                     self.unify(first, clone);
                 });
             }
-            if self.apply_parameter_check(
+            // The type side discards only the errors this check records.
+            let recorded = self.unify_errors.len();
+            let failed = self.apply_parameter_check(
                 cloned_param,
                 argument,
                 block,
                 node,
                 AnyFunctionId::Dynamic(function),
                 parameter,
-            ) {
+            );
+            if !check_parameter {
+                self.unify_errors.truncate(recorded);
+            }
+            if failed {
                 return None;
             }
         }
