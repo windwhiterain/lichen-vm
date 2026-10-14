@@ -79,8 +79,7 @@ impl<P: Program> Module<P> {
                 }
             }
             let result = module.evaluate_node(Dyn(applied), Some(block));
-            // The type slot is applied here too: a static callee's type resolves to a
-            // static function, which the dynamic path's guard refuses.
+            // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
                 && let Some(codomain) = module.pair_type_half(applied)
             {

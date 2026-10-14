@@ -1337,36 +1337,29 @@ twenty-two are correct, **zero** of the other four hundred and seven answers mov
 whose type is still undecided are `b7`, `g2`, `g3`, `h5` (an undecided pair) and `w5` (an undecided
 scalar).
 
-**What is left, measured.** `w5` fails for one reason, and it is not this section's cause: its root apply
-has a **static** callee, whose type the operand's element 3 does carry — `element3=Some(Dynamic(n62))` and
-it resolves to a function — but that function is `AnyFunctionId::Static`, and `apply_callee_type` accepts
-only `AnyFunctionId::Dynamic`, so the type side is skipped at that guard and the root's type cell stays
-empty. The trace is `CALLEE-TYPE-SKIP node=n86 type_node=n62 resolved=Some(Static(StaticFunctionRef {
-module: 0, index: 1 }))`, and calling `apply_callee_type` from the static arm changes nothing because of
-that guard. Repairing it needs a static analogue of `apply_type` — instantiate, take the codomain, bind
-the cell — which is a new path, not a line.
-
-The other four (`b7`, `g2`, `g3`, `h5`) fail differently: their root's type cell **is** bound, but to a
-pair whose two slots are empty singletons — no value, no operator, and no class-mate — while the working
-case (`m4`) binds the template's own pair with values in both slots. The measured chain of a failing slot
-is `n611(op=false value=false) <- n156(op=true value=false) <- n51(op=true value=true)`: an unevaluated
-operation sits **between** the slot and a healthy ancestor.
+**Both ends of what was left are repaired, and the acceptance is the corpus.** `w5` failed because its
+root apply has a **static** callee: element 3 carried the type and it resolved to a function, but of the
+`AnyFunctionId::Static` variant, which the dynamic path's guard refuses, so the type side was skipped and
+the root's type cell stayed empty. The static path now applies its type slot the same way the dynamic one
+does — after the instantiated return is evaluated, take its type half, evaluate it, and unify it with the
+checker-wired result cell. That also repaired `b7`, `g2`, `g3` and `h5`, whose type chains pass through
+static callees further down. Measured over the corpus afterwards: **twenty-two answers moved, every one of
+them a program that previously answered `none`**, all twenty-two now answering fully correct values and
+`Int` types, and **none of the other four hundred and seven answers moved**.
 
 **Three routes to those slots were tried and refuted**, so a later attempt need not repeat them:
 evaluating the pair's own items changed no answer; evaluating the chain's operation-bearing producer
 changed no answer; and unifying the slot with the chain's value-bearing element is **harmful** — it turned
 five previously correct programs into `expected Type, found Int` and the four into nested `raw[?a, …]`
-types. The repair therefore belongs where that clone is minted or where its reader is chosen, not in the
-type application's post-processing, which is where all three attempts lived.
+types. The type application's post-processing is not where the repair belongs.
 
-**And the mint is measured.** `apply_type` clones the function's return, and inside `node_apply` a clone is
-published into the remap **before** its operation is assigned (`remap.insert` and then, later,
-`self.nodes[clone].operation = operation`). A clone reached again during its own construction therefore
-copies a node that has no operation yet, and the hole is inherited down the chain. Instrumenting exactly
-that state — a node that is a clone whose own origin carries an operation while it does not — fires
-**forty-six times** in `g3` and **zero times** in `m4`, the program that answers correctly, which is the
-discrimination the earlier inference lacked. The repair this points at is to initialise a clone's operation
-before publishing it, or to patch the revisiting clone afterwards.
+**What the mint does, measured.** The clone hole is real and was measured: a node that is a clone whose own
+origin carries an operation while it does not fires **forty-six times** in `g3` and **zero times** in `m4`,
+matching `node_apply` publishing a clone into the remap before assigning its operation. Completing those
+clones was tried and is **not** the repair either: copying the operation from the origin chain produces
+nested `raw[raw[…]]` types, because an apply's value is a pair while a type slot needs one element of it.
+The hole is recorded here as a fact about the engine, not as the cause of this defect — the type slot is
+filled by the application above, not by completing those clones.
 
 | option | what it changes | pros | cons |
 | --- | --- | --- | --- |
