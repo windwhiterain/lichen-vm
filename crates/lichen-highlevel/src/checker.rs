@@ -815,19 +815,6 @@ where
         self.alloc_node(self.current_block, None, None)
     }
 
-    /// A fresh cell whose value is the wildcard: an unconstrained **position**.
-    ///
-    /// # Invariant
-    /// One cell per position, never the shared [`Self::any`] node: a call mints a
-    /// fresh cell per position, so sharing the node would alias two of them.
-    pub fn any_cell(&mut self) -> NodeId {
-        self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Any)),
-        )
-    }
-
     /// A plain value node in the current block — how a native operator builds a
     /// custom value without an operation.
     pub fn value_node(&mut self, value: P::Value) -> NodeId {

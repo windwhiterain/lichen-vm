@@ -53,18 +53,17 @@ fn an_applied_parameter_still_computes() {
 }
 
 #[test]
-fn every_parameter_shares_the_wildcard_value_position() {
+fn every_parameter_owns_an_undecided_value_position() {
     let probe = applied_parameter();
     let (n_slot, n_value) = pair_value(&probe.checked().module, probe.pair_of("n"));
     let (x_slot, x_value) = pair_value(&probe.checked().module, probe.pair_of("x"));
     assert_eq!(
-        n_value,
-        Some(LowValue::Any),
-        "the outer parameter's value position is unconstrained"
+        n_value, None,
+        "the outer parameter's value position is undecided, not a value"
     );
-    assert_eq!(x_value, Some(LowValue::Any));
-    assert_eq!(
+    assert_eq!(x_value, None);
+    assert_ne!(
         n_slot, x_slot,
-        "one shared wildcard node stands at every unconstrained position"
+        "each parameter owns its own cell, so an apply clones it per call"
     );
 }
