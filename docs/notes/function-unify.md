@@ -6,15 +6,15 @@
 > part of unification; a class pair met again on the descent now agrees instead of
 > recording a conflict. The wildcard experiments (a lambda's value positions
 > holding `@any`) are **rejected and reverted**, with the measurements below.
-> Two suite failures remain: one diagnostic-shape pin and one closure that reads
-> `none` for a captured parameter. Measured on this branch: lowlevel 160/0,
-> highlevel 86/1, language pipeline 140/1, the two reds being those two.
+> One suite failure remains: the diagnostic-shape pin, which is a pin to move
+> deliberately. The closure that read `none` for a captured parameter is **repaired** —
+> the fix and its measurements are in §6 — and the pipeline test that pinned it passes.
+> Measured on this branch after the repair: lowlevel 160/0, highlevel 86/1.
 >
 > **Checkpoint decision (with the maintainer): the branch stays unmerged until the
-> repair lands.** The workspace rule is to merge at each checkpoint so parallel work
-> stays in sync; merging now would take the two reds above into `dev`, and the
-> capture loss is a direct consequence of the function arm this branch adds, so the
-> repair comes first and the merge follows it.
+> repair lands.** The repair has landed; what remains before the merge is the diagnostic
+> pin above, which pins a shape deliberately and therefore needs the maintainer's word
+> before it is moved.
 >
 > This note is the branch's coordination document; it records the maintainer's
 > proposals as they are made, and what each one measured.
@@ -140,10 +140,12 @@ what made per-call freshness.
 
 ## 5. What is open
 
-- **A closure that reads `none` for a captured parameter.** `a = 1; f1 = x => { b =
-  2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` answers `[1, 2, none, 4]` (dev:
-  `[1, 2, 3, 4]`, pinned by
-  `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`).
+- **A closure that reads `none` for a captured parameter — diagnosed and repaired.**
+  `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` **used to** answer
+  `[1, 2, none, 4]` (dev: `[1, 2, 3, 4]`, pinned by
+  `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`);
+  it now answers `[1, 2, 3, 4]` and that test passes, the cause being the non-uniform
+  copying recorded in §6. Every measurement below was taken **before** the repair.
   Every link of the chain is measured on this branch. **The process, in order:** check time
   gives each closure a class that already holds the template's function value. A call then
   copies the template into that call's nodes and binds the argument into the *copy's*
@@ -351,22 +353,23 @@ function arm applies a *type-level* rule (equal signatures) to a *value-level* q
 (which closure), which is the category error underneath; the capture loss and the capture
 merge are its two visible faces.
 
-Nothing here is decided: the cause above is measured, and these are the candidate repairs
-with what is already known about each. Two of them were run as diagnostics (reverted), so
-their effect on the programs is measured; **none has been run against the suites**, which is
-the first step for whichever one is chosen.
+The cause above is measured, and one repair has **landed**; the rest are candidates with
+what is already known about each. Of the candidates, B was run as a diagnostic (reverted),
+so its effect on the programs is measured but never against the suites.
 
-- **A. Make the clone decision context-free.** `depends_on_parameter`'s closure test would
-  be evaluated against the call rather than against the function currently being walked, so
-  one node could not be referenced in place in one context and cloned in another.
-  - Measured (as the `ctx.anchor` diagnostic, §5): the capture loss disappears
-    (`[1, 2, 3, 4]`), the capture merge does not move (`(1, 1)`), and no other measured
-    program changes.
-  - Pros: smallest change; it removes the context dependence that creates the mixed shape
-    at all; it stays inside the walk this branch added, so no documented invariant moves.
-  - Cons: it repairs only the capture loss, leaving two calls' closures merging; the
-    diagnostic substituted `ctx.anchor` as a stand-in, so the repair owes a principled
-    statement of what "foreign" is foreign *to*, and of the branch's intent for that term.
+- **A. Make the clone decision context-free — landed.** The closure test inside
+  `depends_on_parameter` is now judged against `ApplyCtx::anchor`, the call's applied
+  function that nested walks already reuse unchanged, instead of `ctx.applied`, the
+  function being walked.
+  - Measured after landing: the pinned program answers `[1, 2, 3, 4]` and
+    `a_nested_function_captures_the_applied_outer_parameter` passes; the whole family it
+    belonged to answers correctly (`w1` `[1, 2, 3, 3, 4, 5]`, `w3` `[1, 2, 3, 4, 5]`, both
+    calls of `x1`, `x2`, and the constant- and non-constant-capture discriminators `y1`
+    and `y2`); lowlevel 160/0 and highlevel 86/1, the remaining red being the
+    diagnostic-shape pin; and every other measured program keeps its answer, including
+    this branch's repaired refusals.
+  - What it does **not** repair: the capture merge and the `mk n 1` path, which are other
+    causes (B below is the measured candidate for the former).
 - **B. Let the function arm agree without merging when the two ids differ.** Two distinct
   closures would compare equal without their classes becoming one.
   - Measured (as the `a == b` gate, §5): the capture loss disappears (`[1, 2, 3, 4]`), the
@@ -397,11 +400,11 @@ the first step for whichever one is chosen.
     unifying with its template, which is what `f : f` needs — so as stated it is likely
     wrong.
 
-Whichever is chosen, the decision needs the same four measurements first: the three
-influenced suites against the recorded 160/0, 86/1, 140/1; the program set above against its
-recorded answers; the branch's own repaired refusals (`n1`, `k3`, `k5`,
-`prelude_reads`, `wildcard_positions`); and the two known reds, of which the capture loss
-must turn green and the diagnostic pin must be moved deliberately.
+The remaining candidates each need the same measurements before they are tried: the three
+influenced suites against the recorded 160/0 and 86/1; the program set above against its
+recorded answers; the branch's own repaired refusals (`n1`, `k3`, `k5`, `prelude_reads`,
+`wildcard_positions`); and the diagnostic-shape pin, which must be moved deliberately
+rather than by a candidate's side effect.
 
 ## 7. Reproductions
 
