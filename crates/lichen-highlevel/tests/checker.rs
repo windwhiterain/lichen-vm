@@ -837,10 +837,10 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // The found side is the function-type node `[Function(fid), ↺]`.
+    // The found side is the function's leaf: the arm compares functions by their cells.
     assert!(matches!(
         diags[0].value_a,
-        Some(HighProgramValue::LowValue(LowValue::Array(_)))
+        Some(HighProgramValue::LowValue(LowValue::Function(_)))
     ));
 }
 
