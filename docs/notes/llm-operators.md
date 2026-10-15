@@ -242,6 +242,30 @@ need a node-local producer for `r`.
   that fixed it put it: *"neither check is about `int2float`; both are about **a class having two sources of
   truth**."* A second, weaker one: the class the emitter gives a value's slot must equal the class
   `value_class` reports for it. Either would catch the next instruction of the same shape.
+  **That guard exists now** (`f3124d42`): ten probes over five variants (`Const`, `Bin`, `BufferReadCall`,
+  `SliceReadCall`, and `Conv` in both directions), with **no new API** — `select_class` already speaks the
+  class aloud, so the instrument is a `Select` whose arms are the probed value and a constant of the class
+  `own_class` states — and a **compile-enforced ledger**: `every_variant()`'s exhaustive `match` over
+  `KernelInstr` means a new variant must be classified, and the eight it does not probe (`Exp`, `Sqrt`,
+  `Floor`, the two write calls, `I32WrapI64`, `Select`, `CallKernel`) each carry their reason in the test.
+  **Reverting the one-line fix makes it name four disagreements, not one** — `BufferReadCall`,
+  `SliceReadCall` and `Conv` — because the removed line answered `Int` for **any** read at `Float`
+  (`operand_class(op, 0)` is the access chain's index), so **three of the four were latent and invisible**.
+  **And it found the next one of the same shape, live and deliberately unpinned**: `CallKernel`, the one
+  variant where `own_class` states `None`, so `value_class` falls back to `operand_class(op, 0)` — which for
+  a call reads the callee's **first parameter leaf** (`spirv.rs:2200-2203`) while the emission gives the
+  call's result slot the callee's **result** class (`:1891`, `:1920`). Measured for a callee taking one
+  `Float` and returning one `Int`: a `Select` over the call's result and an honest `Int` constant is refused
+  `[Int, Float]`, and with arms that *agree* the emitter then refuses `MixedClasses` because the slot is
+  `Int` — **the classing and the emission contradicting each other inside one compile**. The guard does not
+  pin it, on purpose: *"pinning would freeze a behaviour I believe is wrong."* A one-line fix of the
+  `b6dea46c` shape is available.
+  **What the guard cannot catch**, in its author's words: `Exp`/`Sqrt`/`Floor` (whose `own_class` is `Float`
+  and whose `operand_class` is `None`, so a regression to `module` would pass unnoticed, and closing that
+  needs a `pub(crate)` accessor — more machinery than the guard is worth); the slot-versus-`value_class`
+  check, whose absence the `CallKernel` finding proves is a real gap; anything surfacing at a **phi edge**
+  rather than a `Select` arm; a bug **inside** `select_class` itself, since the instrument *is* the
+  `Select`; and future variants — the match forces *classification*, but nothing forces a *probe*.
 
 - **A `@loop` nest cannot be applied inside another nest's step, and that is attention's real wall** (a rule,
   not a missing feature). Nesting lowers and runs: a `nest3`-shaped program answers correctly, triple
