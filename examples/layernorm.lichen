@@ -1,0 +1,91 @@
+---
+  order = "20"
+  compute = import "compute.lichen"
+  doc = "LayerNorm: `y[i] = (x[i] - mean) / sqrt(var + eps) * w[i]`, with `mean = Σx / n` and \
+   `var = Σ(x - mean)² / n` — the normaliser every transformer block opens with, and the \
+   operator that makes **the mean and the variance two producers one consumer needs both**. \
+   It is **three kernels in a diamond**: `Σx` and `Σx²` are two independent producers, and \
+   one normalise kernel reads **both**. **Neither spelling of this operator merges today**, \
+   and both refusals are named. **The one-pass identity `var = Σx²/n - mean²` is what makes it \
+   a diamond at all** — the textbook two-pass form is mean-kernel → variance-kernel → \
+   normalise, and there the mean is read by the variance kernel *and* by the normalise kernel, \
+   which is `ProducerFeedsTwice` (`crates/lichen-runtime/src/fusion_claim/schema.rs:992`, in \
+   `region_edges`: one value, two slots, and the language has no spelling for it). One-pass, \
+   both folds are independent, so both edges **arrive** at one consumer and the shape **is** a \
+   fan-in — but a fan-in licence is only reached once the region *forms*, and two \
+   **independent** producers never do. `region_positions` \
+   (`crates/lichen-runtime/src/fusion_claim/schema.rs:793-820`) groups by a forward-only \
+   adjacency scan, so the second producer is fed by nothing earlier in the region and starts a \
+   new one. Measured on the RTX 3060, the two lines are `region 0 (nodes 0): refused: \
+   RegionIsNotAPair: the region holds 1 instance(s), and a merge is one producer and one \
+   consumer` and `region 1 (nodes 1, 2): refused: ProjectionNotBridged: the instance at 1's \
+   element projection did not bridge: the projection reads parameter leaf 0 of the kernel's \
+   own domain — the lane index — and a projection is one function of the fused step's slots`. \
+   The second \
+   line is **not** this operator's: RMSNorm's own pair, recorded the same way, refuses with it \
+   verbatim. softmax's diamond does merge (`d364f547`) because its producers are **chained** \
+   — the sum reads the maximum — so all three nodes group. **The folds are \
+   two kernels and not two folds in one body**: two folds in one body is a chain of two \
+   links, and a chain is not the shape this operator exists to measure. \
+   `eps = 1.0` is a **literal** and not a parameter, for the reason RMSNorm's `0.25` is — a \
+   kernel parameter cannot cross the graph path (`compute/graph.rs`) — and it is chosen so the \
+   denominator lands on an exact square, `1.25 + 1.0 = 2.25`. It is **not** a stabiliser a \
+   production LayerNorm would ship; this example's job is the exact arithmetic and the shape. \
+   **What is exact**: the row is `1, 2, 3, 4`, so `Σx = 10` and `Σx² = 30`; `mean = 10/4 = 2.5` \
+   is a sum of small integers over a division by a power of two, `Σx²/4 = 7.5` likewise, and \
+   `7.5 - 6.25 = 1.25` is a difference of exact `f32` values. The centred values `-1.5, -0.5, \
+   0.5, 1.5` are differences from `2.5` and are exact. Every integer here is below `2^24`. \
+   **What is modelled**: `sqrt` alone. This language's `sqrt` is a Newton iteration over a \
+   range reduction (`crates/lichen-kernel-ir/src/unary.rs:203`) — six steps from the seed \
+   `2.0` — not the correctly rounded square root, so the scale is derived by re-implementing \
+   **that sequence** in `f32` outside the workspace, never by calling the crate under test. \
+   Its trace on `2.25` is `1.5625, 1.50125, 1.5, 1.5, 1.5, 1.5`: a modelled number that lands \
+   **exactly** on `1.5` at step three and holds it for the rest, which is why the rest of the \
+   answer is exact too. With `w = 3, 6, 3, 6` the row then answers `-3, -2, 1, 6`: `±1.5 / 1.5 = \
+   ±1` exactly, and `0.5 / 1.5` is the **one** inexact step — it is `0.33333334` — whose \
+   product with `3` or with `6` rounds back to an exact integer. An `@loop` fold counts \
+   **down**, as matmul's does, so each sum accumulates `x[3], x[2], x[1], x[0]`; over exact \
+   integers the order changes nothing and it is stated because it is the order the body has. \
+   **The RTX 3060 answers `[-3.0, -2.0, 1.0, 6.0]` for the same three kernels through \
+   `graphrun`, element for element with the `cpu` path**, so the Newton `sqrt` above did not \
+   drift on a device — which it might, since this device does not round `f32` division \
+   correctly (`docs/notes/floating-point.md` §7) and the iteration is built on it."
+  output = "[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}"
+---
+Row   = struct{.x (compute.Buf Float)}
+Sums  = struct{.s (compute.Buf Float)}
+ParS  = compute.P (compute.KT Float)(.I Row, .O Sums)
+row_sum_raw = (k : ParS) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+}
+row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu"
+Sumsq = struct{.q (compute.Buf Float)}
+ParQ  = compute.P (compute.KT Float)(.I Row, .O Sumsq)
+row_sumsq_raw = (k : ParQ) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.q, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+}
+row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+Moments = struct{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}
+OutY    = struct{.y (compute.Buf Float)}
+ParY    = compute.P (compute.KT Float)(.I Moments, .O OutY)
+normalise_raw = (k : ParY) => {
+  i = compute.range k.n
+  count = int2float k.n
+  m = compute.read ((compute.Read _)(.from k.in.s, .at 0)) / count
+  v = compute.read ((compute.Read _)(.from k.in.q, .at 0)) / count - m * m
+  d = sqrt (v + 1.0)
+  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  w = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((x - m) / d * w) ~ "element")))
+}
+normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu"
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+w = (compute.buffer ([3.0, 6.0, 3.0, 6.0] : array{Float, 4}) : (compute.Buf Float))
+sm = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
+sq = (compute.plrun row_sumsq ((compute.A Row)(.n 4, .I Row(.x x))) : Sumsq)
+out = (compute.plrun normalise ((compute.A Moments)(.n 4, .I Moments(.x x, .w w, .s sm.s, .q sq.q))) : OutY)
+compute.collect out.y : array{Float, 4}
