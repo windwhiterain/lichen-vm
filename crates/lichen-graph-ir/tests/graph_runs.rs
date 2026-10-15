@@ -262,7 +262,7 @@ fn chain(count: usize) -> Graph {
                 fragment: fragment(),
                 inputs: vec![0],
                 count: Count::Constant(count),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
@@ -273,7 +273,7 @@ fn chain(count: usize) -> Graph {
                 fragment: fragment(),
                 inputs: vec![first],
                 count: Count::Constant(count),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
@@ -491,7 +491,7 @@ fn an_edge_to_a_value_that_does_not_exist_yet_is_refused_where_it_is_written() {
                 // through this type — so this is the closest thing to one.
                 inputs: vec![7],
                 count: Count::Constant(4),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
@@ -515,7 +515,7 @@ fn an_output_count_the_body_disagrees_with_is_refused_rather_than_misaligning_th
                 fragment: fragment(),
                 inputs: vec![0],
                 count: Count::Constant(4),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             2,
         )
@@ -625,7 +625,7 @@ fn counted_by_input() -> Graph {
                 fragment: fragment(),
                 inputs: vec![0],
                 count: Count::Value(1),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )

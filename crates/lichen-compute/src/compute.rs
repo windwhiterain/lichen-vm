@@ -2085,13 +2085,20 @@ fn shape_name(shape: &LowShape) -> &'static str {
     }
 }
 
+/// A parameter path as a refusal names it: the positions, dotted.
+fn path_text(path: &[usize]) -> String {
+    path.iter()
+        .map(usize::to_string)
+        .collect::<Vec<String>>()
+        .join(".")
+}
+
 /// The refusal a role walk gives: the path it was walking, and what it found.
 fn role_refusal(path: &[usize], what: &str) -> RoleUnread {
-    let path: Vec<String> = path.iter().map(usize::to_string).collect();
     RoleUnread::Refusal(format!(
         "a parallel kernel's parameter holds {what} at position {}, and the ABI has no place for \
          it",
-        path.join(".")
+        path_text(path)
     ))
 }
 
@@ -4643,19 +4650,20 @@ where
     unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
-/// The one runtime scalar a recorded dispatch fixes beside its extent, read at `path`.
+/// One runtime scalar a recorded dispatch fixes beside its extent, read at `path`.
 ///
 /// # Invariant
 /// **Named at the point it is missing.** A scalar leaf has to be a number the
 /// build already has or one of this function's arguments, exactly as an extent
-/// does — the two differ in position, not in what can be one — so anything else
-/// is refused here rather than left for the run to meet as a buffer read from a
-/// number.
+/// does, so anything else is refused here rather than left for the run to meet as
+/// a buffer read from a number. `ordinal` is the leaf's own place in the
+/// parameter's scalar leaves, which is where its class is read.
 fn recorded_scalar<P>(
     module: &mut Module<P>,
     cfg: NodeId,
     path: &[usize],
     fragment: &KernelFragment,
+    ordinal: usize,
 ) -> Option<graph::Scalar>
 where
     P: Program,
@@ -4674,9 +4682,11 @@ where
         None => {
             refuse(
                 module,
-                "a dispatch's second scalar leaf is not a value at its own path in the argument, \
-                 so there is nothing to record for it"
-                    .into(),
+                format!(
+                    "a dispatch's scalar leaf at parameter position {} is not a value at its own \
+                     path in the argument, so there is nothing to record for it",
+                    path_text(path)
+                ),
             );
             return None;
         }
@@ -4685,7 +4695,7 @@ where
     let class = fragment
         .param_shape
         .leaf_classes()
-        .get(fragment.scalar_leaves().saturating_sub(1))
+        .get(ordinal)
         .copied()
         .unwrap_or(ScalarClass::Int);
     let found = module
@@ -4697,6 +4707,20 @@ where
             _ => None,
         });
     if let Some(placed) = found {
+        // A table's numbers are integers, and a leaf is read at its own class.
+        if class == ScalarClass::Float {
+            refuse(
+                module,
+                format!(
+                    "a dispatch's scalar leaf at parameter position {} is declared Float and its \
+                     value is a number the graph's table holds, which is an integer: a launch \
+                     reads a leaf at its own class, so this one would read those bits as a \
+                     float. Give the leaf a literal, or declare it Int",
+                    path_text(path)
+                ),
+            );
+            return None;
+        }
         return Some(graph::Scalar::Value(placed));
     }
     // A literal only: inventing a node that produces a computed one writes nothing.
@@ -4721,9 +4745,10 @@ where
     refuse(
         module,
         format!(
-            "a dispatch's second scalar leaf is {described}, and a runtime scalar is a number the \
-             build already has or one of this function's arguments: a graph's value table holds \
-             nothing else, so there is no edge to record it on"
+            "a dispatch's scalar leaf at parameter position {} is {described}, and a runtime \
+             scalar is a number the build already has or one of this function's arguments: a \
+             graph's value table holds nothing else, so there is no edge to record it on",
+            path_text(path)
         ),
     );
     None
@@ -4743,10 +4768,11 @@ fn scalar_bits(class: ScalarClass, value: &LowValue) -> Option<i64> {
 /// Record one dispatch into the graph being built, in place of running it.
 ///
 /// # Invariant
-/// The argument is read for its placeholders, not its data: the extent, the
-/// runtime scalar and each buffer sit at the paths the role walk found, so the
-/// body is walked exactly as a run would walk it. A value that is neither a
-/// placeholder nor an input is refused by name rather than coerced.
+/// **The rule: the first scalar leaf is the extent, and every other leaf is
+/// carried for what it is.** A leaf under `.in` or `.out` is a buffer; every
+/// other leaf is a launch value, at whatever depth the role walk found it. The
+/// extent keeps its position — `scalar_leaf_classes` reads the first scalar leaf
+/// as the count — so this bounds the kind of a leaf, never how many there are.
 fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> Option<P::Value>
 where
     P: Program,
@@ -4867,28 +4893,14 @@ where
             return None;
         }
     };
-    // **The rule: the extent, then at most one runtime scalar, then the buffers.**
-    // See [`recorded_scalar`].
-    let scalar_leaves = roles.scalars.len().saturating_sub(1);
-    if scalar_leaves > 1 {
-        refuse(
-            module,
-            format!(
-                "this dispatch's kernel parameter declares {scalar_leaves} runtime scalars after \
-                 the extent, and a recorded dispatch carries the extent and one scalar beside it: \
-                 the second one would be an edge of the recording, and the graph's scalar leaves \
-                 are one long. Split the extra leaves into a second dispatch"
-            ),
-        );
-        return None;
-    }
-    let scalar = match scalar_leaves {
-        0 => None,
-        _ => match recorded_scalar::<P>(module, cfg, roles.scalars[1].as_slice(), &fragment) {
-            Some(scalar) => Some(scalar),
+    // Every leaf after the extent is a launch value, in the parameter's own order.
+    let mut scalars: Vec<graph::Scalar> = Vec::with_capacity(roles.scalars.len());
+    for (ordinal, path) in roles.scalars.iter().enumerate().skip(1) {
+        match recorded_scalar::<P>(module, cfg, path, &fragment, ordinal) {
+            Some(scalar) => scalars.push(scalar),
             None => return None,
-        },
-    };
+        }
+    }
     let mut inputs: Vec<Placed> = Vec::new();
     for (position, path) in roles.inputs.iter().enumerate() {
         // An input path names the `Buf` the caller passes; the placeholder rides in
@@ -4920,7 +4932,7 @@ where
             }
         }
     }
-    let placed = match graph::record_dispatch(fragment, backend, extent, scalar, &inputs) {
+    let placed = match graph::record_dispatch(fragment, backend, extent, &scalars, &inputs) {
         Ok(placed) => placed,
         Err(reason) => {
             refuse(module, reason);

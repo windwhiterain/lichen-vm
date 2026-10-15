@@ -133,6 +133,18 @@ pub enum GraphRefusal {
     /// because a number is asked for as an extent by a node *or* handed back as a return
     /// value nobody asked for; naming one would invent a node where the mistake is in none.
     CountNegative { number: i64 },
+    /// A node's runtime scalars were not as many as its fragment declares.
+    ///
+    /// # Invariant
+    /// The mirror of [`Self::InputArity`] for the leaves: a launch reads one word per
+    /// runtime scalar the fragment declares, so a node carrying another number would
+    /// place a value under a leaf the body never names. Refused here rather than left to
+    /// the backend, which would name a leaf count nobody stated at this node.
+    ScalarArity {
+        node: usize,
+        wanted: usize,
+        got: usize,
+    },
     /// A node's runtime scalar resolved to something that is not a number.
     ///
     /// # Invariant
@@ -298,6 +310,13 @@ impl fmt::Display for GraphRefusal {
             GraphRefusal::CountNegative { number } => {
                 write!(f, "a count is {number}, and a count cannot be negative.")
             }
+            GraphRefusal::ScalarArity { node, wanted, got } => write!(
+                f,
+                "node {node} fixes {got} runtime scalar(s) and its kernel parameter declares \
+                 {wanted}. A launch reads one word per scalar leaf the parameter declares, so \
+                 this would place a value under a leaf the body never names, or leave one \
+                 holding nothing."
+            ),
             GraphRefusal::ScalarNotANumber { node, value, found } => write!(
                 f,
                 "node {node} reads its runtime scalar from value {value}, and that value is \

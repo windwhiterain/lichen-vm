@@ -303,7 +303,7 @@ fn counting_chain(device_held: bool) -> Graph {
                 fragment: counts_the_passing_elements(),
                 inputs: vec![0],
                 count: Count::Constant(COUNTED),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
@@ -321,7 +321,7 @@ fn counting_chain(device_held: bool) -> Graph {
                 fragment: doubles_then_one(),
                 inputs: vec![0],
                 count: over,
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )

@@ -189,8 +189,8 @@ fn the_second_extent_is_recorded_as_the_scalars_own_edge() {
         "the extent is the first argument"
     );
     assert_eq!(
-        node.scalar,
-        Some(Scalar::Value(1)),
+        node.scalars,
+        vec![Scalar::Value(1)],
         "the second extent is an edge of its own, beside the count"
     );
     assert_eq!(
@@ -285,8 +285,8 @@ neither_raw = (k : Par2) => {
         let graph = recorded(value.as_ref().unwrap()).expect("the recording is there");
         let Node::Kernel(node) = &graph.nodes()[0];
         assert_eq!(
-            node.scalar,
-            Some(Scalar::Value(1)),
+            node.scalars,
+            vec![Scalar::Value(1)],
             "the second extent is the scalar edge whether the body read {reads} or not"
         );
         assert_eq!(
@@ -297,14 +297,14 @@ neither_raw = (k : Par2) => {
     }
 }
 
-/// One runtime scalar is the rule; a second is refused by the line that states it.
+/// A second runtime scalar is no longer refused: it is carried, in the parameter's order.
 ///
 /// # Invariant
-/// The refusal names **how many** and says what a recorded dispatch carries, because the
-/// old sentence — "a runtime scalar would have to be an edge of the recording, and that
-/// is not written yet" — described the plumbing this slice wrote rather than the shape.
+/// [`HEAD`]'s parameter with one leaf added, so the extent keeps its position and the two
+/// scalars sit in the order the walk found them. This is what the refusal at
+/// `record_launch` used to stand in the way of.
 #[test]
-fn a_second_runtime_scalar_is_refused_by_the_line_that_states_the_rule() {
+fn a_second_runtime_scalar_is_carried_beside_the_extent() {
     let source = format!(
         "{HEAD}\nPar3 = struct{{.n Int, .cols Int, .rows Int, .in In, .out Out}}\n\
          Arg3 = struct{{.n Int, .cols Int, .rows Int, .I In}}\n\
@@ -317,26 +317,26 @@ fn a_second_runtime_scalar_is_refused_by_the_line_that_states_the_rule() {
          built = compute.graph step\nbuilt\n"
     );
     let (lines, value) = reported_run(&source);
-    assert!(
-        value.as_ref().and_then(recorded).is_none(),
-        "a parameter carrying more than one runtime scalar does not record"
+    let graph = value.as_ref().and_then(recorded).unwrap_or_else(|| {
+        panic!(
+            "three scalar leaves record; the report was:\n  {}",
+            lines.join("\n  ")
+        )
+    });
+    let Node::Kernel(node) = &graph.nodes()[0];
+    assert_eq!(
+        node.count,
+        lichen_graph_ir::Count::Value(0),
+        "the extent is still the first scalar leaf, whatever follows it"
     );
-    let refusal = lines
-        .iter()
-        .find(|line| line.contains("runtime scalar"))
-        .unwrap_or_else(|| {
-            panic!(
-                "no line names the runtime scalars; the report was:\n  {}",
-                lines.join("\n  ")
-            )
-        });
-    assert!(
-        refusal.contains("carries the extent and one scalar beside it"),
-        "the refusal states what a recorded dispatch carries:\n  {refusal}"
+    assert_eq!(
+        node.scalars,
+        vec![Scalar::Value(1), Scalar::Value(2)],
+        "both runtime scalars cross as edges of their own, in the parameter's own order"
     );
-    assert!(
-        !refusal.contains("not written yet"),
-        "and no longer describes plumbing this slice wrote:\n  {refusal}"
+    assert_eq!(
+        node.inputs,
+        vec![3],
+        "and the buffer is still an input, not a scalar"
     );
-    println!("the second runtime scalar is refused by:\n  {refusal}");
 }

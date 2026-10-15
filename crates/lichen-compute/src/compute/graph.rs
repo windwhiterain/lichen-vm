@@ -131,7 +131,7 @@ struct RecordedNode {
     fragment: KernelFragment,
     inputs: Vec<Edge>,
     count: RecordedCount,
-    scalar: Option<RecordedScalar>,
+    scalars: Vec<RecordedScalar>,
 }
 
 /// A recorded runtime scalar, in the recording's own numbering.
@@ -264,10 +264,14 @@ pub fn finish() -> Result<(Graph, Backend), String> {
                             RecordedCount::Constant(count) => Count::Constant(count),
                             RecordedCount::Value(edge) => Count::Value(resolve(&edge)),
                         },
-                        scalar: node.scalar.map(|scalar| match scalar {
-                            RecordedScalar::Constant(leaf) => GraphScalar::Constant(leaf),
-                            RecordedScalar::Value(edge) => GraphScalar::Value(resolve(&edge)),
-                        }),
+                        scalars: node
+                            .scalars
+                            .iter()
+                            .map(|scalar| match scalar {
+                                RecordedScalar::Constant(leaf) => GraphScalar::Constant(*leaf),
+                                RecordedScalar::Value(edge) => GraphScalar::Value(resolve(edge)),
+                            })
+                            .collect(),
                     }),
                     node.fragment.outputs,
                 )
@@ -320,13 +324,13 @@ pub enum Extent {
     Value(Placed),
 }
 
-/// The runtime scalar a recorded dispatch fixes beside its extent: already known, or read
-/// when the node runs.
+/// The runtime scalars a recorded dispatch fixes beside its extent: already known, or
+/// read when the node runs.
 ///
 /// # Invariant
 /// The same two arms [`Extent`] has and for the same reason — a parameter's second leaf is
-/// a value as often as a literal is — but the number it carries is the leaf's own bits at
-/// the leaf's own class, because a leaf is a word rather than an extent. A leaf's class is
+/// a value as often as a literal is — but the number a leaf carries is the leaf's own bits
+/// at the leaf's own class, because a leaf is a word rather than an extent. A leaf's class is
 /// read off the fragment when the graph is built, so the two cannot disagree.
 #[derive(Debug, Clone, Copy)]
 pub enum Scalar {
@@ -384,7 +388,7 @@ pub fn record_dispatch(
     fragment: KernelFragment,
     backend: Backend,
     extent: Extent,
-    scalar: Option<Scalar>,
+    scalars: &[Scalar],
     inputs: &[Placed],
 ) -> Result<Vec<Placed>, String> {
     RECORDINGS.with(|recordings| {
@@ -438,17 +442,20 @@ pub fn record_dispatch(
             .iter()
             .map(|placed| edge(recording, placed))
             .collect();
-        // The runtime scalar marks through the same allocator as a count.
-        let scalar = match scalar {
-            None => None,
-            Some(Scalar::Constant(leaf)) => Some(RecordedScalar::Constant(leaf)),
-            Some(Scalar::Value(placed)) => Some(RecordedScalar::Value(edge(recording, &placed))),
-        };
+        // Each runtime scalar marks through the same allocator as a count, in the
+        // parameter's own leaf order.
+        let scalars: Vec<RecordedScalar> = scalars
+            .iter()
+            .map(|scalar| match scalar {
+                Scalar::Constant(leaf) => RecordedScalar::Constant(*leaf),
+                Scalar::Value(placed) => RecordedScalar::Value(edge(recording, placed)),
+            })
+            .collect();
         recording.nodes.push(RecordedNode {
             fragment,
             inputs: edges,
             count,
-            scalar,
+            scalars,
         });
         Ok((0..outputs)
             .map(|offset| Placed::Value(first + offset))

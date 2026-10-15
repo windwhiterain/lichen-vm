@@ -229,14 +229,14 @@ pub struct KernelNode {
     pub inputs: Vec<ValueId>,
     /// The index range `[0, count)`.
     pub count: Count,
-    /// The one runtime scalar beside the extent, when the parameter declares one.
+    /// The runtime scalars beside the extent, in the parameter's own scalar-leaf order.
     ///
     /// # Invariant
-    /// `None` or exactly one, because that is what [`KernelFragment::runtime_scalars`]
-    /// allows a launch to fix: the extent is the [`Self::count`] and the index is the
-    /// lane's. A node that declared two would be a shape no backend reads, so the
-    /// recording refuses it there rather than dropping one.
-    pub scalar: Option<Scalar>,
+    /// Exactly [`KernelFragment::runtime_scalars`] entries, leaf `k` being the parameter's
+    /// `(k + 1)`-th scalar leaf: the extent is the [`Self::count`] and the index is the
+    /// lane's. **How many** leaves a parameter may declare is `record_launch`'s rule and
+    /// not this field's.
+    pub scalars: Vec<Scalar>,
 }
 
 /// One runtime scalar a dispatch fixes beside its extent.
@@ -268,14 +268,17 @@ impl Scalar {
         }
     }
 
-    /// The class this scalar's parameter leaf declared.
+    /// The class this scalar's parameter leaf declared, `ordinal` counting the node's
+    /// runtime scalars from zero.
     ///
     /// # Invariant
-    /// Read from the fragment rather than carried beside the value: the class is a property
-    /// of the parameter field the leaf sits at, so a value and a class read in two places
-    /// are two answers to one question.
-    pub fn class(&self, fragment: &KernelFragment) -> ScalarClass {
-        fragment.param_shape.leaf_classes()[fragment.scalar_leaves() - 1]
+    /// Read from the fragment rather than carried beside the value: the class is a
+    /// property of the parameter field the leaf sits at. `ordinal + 1` because leaf `0`
+    /// of `param_shape` is the extent, which is the count rather than one of these, and
+    /// `ordinal` is below `runtime_scalars` because [`crate::Runner`] refuses a node
+    /// whose list is another length.
+    pub fn class(&self, fragment: &KernelFragment, ordinal: usize) -> ScalarClass {
+        fragment.param_shape.leaf_classes()[ordinal + 1]
     }
 }
 

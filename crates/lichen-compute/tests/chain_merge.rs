@@ -212,7 +212,7 @@ fn chain_graph(instances: &[Instance], wires: &[&[usize]], returned: &[usize]) -
                     fragment: fragment.clone(),
                     inputs: wires[index].to_vec(),
                     count: Count::Constant(COUNT),
-                    scalar: None,
+                    scalars: Vec::new(),
                 }),
                 fragment.outputs,
             )

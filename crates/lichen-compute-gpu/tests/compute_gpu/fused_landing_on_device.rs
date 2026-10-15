@@ -28,7 +28,7 @@ fn graph_over(fragment: KernelFragment, count: usize) -> Graph {
                 fragment,
                 inputs: vec![0],
                 count: Count::Constant(count),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )

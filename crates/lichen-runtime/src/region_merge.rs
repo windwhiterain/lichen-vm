@@ -11,7 +11,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use lichen_graph_ir::{Count, Graph, KernelNode, Node, ValueId as GraphValueId};
+use lichen_graph_ir::{
+    Count, Graph, KernelNode, Node, Scalar as GraphScalar, ValueId as GraphValueId,
+};
 use lichen_kernel_ir::{
     ComposeRefusal, KernelFragment, Producer, ScalarClass, compose, compose_fan_in, compose_fan_out,
 };
@@ -937,16 +939,18 @@ fn rebuild(graph: &Graph, starts: &[usize], merges: &HashMap<usize, Merge>) -> O
             .iter()
             .map(|value| map[*value])
             .collect::<Option<Vec<_>>>()?;
+        let scalars: Vec<GraphScalar> = kernel
+            .scalars
+            .iter()
+            .map(|scalar| scalar.map_value(|v| map[v]))
+            .collect::<Option<Vec<_>>>()?;
         let first = rebuilt
             .push(
                 Node::Kernel(KernelNode {
                     fragment: fragment.clone(),
                     inputs: reads,
                     count,
-                    scalar: kernel
-                        .scalar
-                        .map(|scalar| scalar.map_value(|v| map[v]))
-                        .flatten(),
+                    scalars,
                 }),
                 fragment.outputs,
             )

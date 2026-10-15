@@ -420,36 +420,55 @@ impl<'backend> Runner<'backend> {
     }
 }
 
-/// The runtime scalar a node fixes beside its extent, resolved against the value table.
+/// The runtime scalars a node fixes beside its extent, resolved against the value table.
 ///
 /// # Invariant
-/// **Empty or one, never more**: [`KernelFragment::runtime_scalars`] is the length a
-/// launch set's leaves must have, and this is the one place that length is met for a
-/// graph. The value is read here rather than carried as a slot, because a scalar is a
+/// **As many as [`KernelFragment::runtime_scalars`]**: the list's length is the
+/// fragment's, since one too few or one too many places a value under a leaf the body
+/// never names. Each is read here rather than carried as a slot, because a scalar is a
 /// number the host already holds, not a buffer a dispatch reads through.
 fn leaves_of(
     node: usize,
     kernel: &KernelNode,
     values: &[Value<'_>],
 ) -> Result<Vec<ScalarLeaf>, GraphRefusal> {
-    let Some(scalar) = kernel.scalar else {
-        return Ok(Vec::new());
-    };
-    let class = scalar.class(&kernel.fragment);
-    match scalar {
-        Scalar::Constant(leaf) => Ok(vec![ScalarLeaf { class, ..leaf }]),
-        Scalar::Value(value) => {
-            let number = values
-                .get(value)
-                .ok_or(GraphRefusal::UnknownValue { node, value })?
-                .as_number()
-                .map_err(|found| GraphRefusal::ScalarNotANumber { node, value, found })?;
-            Ok(vec![ScalarLeaf {
-                class,
-                bits: number,
-            }])
-        }
+    let wanted = kernel.fragment.runtime_scalars();
+    if kernel.scalars.len() != wanted {
+        return Err(GraphRefusal::ScalarArity {
+            node,
+            wanted,
+            got: kernel.scalars.len(),
+        });
     }
+    kernel
+        .scalars
+        .iter()
+        .enumerate()
+        .map(|(ordinal, scalar)| {
+            let class = scalar.class(&kernel.fragment, ordinal);
+            match scalar {
+                Scalar::Constant(leaf) => Ok(ScalarLeaf { class, ..*leaf }),
+                Scalar::Value(value) => {
+                    let number = values
+                        .get(*value)
+                        .ok_or(GraphRefusal::UnknownValue {
+                            node,
+                            value: *value,
+                        })?
+                        .as_number()
+                        .map_err(|found| GraphRefusal::ScalarNotANumber {
+                            node,
+                            value: *value,
+                            found,
+                        })?;
+                    Ok(ScalarLeaf {
+                        class,
+                        bits: number,
+                    })
+                }
+            }
+        })
+        .collect()
 }
 
 /// The slots a resolved node's already-issued inputs are read through.

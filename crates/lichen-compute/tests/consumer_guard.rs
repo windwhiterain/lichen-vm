@@ -229,7 +229,7 @@ fn chain_graph(producer: &KernelFragment, consumer: &KernelFragment) -> Graph {
                 fragment: producer.clone(),
                 inputs: vec![0],
                 count: Count::Constant(COUNT),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
@@ -240,7 +240,7 @@ fn chain_graph(producer: &KernelFragment, consumer: &KernelFragment) -> Graph {
                 fragment: consumer.clone(),
                 inputs: vec![0, first],
                 count: Count::Constant(COUNT),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )

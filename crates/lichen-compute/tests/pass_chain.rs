@@ -39,7 +39,7 @@ impl GraphPass for Append {
                         fragment: one_output(),
                         inputs: vec![0],
                         count: Count::Constant(EXTENT),
-                        scalar: None,
+                        scalars: Vec::new(),
                     }),
                     1,
                 )
@@ -82,7 +82,7 @@ fn one_node() -> Graph {
                 fragment: one_output(),
                 inputs: vec![0],
                 count: Count::Constant(EXTENT),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )

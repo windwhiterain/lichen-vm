@@ -194,7 +194,7 @@ fn graph_of(fragment: KernelFragment, extent: usize) -> Graph {
                 fragment,
                 inputs: vec![0],
                 count: Count::Constant(extent),
-                scalar: None,
+                scalars: Vec::new(),
             }),
             1,
         )
