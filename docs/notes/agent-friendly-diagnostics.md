@@ -98,6 +98,37 @@ instead of the furthest no longer produces that union.
 
 ## 6. What is not covered yet
 
-The offender list is parser-heavy. The checker and module layers were **claimed from a grep of their
-sources, not measured with reproductions**, so P1/P2's "satisfied" for the checker is a reading, not a
-measurement. Closing that gap is the first step of the next diagnostics slice.
+The offender list is parser-heavy, and the checker and module layers were first claimed from a grep of
+their sources. Two surveys have since gone over them, and **the slice that wrote this note verified their
+load-bearing claims itself** — but *"neither survey ran anything: every claim is read-verified, not
+reproduction-verified"*. So this section records **reads with quoted strings**, not measurements, and the
+gap is **narrowed, not closed**.
+
+**Two corrections to what the surveys first said, both worth more than the claims they replaced.**
+
+* **`TableMiss` is a P1-only failure, and its fix is one field away.** The survey said the key is never
+  printed; it is — as the **span**. `crates/lichen-highlevel/src/diagnostic.rs:462-464` builds it as
+  `Diag::factual(DiagKind::TableMiss, self.node_loc(*key))`, so the caret lands on the key and **P2
+  holds**; only P1 fails, because `render.rs:261` is a literal — *"table lookup missed — no entry for this
+  key"*. The key is bound on that line and consumed only as a location, so printing it makes the message
+  answerable — the reader can see **which** key to add.
+* **`DiagKind::IndexTarget` is dead code, and its message was already written.** It is defined
+  (`diagnostic.rs:33`), rendered with the right words (`render.rs:173`: *"expected a tuple, array, or
+  struct type, found {}"*), and **produced nowhere** — the other `IndexTarget` hits are
+  `RuntimeIndexTarget` (a distinct runtime variant) and `EvalError::IndexTarget` (a different type in
+  another crate). So the correct message for `expected TypeArray, found Type` exists and was **never
+  wired**. Wiring it is a **semantic** change to which diagnostic exists, on a path whose test
+  (`crates/lichen-highlevel/tests/checker.rs:738`, named
+  `indexing_a_function_reports_expected_tuple_or_array`) was not read.
+
+**And one claim confirmed verbatim**: `crates/lichen-preprocess/src/lib.rs:429-432` builds
+`PreprocessDiag::unattributed`, so a preprocessor diagnostic carries **no span** even though the
+directive's offset is known to the block parser — a P2 failure on a surface no parser rule touches.
+
+**Still unmeasured**: whether the `?a -> ?b` expected side renders as claimed (`tests/checker.rs:713-736`
+supports the value structure but the rendered string was not captured); whether `checker.rs:738` already
+pins the `IndexTarget` wording; the positional-struct `raw[Int, Int]` offender, whose fix belongs to
+`crates/lichen-render/src/render/type_printer.rs` under `docs/notes/type-rendering-inconsistent.md`; and the
+two facts unchanged from the main report — the 37 examples do not run on `dev` (`invalid SlotMap key used`,
+`crates/lichen-lowlevel/src/evaluation.rs:517`, pre-existing) and the eight named compute binaries were
+never run.
