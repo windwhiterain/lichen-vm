@@ -252,9 +252,23 @@ need a node-local producer for `r`.
   *longer* than its output — so **a chained step may reach a device before a lone GEMV does**. Unverified:
   the chain's device and graph legs are inferred from the KV-cache and GEMV measurements, because the CLI
   installs no compute backend.
-- **A parse trap, unclassified**: writing a softmax fold's index as `.at (s(0) - 1)` instead of
-  `.at s(0) - 1` **failed to parse**, and the cascade's **first error pointed at a later line**. Whether
-  that is a grammar rule about a parenthesised `.at` value or a knock-on was not established.
+- **Not a trap, and the parenthesised form is what the example already uses** (`025d2e17`). The report that
+  `.at (s(0) - 1)` fails to parse **was wrong**: the grammar of record
+  (`docs/language-spec.md:96-97`, `farg := '.' name expr | expr`, implemented at `parse.rs:1153-1168` with
+  the value read at full-expression level) accepts a parenthesised value in **every** argument position
+  measured — instantiation fields, indexes, type access, native calls, arrays, one-operand keywords and slot
+  reads — and `examples/decode.lichen:248` already uses the parenthesised spelling. What the slice hit was
+  **one missing `)`**. The measured facts about that: an unclosed delimiter is reported **where parsing
+  stops, never where it was opened** (general, not specific to `.at`), and a deep cascade can put a *later*
+  line first because diagnostics are emitted in **chumsky's order** (`parse.rs:164`, loop at `:171-176`) —
+  the first error at `236:9` is genuinely the furthest failure, so sorting would move it *away* from the
+  edit. `max`/`min`'s asymmetry (a two-operand keyword takes atoms) is their own stated rule
+  (`parse.rs:493-496`). **Two decisions this leaves open**: an **unclosed-delimiter diagnostic** — one new
+  message class on every unbalanced input, on a surface `docs/notes/parse-clean-probe.md:33-38` reserves, so
+  it was not taken; and **four stale parser expectations on `dev`**
+  (`broken_statements_are_recovered`, `index_errors_carry_spans`, `parse_errors_carry_spans`,
+  `statement_errors_carry_spans` expect a label set without `'sin', 'cos'` while the grammar registers both),
+  pre-existing and left in the owner's hands.
 - **Leaf one is positional even with no coordinates; leaf two only matters where coordinates are used.**
   Measured on GEMV: `.n, .kdim, .spare` is **identical** to `.n, .spare, .kdim`, while `.kdim` **first**
   answers `[14.0, 38.0, 62.0]` instead of `[14.0, 32.0, 50.0, 68.0]` — **with no refusal at all**: the
@@ -273,7 +287,15 @@ need a node-local producer for `r`.
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
   `unwrap_or(ScalarClass::Int)` chain as attention's `attend` (`compute.rs:2424-2430`), and now reached by
   an operator nobody had to hand-build. It refuses **earlier** than the KV-cache slice's eight-byte
-  payload count; those are different bugs and are not conflated.
+  payload count; those are different bugs and are not conflated. **The type system's author has since ruled
+  on it** (`44190cc1`, recorded in `docs/notes/compile-order-class.md` §8): a class that is *determinable*
+  is meant to be decided by checking or by a normalize, and a later phase **reads** it rather than creating
+  it; a graph step recorded while the parameter reads `Undecided` must **report** it, and that is the
+  **record** path's job alone — refusing inside `walk_role` instead fixes the pinned assertions but breaks
+  four targets and 38 tests, because that site's `Undecided` is the ordinary "annotation is still a cell"
+  case that must stay lazy (`compute.rs:1178-1195`); the JIT may not write back into the type system; and
+  **carrying more does not reach this cell**, because the frozen template's own node read is `None` — there
+  is nothing on the template side to carry. So the gap is the **order in which the recording reads it**.
 - **What stands between here and a decode step**, measured: the graph leg refuses the two-input shape, the
   device leg refuses a reduction shorter than its output, and nothing can advance a position. Beyond those
   three, arithmetic, layout and chaining are expressible today.
