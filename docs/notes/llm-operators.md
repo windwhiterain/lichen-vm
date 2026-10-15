@@ -251,15 +251,33 @@ need a node-local producer for `r`.
   **Reverting the one-line fix makes it name four disagreements, not one** — `BufferReadCall`,
   `SliceReadCall` and `Conv` — because the removed line answered `Int` for **any** read at `Float`
   (`operand_class(op, 0)` is the access chain's index), so **three of the four were latent and invisible**.
-  **And it found the next one of the same shape, live and deliberately unpinned**: `CallKernel`, the one
-  variant where `own_class` states `None`, so `value_class` falls back to `operand_class(op, 0)` — which for
-  a call reads the callee's **first parameter leaf** (`spirv.rs:2200-2203`) while the emission gives the
-  call's result slot the callee's **result** class (`:1891`, `:1920`). Measured for a callee taking one
-  `Float` and returning one `Int`: a `Select` over the call's result and an honest `Int` constant is refused
-  `[Int, Float]`, and with arms that *agree* the emitter then refuses `MixedClasses` because the slot is
-  `Int` — **the classing and the emission contradicting each other inside one compile**. The guard does not
-  pin it, on purpose: *"pinning would freeze a behaviour I believe is wrong."* A one-line fix of the
-  `b6dea46c` shape is available.
+  **And it found the next one of the same shape, which is now fixed — with the emission, not the classing, as
+  the truth** (`3f3706a1`). `CallKernel` is the one variant where `own_class` states `None`, so `value_class`
+  fell back to `operand_class(op, 0)` — which for a call reads the callee's **first parameter leaf**
+  (`spirv.rs:2200-2203`) while the emission gives the call's result slot the callee's **result** class. Four
+  reasons settled it: **both emitters already type a call by its callee's `result_classes`** — the GPU one at
+  `spirv.rs:1901`/`:1920`, and the wasm backend at `lichen-compute/src/compute/wasm/lower.rs:308-316`, whose
+  own `# Invariant` says *"a cross-kernel call is typed by its callee's own `result_classes`"* — so **only
+  `value_class` dissented**; `operand_class`'s own contract is *"an operator's operands are the class it
+  names"*, a fact about the value in the position asked of a **different** value; `own_class` returning
+  `None` for a call is **correct, not a gap** (`arity()` returns `None` for the same reason,
+  `kernel-ir/lib.rs:896-909` — the class is the callee's, so the instruction has none of its own); and `Conv`
+  is the same rule one level down (`b6dea46c`: a `Conv`'s value is `to`, not `from`). So the `b6dea46c`
+  shape did **not** transfer. The fix reads the callee's result list and **drops the `operand_class(op, 0)`
+  fallback** — reachable only for `CallKernel`, and *"leaving it open is exactly the trap the guard exists to
+  close"*. The two handed rows **swap**: the honest spelling is emitted and the genuinely disagreeing one is
+  refused by the sound refusal, and `MixedClasses` became **unreachable for an honest body rather than
+  relaxed**. **The guard grew the right thing for it**: its oracle for a call is now the callee's declared
+  `result_classes` — *"an input to the compile, not an answer it gives"*, the same move one level down from
+  the module's buffer classes — and reverting just the `value_class` arm makes it fail in **both**
+  directions. The general lesson, in its author's words: the guard is *"exhaustive over the **variant list**,
+  not over the **class sources**"*, and `own_class` being `None` was read as "no oracle exists" when **the
+  oracle existed one call away in the callee** — *"making the oracle a per-probe declared source, rather than
+  a hardcoded `own_class`, is what closes the class of holes, not the one variant."* Two residuals it states
+  plainly: the probe **cannot separate** "read operand 0" from "fell back to the module" (two classes, and
+  the probe needs three distinct values, so both wrong answers coincide at the same wrong class); and **no
+  `.lichen` fixture exercises the shape** — both rows were hand-built, so whether the frontend can emit a
+  `Float`→`Int` call feeding a `Select` with an `Int` module is unmeasured.
   **What the guard cannot catch**, in its author's words: `Exp`/`Sqrt`/`Floor` (whose `own_class` is `Float`
   and whose `operand_class` is `None`, so a regression to `module` would pass unnoticed, and closing that
   needs a `pub(crate)` accessor — more machinery than the guard is worth); the slot-versus-`value_class`
