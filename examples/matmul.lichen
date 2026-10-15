@@ -20,9 +20,17 @@
    ordinary runtime scalar it always was: it is the **same** local the coordinates divide by, so
    naming the shape costs nothing and hides nothing.
    The language also has no two-dimensional array, so both matrices are **row-major flattened** and the
-   body indexes them itself: `A[r * 3 + k]` and `B[k * cols + c]`. The inner dimension `3` is a
-   **literal** and not a parameter, as RMSNorm's `eps` is, because a kernel parameter cannot cross
-   the graph path. An `@loop` fold counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
+   body indexes them itself: `A[r * k.k + k]` and `B[k * k.cols + c]`. **The inner dimension is a
+   parameter now, not a literal** — `k.k`, carried as a scalar leaf of the config beside `k.cols` —
+   where it used to be a `3` because a kernel parameter could not cross the graph path at all
+   (`c92b6471` carries every leaf for what it is, at any depth; `e24d00fb` lets a value table hold a
+   float). **Two ordering rules come with it, and both are positional**: the **first** scalar leaf is the
+   *extent* (`scalar_leaf_classes` reads it as the count), and the **second** is what
+   `compute.row`/`compute.col` divide by — so `K` has to sit **after** `cols`, not between `.n` and it.
+   Putting it between them does not refuse: `[.n, .k, .cols]` answered `[58.0, 64.0, 31.0, 139.0]`
+   instead of `[58.0, 64.0, 139.0, 154.0]`, because the coordinates then divided by `k = 3` and every
+   lane took its row and column from the wrong pair. An `@loop` fold
+   counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
    the last addend is the `k = 0` product; over exact integers the order changes nothing, and it is
    stated here because it is the order the body actually has.
    **The shape need not be square, and that is measured.** A device run uploads each host input at
@@ -53,17 +61,17 @@
 ---
 Ain  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
 OutC = struct{.c (compute.Buf Float)}
-Par  = struct{.n Int, .cols Int, .in Ain, .out OutC}
-Arg  = struct{.n Int, .cols Int, .I Ain}
+Par  = struct{.n Int, .cols Int, .k Int, .in Ain, .out OutC}
+Arg  = struct{.n Int, .cols Int, .k Int, .I Ain}
 matmul_raw = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * 3 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (3, 0.0 ~ "identity"))))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (k.k, 0.0 ~ "identity"))))
 }
 matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 b = (compute.buffer ([7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 6}) : (compute.Buf Float))
-out = (compute.plrun matmul ((Arg)(.n 4, .cols 2, .I Ain(.a a, .b b))) : OutC)
+out = (compute.plrun matmul ((Arg)(.n 4, .cols 2, .k 3, .I Ain(.a a, .b b))) : OutC)
 compute.collect out.c : array{Float, 4}
