@@ -408,3 +408,49 @@ does not visit in order gave slot 1 a higher number than slot 2. The numbers are
 once, in slot order, in `finish`. §2.2's control answered the same way in all three rows (a
 body reading both buffers, only one, or neither), because the role table no longer depends on
 the read pattern.
+
+## 9. The config's leaves are carried for what they are (`c92b6471`)
+
+**The rule §8 left behind is gone.** It read, at the gate: *the extent, then at most one runtime
+scalar, then the buffers.* It is replaced by one statement, the `# Invariant` of `record_launch`
+(`crates/lichen-compute/src/compute.rs`): *the first scalar leaf is the extent, and every other leaf
+is carried for what it is. A leaf under `.in` or `.out` is a buffer; every other leaf is a launch
+value, at whatever depth the role walk found it. The extent keeps its position — `scalar_leaf_classes`
+reads the first scalar leaf as the count — so this bounds the kind of a leaf, never how many there
+are.* Nothing else states it; `KernelNode::scalars`'s own invariant points at that one.
+
+**Why the older contract survives.** The extent is still `roles.scalars.first()`, and `walk_role`
+descends depth-first pushing as it goes, so nesting reorders nothing — `.meta.rows` is still leaf `0`.
+`scalar_leaf_classes` is unchanged and still refuses a non-`Int` first leaf by name. What was a fact of
+*the launch* ("the second leaf is the only runtime scalar") is gone; what was a fact of *the config*
+("the first leaf is the extent") is untouched, so the count is now unbounded while the position is not.
+
+**What a leaf becomes.** `record_launch` maps every scalar leaf after the first; `recorded_scalar`
+reads each at its own path with its class from `leaf_classes()[ordinal]`, so a leaf is read at **its
+own** class and not the extent's; `leaves_of` resolves the whole list onto the `LaunchSet`, whose ABI
+was already one long — **no backend signature changed**. For
+`{.meta (struct{.rows Int, .cols Float}), .in (struct{.a Buf, .b Buf}), .out (struct{.z Buf})}`:
+`.meta.rows` is the count, `.meta.cols` is `scalars[0]` read as a `Float`, `.in.a`/`.in.b` are inputs
+at depth 1, `.out.z` is the recorded output. Measured on the device: the nested config answers
+`[105,109,113,117,121,125]` through `compute.graphrun`, **element for element** what the direct
+`compute.plrun` leg answers, and a two-scalar `{.n, .K, .cols, …}` answers `[10,11,12,12,13,14]` the
+same way.
+
+**One silent wrong answer closed.** A `Float` scalar leaf used to cross the argument's **integer bits**
+as a float, silently. It is now refused **at the leaf**, naming its own parameter position: *"a dispatch's
+scalar leaf at parameter position 0.1 is declared Float and its value is a number the graph's table
+holds, which is an integer: a launch reads a leaf at its own class, so this one would read those bits as
+a float. Give the leaf a literal, or declare it Int."* `GraphRefusal::ScalarArity` mirrors `InputArity`
+so a hand-built node with the wrong leaf count is refused **at the plan** rather than by the backend's
+`ScalarLeavesMismatch`, and `region_merge` refuses the whole rebuild rather than `.flatten()`-ing one
+scalar away.
+
+**What is still not carried.** A `Float` scalar leaf can only be a **literal**: a graph's value table
+holds `i64` (`run.rs`) and `compute.graphrun` classifies a `Float` argument as *"neither a buffer nor a
+number"*. The honest fix is a `Float` arm on `Value` and on `RunArgument` — **a second contract change,
+not taken**, because it changes the sentence *"a graph's value table holds the caller's arguments"* and
+how `graphrun` sorts its arguments. Until it lands, an operator that wants `eps` or a scale as a
+parameter must write it as a literal. Also: a scalar leaf whose expression cannot evaluate never reaches
+the recording, so the refusal that surfaces is about the *function's return* — a late refusal naming the
+wrong thing; and a **literal** leaf in the middle of a shape leaves a hole in the graph's argument width
+(`rposition(occupied) + 1`), so `graphrun` wants an argument nobody reads.
