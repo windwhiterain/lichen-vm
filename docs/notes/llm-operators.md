@@ -24,6 +24,7 @@ test file.
 | **attention** | **landed, naive** (`576c9229`): two kernels — `scores` (a dot product per query/key pair, one lane each, `query = compute.row k`, `key = compute.col k`) then `attend` (softmax × V, three `@loop` nests with the row maximum carried in the value fold's state) — over `Q = 2 0 1 1 / 0 0 2 1`, `K = 1 1 0 0 / 0 1 1 0`, `V = 1 2 3 4 / 5 6 7 8`. Exact by hand except `exp`, which is modelled from its own sequence; `sqrt(dim) = sqrt(4)` is exact because the Newton definition's reduction is the identity on `4`. On the device `attend` answers the declared line with **six of eight entries differing in the last bit** (this device's `f32` division; the slice that landed this example first reported three, and its own run could not be reproduced because flipping only `attend` to `"gpu"` trips a different rule — `attend`'s lanes are `queries × dim = 8` while the `cpu` `scores` buffer holds 4, so the upload rule refuses it — and the six-of-eight measurement is a whole-example run), and **`scores` was refused outright until `b6dea46c`**: *"a `Select`'s two arms are computed in different classes ([Int, Float])"* — reproducible as `sqrt (int2float k.dim)` failing while `sqrt 4.0` and `sqrt (int2float k.dim + 0.0)` both run, i.e. the `Select` inside `sqrt_body` is left with one arm unclassed when an `int2float` of a config leaf feeds it directly. **The wall the row used to describe is a rule, not a missing feature**: a `@loop` nest **cannot be applied inside another nest's step** (see the finding below), so the one-kernel form — score recomputed per lane — is **not writable**, and this is a demonstration rather than a schedule anyone would ship |
 | **KV-cache append** | **landed** (`1f79786d`): one `compute.parallel` kernel over `count = capacity · dim`, one lane per cache element, writing **both** the key and the value row back at `position · dim + column` — a **bijection** (8 lanes → 8 slots), so no lane contends and the write address is genuinely computed rather than the lane's own index (lane 1 writes slot 2, lane 4 slot 1). Exact integers throughout, **nothing modelled**. It rewrites the whole cache because **a write past the count is dropped in silence** — see the first finding below, which is what a one-lane-per-column append actually hits. The graph path **records** it (1 node, the extent plus all three runtime scalars) but **refuses the run** at submit; the direct device leg agrees with `cpu` element for element once the incoming row is padded |
 | **GEMV (the decode matmul)** | **landed** (`da584de5`): `y[m] = Σ_k W[m·kdim + k] · x[k]`, one lane per output element, the `k` fold in the lane, leaves `.n` and `.kdim`, declaring `[14.0, 32.0, 50.0, 68.0]` — exact integers, **nothing modelled**. **It chains with the KV-cache operator as it stands**: `K[p][d]` row-major flattened *is* this operator's matrix with `m` = position, so append-then-score-one-query is this kernel unchanged and answers `[3.0, 7.0, 300.0, 0.0]`, element for element the literal-cache run — while the **values** half needs a second address form (the cache is position-major, this operator output-major), and the cache must be the whole `capacity · dim` buffer, which is exactly what the KV-cache operator rewrites. **Two of the three remaining walls are measured here**: the device leg refuses a GEMV whose reduction is shorter than its output (*"input buffer 1 holds 3 element(s) but the run covers 4 index/indices"*, `dispatch.rs:219`), and the graph leg refuses it **by construction** — see the finding below |
+| **one decode step, chained** | **landed** (`98ddba9b`): five `compute.parallel` kernels on `cpu` — the KV-cache append, a GEMV scoring one query against the **appended** keys, softmax's row max and denominator, and attention's `acc` nest over the appended values — declaring `[8.888384, 10.773098]`, and **four of the five are a landed kernel's body with nothing but the binder and parameter renamed**. Exact: the append, the four dots `1, 3, 1, 0`, the maximum `3.0`, the offsets `−2, 0, −2, −3`, `exp(0) = 1.0` (the polynomial at zero is `1.0` and seven squarings of `1.0` are `1.0`), and the weighted sum *given* the weights. Modelled: `exp(−2)`, `exp(−3)` and everything downstream, from the language's own sequence re-implemented in `f32` outside the workspace — a reference `eˣ` in `f64` puts the same chain at `[8.8883843, 10.7731007]`, so the degree-10 Taylor costs about half an ulp and three. **Only the last stage had to change, and the change is visible in the answer** — see the finding below |
 
 ## What RMSNorm measured
 
@@ -222,6 +223,38 @@ need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
 
+- **A chain is possible, and its cost is one division's placement.** Four of `decode.lichen`'s five stages
+  are a landed kernel byte-for-byte (softmax's two) or with only the binder and parameter renamed (the
+  append and the score). **Only the last stage changed**, and it is not free: hoisting the softmax out of
+  `attend` gives `[8.888384, 10.773098]`, while `attend` **verbatim** over the same scores and the same
+  values gives `[8.888383, 10.773099]` — **a last bit in both elements**, because hoisted each weight is
+  divided once and the sum is exact, while inline one division divides an accumulated sum. A chain has to
+  **choose**, and the choice is visible in the answer.
+- **The transpose between a position-major cache and an output-major operator is the caller's, and getting
+  it wrong is silent.** The score stage reads `p · dim + d` as GEMV's own `i · kdim + (s(0) − 1)` (output =
+  position, fold = head dimension) while the weighting stage reads the same buffer as
+  `(s(0) − 1) · dim + column` (output = column, fold = position). Written at the score stage's form, the
+  weighting stage answers `[6.0754085, 33.36727]` — wrong in both elements, **no error, no refusal, no
+  report line** — and **there is no spelling that transposes a buffer**.
+- **A chain hides a wrong extent worse than a single kernel does.** With `.kdim` first, the launch runs two
+  lanes with `n = 4` as the stride, two slots read past the buffer and answer `0`, and the chain still
+  answers `[7.425879, 8.748409]` — plausible, with no refusal, *because the wrong scores are still a
+  softmax*. The last stage cannot show it at all: its extent and its divisor are both `2`, because a
+  one-query step's output extent **is** the head dimension.
+- **`dim` is carried as three unrelated literals** (`.dim`, `.kdim`, `.dim`) and `.kdim` is the **stride**,
+  so a mismatch reads the cache at the wrong pitch, silently.
+- **Where the loop wall bites.** Carried state is expressible **inside one program and nowhere else**: this
+  file proves it five times, and `cached` is a binding in *this* term — an `N`-step spelling repeats the
+  program's shape `N` times with the cache and the incoming-row literals written out `N` times. Nothing is
+  reused (`3N` buffers, none nameable again), and the one missing piece is **a position**: `t` is a literal
+  leaf, step *n + 1* needs `t + 1`, and nothing in this operator must change for that to land.
+- **A hypothesis worth testing**: the weighting stage is **not** the GEMV refusal — its reduction is
+  *longer* than its output — so **a chained step may reach a device before a lone GEMV does**. Unverified:
+  the chain's device and graph legs are inferred from the KV-cache and GEMV measurements, because the CLI
+  installs no compute backend.
+- **A parse trap, unclassified**: writing a softmax fold's index as `.at (s(0) - 1)` instead of
+  `.at s(0) - 1` **failed to parse**, and the cascade's **first error pointed at a later line**. Whether
+  that is a grammar rule about a parenthesised `.at` value or a knock-on was not established.
 - **Leaf one is positional even with no coordinates; leaf two only matters where coordinates are used.**
   Measured on GEMV: `.n, .kdim, .spare` is **identical** to `.n, .spare, .kdim`, while `.kdim` **first**
   answers `[14.0, 38.0, 62.0]` instead of `[14.0, 32.0, 50.0, 68.0]` — **with no refusal at all**: the
