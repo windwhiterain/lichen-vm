@@ -157,15 +157,15 @@ fn verdict(denominator: &str) -> (String, bool) {
     (line, merged)
 }
 
-/// A hidden size fuses today, and the runtime extent is what still stops at a refusal.
+/// A fixed size and a **runtime extent** both fuse, because both name `the invocation`.
 ///
 /// # Invariant
 /// **Two facts.** A `sqrt` the lowering wrote out as its Newton iteration is read as the
 /// operator, so a denominator the walk can name bridges and the floor's licence merges the
-/// pair. The remaining `int2float` has the launch extent as its source — not a projection's
-/// business — so the refusal has moved off the conversion.
+/// pair. The `int2float` reads `k.n`, which is the ABI's **first** leaf — the extent, not the
+/// invocation's index, which is the **last** — so it is a value the whole launch fixes.
 #[test]
-fn a_fixed_size_fuses_and_a_runtime_extent_stops_at_the_domain() {
+fn a_fixed_size_and_a_runtime_extent_both_fuse() {
     let (line, merged) = verdict(&format!("sqrt ({SUM} / int2float 4 + 0.25)"));
     assert!(
         merged,
@@ -182,16 +182,12 @@ fn a_fixed_size_fuses_and_a_runtime_extent_stops_at_the_domain() {
     ] {
         let (line, merged) = verdict(&denominator);
         assert!(
-            !merged,
-            "an extent the projection cannot name does not fuse: {line}"
+            merged,
+            "the launch's extent is `the invocation`, so a denominator reading it fuses: {line}"
         );
         assert!(
-            line.contains("reads parameter leaf 0 of the kernel's own domain"),
-            "and the refusal names the extent rather than the conversion or the expansion: {line}"
-        );
-        assert!(
-            !line.contains("converts") && !line.contains("selects between"),
-            "neither of the two refusals this slice removed is what is left: {line}"
+            !line.contains("refused:"),
+            "and nothing refuses the region: {line}"
         );
     }
 }

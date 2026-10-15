@@ -19,8 +19,14 @@ pub enum BridgeRefusal {
         /// The marked value.
         marked: ValueId,
     },
-    /// The marked value reads the fragment's own domain — the lane index.
-    ReadsTheDomain {
+    /// The marked value reads a **scalar** fragment's own domain at a leaf the roles do not name.
+    ReadsAnUnnamedLeaf {
+        /// The parameter leaf the projection read.
+        index: u32,
+    },
+    /// The marked value reads a runtime scalar of the fragment's own domain — a value the launch
+    /// fixes beside its extent.
+    ReadsARuntimeScalar {
         /// The parameter leaf the projection read.
         index: u32,
     },
@@ -100,10 +106,18 @@ impl fmt::Display for BridgeRefusal {
                 formatter,
                 "the mark names {marked:?}, which is not a value of the body it was read from"
             ),
-            BridgeRefusal::ReadsTheDomain { index } => write!(
+            BridgeRefusal::ReadsAnUnnamedLeaf { index } => write!(
                 formatter,
-                "the projection reads parameter leaf {index} of the kernel's own domain — the \
-                 lane index — and a projection is one function of the fused step's slots"
+                "the projection reads parameter leaf {index} of a scalar kernel's own domain, \
+                 which the roles name no producer's value at, and a projection is one function \
+                 of the fused step's slots and the invocation"
+            ),
+            BridgeRefusal::ReadsARuntimeScalar { index } => write!(
+                formatter,
+                "the projection reads parameter leaf {index} of the kernel's own domain, which is a \
+                 runtime scalar the launch fixes beside its extent — not the extent and not the \
+                 invocation — and a projection is one function of the fused step's slots and the \
+                 invocation"
             ),
             BridgeRefusal::ReadsABuffer => write!(
                 formatter,

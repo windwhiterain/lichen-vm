@@ -19,6 +19,23 @@ pub struct Variable(&'static str);
 impl Variable {
     /// The element datum of the step being fused.
     pub const DATUM: Variable = Variable("d");
+    /// The launch extent `n` the fused step dispatches over — `KernelFragment::runtime_scalars`
+    /// is what leaves before it.
+    ///
+    /// # Invariant
+    /// It is **the ABI's first scalar**, one number for the whole launch and one for every lane
+    /// of it, so a projection reading it is still one value per fused step rather than one per
+    /// element: hoisting it out of the step loop changes no lane's answer.
+    pub const EXTENT: Variable = Variable("n");
+    /// The invocation index `i` the fused step is running — `KernelFragment::scalar_leaves`
+    /// is the leaf it arrives as.
+    ///
+    /// # Invariant
+    /// It is **the domain's last leaf**, and it is the fused step's own: composing binds the
+    /// consumer's parameters to the producer's position for position
+    /// (`compose_fan_in`'s `ParameterCountsDiffer`), so a marked expression that reads it reads
+    /// the index of the step that runs it, not of the step that was replaced.
+    pub const INVOCATION: Variable = Variable("i");
     /// The producer reduction's value `r_N`, the parameter the element function is a
     /// function of.
     ///

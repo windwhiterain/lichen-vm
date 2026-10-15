@@ -54,6 +54,7 @@ pub fn projection(
     let mut walk = Walk {
         body: &fragment.body,
         entry: fragment.body.entry,
+        invocation: invocation_of(fragment),
         reads,
         read: HashMap::new(),
         state_slots: Vec::new(),
@@ -62,10 +63,27 @@ pub fn projection(
     walk.value(marked)
 }
 
+/// The two leaves of a parallel domain that spell `the invocation`.
+///
+/// # Invariant
+/// **The domain's first and last leaves, and nothing between them.** A parallel fragment's
+/// shape is `(config, index)`, so leaf `0` is the extent the ABI's first scalar states and the
+/// last is the index [`KernelFragment::scalar_leaves`] names. A runtime scalar lies between the
+/// two and is **not** one of them, so a projection reading one is refused.
+#[derive(Debug, Clone, Copy)]
+struct Invocation {
+    /// The leaf the launch extent arrives as.
+    extent: u32,
+    /// The leaf the invocation index arrives as.
+    index: u32,
+}
+
 /// One walk of one body: the values already read, and the node count it is held to.
 struct Walk<'a> {
     body: &'a KernelBody,
     entry: usize,
+    /// The invocation's own two leaves, for a fragment that has one.
+    invocation: Option<Invocation>,
     reads: ReadRoles,
     /// A value read twice is one expression value, cloned: the body shares it and the
     /// symbolic language has no sharing.
@@ -99,14 +117,23 @@ impl Walk<'_> {
     /// The symbolic slot a value a block receives stands for.
     ///
     /// # Invariant
-    /// The entry block's parameters are the kernel's own domain: a **scalar** fragment's
-    /// leaves are its slots, which the roles name, and a **parallel** fragment's extent and
-    /// lane index are no projection's business. Every other block's parameters are a loop's
-    /// carried state, one slot, so reading two of them is refused.
+    /// The entry block's parameters are the kernel's own domain: a **scalar** fragment's leaves
+    /// are its slots, which the roles name, and a **parallel** fragment's first and last leaves
+    /// are `the invocation`, which a projection may read. A runtime scalar leaf between them is
+    /// refused by name. Every other block's parameters are a loop's carried state, one slot, so
+    /// reading two is refused.
     fn parameter(&mut self, block: usize, index: u32) -> Result<Expr, BridgeRefusal> {
         if block == self.entry {
             let Some((datum, producer)) = self.reads.parameter_leaves else {
-                return Err(BridgeRefusal::ReadsTheDomain { index });
+                return match self.invocation {
+                    Some(invocation) if index == invocation.extent => {
+                        Ok(Expr::Variable(Variable::EXTENT))
+                    }
+                    Some(invocation) if index == invocation.index => {
+                        Ok(Expr::Variable(Variable::INVOCATION))
+                    }
+                    _ => Err(BridgeRefusal::ReadsARuntimeScalar { index }),
+                };
             };
             let leaf = index as usize;
             if leaf == datum {
@@ -115,7 +142,7 @@ impl Walk<'_> {
             if leaf == producer {
                 return Ok(Expr::Variable(Variable::PRODUCER));
             }
-            return Err(BridgeRefusal::ReadsTheDomain { index });
+            return Err(BridgeRefusal::ReadsAnUnnamedLeaf { index });
         }
         if !self.state_slots.contains(&index) {
             self.state_slots.push(index);
@@ -264,6 +291,21 @@ impl Walk<'_> {
             _ => Err(BridgeRefusal::UnknownReadPosition),
         }
     }
+}
+
+/// The invocation a fragment's domain spells, when the fragment is dispatched over one.
+///
+/// # Invariant
+/// **A parallel fragment's first and last leaves, and only those**: [`KernelFragment::scalar_leaves`]
+/// is the domain's leaves but the index, so a fragment that has one has the extent at `0` and the
+/// index at that count. A **scalar** fragment has none — its shape is its own domain and
+/// `scalar_leaves` is `0` — so its leaves stay the roles' business.
+fn invocation_of(fragment: &KernelFragment) -> Option<Invocation> {
+    let leaves = fragment.scalar_leaves();
+    (leaves > 0).then(|| Invocation {
+        extent: 0,
+        index: leaves as u32,
+    })
 }
 
 /// The value a float instruction's bits denote.

@@ -208,37 +208,98 @@ fn unnamed() -> String {
     )
 }
 
-/// LayerNorm's own diamond is **one region**, and it still refuses at the lane index.
+/// A **position-dependent** element reads the invocation's index, and the region merges.
 ///
 /// # Invariant
-/// **The grouping, on its own**: three kernels and one region, the two producers siblings the
-/// normalise joins. The refusal that follows is the **projection's** — the element reads `k.n`,
-/// which is a parameter leaf of the kernel's own domain — and it is RMSNorm's own pair's wall
-/// verbatim, so the shape is not what stops this operator.
+/// **What the licence widened bought.** `compute.range` is the domain's *last* leaf, so
+/// `int2float i` inside the marked element names `i` at a slot of its own — a relative-position
+/// term, a mask — while each `Between` still names its own producer slot and the fan-in merges
+/// under the floor's licence. Nothing here reads a buffer, so nothing new is carried.
 #[test]
-fn a_sibling_diamond_is_one_region_and_refuses_at_the_lane_index() {
-    let (module, _instances, schema, graph) = derived(&layernorm());
-    let refused = schema.expect_err("the element reads the launch extent");
-    assert_eq!(
-        refused,
-        "ProjectionNotBridged: the instance at 2's `element` projection did not bridge: the \
-         projection reads parameter leaf 0 of the kernel's own domain — the lane index — and a \
-         projection is one function of the fused step's slots",
-        "the second wall is the projection's, and the group is one region before it is reached"
+fn an_element_reading_the_invocation_index_is_one_region_and_merges() {
+    let positional = layernorm().replace(
+        "(((x - m) / d * w) ~ \"element\")",
+        "(((x - m) / d * w + int2float i) ~ \"element\")",
     );
+    let (module, _instances, schema, graph) = derived(&positional);
+    let schema =
+        schema.expect("the element reads the invocation's index, which is `the invocation`");
+    let variables: Vec<String> = schema.nodes[2]
+        .projection("element")
+        .expect("the normalise declares an element")
+        .variables()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        variables.contains(&"i".to_string()) && variables.contains(&"r".to_string()),
+        "the element names the invocation's index **and** the producer it arrived from: {variables:?}"
+    );
+
     clear_graph_pass();
     install_region_merge(&module);
     let rewritten = consult_graph_pass(&graph, &|_node| Some(COUNT));
     let lines = take_graph_pass_lines();
     clear_graph_pass();
-    assert!(
-        rewritten.is_none(),
-        "a region the derivation refuses is not merged weakly: {lines:?}"
+    let rewritten = rewritten.expect("the floor's own proof licenses a proved fan-in");
+    assert_eq!(rewritten.len(), 1, "the diamond becomes one node");
+    assert_eq!(
+        lines.len(),
+        1,
+        "the pass's own line is the merge, with no refusal beside it: {lines:?}"
     );
+    assert!(
+        lines[0].contains("nodes 0, 1, 2 merged into one node at 2"),
+        "and it names the three nodes it merged: {lines:?}"
+    );
+}
+
+/// LayerNorm's own diamond reads the launch's **extent**, and the region still merges.
+///
+/// # Invariant
+/// **The extent is not the lane index.** The element reads `int2float k.n`, and `k.n` is the
+/// ABI's *first* leaf while `compute.range` is the domain's *last* — so the leaf the refusal
+/// named is the extent. The element names `n` beside both producers, each `Between` still names
+/// its own slot, and the region merges under the floor's licence.
+#[test]
+fn a_sibling_diamond_reading_the_launch_extent_is_one_region_and_merges() {
+    let (module, _instances, schema, graph) = derived(&layernorm());
+    let schema = schema.expect("the element reads the launch's extent, which is `the invocation`");
+    let variables: Vec<String> = schema.nodes[2]
+        .projection("element")
+        .expect("the normalise declares an element")
+        .variables()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        variables.contains(&"n".to_string()),
+        "the element names the launch's extent at a slot of its own: {variables:?}"
+    );
+    assert!(
+        !variables.contains(&"i".to_string()),
+        "and it does not name the invocation's index, because `k.n` is the extent and not the \
+         index: {variables:?}"
+    );
+
+    clear_graph_pass();
+    install_region_merge(&module);
+    let rewritten = consult_graph_pass(&graph, &|_node| Some(COUNT));
+    let lines = take_graph_pass_lines();
+    clear_graph_pass();
+    let rewritten = rewritten.expect("the floor's own proof licenses a proved fan-in");
+    assert_eq!(rewritten.len(), 1, "the diamond becomes one node");
     assert_eq!(
         lines,
-        vec![format!("region 0 (nodes 0, 1, 2): refused: {refused}")],
-        "the pass's own line, one region and one named refusal"
+        vec![format!(
+            "region 0: nodes 0, 1, 2 merged into one node at 2 (the survivor), absorbing input \
+             position 2 of node 2 and input position 3 of node 2, licensed by the floor: every \
+             node of the region claims Reduction and nothing else; the merged fragment is \
+             unregistered, so it carries no claim and a later digest-keyed pass cannot name it"
+        )],
+        "the pass's own line: one region, three nodes, both arrivals absorbed. Positions `2` and \
+         `3` are `.s` and `.q` here, not the `minimal()` pair's `{SUM}` and `{SUMSQ}`, because \
+         this normalise also declares `.w`"
     );
 }
 
