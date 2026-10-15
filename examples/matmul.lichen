@@ -10,10 +10,16 @@
    (`Plan::group_width` is one number, `EXECUTION_MODE_LOCAL_SIZE` is `(x, 1, 1)`, and neither
    `LocalInvocationId` nor `WorkgroupId` is bound at all). `docs/notes/two-dimensional-launch.md`
    §3(b) is that wall and `docs/notes/llm-operators.md` is the ladder it stands on.
-   The row and the column are **hand-written**: `r = i / k.cols` and `c = i % k.cols` are the whole
-   spelling, because the language has no `compute.row`/`compute.col`; `k.cols` is the **second
-   extent** and travels as a runtime scalar (one as a graph edge, so the recording keeps it). The
-   language also has no two-dimensional array, so both matrices are **row-major flattened** and the
+   The row and the column are **named, not written**: `r = compute.row k` and `c = compute.col k`
+   take the **second extent** out of the config itself. The primitive reads the launch's own leaf,
+   not the `cfg` it is handed, so a body cannot pass a shape this launch never declared — and a
+   config that declares only one extent is refused by name rather than answered. The argument is
+   the one concession to the surface: the language has **no nullary lambda** (`parse.rs:837` wants a
+   name before `=>`), so the wrapper takes one and ignores it, exactly as `compute.range` does with
+   `k.n`. `k.cols` is still read below, for `B`'s row-major flattening, and that read is the
+   ordinary runtime scalar it always was: it is the **same** local the coordinates divide by, so
+   naming the shape costs nothing and hides nothing.
+   The language also has no two-dimensional array, so both matrices are **row-major flattened** and the
    body indexes them itself: `A[r * 3 + k]` and `B[k * cols + c]`. The inner dimension `3` is a
    **literal** and not a parameter, as RMSNorm's `eps` is, because a kernel parameter cannot cross
    the graph path. An `@loop` fold counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
@@ -50,8 +56,8 @@ Par  = struct{.n Int, .cols Int, .in Ain, .out OutC}
 Arg  = struct{.n Int, .cols Int, .I Ain}
 matmul_raw = (k : Par) => {
   i = compute.range k.n
-  r = i / k.cols
-  c = i % k.cols
+  r = compute.row k
+  c = compute.col k
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * 3 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (3, 0.0 ~ "identity"))))
 }

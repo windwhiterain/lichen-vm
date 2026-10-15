@@ -22,9 +22,9 @@ use lichen_utils::extend::AsEnum;
 
 use super::{
     ComputeOperator, ComputeValue, ParamSlot, Positions, TypeOperator, const_bits, conv_of,
-    flat_arity, float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class,
-    node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
-    unary_class, write_chain_output_pos, write_node,
+    float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class, node_class_in,
+    parallel_buffer_pos, param_classes, peeled_argument, scalar_literal, unary_class,
+    write_chain_output_pos, write_node,
 };
 
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
@@ -154,6 +154,24 @@ const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is
 /// `f32` to an integer callee — or reading an `i64` back into a float body —
 /// would be a module that does not validate.
 const CROSS_KERNEL_RESULT_ARITY: &str = "a cross-kernel call to a kernel that returns more than one value is not supported: a kernel body reads a callee result as a single value, and re-materialising a tuple result needs local slots the kernel instruction set does not yet have";
+
+/// The config's second scalar leaf, among the leaves the role table puts in ABI order.
+///
+/// # Invariant
+/// Not one — the **second**: a parallel fragment's first scalar leaf is the launch
+/// extent (`scalar_leaf_classes`), so this is the first leaf that is not the count. A
+/// second extent is not a new role: the role walk calls every leaf outside
+/// `.in`/`.out` a runtime scalar, and it is the position that says which one it is.
+const SECOND_EXTENT_ORDINAL: usize = 1;
+
+/// Refusal: the configuration has one extent, and a row or a column has nothing to be
+/// taken over.
+///
+/// # Invariant
+/// One sentence for every shape that reaches it — a scalar `jit` kernel, the retired
+/// tuple form, and a named struct whose parameter declares a single scalar leaf — so a
+/// reader is told what to change rather than which of the three it met.
+const ONE_EXTENT_CONFIG: &str = "this launch declares one extent, the count, and `compute.row`/`compute.col` take the lane's coordinates over the **second** one: a row and a column are positions in a shape with two extents, and this parameter has one scalar leaf. Give the config a second — `Par = struct{.n Int, .cols Int, .in In, .out Out}` — or divide the index by the leaf the body already reads, which is the spelling this replaces";
 
 /// The walk's depth ceiling: a refusal, not a panic, and what a deeply **expanded**
 /// recursion runs into.
@@ -746,16 +764,54 @@ where
                 self.cross_kernel_call(*kernel, *arg)
             }
             // The loop index of the current parallel invocation, after the cfg params.
-            ComputeOperator::Range => {
-                let index: usize = self.params.iter().map(|p| flat_arity(&p.shape)).sum();
-                self.parameter(index)
-            }
+            ComputeOperator::Range => self.parameter(domain_arity(self.params)),
+            // The lane's coordinates over the launch's second extent.
+            ComputeOperator::Row => self.coordinate(KernelBin::Div),
+            ComputeOperator::Col => self.coordinate(KernelBin::Rem),
             ComputeOperator::Read => self.buffer_read(operand),
             ComputeOperator::Write => self.buffer_write(operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
             )),
         }
+    }
+
+    /// The lane's row (`Div`) or its column (`Rem`), taken over the launch's **second**
+    /// extent.
+    ///
+    /// # Invariant
+    /// The divisor is the config's second scalar leaf and the dividend the index
+    /// `range` already reads, so the two coordinates are one instruction each and cost
+    /// nothing a body could not already write by hand — this names them, it does not
+    /// add arithmetic. The class is `Int` in both operands whatever the fragment
+    /// computes in: a coordinate is an ordinal, the same answer `Range` gives.
+    fn coordinate(&mut self, bin: KernelBin) -> Result<ValueId, String> {
+        let index = self.parameter(domain_arity(self.params))?;
+        let extent = self.second_extent()?;
+        Ok(self.emit(
+            KernelInstr::Bin(ScalarClass::Int, bin),
+            vec![index, extent],
+            ScalarClass::Int,
+        ))
+    }
+
+    /// The config's second extent: the block parameter its **second** scalar leaf is bound to.
+    ///
+    /// # Invariant
+    /// The role table is the ABI's own leaf order and its first scalar is the launch
+    /// extent (`scalar_leaf_classes`), so the second is the only other leaf a shape can be
+    /// taken over. The ordinal is `base + 1` because a scalar leaf takes one wasm local —
+    /// the buffers under `.in`/`.out` are bound and take none.
+    fn second_extent(&self) -> Result<ValueId, String> {
+        let slot = self.params.first().filter(|slot| {
+            slot.roles
+                .as_ref()
+                .is_some_and(|roles| roles.scalars.len() > SECOND_EXTENT_ORDINAL)
+        });
+        let Some(slot) = slot else {
+            return Err(ONE_EXTENT_CONFIG.to_string());
+        };
+        self.parameter(slot.base + SECOND_EXTENT_ORDINAL)
     }
 
     /// One arithmetic or comparison operator over two operands, at `fallback_class`

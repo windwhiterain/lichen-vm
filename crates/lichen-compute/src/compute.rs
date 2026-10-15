@@ -839,6 +839,21 @@ pub enum ComputeOperator {
     ParLaunch,
     /// `[n]` — the loop index of the current parallel invocation, `i ∈ [0, n)`.
     Range,
+    /// `[cfg]` — the lane's **row**, `i / cols`, over the launch's second extent.
+    ///
+    /// # Invariant
+    /// The extent is the config's **second scalar leaf** and nothing else. `range`'s own
+    /// argument is typed and then ignored, and this one is too — a body handed the columns
+    /// to divide by would be a body that can take a shape the launch never declared, so
+    /// reading the leaf leaves only the configurations that have one able to answer.
+    Row,
+    /// `[cfg]` — the lane's **column**, `i % cols`, over the launch's second extent.
+    ///
+    /// # Invariant
+    /// [`Self::Row`]'s, and the same read: the two differ in one instruction, and a pair
+    /// would compute the half the body did not ask for — the kernel IR has no instruction
+    /// that leaves two values, so a pair would be a change to the instruction set instead.
+    Col,
     /// `[buffer, index]` — read one buffer element → `?b`.
     Read,
     /// `[length, index, value]` — a pending parallel write; kernel-only.
@@ -951,6 +966,8 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
             | ComputeOperator::Range
+            | ComputeOperator::Row
+            | ComputeOperator::Col
             | ComputeOperator::Read
             | ComputeOperator::Write
             | ComputeOperator::Graph
@@ -1522,8 +1539,11 @@ where
                     };
                     Some(element)
                 }
-                ComputeOperator::Range | ComputeOperator::Write => {
-                    // Kernel-only operators: `range`/`write` never reach the VM as a
+                ComputeOperator::Range
+                | ComputeOperator::Row
+                | ComputeOperator::Col
+                | ComputeOperator::Write => {
+                    // Kernel-only operators: none of them reaches the VM as a
                     // standalone apply — stay lazy.
                     None
                 }
@@ -1686,6 +1706,8 @@ where
             ComputeOperator::Launch
             | ComputeOperator::Call
             | ComputeOperator::Range
+            | ComputeOperator::Row
+            | ComputeOperator::Col
             | ComputeOperator::Read => Some(LowShape::USize),
             ComputeOperator::Jit
             | ComputeOperator::Parallel
@@ -6837,6 +6859,8 @@ macro_rules! compute_native_ops {
         static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
         static PARLAUNCH: $crate::ParLaunchOp = $crate::ParLaunchOp;
         static RANGE: $crate::RangeOp = $crate::RangeOp;
+        static ROW: $crate::RowOp = $crate::RowOp;
+        static COL: $crate::ColOp = $crate::ColOp;
         static READ: $crate::ReadOp = $crate::ReadOp;
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
@@ -6850,6 +6874,8 @@ macro_rules! compute_native_ops {
             ("parallel", &PARALLEL as &dyn $crate::NativeOp<$program>),
             ("plrun", &PARLAUNCH as &dyn $crate::NativeOp<$program>),
             ("range", &RANGE as &dyn $crate::NativeOp<$program>),
+            ("row", &ROW as &dyn $crate::NativeOp<$program>),
+            ("col", &COL as &dyn $crate::NativeOp<$program>),
             ("read", &READ as &dyn $crate::NativeOp<$program>),
             ("write", &WRITE as &dyn $crate::NativeOp<$program>),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
@@ -6983,6 +7009,12 @@ pub struct ParLaunchOp;
 /// `$range(n)` — the loop index `i ∈ [0, n)` of the current invocation.
 pub struct RangeOp;
 
+/// `$row(cfg)` — the row of the current invocation, over the launch's second extent.
+pub struct RowOp;
+
+/// `$col(cfg)` — the column of the current invocation, over the launch's second extent.
+pub struct ColOp;
+
 /// `$read(buf, i)` — read one buffer element → `?b`.
 pub struct ReadOp;
 
@@ -7108,6 +7140,71 @@ where
             value: op,
             decided: false,
         }
+    }
+}
+
+/// The node a lane-coordinate call builds: `op` over the launch it was handed.
+///
+/// # Invariant
+/// The operand array is `[cfg]`, exactly `range`'s shape, and the lowering reads
+/// neither: a body's coordinates are read from the launch's own role table when the
+/// body is lowered (`compute/body.rs`, `second_extent`), which is the only place that
+/// table is known.
+fn coordinate_op<P>(ctx: &mut dyn Ctx<P>, op: ComputeOperator, cfg: NodeId) -> NativeApply
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    let operands = ctx.array_node(&[cfg]);
+    let op = ctx.op_node(P::Operator::from(op), Some(operands));
+    NativeApply {
+        value: op,
+        decided: false,
+    }
+}
+
+impl<P> NativeOp<P> for RowOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$row(cfg)` — the row of the current parallel invocation.
+    ///
+    /// # Invariant
+    /// [`coordinate_op`]'s: the launch is carried in the operand array and read by
+    /// neither side, so what a body passes cannot change what it answers.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        coordinate_op(ctx, ComputeOperator::Row, args[0].value)
+    }
+}
+
+impl<P> NativeOp<P> for ColOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$col(cfg)` — the column of the current parallel invocation.
+    ///
+    /// # Invariant
+    /// [`RowOp::build`]'s, over [`ComputeOperator::Col`] — one node each, and the walk
+    /// tells them apart by the operator rather than by an operand it would have to read.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        coordinate_op(ctx, ComputeOperator::Col, args[0].value)
     }
 }
 
