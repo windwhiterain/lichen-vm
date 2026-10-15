@@ -28,8 +28,8 @@
    what it is, at any depth**, and the graph's value table carries a **float at its own class** \
    (`c92b6471`, `e24d00fb`), where a kernel parameter used to cross the graph path not at all. Two \
    limits are worth knowing: a `Float` leaf can only be a **literal or an argument**, never a value \
-   computed inside the source function; and `compute.graphrun` refuses the `"cpu"` backend, so driving \
-   `eps` *through a graph* would mean moving these kernels to `"gpu"` — the leg below is the direct \
+   computed inside the source function; and `compute.graphrun` refuses the `cpu` backend, so driving \
+   `eps` *through a graph* would mean moving these kernels to `gpu` — the leg below is the direct \
    one. The value is still chosen so the \
    denominator lands on an exact square, `1.25 + 1.0 = 2.25`. It is **not** a stabiliser a \
    production LayerNorm would ship; this example's job is the exact arithmetic and the shape. \
