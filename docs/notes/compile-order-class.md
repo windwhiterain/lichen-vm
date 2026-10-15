@@ -286,3 +286,36 @@ That is the same `unwrap_or(ScalarClass::Int)` chain as attention's `attend`
 (`compute.rs:2424-2430`), reached by an operator that a decoder would actually run. It refuses
 **earlier** than the eight-byte payload count the KV-cache slice measured (`§` the operators note): those
 are two different bugs, and neither this note nor that slice conflates them.
+
+## 8. The author's rulings, and what each one rules out
+
+Asked directly, the type system's author decided the following. They are contract, not commentary, and the
+measurement under each is what the ruling has already been tested against.
+
+1. **"检查期间和函数 normalize 期间尽可能的先把能 unify 的 unify 了，让剩下的求值能一次出结果，不再需要
+   进一步的 unify。"** A class that is *determinable* is meant to be decided by checking or by a normalize;
+   a later phase reads it rather than creating it.
+2. **"检查期间只能 normalize 已经存在的函数，apply clone 出来的函数的 normalize 只能在运行期。"** For a
+   kernel reached as an apply clone the deciding write is therefore a **run-time** normalize — which is what
+   §3 measured: the same field reads `None` when the fragment is recorded and `Float` later in the run.
+3. **A graph step recorded while the parameter reads `Undecided` must report it** — "报错" — never silently
+   keep the flat tuple and the ABI's `Int` default. Measured, this is the *record* path's job alone: refusing
+   inside `walk_role` instead fixes the four pinned assertions and **breaks four targets and 38 tests**
+   (`compute`, `graph_jit`, `graph_structure`, `swallowed_refusal`), because site A's `Undecided` is the
+   ordinary "annotation is still a cell" case that must stay lazy (`compute.rs:1178-1195`).
+4. **"JIT 肯定不能回过来影响类型系统，JIT 对类型系统应当是只读/evaluate 的。"** No back-fill: the JIT may
+   read and may evaluate; it may not write a class into the type system.
+5. **"随便 evaluate 哪个都无所谓"** — subject to ruling 1, the aim stays a read that needs no forcing.
+6. **"跨模块的行为应当 mirror 不跨模块的行为。"** The same type term must read the same way whether or not a
+   module boundary and a materializing clone sit in between.
+7. **"啥叫错误的值？没有值会是错误的。有的只有 unify 冲突。"** A carried value is never "wrong"; a
+   disagreement with a later computation is a **unify conflict**, and it is reported. The carry question is
+   "is this a template fact", never "might it freeze something".
+
+**What ruling 6 does not licence here, measured.** Carrying more does not reach this cell: with the static
+carry relaxed to `operation.is_none() || value.is_some()`, both pinned assertions still read `[Int]`,
+because the frozen template's own node answers `ctx.module.read(local) == None` — there is nothing on the
+template side to carry. The class is written later, by the clone's own run-time normalize (ruling 2), so the
+gap is the **order in which the recording reads it** — which is what rulings 1 and 6 together demand be
+fixed at that read rather than by materializing more.
+
