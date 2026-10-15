@@ -14,12 +14,13 @@
    which is `ProducerFeedsTwice` (`crates/lichen-runtime/src/fusion_claim/schema.rs:992`, in \
    `region_edges`: one value, two slots, and the language has no spelling for it). One-pass, \
    both folds are independent, so both edges **arrive** at one consumer and the shape **is** a \
-   fan-in, and the region now holds all three: measured on the RTX 3060 the pass says `region \
-   0 (nodes 0, 1, 2): refused: ProjectionNotBridged: the instance at 2's element projection did \
-   not bridge: the projection reads parameter leaf 0 of the kernel's own domain — the lane index \
-   — and a projection is one function of the fused step's slots`. That \
-   line is **not** this operator's: RMSNorm's own pair, recorded the same way, refuses with it \
-   verbatim. softmax's diamond does merge (`d364f547`) because its producers are **chained** \
+   fan-in, and the region now holds all three **and merges** (`c9e65140`: a projection may read the \
+   fused step's slots and the invocation, so `count = int2float k.n` bridges). This example itself \
+   still refuses, for two reasons that are not the grouping's and not the extent's: its `eps` is a \
+   **runtime scalar** the launch fixes beside the extent (`ReadsARuntimeScalar` — naming runtime scalars \
+   as a third kind of free value is a decision nobody has taken yet), and even with the element not \
+   reading `eps`, the config still declares it, so `compose` refuses `ShapesDiffer`. softmax's diamond \
+   does merge (`d364f547`) because its producers are **chained** \
    — the sum reads the maximum — so all three nodes group. **The folds are \
    two kernels and not two folds in one body**: two folds in one body is a chain of two \
    links, and a chain is not the shape this operator exists to measure. \
