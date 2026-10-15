@@ -6844,7 +6844,7 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 /// Assemble `lichen-compute`'s private native-operator registry for a host program.
 ///
 /// # Invariant
-/// The table is leaked deliberately and the leak is bounded: nine entries, one
+/// The table is leaked deliberately and the leak is bounded: fourteen entries, one
 /// allocation per call, and the one call site runs once per store. It cannot be a
 /// `static` — a `static` may not name a type parameter, and two invocations are
 /// distinct items even for one program — and caching it on the host would serve a

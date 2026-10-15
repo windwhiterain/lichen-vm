@@ -508,17 +508,22 @@ of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
 not).
 
 **What an author has to know, and what this note did not say.** The sentence a kernel
-writer needs is not "the padding is zeroed" but **only the first `count` elements of a
-host input are real**: every index the body reads must be **below `count`**, because
-`dispatch.rs` sizes the upload as `count × element` and clears the tail on the device.
-A read set that is not a prefix of the buffer therefore works on the `"cpu"` path and
-silently reads `0` on the device — **a wrong number, not a refusal**. A matmul is the
-standard victim: `m×K · K×n` needs `K ≤ m` and `K ≤ n`, while the only length rule the
-device states is the opposite one (a host input **shorter** than the count is refused),
-so the two rules together admit only the square case, `m = K = n`. That is why
-`examples/matmul.lichen` is committed square; the measurement, its discriminator (a body
-with **no** `@loop` shows the identical disagreement, so it is not a lowering bug) and
-what a tiled matmul would need are in
+writer needs is not "the padding is zeroed" but **how much of a host input is real**: a
+run uploads each input at its **own length** (`own_elements`, `dispatch.rs:320`, asked by
+both the staging reservation and the copy), so every index the body reads is real as long
+as it is **inside its buffer** — the invariant is now `[0, len)`, with the padding past
+`len` filled on the device. What remains is the direction the host *can* see: a host input
+**shorter than the count** is refused by name while the staging is sized
+(`InputShorterThanCount`), because the host cannot see the body's read set and a
+conservative refusal beats a silent zero. The other direction is **still uncaught**: a body
+that reaches **past its buffer** while the count stays inside it is an out-of-bounds device
+read, and the region that silently answers `0` shrank from `[count, padded)` to
+`[len, padded)` rather than closing. A matmul used to be the standard victim of the old
+rule — `m×K · K×n` needed `K ≤ m` and `K ≤ n` against a rule that admitted only the square
+case — and it is the measurement that forced the fix: under the old rule a `2×3 · 3×2`
+answered `[25, 28, 28, 32]` on the device against the CPU's `[58, 64, 139, 154]`, **silently**,
+and a body with **no** `@loop` disagreed identically, which ruled out a lowering bug. The
+measurement, the discriminator and what a tiled matmul would still need are in
 [LLM operators](llm-operators.md#smaller-findings-each-with-the-thing-that-would-change).
 
 **The same padding discharges a workgroup barrier's convergence obligation, and

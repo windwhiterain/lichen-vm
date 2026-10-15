@@ -57,7 +57,7 @@ dimension is an additive field plus whoever reads that field.
 | `lichen-compute/src/compute.rs:1893-1941` — `parallel_roles` | a field named `in` is `Input`, one named `out` is `Output`, **everything else is `LeafRole::Scalar`** (`:1932-1938`). There is no role for "the second extent". |
 | `lichen-compute/src/compute.rs:1820-1862` — `scalar_leaf_classes` | "**The first leaf is the launch extent**, read as an `Int` ordinal whatever the parameter declares", refused by name at `:1856-1860`. Leaf **order** is the ABI. |
 | `lichen-compute/src/compute/body.rs:231-236` — `lower_index_function` | `domain_arity(params)` block params, then **one** more: "The fragment's domain is the config's leaves plus the invocation index, which no shape contains". |
-| `lichen-compute/src/compute/body.rs:749-752` — `ComputeOperator::Range` | lowers to the block param at `sum of flat arities` — **one scalar, always**, and the operator's own argument is never read. |
+| `lichen-compute/src/compute/body.rs:767` — `ComputeOperator::Range` | lowers to the block param at `sum of flat arities` — **one scalar, always**, and the operator's own argument is never read. |
 | `lichen-compute-gpu/src/spirv.rs:3130-3136` — `EXECUTION_MODE_LOCAL_SIZE` | `vec![ids.entry(), EXECUTION_MODE_LOCAL_SIZE, lane_width, **1, 1**]`. The two `1`s are the dead dimensions, and they are the module's own geometry. |
 | `lichen-compute-gpu/src/dispatch.rs:332-340` | `workgroups = count.div_ceil(lane_width)`, and `StagedLaunchNotAWholeWorkgroup` (`dispatch.rs:58`) bounds it in **one** axis. |
 
@@ -346,7 +346,7 @@ the recording and not the geometry.
 - §2.3: an admitted second extent **vanishes**. The run refuses, but late and naming the wrong
   thing. Any slice that widens the surface here without fixing the recording turns a refusal
   into a number.
-- `compute.lichen:13` types `range`'s argument `Int` and `body.rs:749-752` **never reads it**.
+- `compute.lichen:13` types `range`'s argument `Int` and `body.rs:767` **never reads it**.
   `compute.range k.cols` therefore checks and answers the *invocation*. A language that grows a
   second index makes that spelling natural to write and wrong to run.
 - The strip-vs-transpose distinction of §2.1 is the hazard's shape in miniature: both spellings
