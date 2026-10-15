@@ -309,11 +309,41 @@ need a node-local producer for `r`.
   `count = 64` under a rectangle answering wrong and writing nothing past index 15, with no error, no
   refusal and no report line**. That is the class a tile's partial sums would pass through, so it is the
   first thing to gate, not the last. Two honest caveats from the attention slice itself: its floor
-  measurement was taken over a **hand-built** two-node graph (the `fused_region.rs` idiom), because
-  `compute.graph` refuses to *record* a two-`plrun` chain — *"this function's return is not a value a graph
-  can hand back"* — so the pass's words are its own, but the merge was **consulted rather than
-  dispatched**; and the `scores` kernel does not run on the device as written, because the slice kept the
-  honest spelling instead of inserting `+ 0.0` to dodge the `sqrt` emitter bug above.
+  measurement was taken over a **hand-built** two-node graph (the `fused_region.rs` idiom), and **both of
+  the reasons it gave for that have since been corrected by measurement**. First, *"`compute.graph` refuses
+  to record a two-`plrun` chain"* is **not what `dev` does**: a chain of two recorded calls was never
+  refused — `graph_argument.rs` records 2 nodes, `chain_merge.rs` 3, and the attention chain itself records
+  **2** (node 0 `inputs [4, 5]` / count `Value(0)` / scalars `[Value(2), Value(3)]`, node 1 `inputs [7, 6]` /
+  count `Value(1)` / scalars `[Value(3), Value(2)]`, 7 inputs, 9 values, `Some([8])` — exactly the wiring
+  the calls imply). Second, running the pass over that **recorded** graph refuses it **differently and
+  earlier**: `ExtentsDiffer: the producer dispatches over Value(0) and the consumer over Value(1), and a
+  merged node has one extent` — because attention's two kernels **genuinely** run over different extents
+  (queries × keys = 4, queries × dim = 8), so the hand-built `ElementWithoutProducer`/`BeyondANode` refusal
+  was partly an artifact of the hand-built shape. **What actually keeps the recorded graph from dispatching
+  is a compile-order dependence in the class inference**: `compute.parallel` compiles `attend`'s fragment
+  with `output_classes [Int]` / `input_classes [Float, Int]` where the program declares `Float`, and it
+  depends only on which kernel compiled first — a program that *declares* the step compiles `attend`
+  **first** and gets `[Float, Int] → [Int]`, while the same kernels without the step compile `scores` first
+  and get `[Float, Float] → [Float]`. `graphrun` then refuses *"input buffer 1 holds 4 element(s) but the
+  run covers 8 index/indices, so a lane would read past it"* (`InputShorterThanCount`,
+  `lichen-compute-gpu/src/dispatch.rs:219`): the wrong class means the wrong element width. The chain is
+  `compute.rs:2013-2017` — `walk_role` reads a `Buf T`'s element class through
+  `low_type_of_slot(module, element).filter(|shape| shape.is_known())` — into **lazily-filled cells**
+  (`lichen-highlevel/src/shape.rs:858` → `low_type_of` at `:704`) that **no pass evaluates a type term
+  for**; 4738 `refine_class_low_type` calls in the failing program never refine that slot, so
+  `compile_parallel_fragment` reads the role table at `:2392` **before** the two passes that could fill it
+  (`:2409`, `:2415`), and `None` falls through `body.rs:1821-1827` to `compute.rs:2424-2430`'s
+  **`unwrap_or(ScalarClass::Int)`**. Four fixes were attempted and **rejected on measurement** — a
+  placeholder class from `roles.input_classes` (no effect: the fragment is compiled at `compute.parallel`,
+  `recording = false`), the class route through `class_value`/`class_low_type` (both empty), the term's
+  *type half* (which made it `[Int, Int]`, worse), and forcing the slot with `evaluate_node` (no effect) —
+  so **no source change shipped**; the defect is pinned instead by
+  `crates/lichen-compute/tests/compile_order_class.rs`, **ignored by default** (the repo's precedent in
+  `graph_structure.rs`) so the suite stays green while `--ignored` shows both assertions red. **Still
+  open**: which write fills that element cell in the passing program — proved *not*
+  `seed_template_term_low_types`, *not* `infer_template_low_types`, and *not* any of those 4738 calls.
+  And the `scores` kernel **does** run on the device now: the `sqrt` emitter bug that kept it off was fixed
+  at `b6dea46c`.
 
 - **A matmul's claim earns two refusals, and one of them names a mark that is there.** With the floor
   installed, the recorded matmul reports `region 0 (nodes 0): refused: RoleNotMarked: the instance at 0
