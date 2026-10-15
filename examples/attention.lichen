@@ -1,0 +1,166 @@
+---
+  order = "21"
+  compute = import "compute.lichen"
+  doc = "Attention: `out[q][d] = Σ_k softmax_k(scores[q][k]) · V[k][d]` over \
+   `scores[q][k] = Σ_j Q[q][j] · K[k][j] / sqrt(dim)` — the operator the ladder's last row names, and \
+   the one that **does not run the way the row describes**. It is two kernels, not one: a `scores` \
+   kernel with the `j` fold inside a lane, then an `attend` kernel that is **one lane per output \
+   element** and recomputes the softmax's row maximum and its denominator **inside the lane** by \
+   looping over the keys with `@loop`, exactly as `examples/softmax.lichen` does. **This is a \
+   demonstration of what the surface can express today, not a schedule anyone would ship**: there \
+   is no shared-memory staging, no tiling and no `k`-blocking, and the one-kernel form the ladder's \
+   row really asks for — the score recomputed per lane, so `O(n·dim)` work per lane per fold — \
+   **cannot be written at all** (the reason is below, with the pass's own words and the refusal \
+   verbatim). What ships here is the nearest spelling the surface takes, and the distance between \
+   the two is the finding.\n\n\
+   **Two leaves are positional and both kernels lean on it.** The **first** scalar leaf is the \
+   launch extent (`scalar_leaf_classes`, `crates/lichen-compute/src/compute.rs:1849`) and the \
+   **second** is what `compute.row`/`compute.col` divide by \
+   (`crates/lichen-compute/src/compute/body.rs:788`). So `ParS`'s second leaf is `keys` — its \
+   lanes are `queries × keys`, the query over the rows and the key over the columns — while \
+   `ParA`'s second leaf is `dim`, its lanes being `queries × dim`. The same field name would have \
+   meant two different shapes, so each kernel names its own: `compute.row k` is the **query** row in \
+   `attend` and in `scores`, and `compute.col k` is the key there and the head-dimension column in \
+   `attend`. `dim` and `keys` are **parameters, not literals** — both are third leaves, after the \
+   second extent, which is where a new leaf has to go (`examples/matmul.lichen` records what a leaf \
+   put between them answers instead). Nothing here is a 2-dimensional array: `Q`, `K`, `V` and the \
+   scores are **row-major flattened** and the bodies index them, `query * k.dim + s(0) - 1` and \
+   `s(0) * k.dim + key` for the score, `query * k.keys + s(0) - 1` for the softmax's read of the \
+   scores and `(s(0) - 1) * k.dim + column` for `V`. The language still has no 2-D array, and a \
+   **per-row reduction that is not a whole-kernel fold** is still not a thing: the row maximum is a \
+   fold over the keys of the lane, and the *scores* matrix is a kernel of its own rather than a \
+   reduction a lane shares.\n\n\
+   **The one-kernel form is refused, and the refusal is about the loop nest, not about attention.** \
+   A body that scores `(q, k)` inside the lane needs the `j` fold **nested inside** the key fold. \
+   Nesting works — an `@loop` recursion applied inside another `@loop`'s step lowers, and the two \
+   nests are real (measured: a `@loop` inside a step, and a third inside that, both run) — but \
+   **the enclosing step's own value is then computed in the enclosing block, after the inner nest \
+   has returned, and read back on a branch that block does not dominate**. The lowering demands \
+   values from the codomain outwards (`crates/lichen-compute/src/compute/body.rs:222`) and \
+   `lower_loop_steps` sets the step's terminator **after** its operands \
+   (`crates/lichen-compute/src/compute/body.rs:1200`), so the inner nest's entry terminator is \
+   overwritten and the inner nest's result has no dominator. The refusal is by name, verbatim: \
+   *`Bin(Float, Div) reads ValueId(32), which block 7 receives as a parameter, and block 7 does not \
+   dominate block 2`*. Three folds that each need the score therefore cannot share one body; the \
+   score is a kernel. **That is a rule, not a preference**, and it is the same rule that makes \
+   `scores` and `attend` two kernels rather than one.\n\n\
+   **One workaround, and it is a preference.** The value fold carries the row's maximum in its \
+   state — the entering call binds the maximum as `acc`'s third state slot and the step carries it \
+   as `s(2)` — because the same \
+   demand rule fixes the order the nests are entered in: `acc`'s **entering call** is what pulls `m` \
+   in, so `top`'s nest is entered from the entry block and dominates the two nests after it, while \
+   `m` demanded from `acc`'s *body* would enter `top`'s nest **inside** `acc`'s and leave \
+   `denominator`'s fold reading a value it cannot see. Carrying the max is the honest spelling of \
+   what a tiled attention does anyway — a lane holds its row's maximum across the key loop — and it \
+   is **a preference**: dropping it and reading `m` from a third kernel's buffer would be equally \
+   correct and is `examples/softmax.lichen`'s own shape.\n\n\
+   **What the fusion machinery says, measured with the floor installed** \
+   (`install_floor`, region merge then automatic tiling, over the two recorded fragments as a \
+   two-node graph with counts `4` and `8`). **The region groups** — a weakly-connected component, \
+   so the scores kernel and the attend kernel are one region — and the merge then refuses it by \
+   name, and the tiling stage refuses each node after it. Verbatim:\n\n   ```\n   region 0 (nodes 0, 1): refused: \
+   ElementWithoutProducer: the instance at 1 reads the one at 0 and its element `d` does not read \
+   the producer's value\n   node 0: refused: BeyondANode: the instance at 0 claims the role(s) element beyond \
+   `combine` and `identity`, whose code reads the value another node produced, and this reader \
+   names no producer\n   node 1: refused: BeyondANode: the instance at 1 claims the role(s) element beyond `combine` \
+   and `identity`, whose code reads the value another node produced, and this reader names no \
+   producer\n   ```\n\n\
+   That is the ladder's *small lie the surface forces* arriving at attention: both kernels claim \
+   `Reduction(combine,identity,element)`, and each one's `element` **is** a whole fold, so there is \
+   no element expression left for a producer to flow into. The grouping is no longer the wall; \
+   the **claim** is. A pair whose consumer's `element` genuinely reads the producer's value would \
+   be a different shape, and this one is not.\n\n\
+   **The device leg, measured.** The `attend` kernel **runs on the RTX 3060** through \
+   `compute.plrun` on `gpu`, fed the same scores, and answers \
+   `[2.510164, 3.510164, 4.510164, 5.510164, 3.924232, 4.9242315, 5.9242315, 6.9242315]` against \
+   the cpu path's `[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, \
+   6.924232]`: **three of the eight differ in the last bit**, which is the division the device does \
+   not round correctly (`docs/notes/floating-point.md` §7), not a drift in either definition. \
+   `matmul`, `layernorm`, `rmsnorm` and `softmax` all run there unchanged, so the device is \
+   available and the difference is this operator's. The `scores` kernel is **refused outright** by \
+   the SPIR-V emitter: *a `Select`'s two arms are computed in different classes ([Int, Float])* — \
+   and the trigger is narrow and reproducible. `sqrt 4.0` runs, `sqrt (int2float k.n + 0.25)` (which \
+   is what `examples/rmsnorm.lichen` writes) runs, and **`sqrt (int2float k.dim)` does not**, for \
+   the second extent or for the third leaf alike; adding one arithmetic term between the crossing \
+   and the root, `sqrt (int2float k.dim + 0.0)`, runs and answers the same numbers. The crossing's \
+   result feeding the Newton definition directly is what leaves the `Select` inside `sqrt_body` \
+   with one arm unclassed (`crates/lichen-kernel-ir/src/unary.rs:203`). This file keeps the honest \
+   spelling and declares the `cpu` backend, which is the one the example suite runs.\n\n\
+   **What a tiled attention would need from the workgroup geometry.** A row of keys is a reduction \
+   *across lanes*, and the only cross-lane exchange the surface has is a `Shared` staging slice and \
+   a barrier. Three things, and the newest note has already measured two of them. **(a)** A real \
+   two-dimensional workgroup: `Q[q][·]` and `K[k][·]` want one axis for the query and one for the \
+   head dimension, and `docs/notes/two-dimensional-workgroup.md` §1.1 names the core construction \
+   site — a `Shared` slice is an `OpTypeArray` with **one** length constant and `slice_pointer` \
+   emits a **one-index** access chain, so a row-shaped exchange needs a nested array and a \
+   **two-index** chain. **(b)** The rectangle itself is **not** the wall, and that is worth knowing \
+   before planning around it: the same note §4 measures `OpExecutionModeLocalSize = (16, 4, 1)` \
+   compiling, validating and running on the RTX 3060. What is the wall is (a)'s companion under \
+   it — the same §4 measures a staged `Shared` exchange at `count = 64` under a rectangle answering \
+   a wrong number and **writing nothing past index 15, with no error, no refusal and no report \
+   line**. That silent class is exactly what a tiled attention's partial sums would go through, so \
+   it is the thing to gate before the first tile. **(c)** the scores tile must be **recomputed per \
+   query** rather than shared, which is the `dot` fold above and is the same recomputation a \
+   `Max`/`Min` tile already covers for the softmax's row maximum. `Plan::group_width` is one number \
+   and `check_plan` refuses a group narrower than the workgroup \
+   (`crates/lichen-kernel-ir/src/plan.rs:110-137`), which is the same one-axis rule from the other \
+   end. `compute.row`/`compute.col` over **one** divisor are the landed spelling working as \
+   intended and are not part of the wall. `docs/notes/two-dimensional-launch.md` §3(b) and \
+   `docs/notes/two-dimensional-workgroup.md` are that wall, and `docs/notes/llm-operators.md` is the \
+   ladder it stands on. **Nothing in this file needs any of it** — every fold here is inside one \
+   lane — which is exactly why the file can exist and the tiled one cannot.\n\n\
+   **What is exact and what is modelled.** Exact, by hand and in `f32`: the four dot products \
+   (`2, 1` for query 0 and `0, 2` for query 1, every term a product of integers under `6`), the row \
+   maxima (`1.0` and `1.0`), the offsets they leave (`0, -0.5` and `-1, 0`), and `sqrt(dim)`: this \
+   language's `sqrt` is a Newton iteration over a range reduction \
+   (`crates/lichen-kernel-ir/src/unary.rs:203`), and on `4` its reduction is the identity and its \
+   six steps from the seed `2.0` stay at `2.0`, so the scale is the **exact** `2` and every \
+   division by it is exact. Every integer is below `2^24`. Modelled: `exp`, which is a clamped, \
+   halved, degree-10 Taylor sum squared back up — **never** a reference `eˣ` — and every product, sum \
+   and final division that touches one. The declared output was derived **independently**, by \
+   re-implementing that published sequence in `f32` outside the workspace and never calling the \
+   crate under test: `exp_model(0) = 1`, `exp_model(-0.5) = 0.6065316`, `exp_model(-1) = 0.3678806`; \
+   the denominators are `1 + 0.6065316 = 1.6065316` and `0.3678806 + 1 = 1.3678806`; and each \
+   `@loop` fold **counts down** — `examples/matmul.lichen` and `examples/layernorm.lichen` say so \
+   too — so row 0 accumulates `exp(-0.5)·V[1][d]` before `exp(0)·V[0][d]` and row 1 the other way \
+   round, and each lane's sum is divided by its row's denominator once, at the write. That gives \
+   `[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]`, which \
+   is what the program prints. The data is `Q = 2 0 1 1 / 0 0 2 1`, `K = 1 1 0 0 / 0 1 1 0`, \
+   `V = 1 2 3 4 / 5 6 7 8`, so the four rows of the answer differ from each other by `4 · p` and \
+   by `1` across the head dimension — a transposition of either matrix would change every entry."
+  output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}"
+---
+QK = struct{.q (compute.Buf Float), .k (compute.Buf Float)}
+Scored = struct{.s (compute.Buf Float)}
+ParS = struct{.n Int, .keys Int, .dim Int, .in QK, .out Scored}
+ArgS = struct{.n Int, .keys Int, .dim Int, .I QK}
+scores_raw = (k : ParS) => {
+  i = compute.range k.n
+  query = compute.row k
+  key = compute.col k
+  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.k, .at (key * k.dim + s(0) - 1)))) ~ "combine")
+  compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")))
+}
+scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+QSV = struct{.s (compute.Buf Float), .v (compute.Buf Float)}
+OutA = struct{.o (compute.Buf Float)}
+ParA = struct{.n Int, .dim Int, .keys Int, .in QSV, .out OutA}
+ArgA = struct{.n Int, .dim Int, .keys Int, .I QSV}
+attend_raw = (k : ParA) => {
+  i = compute.range k.n
+  query = compute.row k
+  column = compute.col k
+  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) ~ "element")) ~ "combine")
+  m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
+  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element")) ~ "combine")
+  denominator = den (k.keys, 0.0 ~ "identity")
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element") * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column)))) ~ "combine", s(2))
+  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")))
+}
+attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+qm = (compute.buffer ([2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
+kk = (compute.buffer ([1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+vv = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
+scale = (compute.plrun scores ((ArgS)(.n 4, .keys 2, .dim 4, .I QK(.q qm, .k kk))) : Scored)
+out = (compute.plrun attend ((ArgA)(.n 8, .dim 4, .keys 2, .I QSV(.s scale.s, .v vv))) : OutA)
+compute.collect out.o : array{Float, 8}
