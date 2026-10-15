@@ -15,11 +15,12 @@
    `region_edges`: one value, two slots, and the language has no spelling for it). One-pass, \
    both folds are independent, so both edges **arrive** at one consumer and the shape **is** a \
    fan-in, and the region now holds all three **and merges** (`c9e65140`: a projection may read the \
-   fused step's slots and the invocation, so `count = int2float k.n` bridges). This example itself \
-   still refuses, for two reasons that are not the grouping's and not the extent's: its `eps` is a \
-   **runtime scalar** the launch fixes beside the extent (`ReadsARuntimeScalar` — naming runtime scalars \
-   as a third kind of free value is a decision nobody has taken yet), and even with the element not \
-   reading `eps`, the config still declares it, so `compose` refuses `ShapesDiffer`. softmax's diamond \
+   fused step's slots and the invocation, so `count = int2float k.n` bridges; `2fd3971f`: a runtime \
+   scalar is a third kind of free value, so `k.eps` is one). **This file drives three `plrun`s and \
+   records no graph**, so there is nothing here for the pass to merge — the shape it spells is what \
+   merges when it is driven through the graph path, measured with `tile ≡ body` **bit for bit** on the \
+   device, and the merged node's element frees are `d`, `n`, `r`, `r1` and `s0`, where `s0` is the \
+   runtime scalar. softmax's diamond \
    does merge (`d364f547`) because its producers are **chained** \
    — the sum reads the maximum — so all three nodes group. **The folds are \
    two kernels and not two folds in one body**: two folds in one body is a chain of two \
