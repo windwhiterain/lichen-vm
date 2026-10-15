@@ -88,7 +88,7 @@ shared with the reads:
 plus a counter at the top of `compile_parallel_fragment` and one `note_read` per `walk_role`
 buffer leaf, so every read is attributed to the kernel compile it belongs to.
 
-Running it on both programs (probe: `cargo test -p lichen-compute --test classfill_probe -- --nocapture`):
+Running it on both programs (the recorder §5 describes how to rebuild):
 
 ```
 CONTROL (root is `(scores, attend)`, passing)
