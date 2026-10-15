@@ -1,0 +1,126 @@
+---
+  order = "23"
+  compute = import "compute.lichen"
+  doc = "GEMV: `y[m] = Σ_k W[m · kdim + k] · x[k]` — a matrix times a **vector**, one lane per \
+    output element and the `k` fold **inside** the lane. It is the shape a token-by-token decoder \
+    runs (`examples/matmul.lichen`'s matrix × matrix is the training shape), and it is the \
+    companion of `examples/kvcache.lichen`: a decode step is a GEMV against the keys, a softmax, \
+    then a GEMV against the values.\n\n\
+    **One lane per output element, and that is a rule rather than a preference.** A \
+    `compute.write` names a slot of an output buffer that is **exactly as long as the launch's \
+    extent** (`crates/lichen-compute/src/compute.rs:5979`), and a write is **the value of an output \
+    position, not an effect** (`code-audit.md` P1-42, `wontfix:D17`), so one lane per `m` is a \
+    bijection from lane to slot and the only spelling whose answer does not depend on a schedule. \
+    The consequence is that this operator needs **no coordinates at all**: `m` is the lane index \
+    itself, `i = compute.range k.n`, so — unlike `examples/matmul.lichen` and \
+    `examples/attention.lichen` — this body never reads `compute.row` or `compute.col`.\n\n\
+    **The leaves are positional, and here the second one is free — measured, not assumed.** The \
+    **first** scalar leaf is the launch extent (`scalar_leaf_classes`, \
+    `crates/lichen-compute/src/compute.rs:1849`) and the **second** is what \
+    `compute.row`/`compute.col` divide by (`crates/lichen-compute/src/compute/body.rs:788-815`), so \
+    a new leaf goes **after** the divisor. Both rules are about *coordinates*, and this body has \
+    none: `second_extent` is reached only from `coordinate` (`body.rs:788`), so with no \
+    `row`/`col` read the second leaf is an ordinary runtime scalar wherever it sits. Three orders \
+    over one data set, measured: `.n, .spare, .kdim` answers \
+    `[14.0, 32.0, 50.0, 68.0]`; `.n, .kdim, .spare` answers `[14.0, 32.0, 50.0, 68.0]` — **the \
+    same**, which is why `kdim` is second here and third in `examples/matmul.lichen`; and \
+    `.kdim` **first** answers `[14.0, 38.0, 62.0]` with **no refusal**, because the first leaf is \
+    the extent whatever it is called: the launch then runs over `kdim = 3` with `n = 4` as the \
+    stride, and `x`'s fourth element reads past its own three and answers `0` \
+    (`compute.rs:6234`). **So the positional rule bites on the first leaf even for an operator \
+    with no coordinates, and does not bite on the second.**\n\n\
+    **An `@loop` fold counts down**, as RMSNorm's and `examples/matmul.lichen`'s do, so `k` runs \
+    `2, 1, 0` and the last addend is the `k = 0` product; over exact integers the order changes \
+    nothing, and it is stated because it is the order the body actually has.\n\n\
+    **Chaining, measured: a two-kernel decode step works today.** A `compute.plrun`'s output is a \
+    buffer a later `compute.plrun` names as an input, and this operator takes \
+    `examples/kvcache.lichen`'s output **unchanged**, because the cache's own layout *is* this \
+    operator's layout: `K[p][d]` row-major flattened is `W[m · kdim + k]` with `m` the position, \
+    `kdim` the head dimension and `k` the column. Append, then score one query over the whole \
+    cache, is therefore this file's kernel with `.w` = the cache's `.k`, and over the kvcache \
+    program it answers `[3.0, 7.0, 300.0, 0.0]` — **element for element what the same kernel over \
+    a literal flattened cache answers**. **The values half does not chain through this spelling**, \
+    and the reason is the transpose and nothing else: `y[d] = Σ_p a[p] · V[p · dim + d]` reads at \
+    `(s(0) - 1) * dim + i` rather than at `i * kdim + s(0) - 1`, because the cache is \
+    position-major and this operator's matrix is output-major. That body answers \
+    `[312.0, 414.0]` chained and `[312.0, 414.0]` direct. **So the decode step is two kernels and \
+    two address forms, not two kernels and one**: the keys half is this file's kernel as \
+    committed, and the values half is `examples/attention.lichen`'s own address form.\n\n\
+    **The device leg, measured on the RTX 3060, and it is refused by name for a reason inherent to \
+    the operator's shape.** The vector is `kdim` long and the count is `M`, so every GEMV with \
+    `kdim < M` — which is every decode-step use, where the reduction runs over the cache positions \
+    and the outputs are the head dimension — hands the device an input shorter than the run, and \
+    that is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`): *input buffer 1 \
+    holds 3 element(s) but the run covers 4 index/indices, so a lane would read past it*. With the \
+    vector padded to the count the same kernel **runs** on the RTX 3060 through the direct \
+    `compute.plrun` leg and answers `[14.0, 32.0, 50.0, 68.0]`, **element for element what `cpu` \
+    answers** — every entry an integer below `2^24`, so that is a bit-exact agreement and not a \
+    tolerance. This file therefore declares `cpu`, the backend the example suite runs, and on \
+    `cpu` the asymmetry is the one `examples/kvcache.lichen` measured: a short input answers `0` \
+    past its own end rather than refusing (`compute.rs:6234`).\n\n\
+    **The graph path refuses this operator twice, and the first refusal is its own shape.** From \
+    the CLI there is no graph leg at all — *compute.graph: this graph dispatches to a device, but \
+    no compute backend is installed* — so the rest is measured through a host program with the \
+    GPU backend installed. (a) The graph argument's buffers must sit **in `.in`**: *a parallel \
+    kernel's parameter holds a buffer outside `.in`/`.out` at position 2.0, and the ABI has no \
+    place for it*. (b) With that fixed the graph **records**, and the **run** is refused before any \
+    dispatch by `RaggedInputs` (`crates/lichen-graph-ir/src/run.rs:273`, `ragged_host` at \
+    `:520-529`): *node 0's inputs are not all the same length: 48 and 12*. Those are **payload \
+    bytes**, and **a GEMV's two inputs are never the same length** — `M · kdim` against `kdim`, \
+    equal only at `M = 1` — so this operator meets that check by construction. The check's own \
+    sentence, *a dispatch over `[0, count)` reads every input to `count`, so a lane would read past \
+    the shorter one*, is **false of this body**: it reads `x` at `[0, kdim)` and `W` at \
+    `[i · kdim, (i + 1) · kdim)`, both inside their own buffers. (c) Equalise the two lengths and \
+    the run reaches submit and is refused by the **class** arm instead: *the backend failed \
+    submitting a kernel node: instruction 0 mixed an integer and a float in one operation ... \
+    this is a malformed fragment rather than an unsupported shape*. That is the compile-order \
+    element-class defect `docs/notes/llm-operators.md` traces for attention's `attend` \
+    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`), and **a real operator hits it**. It \
+    is also why the eight-byte count `examples/kvcache.lichen` measured — *holds 4 element(s) but \
+    the run covers 8* — is not this operator's: **this one refuses earlier, on the class**, so a \
+    GEMV never reaches the payload-length count at all.\n\n\
+    **What a decode step still needs, beyond the walls the KV-cache example names.** The language \
+    has no iteration form (`for`, `while`, no loop keyword in any example), `@loop` is a fold \
+    *inside* one lane, and a `compute.call` inside a parallel body is refused with a `NodeId` \
+    (`code-audit.md` P1-39, `todo`). Those are known, and none of them is this operator's. Three \
+    more, each measured above. **(a) The graph leg** — the only path that consults the fusion \
+    floor — records a GEMV and then refuses to run it, on the ground that its two inputs differ \
+    in length, so nothing here reaches the floor. **(b) The device leg** refuses a GEMV whose \
+    reduction is shorter than its output, which is the decode shape; the operator stays on the \
+    host until a kernel may name a read set shorter than `count`. **(c) A position to advance.** \
+    A GEMV carries no position of its own — `t` belongs to the cache kernel — but the pair needs \
+    one to advance, and the language holds no mutable state between calls. Beyond those three, \
+    nothing: the arithmetic, the layout and the chaining are all expressible today, as measured.\n\n\
+    **One workaround, and it is a preference.** The lane enumerates the outputs directly, `m` \
+    being the lane index, and never takes a coordinate pair. It could have enumerated `M × 1` and \
+    taken `m` from `compute.row k`, which is the spelling `examples/matmul.lichen` and \
+    `examples/attention.lichen` use and which would have exercised the second extent — but `m` is \
+    the row of a one-row matrix, and asking for it costs an instruction per lane to learn \
+    something the lane already knows. It is **a preference**: the rule underneath is D17's, that a \
+    write is the value of a position and so one lane per output and one write per lane, and that \
+    rule is satisfied just as well by the coordinate spelling.\n\n\
+    **The arithmetic is exact, and the declared output is worked out by hand.** `W` is \
+    `1 2 3 / 4 5 6 / 7 8 9 / 10 11 12` (four rows of three, row-major flattened, because the \
+    language has no two-dimensional array) and `x` is `1 2 3`, so `y[0] = 1·1 + 2·2 + 3·3 = 14`, \
+    `y[1] = 4·1 + 5·2 + 6·3 = 32`, `y[2] = 7·1 + 8·2 + 9·3 = 50` and `y[3] = 10·1 + 11·2 + 12·3 = \
+    68`. Every element is an integer below `2^24` and `f32` represents every such integer exactly, \
+    so there is no approximation anywhere in this file: there is no `exp` and no `sqrt` in the \
+    body, and **nothing here is modelled** — unlike SiLU, softmax, LayerNorm and attention, whose \
+    declared values are the language's own transcendental sequences. The declared output is that \
+    arithmetic worked out by hand, not a transcription of what the program printed."
+  output = "[14.0, 32.0, 50.0, 68.0]: array{Float, 4}"
+---
+Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+Gout = struct{.y (compute.Buf Float)}
+Par  = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+Arg  = struct{.n Int, .kdim Int, .I Gin}
+gemv_raw = (k : Par) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+}
+gemv = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+w = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 12}) : (compute.Buf Float))
+x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+out = (compute.plrun gemv ((Arg)(.n 4, .kdim 3, .I Gin(.w w, .x x))) : Gout)
+compute.collect out.y : array{Float, 4}
