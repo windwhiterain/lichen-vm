@@ -5,23 +5,19 @@
    `var = Σ(x - mean)² / n` — the normaliser every transformer block opens with, and the \
    operator that makes **the mean and the variance two producers one consumer needs both**. \
    It is **three kernels in a diamond**: `Σx` and `Σx²` are two independent producers, and \
-   one normalise kernel reads **both**. **Neither spelling of this operator merges today**, \
-   and both refusals are named. **The one-pass identity `var = Σx²/n - mean²` is what makes it \
+   one normalise kernel reads **both**. **The diamond now forms and merges** (`f973544a`: a \
+   region is a weakly-connected component, where it used to be a forward-only adjacency scan \
+   that left two independent producers in sibling regions), **but this operator still refuses** \
+   — at a wall that is not the grouping's. **The one-pass identity `var = Σx²/n - mean²` is what makes it \
    a diamond at all** — the textbook two-pass form is mean-kernel → variance-kernel → \
    normalise, and there the mean is read by the variance kernel *and* by the normalise kernel, \
    which is `ProducerFeedsTwice` (`crates/lichen-runtime/src/fusion_claim/schema.rs:992`, in \
    `region_edges`: one value, two slots, and the language has no spelling for it). One-pass, \
    both folds are independent, so both edges **arrive** at one consumer and the shape **is** a \
-   fan-in — but a fan-in licence is only reached once the region *forms*, and two \
-   **independent** producers never do. `region_positions` \
-   (`crates/lichen-runtime/src/fusion_claim/schema.rs:793-820`) groups by a forward-only \
-   adjacency scan, so the second producer is fed by nothing earlier in the region and starts a \
-   new one. Measured on the RTX 3060, the two lines are `region 0 (nodes 0): refused: \
-   RegionIsNotAPair: the region holds 1 instance(s), and a merge is one producer and one \
-   consumer` and `region 1 (nodes 1, 2): refused: ProjectionNotBridged: the instance at 1's \
-   element projection did not bridge: the projection reads parameter leaf 0 of the kernel's \
-   own domain — the lane index — and a projection is one function of the fused step's slots`. \
-   The second \
+   fan-in, and the region now holds all three: measured on the RTX 3060 the pass says `region \
+   0 (nodes 0, 1, 2): refused: ProjectionNotBridged: the instance at 2's element projection did \
+   not bridge: the projection reads parameter leaf 0 of the kernel's own domain — the lane index \
+   — and a projection is one function of the fused step's slots`. That \
    line is **not** this operator's: RMSNorm's own pair, recorded the same way, refuses with it \
    verbatim. softmax's diamond does merge (`d364f547`) because its producers are **chained** \
    — the sum reads the maximum — so all three nodes group. **The folds are \

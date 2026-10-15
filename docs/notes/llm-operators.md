@@ -18,7 +18,7 @@ test file.
 | **RMSNorm** | **landed** (`419aab56`): a row-wise `Σ x²` reduction plus the rescale that reads it |
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
 | **softmax** | **landed** (`f8645274`) and its **textbook three-kernel form merges** (`d364f547`): the normalise step reads both `m` and `s`, with `m` also read by the sum — a **fan-in**, and a fan-in is licensed. It merges because its two producers are **chained** (the sum reads the maximum); a diamond whose producers are **siblings** does not group at all, which is LayerNorm's wall below. A **chain of any length** landed earlier (`3f8007cc`). The licence was restated once, in the two places it was stated: *"a region two edges **arrive at** is that shape exactly when every one of those inputs is named and proven: a `Between` per arrival, each over a slot of its own"* |
-| **LayerNorm** | **landed** (`807469f1`) as three kernels in a diamond — `Σx` and `Σx²` as two producers, one normalise reading both — **and neither spelling of it merges today**. It uses the **one-pass** identity `var = Σx²/n − mean²`, because the textbook two-pass form cannot be a diamond at all: there the mean is read by the variance kernel *and* the normalise kernel, which is `ProducerFeedsTwice` (one value, two slots, no spelling). One-pass earns two refusals instead — and **the first is the finding**: `region_positions` is a **forward-only adjacency scan**, so two *independent* producers are siblings, the second is fed by nothing, and it starts a new region — `RegionIsNotAPair: the region holds 1 instance(s)`, with the fan-in licence never reached. The second refusal, `ProjectionNotBridged` (the projection reads the lane index), is **not** LayerNorm's: RMSNorm's own pair refuses it verbatim. The answer is exact by hand (`1,2,3,4` ⇒ `Σx = 10`, `Σx² = 30`, `mean = 2.5`, `var = 1.25`, centred `±1.5, ±0.5`) except `sqrt`, which is the language's Newton iteration and is modelled from its own sequence, as SiLU's `exp` is. Measured on the RTX 3060 through `graphrun`: `[-3.0, -2.0, 1.0, 6.0]`, element for element what `cpu` answers, with and without the merge pass |
+| **LayerNorm** | **landed** (`807469f1`) as three kernels in a diamond — `Σx` and `Σx²` as two producers, one normalise reading both. Its region **now holds all three nodes** (`f973544a`) but it **still refuses**, at a wall that is **not** the grouping and **not** this operator's: `ProjectionNotBridged`, because `count = int2float k.n` puts the launch extent inside the marked `element` and the bridge refuses a domain leaf there — RMSNorm's own pair refuses it **verbatim**. It uses the **one-pass** identity `var = Σx²/n − mean²`, because the textbook two-pass form cannot be a diamond at all: there the mean is read by the variance kernel *and* the normalise kernel, which is `ProducerFeedsTwice` (one value, two slots, no spelling). The answer is exact by hand (`1,2,3,4` ⇒ `Σx = 10`, `Σx² = 30`, `mean = 2.5`, `var = 1.25`, centred `±1.5, ±0.5`) except `sqrt`, which is the language's Newton iteration and is modelled from its own sequence, as SiLU's `exp` is. Measured on the RTX 3060 through `graphrun`: `[-3.0, -2.0, 1.0, 6.0]`, element for element what `cpu` answers, with and without the merge pass |
 | **RoPE** | **landed** (`2f7214af`): `cos`/`sin` added to the language (definitions spliced by the lowerer, read by the bridge like `exp`/`sqrt`), then the pairwise rotation as three elementwise kernels. It is **one lane per element** — a rule, not a preference: a `.to` chain can fill both positions of a pair, but its outer link is contended and order is not a contract. Domain `|x| ≤ 8192`, bit-exact against a model; the clamp above that is a **silent `Select`**, so an unbounded angle gets `sin(8192)` |
 | **matmul** | **landed, naive and non-square** (`3fdedd3d`, the upload fix `08c15c45`): one lane per element of `C`, the `k` fold inside the lane, with the coordinates **named** by `compute.row`/`compute.col` (`459f3663`). The wall the measurement found was not the one this note predicted — it was the **upload width**: a device run uploaded `count × element` and zeroed the tail, so a read set that was not a prefix of its buffer silently answered `0`, and for `m×K · K×n` the device's two length rules together admitted **only `m = K = n`** (a non-square `2×3 · 3×2` answered `[25, 28, 28, 32]` against the CPU's `[58, 64, 139, 154]`, silently, and a body with **no `@loop`** disagreed identically, which ruled out a lowering bug). **That is now fixed**: a host input is uploaded at its **own length** (the invariant is `[0, len)`, the padding past `len` filled on the device), so `2×3 · 3×2` answers what the CPU answers, element for element, and `examples/matmul.lichen` is committed **non-square** for that reason. What remains, in order: the host still cannot see the body's read set, so a body reaching **past its buffer** while the count is inside is an out-of-bounds device read (the silent-zero region shrank from `[count, padded)` to `[len, padded)` rather than closing), and a host input **shorter than the count** is refused by name; then the **workgroup geometry** (a real two-dimensional workgroup, a row-shaped `Shared` exchange). **An operator's shape can now be a parameter** (`c92b6471`): a recorded config carries the first scalar leaf as the extent and **every other leaf for what it is, at any depth** — so `K` no longer has to be a literal — with one limit: a `Float` leaf can only be a literal until the graph's value table admits a float |
 | **attention** | behind the matmul wall and the softmax licence — the licence is now there (`d364f547`), so matmul's plumbing is what is left |
@@ -244,18 +244,30 @@ need a node-local producer for `r`.
   most one runtime scalar, then the buffers*. What is left is the language's **spelling** and the
   **workgroup geometry**; the proposal, its sites and its plan are
   [two-dimensional-launch](two-dimensional-launch.md). **This is the only wall left before attention.**
-  (2) **Fan-in** — **the licence is done** (`d364f547`), together with chains (`3f8007cc`), **but its
-  reach is narrower than the licence reads**. `region_positions` (`schema.rs:793-820`, the grouping at
-  `:808-813`) is a **forward-only adjacency scan**: a node joins the current region only if a node
-  *already in it* feeds it. Two **independent** producers are therefore **siblings** — the second is fed
-  by nothing, starts a new region, and the fan-in licence is **never reached** (`RegionIsNotAPair: the
-  region holds 1 instance(s)`). Softmax's diamond groups only because its producers are **chained** (the
-  sum reads the maximum); `chain_merge.rs:473`'s fan-in is **hand-wired**, which is how it dodges the
-  scan, so the licence has never been exercised by a sibling diamond on a real path. **The fix is the
-  grouping, not the licence**: a region should be a **weakly-connected component** of the producer/
-  consumer relation, and every downstream check (`region_edges`, the per-input `Between`,
-  `ElementWithoutProducer`) already speaks a fan-in. LayerNorm (`807469f1`) is the operator that proves
-  it: one-pass refused by the grouping, two-pass refused by `ProducerFeedsTwice`.
+  (2) **Fan-in** — **the licence is done** (`d364f547`), with chains (`3f8007cc`), and **the grouping
+  now reaches it** (`f973544a`). The reach used to be narrower than the licence read: `region_positions`
+  grouped by a **forward-only adjacency scan**, so two **independent** producers were **siblings** — the
+  second was fed by nothing already in the region, started a new region, and the licence was never
+  reached (`RegionIsNotAPair: the region holds 1 instance(s)`). Softmax's diamond grouped only because
+  its producers are **chained** (the sum reads the maximum), and `chain_merge.rs`'s fan-in was
+  **hand-wired**, so a sibling diamond had never been exercised on a real path. A region is now a
+  **weakly-connected component** of the producer/consumer relation — an unclaimed node is still a
+  boundary, and inside a maximal run of claimed nodes one backwards sweep through a value→producer map
+  with union-find (earlier root winning, so a component is named by its earliest node) is **linear in the
+  reads**. **A third wall sat between the grouping and the merge**, and `region_merge.rs`'s `shape()`
+  owned it: with the grouping installed the region held three instances and `shape()` still refused
+  `RegionIsNotAPair`, so the licence was reached and then dropped. It now accepts a **deliberately
+  narrow** predicate — every node but the last feeds the last, and the last reads two or more — so a
+  **deeper tree still refuses rather than merging weakly**, and `chain`/`fan_out` are still decided
+  first. Measured on the device: a sibling diamond's recorded and merged answers are **bit for bit**
+  equal, and the `+1.0 → +10.0` counterfactual inside the composed body answered `(x[i] − 10)/40` — a
+  number no recording computes — so the merged node is what dispatched.
+  **What still blocks LayerNorm** (`807469f1`) is therefore *not* the grouping: its region now holds all
+  three nodes and refuses `ProjectionNotBridged`, because `count = int2float k.n` puts the launch extent
+  inside the marked `element` and the bridge refuses a domain leaf there
+  (`crates/lichen-fusion-bridge/src/refusal.rs:105-106`). RMSNorm's own pair refuses it **verbatim**, so
+  it is a bridge question about naming the lane index in a projection, not an operator's. The two-pass
+  spelling stays `ProducerFeedsTwice`.
   The licence was restated **once, in the two places it was stated** (`licence()` and
   `RegionSchema::off_chain_node`): a region two edges *arrive at* is served "exactly when **every one of
   those inputs is named and proven**: a `Between` per arrival, each over a slot of its own". Per input
