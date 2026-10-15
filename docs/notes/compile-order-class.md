@@ -201,3 +201,69 @@ investigation is closed, and the defect stays pinned by the ignored assertions i
 of `Node::value` named in *What proved it*, share one ordered log with the `walk_role` reads and a
 per-`compile_parallel_fragment` counter, and run the two programs — the same write appears in both, only
 its position differs (CONTROL 7422/7447 against a compile at 7854; STEP 8865 against 7961).
+
+## 6. The minimal reproduction set
+
+**The smallest program that shows it** is one kernel, one `.in` buffer, one `.out` buffer, one read, one
+write — no loop, no claim, no coordinate, no second read:
+
+```lichen
+In = struct{.d (compute.Buf Float)}
+OutE = struct{.e (compute.Buf Float)}
+Par = struct{.n Int, .in In, .out OutE}
+raw = (lane : Par) => {
+  compute.write ((compute.Write _)(.to lane.out.e, .at 0, .value compute.read ((compute.Read _)(.from lane.in.d, .at 0))))
+}
+k = compute.parallel raw "gpu"
+Arg = struct{.n Int, .I In}
+GArg = struct{.n Int, .in In}
+built = compute.graph ((a : GArg) => {
+  (compute.plrun k ((Arg)(.n a.n, .I a.in)) : OutE)
+})
+built
+```
+
+It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-compute/tests/`
+`buf_element_class_recorded.lichen` (shows it) and `buf_element_class_direct.lichen` (does not), whose
+kernel, parameter and buffers are **byte-identical** — **the root expression is the only difference**
+(`k` against the `compute.graph` step). Each is its own test binary, so a single process's compile order
+cannot be what decides either answer. One command shows the defect, its two assertions
+`#[ignore]`d **with the reason** so the suite stays green; flipping them is the fix's acceptance:
+
+```
+cargo test -p lichen-compute --test buf_element_class_recorded -- --ignored
+left: (1, [Int])   right: (1, [Float])
+left: [Int]        right: [Float]
+```
+
+**What the reduction removed, each measured**: the claims (`~ "combine"`, `~ "identity"`, `~ "element"`,
+`~ "claim:Reduction(…)"`), `compute.range` and `.at` (a literal index does), the second extent, the
+**`@loop` recursion entirely**, and **even reading the input buffer** — the defect survives all of them.
+The backend is irrelevant (`"cpu"` shows it too). Two reductions are blocked by **contracts, not by the
+defect**, and were not worked around: moving the step's buffer outside `.in`/`.out`, and dropping the
+`.n` extent. Two spellings make it **vanish**, and they matter to the owner:
+`compute.P (compute.KT Float)` (applying them is itself a unification that decides the class first — a
+**workaround, not a reduction**), and **any float literal in the body** (`2.0 * …`). That second one is
+the sharpest form of the propagation gap: **the fact is reachable from the program, just not from the
+clone the walk reads.**
+
+**The statement to hand to the type system.** *Known*: `checker/lambda.rs:316` builds one node for the
+`compute.Buf Float` application and the class is known there — the argument's value node is the shared
+`Float` node and its cell holds `TypeValue(TypeFloat)`; this is asserted, and it **passes for the failing
+program**, because every `Buf` element cell in the module reads `Float` **once the module has run**.
+*Needed*: `compute.rs:2013-2017` reads those cells through `low_type_of_slot`
+(`shape.rs:858-877`) to build the fragment's `input_classes`/`output_classes` — those reads *are* the
+classes the fragment declares. *Missing*: the checker never builds the type **term**; the VM materialises
+it by **cloning the frozen template** (`static_module/apply.rs:112`), and the carry rule there
+(`:129-140`, `apply-clone-ownership.md` §2) carries a frozen node's value only `if carried` — **a
+definition carries no answer** — so the clone arrives with an empty value half, and the write that decides
+the class is the kernel's **own parameter apply**, which runs *after* the walk. So: **the element class is
+declared, checked and decided, but the node that carries it to the compiler is a clone the checker never
+sees, and the write that would fill it belongs to a later phase — no site both knows the class and holds
+the cell.**
+
+**Two contracts a fix must respect**, both already decided: **D11** removed `Module::node_shape`/
+`set_node_shape`, because a per-node low-type accessor is a second reader that can disagree with
+`refine_class_low_type`; and `a68e3320` deleted `Module::class_value` after measuring 817 corpus programs,
+which closes the class route (and matches this note's own measurement that it was `None` at the failing
+read). There is **no `wontfix:D<n>` line over the classing**.
