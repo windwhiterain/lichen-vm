@@ -1,0 +1,11 @@
+---
+  compute = import "compute.lichen"
+---
+In = struct{.d (compute.Buf Float)}
+OutE = struct{.e (compute.Buf Float)}
+Par = struct{.n Int, .in In, .out OutE}
+raw = (lane : Par) => {
+  compute.write ((compute.Write _)(.to lane.out.e, .at 0, .value compute.read ((compute.Read _)(.from lane.in.d, .at 0))))
+}
+k = compute.parallel raw "gpu"
+k

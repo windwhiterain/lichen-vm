@@ -14,6 +14,75 @@ pub use lichen_language::testing::{
     type_is_undecided, usize_array, usize_of, values_eq,
 };
 
+/// The one fragment a module compiled, whatever value of its own the root carries.
+///
+/// # Invariant
+///
+/// The multiset, not a named kernel: which kernel compiled first is a property of the
+/// module and not of the source, so this returns the fragment rather than the kernel it
+/// came from, and refuses a module that holds more than one rather than picking.
+pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFragment {
+    use lichen_compute::fusion_claim::{fragment_of, kernel_id};
+
+    let mut found: Vec<lichen_kernel_ir::KernelFragment> = Vec::new();
+    let mut seen: Vec<usize> = Vec::new();
+    for (id, _node) in module.nodes.iter() {
+        let Ok(kernel) = kernel_id(module, id) else {
+            continue;
+        };
+        if seen.contains(&kernel) {
+            continue;
+        }
+        let Ok(fragment) = fragment_of(kernel) else {
+            continue;
+        };
+        seen.push(kernel);
+        found.push(fragment);
+    }
+    assert_eq!(
+        found.len(),
+        1,
+        "the module compiles exactly one parallel kernel: {found:?}"
+    );
+    found.pop().expect("one fragment was just counted")
+}
+
+/// The `compute.Buf` element slots a module holds, and what each one reads.
+///
+/// # Invariant
+///
+/// This is `walk_role`'s read restated: a `Buf`-shaped type term's `.element` field
+/// through `low_type_of_slot`, which is the call the element class is taken by.
+pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(String, String)> {
+    use lichen_highlevel::shape::{TypeRef, field_names, field_type, low_type_of_slot};
+    use lichen_lowlevel::AnyNodeId;
+
+    let mut reads: Vec<(String, String)> = Vec::new();
+    for (id, _node) in module.nodes.iter() {
+        let slot = AnyNodeId::Dynamic(id);
+        let Some(ty) = [TypeRef::Term(slot), TypeRef::Slot(slot)]
+            .into_iter()
+            .find(|ty| field_names(module, *ty).is_some())
+        else {
+            continue;
+        };
+        if !field_names(module, ty)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|name| *name)
+            .eq(["native", "element"])
+        {
+            continue;
+        }
+        let read = match field_type(module, ty, 1) {
+            Some(element) => format!("{:?}", low_type_of_slot(module, element)),
+            None => "<no element field>".to_string(),
+        };
+        reads.push((format!("{id:?}"), read));
+    }
+    reads
+}
+
 /// Compile and run `source` (no imports, no store).
 pub fn evaluate(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
     lichen_language::testing::evaluate::<LangProgram>(source)
