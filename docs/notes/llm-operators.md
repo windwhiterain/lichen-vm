@@ -25,6 +25,7 @@ test file.
 | **KV-cache append** | **landed** (`1f79786d`): one `compute.parallel` kernel over `count = capacity · dim`, one lane per cache element, writing **both** the key and the value row back at `position · dim + column` — a **bijection** (8 lanes → 8 slots), so no lane contends and the write address is genuinely computed rather than the lane's own index (lane 1 writes slot 2, lane 4 slot 1). Exact integers throughout, **nothing modelled**. It rewrites the whole cache because **a write past the count is dropped in silence** — see the first finding below, which is what a one-lane-per-column append actually hits. The graph path **records** it (1 node, the extent plus all three runtime scalars) but **refuses the run** at submit; the direct device leg agrees with `cpu` element for element once the incoming row is padded |
 | **GEMV (the decode matmul)** | **landed** (`da584de5`): `y[m] = Σ_k W[m·kdim + k] · x[k]`, one lane per output element, the `k` fold in the lane, leaves `.n` and `.kdim`, declaring `[14.0, 32.0, 50.0, 68.0]` — exact integers, **nothing modelled**. **It chains with the KV-cache operator as it stands**: `K[p][d]` row-major flattened *is* this operator's matrix with `m` = position, so append-then-score-one-query is this kernel unchanged and answers `[3.0, 7.0, 300.0, 0.0]`, element for element the literal-cache run — while the **values** half needs a second address form (the cache is position-major, this operator output-major), and the cache must be the whole `capacity · dim` buffer, which is exactly what the KV-cache operator rewrites. **Two of the three remaining walls are measured here**: the device leg refuses a GEMV whose reduction is shorter than its output (*"input buffer 1 holds 3 element(s) but the run covers 4 index/indices"*, `dispatch.rs:219`), and the graph leg refuses it **by construction** — see the finding below |
 | **one decode step, chained** | **landed** (`98ddba9b`): five `compute.parallel` kernels on `cpu` — the KV-cache append, a GEMV scoring one query against the **appended** keys, softmax's row max and denominator, and attention's `acc` nest over the appended values — declaring `[8.888384, 10.773098]`, and **four of the five are a landed kernel's body with nothing but the binder and parameter renamed**. Exact: the append, the four dots `1, 3, 1, 0`, the maximum `3.0`, the offsets `−2, 0, −2, −3`, `exp(0) = 1.0` (the polynomial at zero is `1.0` and seven squarings of `1.0` are `1.0`), and the weighted sum *given* the weights. Modelled: `exp(−2)`, `exp(−3)` and everything downstream, from the language's own sequence re-implemented in `f32` outside the workspace — a reference `eˣ` in `f64` puts the same chain at `[8.8883843, 10.7731007]`, so the degree-10 Taylor costs about half an ulp and three. **Only the last stage had to change, and the change is visible in the answer** — see the finding below |
+| **a decode loop** | **landed** (`cbe4feb1`): two decode steps through a **recursive lichen function**, the six-kernel chain appearing **once** (the guard is `s(0) == 2`, the base arm returns the state), and the position **computed inside the recursion** as `s(0) + 2` rather than handed in. It declares a three-part answer — both steps' outputs end to end, the **last step's output alone** (the only one anything outside the recursion can name), and the **trip count** — and the CLI prints all three, `([8.888384, 10.773098, 11.235222, 13.9678135], [11.235222, 13.9678135], 2)`. Exact where the arithmetic is (the appends, the dots, the maxima, the offsets, `exp(0) = 1.0`, the weighted sums given the weights), `exp` modelled from the language's own sequence; **step zero reproduces `decode.lichen`'s declared row and its documented weights exactly**, which is what makes the model trustworthy for step one |
 
 ## What RMSNorm measured
 
@@ -223,6 +224,33 @@ need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
 
+- **The loop's bounds, measured — and the audit's own cost line refuted** (`cbe4feb1`). **A launch does
+  follow a loop-carried value**: a loop-carried **buffer** as input answers `[1, 2, 1, 2, 0, 0, 0, 0]`
+  (positions 0 then 1), the trip count itself as `.t s(0)` answers the same, and `.t (s(0) + 1)` answers
+  `[0, 0, 1, 2, 1, 2, 0, 0]` (positions 1 then 2) — *"each launch got its own value; a static read of the
+  cell could not produce that"* — so `decode.lichen`'s literal `2` is a **choice, not a wall**. And the
+  audit's cost line ("nothing else in the program can see the trip count") is **wrong**: the count **is**
+  the declared third entry. What is true instead is narrower and cuts the other way — the count is
+  **decided by a literal in the recursion's own body**, and replacing that literal with a top-level `Int`
+  binding is **refused** (*"table lookup missed — no entry for this key"*) while the literal-only control
+  runs: **the loop can be asked how far it got; it cannot be told what to do.**
+- **Three bounds on the recursion, two of them silent.** (1) **One level removed, it stops.** A helper whose
+  parameter is a buffer and whose **every leaf is a literal** collects `raw none` — no error, no refusal, no
+  report line (with a scalar leaf it is refused **loudly**: *"input buffer 0 holds Float elements, but this
+  kernel reads that position as Int"*), which is why the loop's chain was deliberately **not** factored
+  into a named `step` function: *"the worst of the three, since nothing says so."* (2) **The extent leaf
+  never follows the recursion**: `.n (s(0) * 8)` collects an **empty buffer, silently** — every other leaf
+  follows, and the one that decides how many lanes run does not. (3) **A `@gc` block inside the recursion
+  panics** (`invalid SlotMap key used`, `crates/lichen-lowlevel/src/equality.rs:823`) — measured, worked
+  around, not diagnosed.
+- **What a real decode loop still lacks.** **A sampler is a wall**: `ln` does not exist, and its range
+  reduction wants `floor`, a shift or a bitcast — **none of which the primitive set has**
+  (`floating-point.md:489-495`). **A stop condition is a wall** (item 1 above): a loop that cannot be told
+  when to stop can **unroll but not generate**. **A growing cache is mostly work** with one wall inside it —
+  an **extent that follows the state** is not writable, so a fixed large extent plus masking is the only
+  spelling and it costs the lanes. **Per-token rows are work** (both steps append the same row, because
+  `nk`, `nv` and `q` are top-level constants). And **`wontfix:D9`'s depth is the obvious thing to hit**: the
+  recursion here is depth 2, and a loop of hundreds of steps is unmeasured.
 - **A chain is possible, and its cost is one division's placement.** Four of `decode.lichen`'s five stages
   are a landed kernel byte-for-byte (softmax's two) or with only the binder and parameter renamed (the
   append and the score). **Only the last stage changed**, and it is not free: hoisting the softmax out of

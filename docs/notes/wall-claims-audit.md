@@ -260,6 +260,22 @@ defect here, because [code-audit](code-audit.md)'s `wontfix:D17` is a contract a
 write **is** — *the value of an output position and not an effect* — and a write to an input is
 exactly the spelling that sentence declines.
 
+## Corrigendum — §3's cost line, refuted by the loop that followed it
+
+The example this audit's §3 made possible (`examples/decode_loop.lichen`, `cbe4feb1`) refutes the cost
+recorded above: **the trip count is observable from outside the recursion** — it is the declared third
+entry of that program's answer, `2`, alongside the transcript and the last step's row. What is true
+instead is narrower and cuts the other way: the count is **decided by a literal in the recursion's own
+body** (`s(0) == 2`), and replacing that literal with a top-level `Int` binding is **refused** (*"table
+lookup missed — no entry for this key"*) against a control whose only difference is the literal, which
+runs. **The loop can be asked how far it got; it cannot be told what to do.**
+
+The same slice also answered §4's open question **yes** and bounded it: a launch **does** follow a
+loop-carried value — a buffer, the trip count itself, or a computed `s(0) + 1` each reached their own
+launch — but **one level removed it stops in silence** (a helper whose every leaf is a literal collects
+`raw none`), and **the extent leaf never follows** (`.n (s(0) * 8)` collects an empty buffer, silently).
+See `docs/notes/llm-operators.md`'s decode-loop findings for the measurements.
+
 ## §7 What would change which wall needs a decision
 
 1. **Wall 2 needs no decision.** A decode loop is expressible; the roadmap rows that plan for one
