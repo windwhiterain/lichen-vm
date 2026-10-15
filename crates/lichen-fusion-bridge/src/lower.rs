@@ -63,13 +63,13 @@ pub fn projection(
     walk.value(marked)
 }
 
-/// The two leaves of a parallel domain that spell `the invocation`.
+/// The leaves of a parallel domain that spell `the invocation`, and the ones between them.
 ///
 /// # Invariant
-/// **The domain's first and last leaves, and nothing between them.** A parallel fragment's
-/// shape is `(config, index)`, so leaf `0` is the extent the ABI's first scalar states and the
-/// last is the index [`KernelFragment::scalar_leaves`] names. A runtime scalar lies between the
-/// two and is **not** one of them, so a projection reading one is refused.
+/// **The domain's own order: `extent`, the runtime scalars, `index`.** Leaf `0` is the extent the
+/// ABI's first scalar states and the last the index [`KernelFragment::scalar_leaves`] names. **A
+/// runtime scalar is one value for every lane of the launch**, so a projection is one function of
+/// it in every lane and reads it at a slot of its own, named by its ordinal.
 #[derive(Debug, Clone, Copy)]
 struct Invocation {
     /// The leaf the launch extent arrives as.
@@ -117,17 +117,20 @@ impl Walk<'_> {
     /// The symbolic slot a value a block receives stands for.
     ///
     /// # Invariant
-    /// The entry block's parameters are the kernel's own domain: a **scalar** fragment's leaves
-    /// are its slots, which the roles name, and a **parallel** fragment's first and last leaves
-    /// are `the invocation`, which a projection may read. A runtime scalar leaf between them is
-    /// refused by name. Every other block's parameters are a loop's carried state, one slot, so
-    /// reading two is refused.
+    /// The entry block's parameters are the kernel's own domain: a **scalar** fragment's leaves are
+    /// its slots, which the roles name, and a **parallel** fragment's are the launch's own — the
+    /// extent, a slot per runtime scalar, then the invocation index, and a leaf past the table is
+    /// refused. Every other block's parameters are a loop's carried state, one slot, so reading two
+    /// is refused.
     fn parameter(&mut self, block: usize, index: u32) -> Result<Expr, BridgeRefusal> {
         if block == self.entry {
             let Some((datum, producer)) = self.reads.parameter_leaves else {
                 return match self.invocation {
                     Some(invocation) if index == invocation.extent => {
                         Ok(Expr::Variable(Variable::EXTENT))
+                    }
+                    Some(invocation) if index > invocation.extent && index < invocation.index => {
+                        runtime_scalar(index)
                     }
                     Some(invocation) if index == invocation.index => {
                         Ok(Expr::Variable(Variable::INVOCATION))
@@ -296,7 +299,7 @@ impl Walk<'_> {
 /// The invocation a fragment's domain spells, when the fragment is dispatched over one.
 ///
 /// # Invariant
-/// **A parallel fragment's first and last leaves, and only those**: [`KernelFragment::scalar_leaves`]
+/// **The extent, the runtime scalars between, and the index**: [`KernelFragment::scalar_leaves`]
 /// is the domain's leaves but the index, so a fragment that has one has the extent at `0` and the
 /// index at that count. A **scalar** fragment has none — its shape is its own domain and
 /// `scalar_leaves` is `0` — so its leaves stay the roles' business.
@@ -306,6 +309,17 @@ fn invocation_of(fragment: &KernelFragment) -> Option<Invocation> {
         extent: 0,
         index: leaves as u32,
     })
+}
+
+/// The slot one runtime scalar leaf is read as, or the refusal past the table.
+///
+/// # Invariant
+/// The leaf's own ordinal is its slot: leaf `1` is [`Variable::runtime_scalar`]'s `0`, beside the
+/// extent, so the spelling moves with the ABI rather than with a count this crate kept.
+fn runtime_scalar(index: u32) -> Result<Expr, BridgeRefusal> {
+    Variable::runtime_scalar(index.saturating_sub(1) as usize)
+        .map(Expr::Variable)
+        .ok_or(BridgeRefusal::ReadsARuntimeScalar { index })
 }
 
 /// The value a float instruction's bits denote.

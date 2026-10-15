@@ -1,10 +1,10 @@
 //! A projection may read `the invocation`: the launch's extent and the invocation's index.
 
-use lichen_fusion::{Expr, Variable};
+use lichen_fusion::{Expr, RUNTIME_SCALAR_INPUTS, Variable};
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneWidth, ScalarClass,
-    TargetFacts, ValueId,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneWidth,
+    ScalarClass, TargetFacts, ValueId,
 };
 
 /// A parallel fragment with `runtime` runtime scalars beside the extent, marked at `leaf`.
@@ -81,24 +81,92 @@ fn the_invocation_index_is_a_slot_at_the_last_leaf() {
     assert_eq!(expression, Expr::Variable(Variable::INVOCATION));
 }
 
-/// A **runtime scalar** is neither half, and is refused by name.
+/// A **runtime scalar** is a third kind of free value, one slot per ordinal beside the extent.
 ///
 /// # Invariant
-/// Leaf `0` is the extent and leaf `2` the index of a two-scalar launch, so leaf `1` — the value
-/// the launch fixes *beside* the extent, `eps` — is the one leaf no slot names.
+/// **It is one value for the whole launch**, so a projection that reads it is still one function
+/// per lane and needs no role of its own — the licence the extent already had, widened to the
+/// leaves between the extent and the index. Leaf `1` is [`Variable::RUNTIME_SCALAR`] and leaf `2`
+/// the slot after it, so the ordinal is the leaf's own place in the domain.
 #[test]
-fn a_runtime_scalar_beside_the_extent_is_refused_by_name() {
-    let fragment = parallel_over(1, 1);
-    let refusal = read(&fragment).expect_err("no slot names a runtime scalar");
-    assert_eq!(refusal, BridgeRefusal::ReadsARuntimeScalar { index: 1 });
+fn a_runtime_scalar_beside_the_extent_is_a_slot_of_its_own() {
+    let first = parallel_over(1, 1);
+    let expression = read(&first).expect("a runtime scalar is a slot");
+    assert_eq!(expression, Expr::Variable(Variable::RUNTIME_SCALAR));
+    let second = parallel_over(2, 2);
+    let expression = read(&second).expect("each runtime scalar is a slot of its own");
+    assert_eq!(
+        expression,
+        Expr::Variable(Variable::runtime_scalar(1).expect("the table holds the second")),
+        "the second runtime scalar is a different slot, not the first re-read"
+    );
+}
+
+/// A runtime scalar past the number the symbolic language names is refused by name.
+///
+/// # Invariant
+/// **The bound is a capability rather than a licence**: a fragment reading more runtime scalars
+/// than the table holds is refused rather than admitted with two of them read as one.
+#[test]
+fn a_runtime_scalar_past_the_named_table_is_refused_by_name() {
+    let past = RUNTIME_SCALAR_INPUTS as u32 + 1;
+    let fragment = parallel_over(past as usize + 1, past as usize);
+    let refusal = read(&fragment).expect_err("the table does not reach this leaf");
+    assert_eq!(refusal, BridgeRefusal::ReadsARuntimeScalar { index: past });
     let message = refusal.to_string();
     assert!(
         message.contains("runtime scalar the launch fixes beside its extent"),
         "names what the leaf is: {message}"
     );
     assert!(
-        message.contains("one function of the fused step's slots and the invocation"),
-        "and restates the licence the refusal enforces: {message}"
+        message.contains(&format!(
+            "past the {RUNTIME_SCALAR_INPUTS} the symbolic language names"
+        )),
+        "and why it has no slot: {message}"
+    );
+}
+
+/// A **scalar** fragment's own leaf that the roles name no producer's value at is still refused.
+///
+/// # Invariant
+/// **The widening is about a parallel domain only.** A scalar fragment's parameters *are* its
+/// slots, so leaf `2` of a three-leaf scalar domain names no value at all and reading it is not a
+/// third kind of free value — it is none.
+#[test]
+fn an_unnamed_leaf_of_a_scalar_fragment_is_still_refused_by_name() {
+    let fragment = fragment(
+        3,
+        &[
+            FlatOp::Instr(KernelInstr::Const(
+                ScalarClass::Float,
+                1.0f32.to_bits() as i64,
+            )),
+            FlatOp::Read(2),
+            FlatOp::Instr(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul)),
+        ],
+        KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Float),
+            KernelShape::Scalar(ScalarClass::Float),
+            KernelShape::Scalar(ScalarClass::Float),
+        ]),
+    );
+    let marked = fragment.body.blocks[fragment.body.entry]
+        .instrs
+        .last()
+        .copied()
+        .expect("the body computes something");
+    let refusal = projection(&fragment, marked, ReadRoles::parameters(0, 1))
+        .expect_err("no slot names a scalar fragment's third leaf");
+    assert_eq!(refusal, BridgeRefusal::ReadsAnUnnamedLeaf { index: 2 });
+    let message = refusal.to_string();
+    assert!(
+        message.contains("a scalar kernel's own domain"),
+        "names which domain it was: {message}"
+    );
+    assert!(
+        message
+            .contains("a projection is one function of the fused step's slots and the invocation"),
+        "and restates the licence a scalar projection still answers to: {message}"
     );
 }
 

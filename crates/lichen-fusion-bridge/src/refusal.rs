@@ -24,8 +24,7 @@ pub enum BridgeRefusal {
         /// The parameter leaf the projection read.
         index: u32,
     },
-    /// The marked value reads a runtime scalar of the fragment's own domain — a value the launch
-    /// fixes beside its extent.
+    /// The marked value reads a runtime scalar of the fragment's own domain past the count named.
     ReadsARuntimeScalar {
         /// The parameter leaf the projection read.
         index: u32,
@@ -115,9 +114,9 @@ impl fmt::Display for BridgeRefusal {
             BridgeRefusal::ReadsARuntimeScalar { index } => write!(
                 formatter,
                 "the projection reads parameter leaf {index} of the kernel's own domain, which is a \
-                 runtime scalar the launch fixes beside its extent — not the extent and not the \
-                 invocation — and a projection is one function of the fused step's slots and the \
-                 invocation"
+                 runtime scalar the launch fixes beside its extent, and leaf {index} is past the \
+                 {count} the symbolic language names — so there is no slot to read it as here",
+                count = lichen_fusion::RUNTIME_SCALAR_INPUTS
             ),
             BridgeRefusal::ReadsABuffer => write!(
                 formatter,

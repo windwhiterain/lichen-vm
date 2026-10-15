@@ -11,8 +11,9 @@ use std::collections::HashMap;
 
 use crate::compose::{
     Renumber, branch_targeting, buffer_reads, compact, copy_cone, duplicated_mark,
-    first_slice_ordinal, lane_dependent, mapped_terminator, read_address, shifted_past,
-    shifted_write_positions, write_edge, write_sites,
+    first_slice_ordinal, landed_slot, lane_dependent, mapped_terminator, merged_scalars,
+    read_address, shifted_past, shifted_write_positions, splice_runtime_scalars, spliced_scalars,
+    write_edge, write_sites,
 };
 use crate::{
     Barrier, BasicBlock, ComposeRefusal, Cone, KernelFragment, KernelMark, KernelRoles,
@@ -124,6 +125,19 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
     }
 
     let mut body = first.body.clone();
+    // **The runtime scalars are spliced into the merged body's own domain.**
+    let spliced: Vec<usize> = edges.iter().map(|edge| edge.spliced).collect();
+    let Some(total) = merged_scalars(&spliced) else {
+        let offender = edges
+            .iter()
+            .find(|edge| edge.spliced != 0 && edge.spliced != spliced[spliced.len() - 1])
+            .map_or(edges[0].fragment, |edge| edge.fragment);
+        return Err(ComposeRefusal::ShapesDiffer {
+            producer: first.param_shape.clone(),
+            consumer: offender.param_shape.clone(),
+        });
+    };
+    splice_runtime_scalars(&mut body, total);
     // **The first producer's store goes**: its buffer is not an output of the merged fragment.
     for block in &mut body.blocks {
         block.instrs.retain(|&value| value != edges[0].stores[0]);
@@ -133,7 +147,7 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
     let mut input_classes = first.input_classes.clone();
     let mut slices = first.slices.clone();
     let mut blocks_base = body.blocks.len();
-    let first_parameters = first.body.parameters();
+    let first_parameters = body.blocks[body.entry].params.clone();
     // **Where each body's values landed**: a spliced producer's value is read through this.
     let mut renumbers: Vec<Option<Renumber>> = (0..edges.len()).map(|_| None).collect();
     for (index, edge) in edges.iter().enumerate().skip(1) {
@@ -148,7 +162,10 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
         // The body's values are renumbered past the first body's, less what is bound below.
         let mut renumber = Renumber::default();
         for (slot, &parameter) in consumer.body.parameters().iter().enumerate() {
-            renumber.bind(parameter, first_parameters[slot]);
+            renumber.bind(
+                parameter,
+                first_parameters[landed_slot(slot, edge.spliced, total)],
+            );
         }
         for &(read, _, _) in &edge.reads_absorbed {
             // The read's own id until the copy below replaces it, so it reserves no value of its own.
@@ -326,7 +343,7 @@ pub fn compose_fan_in(producers: &[Producer<'_>]) -> Result<KernelFragment, Comp
     compact(&mut body, &mut marks);
     let consumer = edges[edges.len() - 1].fragment;
     let fragment = KernelFragment {
-        param_shape: first.param_shape.clone(),
+        param_shape: consumer.param_shape.clone(),
         roles: KernelRoles::default(),
         body,
         inputs: ports,
@@ -364,6 +381,8 @@ struct Edge<'a> {
     reads_absorbed: Vec<(ValueId, usize, ValueId)>,
     /// The body's own stores, which the merged body drops.
     stores: Vec<ValueId>,
+    /// How many runtime scalars this body's domain splices into the first body's.
+    spliced: usize,
 }
 
 impl<'a> Edge<'a> {
@@ -379,12 +398,15 @@ impl<'a> Edge<'a> {
         if let Err(cause) = fragment.body.validate() {
             return Err(ComposeRefusal::ConsumerIsNotWellFormed { cause });
         }
-        if first.param_shape != fragment.param_shape {
-            return Err(ComposeRefusal::ShapesDiffer {
-                producer: first.param_shape.clone(),
-                consumer: fragment.param_shape.clone(),
-            });
-        }
+        let spliced = match spliced_scalars(&first.param_shape, &fragment.param_shape) {
+            Some(spliced) => spliced,
+            None => {
+                return Err(ComposeRefusal::ShapesDiffer {
+                    producer: first.param_shape.clone(),
+                    consumer: fragment.param_shape.clone(),
+                });
+            }
+        };
         if first.target != fragment.target {
             return Err(ComposeRefusal::TargetsDiffer {
                 producer: first.target,
@@ -401,7 +423,7 @@ impl<'a> Edge<'a> {
             });
         }
         let parameters = fragment.body.parameters();
-        if parameters.len() != first.body.parameters().len() {
+        if parameters.len() != first.body.parameters().len() + spliced {
             return Err(ComposeRefusal::ParameterCountsDiffer {
                 producer: first.body.parameters().len(),
                 consumer: parameters.len(),
@@ -495,6 +517,7 @@ impl<'a> Edge<'a> {
             reads,
             reads_absorbed,
             stores,
+            spliced,
         })
     }
 

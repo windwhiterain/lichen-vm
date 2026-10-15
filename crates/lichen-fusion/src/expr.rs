@@ -43,6 +43,13 @@ impl Variable {
     /// It is [`Self::producer`]'s `0`, because the name is the whole identity: a consumer of one
     /// producer reads the slot it always has, so a pair's canonical form does not move.
     pub const PRODUCER: Variable = Variable("r");
+    /// The launch's first runtime scalar `s_0`, the number it fixes beside its extent.
+    ///
+    /// # Invariant
+    /// It is [`Self::runtime_scalar`]'s `0` and **not** [`Self::PRODUCER`]: one is a constant the
+    /// launch supplies for every lane of it, the other a slot some producer forwarded, so a
+    /// projection that read both must not answer as one.
+    pub const RUNTIME_SCALAR: Variable = Variable("s0");
     /// The consumer reduction's rolling state `t`, the slot the loop carries.
     pub const CONSUMER_STATE: Variable = Variable("t");
     /// The repair function's own first argument `x`.
@@ -73,21 +80,38 @@ impl Variable {
     /// spelling — so the shape widens without moving anything a chain already read. `None` past
     /// [`FAN_IN_INPUTS`] rather than a name the table does not hold.
     pub const fn producer(ordinal: usize) -> Option<Variable> {
-        if ordinal < PRODUCERS.len() {
-            Some(PRODUCERS[ordinal])
+        if ordinal < FAN_IN_INPUTS {
+            Some(SLOTS[ordinal])
+        } else {
+            None
+        }
+    }
+
+    /// The `ordinal`-th runtime scalar the launch fixes beside its extent, or `None` past the
+    /// table.
+    ///
+    /// # Invariant
+    /// **The table's second run, spelled from `0`**, and disjoint from [`Self::producer`]: a
+    /// runtime scalar is one value the launch supplies for every lane rather than a slot some
+    /// producer forwarded, so `0` is [`Self::RUNTIME_SCALAR`] and not [`Self::PRODUCER`]. `None`
+    /// past [`RUNTIME_SCALAR_INPUTS`] rather than a name the table does not hold.
+    pub const fn runtime_scalar(ordinal: usize) -> Option<Variable> {
+        if ordinal < RUNTIME_SCALAR_INPUTS {
+            Some(SLOTS[FAN_IN_INPUTS + ordinal])
         } else {
             None
         }
     }
 }
 
-/// The producer slots a fan-in's consumer reads its inputs as.
+/// Every named free value, the producer slots first and the runtime scalars after.
 ///
 /// # Invariant
-/// [`Variable::PRODUCER`] is the first, so one producer is the chain's own spelling, and the width
-/// is [`FAN_IN_INPUTS`]: a region reader refuses a wider consumer by name rather than naming a slot
-/// this table does not hold.
-const PRODUCERS: [Variable; FAN_IN_INPUTS] = [
+/// **Two disjoint runs of one table** — [`FAN_IN_INPUTS`] producers then
+/// [`RUNTIME_SCALAR_INPUTS`] runtime scalars — so adding a run moved no row the first already
+/// held: a name an earlier canonical form printed is a name this table still spells the same way,
+/// and a pack's region hash is over that text.
+const SLOTS: [Variable; FAN_IN_INPUTS + RUNTIME_SCALAR_INPUTS] = [
     Variable::PRODUCER,
     Variable("r1"),
     Variable("r2"),
@@ -96,15 +120,31 @@ const PRODUCERS: [Variable; FAN_IN_INPUTS] = [
     Variable("r5"),
     Variable("r6"),
     Variable("r7"),
+    Variable::RUNTIME_SCALAR,
+    Variable("s1"),
+    Variable("s2"),
+    Variable("s3"),
+    Variable("s4"),
+    Variable("s5"),
+    Variable("s6"),
+    Variable("s7"),
 ];
 
 /// How many of a fan-in consumer's inputs the symbolic language names.
 ///
 /// # Invariant
-/// It is the width of [`PRODUCERS`], and it is a capability bound rather than a licence: a region
-/// that reads more producers than this is refused by name, never admitted with two of them read as
-/// one.
+/// It is the first run's width of [`SLOTS`], and it is a capability bound rather than a licence: a
+/// region that reads more producers than this is refused by name, never admitted with two of them
+/// read as one.
 pub const FAN_IN_INPUTS: usize = 8;
+
+/// How many of a launch's runtime scalars the symbolic language names.
+///
+/// # Invariant
+/// It is the second run's width of [`SLOTS`], and it is a capability bound rather than a licence:
+/// a fragment reading more runtime scalars than this is refused by name, never admitted with two
+/// of them read as one.
+pub const RUNTIME_SCALAR_INPUTS: usize = 8;
 
 impl std::fmt::Display for Variable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
