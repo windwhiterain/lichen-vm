@@ -1835,6 +1835,22 @@ fn a_deferred_instantiation_refusal_points_at_the_offending_argument() {
 }
 
 #[test]
+fn a_missed_table_read_names_the_key() {
+    // The message is the fix: a reader who cannot ask which entry to add
+    // reads the key off the diagnostic.
+    let d = diags("t = table(1 ==> 10, 2 ==> 20)\nt <== 7");
+    assert_eq!(
+        d[0].message, "table lookup missed — no entry for key 7",
+        "an Int key names itself: {d:?}"
+    );
+    let d = diags("t = table(\"a\" ==> 10)\nt <== \"b\"");
+    assert_eq!(
+        d[0].message, "table lookup missed — no entry for key \"b\"",
+        "a string key keeps its quotes, so it cannot read as a name: {d:?}"
+    );
+}
+
+#[test]
 fn an_undecided_sibling_type_narrows_the_deferred_type_check() {
     // Known limit, pinned deliberately. The supplying key carries a type only
     // when every argument's type is decided.

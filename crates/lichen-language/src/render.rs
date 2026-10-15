@@ -258,7 +258,10 @@ where
             };
             format!("index {index} out of bounds (array length {length})")
         }
-        DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
+        DiagKind::TableMiss => match table_key_text(d) {
+            Some(key) => format!("table lookup missed — no entry for key {key}"),
+            None => "table lookup missed — no entry for this key".to_string(),
+        },
         // The report invariant's last resort: the build failed with nothing to
         // attribute it to.
         DiagKind::UnattributedFailure => {
@@ -360,6 +363,21 @@ where
              no backend emits one yet, so the call is refused rather than expanded"
                 .to_string()
         }
+    }
+}
+
+/// The missed read's key in the language's spelling; `None` for a non-scalar key
+/// or a key that held no value.
+fn table_key_text<P>(d: &CheckerDiag<P>) -> Option<String>
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    match d.table_key.as_ref().and_then(|key| key.as_enum())? {
+        LowValue::USize(n) => Some(n.to_string()),
+        LowValue::Str(s) => Some(format!("{s:?}")),
+        LowValue::Float(f) => Some(f.to_string()),
+        _ => None,
     }
 }
 

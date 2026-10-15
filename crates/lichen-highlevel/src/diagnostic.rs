@@ -301,6 +301,9 @@ pub struct Diag<P: Program> {
     /// The offending or missing field name of a named-field read or
     /// instantiation.
     pub field: Option<String>,
+    /// The key a missed table read looked up (when `kind == DiagKind::TableMiss`);
+    /// `None` when the key held no value.
+    pub table_key: Option<P::Value>,
     /// The budget the VM's guard refused on, for [`DiagKind::NonTerminating`];
     /// `None` for every other kind.
     pub budget: Option<BudgetExhausted>,
@@ -340,6 +343,7 @@ impl<P: Program> Diag<P> {
             index: None,
             length: None,
             field: None,
+            table_key: None,
             budget: None,
             error_index: None,
             static_template: None,
@@ -456,12 +460,14 @@ where
                     index: Some(*index_value),
                     length: Some(*length),
                     field: None,
+                    table_key: None,
                     error_index: None,
                     static_template: None,
                 }),
-                EvalError::TableMiss { key, .. } => {
-                    out.push(Diag::factual(DiagKind::TableMiss, self.node_loc(*key)))
-                }
+                EvalError::TableMiss { key, .. } => out.push(Diag {
+                    table_key: self.module.node_value(*key),
+                    ..Diag::factual(DiagKind::TableMiss, self.node_loc(*key))
+                }),
                 EvalError::TableKeyUndecided { key } => out.push(Diag::factual(
                     DiagKind::TableKeyUndecided,
                     self.node_loc(*key),
@@ -693,6 +699,7 @@ where
                 index: None,
                 length: None,
                 field: None,
+                table_key: None,
                 error_index: Some(i),
                 static_template: None,
             };
@@ -722,6 +729,7 @@ where
             index: None,
             length: None,
             field,
+            table_key: None,
             error_index: Some(i),
             static_template: None,
         }
