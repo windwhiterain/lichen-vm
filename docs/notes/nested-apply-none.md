@@ -1342,10 +1342,13 @@ root apply has a **static** callee: element 3 carried the type and it resolved t
 `AnyFunctionId::Static` variant, which the dynamic path's guard refuses, so the type side was skipped and
 the root's type cell stayed empty. The static path now applies its type slot the same way the dynamic one
 does — after the instantiated return is evaluated, take its type half, evaluate it, and unify it with the
-checker-wired result cell. That also repaired `b7`, `g2`, `g3` and `h5`, whose type chains pass through
-static callees further down. Measured over the corpus afterwards: **twenty-two answers moved, every one of
-them a program that previously answered `none`**, all twenty-two now answering fully correct values and
-`Int` types, and **none of the other four hundred and seven answers moved**.
+checker-wired result cell. The dynamic path evaluates that clone only when its pair is absent, since
+forcing one that already answers costs an apply the depth budget counts, and the pair's elements are
+resolved only inside a deep pass and never at a position the mask marks shallow. That also repaired `b7`,
+`g2`, `g3` and `h5`, whose type chains pass through static callees further down. Measured over the corpus
+afterwards: **twenty-two answers moved, every one of them a program that previously answered `none`**, all
+twenty-two now answering fully correct values and `Int` types, and **none of the other four hundred and
+seven answers moved**.
 
 **Three routes to those slots were tried and refuted**, so a later attempt need not repeat them:
 evaluating the pair's own items changed no answer; evaluating the chain's operation-bearing producer
