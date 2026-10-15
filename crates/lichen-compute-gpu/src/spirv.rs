@@ -2111,11 +2111,14 @@ fn value_class(
         let ValueDef::Instr { op, args, .. } = definition else {
             return Ok(module);
         };
-        // **The one instruction stating no class**: its own is the arms' class.
+        // **A value is in the class its own definition states**; a `Select` and a call state none.
         if matches!(op, KernelInstr::Select) {
             return select_class(fragment, launch, module, args, visiting);
         }
-        return Ok(operand_class(launch, op, 0).unwrap_or(module));
+        return Ok(op
+            .own_class()
+            .or_else(|| operand_class(launch, op, 0))
+            .unwrap_or(module));
     };
     let (block, index) = (*block, *index as usize);
     if let Some(class) = read_class(fragment, launch, module, block, value, visiting)? {

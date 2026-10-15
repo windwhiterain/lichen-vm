@@ -1,5 +1,6 @@
 mod common;
 
+mod conv_class;
 mod crossover;
 mod device_extent;
 mod fused_landing_on_device;
