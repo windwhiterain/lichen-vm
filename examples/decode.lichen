@@ -1,0 +1,262 @@
+---
+  order = "24"
+  compute = import "compute.lichen"
+  doc = "One decode step, chained: `examples/kvcache.lichen`'s append, `examples/gemv.lichen`'s \
+    score, `examples/softmax.lichen`'s normalise, and `examples/attention.lichen`'s weighted \
+    values, in that order, each reading the buffer the last one wrote. **Four stages, five \
+    kernels, one query, `capacity = 4`, `dim = 2`, `t = 2`.** Every example below this one on \
+    the ladder in `docs/notes/llm-operators.md` is one operator or one operator's pair, and the \
+    two slices before this one each measured a wall in the **hand-off** between two. This file \
+    is the first program here whose subject is the hand-off itself, and what it found is that \
+    the hand-off is cheap — the transposed half is not.\n\n\
+    **The data, and why it is not the KV-cache example's.** The cache is `K = 1 2 / 3 4 / 0 0 \
+    / 0 0` and `V = 5 6 / 7 8 / 0 0 / 0 0`, two filled positions of four; the new rows are \
+    `nk = 1 1` and `nv = 30 40`; the query is `q = 1 0`. So the appended cache is `K' = 1 2 \
+    / 3 4 / 1 1 / 0 0` and `V' = 5 6 / 7 8 / 30 40 / 0 0`. **The new key row is small on \
+    purpose.** A large one scores highest, the softmax collapses onto it, and the weighted row \
+    comes back as the new value row with the other three positions invisible in `f32` — a true \
+    fact about attention and a useless example. Here the four scores are `1 3 1 0` and the \
+    answer is a genuine blend of all four positions: `8.888384` and `10.773098`, against the \
+    `30` and `40` any single row holds.\n\n\
+    **The two address forms, and the transpose is the whole story.** The cache is \
+    **position-major**: `K[p][d]` sits at `p · dim + d`. `examples/gemv.lichen`'s matrix is \
+    **output-major**: `W[m · kdim + k]`, the output index on the outside. A decode step reads \
+    **one** buffer at two different axes, and which axis the fold runs over is what decides \
+    the form. Stage 2, the score, uses GEMV's own form `i · kdim + (s(0) - 1)` **unchanged**: \
+    the output is the position, one lane per cached key, so `i` is the position and the fold \
+    runs down the row over the head dimension. That is GEMV's layout exactly, with `m` = \
+    position and `kdim` = `dim` — the cache *is* this operator's matrix. Stage 4, the weight, \
+    needs `examples/attention.lichen`'s form `(s(0) - 1) · dim + column`: the output is the \
+    head-dimension column and the fold runs over the position, so the position is on the \
+    outside and the column indexes inside the row. **Measured, and the failure is silent:** \
+    writing stage 4 at stage 2's form, `column · keys + (s(0) - 1)`, answers `[6.0754085, \
+    33.36727]` against this file's `[8.888384, 10.773098]` — wrong in both elements, **no \
+    error, no refusal, no report line**, and a plausible-looking row. The language has no \
+    spelling that transposes a buffer, so this transpose is the caller's, by hand, at every \
+    call site.\n\n\
+    **The hand-offs: what each stage's buffers must be shaped like.** A `compute.write` names \
+    a slot of a buffer **exactly as long as the launch's extent** \
+    (`crates/lichen-compute/src/compute.rs:5979`) and `compute.collect` hands back **every** \
+    element of it (`:1550-1621`), so a stage's output buffer is as long as its own extent and \
+    not a byte more. Nothing between the stages reshapes a buffer: each `plrun`'s output \
+    struct field feeds the next argument's input struct field by name, and the shapes are \
+    this — stage 1 over `capacity · dim = 8` lanes, reading `k` and `v` at 8 and `nk` and `nv` \
+    at **2**, writing `k` and `v` at 8; stage 2 over `capacity = 4` lanes, reading `cached.k` \
+    at 8 and `q` at **2**, writing 4; stages 3a and 3b over 4 lanes each, reading and writing \
+    4; stage 4 over `dim = 2` lanes, reading `weights.y` at 4 and `cached.v` at 8, writing 2. \
+    **Two of those rows are the whole cache, and both are the rule \
+    `examples/kvcache.lichen` measures.** Stage 2 reads all eight key slots (`i · kdim + \
+    s(0) - 1` over `i` in `0 … 3`) and stage 4 reads all eight value slots **including the \
+    two unfilled positions**, which is why the appended cache cannot be handed on as its \
+    filled prefix `[1 2 3 4]`: a host input shorter than the count is refused by name on the \
+    device and zero-filled silently on the host. The chain is the reason that operator rewrites \
+    the whole buffer rather than one row. **Only the query is short, and only by `dim`.**\n\n\
+    **The two config spellings coexist, and which one a kernel can use is decided by its leaf \
+    count.** Stages 3a and 3b are `examples/softmax.lichen`'s two kernels **verbatim**, and \
+    they carry `compute.P (compute.KT Float)(.I Row, .O Maxs)` — a config holding **one** \
+    leaf, `.n` (`crates/lichen-compute/src/compute.lichen:5`). Stages 1, 2 and 4 need four, \
+    two and three leaves, so they spell the config out as a `struct` with `.n` first and \
+    `.in`/`.out` last, the way `examples/gemv.lichen` and `examples/kvcache.lichen` do. Both \
+    spellings compile in the same file and either may be used at any hand-off: what decides \
+    it is only how many leaves the body reads.\n\n\
+    **The two positional rules, and one of them is now measurable through a chain.** Leaf \
+    **one** is the launch extent whatever it is called (`scalar_leaf_classes`, \
+    `crates/lichen-compute/src/compute.rs:1849`); leaf **two** is what `compute.row` and \
+    `compute.col` divide by (`crates/lichen-compute/src/compute/body.rs:788-815`) and is \
+    reached only from a coordinate, so it is free in a body that takes none. Every multi-leaf \
+    config here keeps the extent first and puts a new leaf after the divisor: `ParK` is `.n, \
+    .cap, .dim, .t` and `ParW` is `.n, .dim, .keys`. **Stage 2 measures the rule through the \
+    chain:** putting `.kdim` **first** in `ParS` launches the score kernel over **2** lanes with \
+    `n = 4` as the stride, the scores buffer holds 4, the row maximum is taken over four slots \
+    of which two read past the buffer and answer `0` (`compute.rs:6234`), and the chain still \
+    answers a plausible row — `[7.425879, 8.748409]`, from scores `[1.0, 3.0]` — **with no \
+    refusal anywhere**. The rule bites through a chain, and a chain hides it *worse* than a \
+    single kernel does: the wrong scores are still a softmax, and the wrong softmax is still a \
+    weighted sum. **Stage 4 cannot show it, and that is the shape rather than the data:** its \
+    extent and its divisor are both `2`, because a one-query decode step's output extent **is** \
+    the head dimension, so no reordering of `.n` and `.dim` is observable here. A decode step \
+    with two queries would not have that luck.\n\n\
+    **What chaining cost.** Stages 3a and 3b are `examples/softmax.lichen`'s two kernels \
+    **character for character**, measured by diffing each body out of the two files. Stages 1 \
+    and 2 are their example's kernel with the binder and its parameter renamed and **nothing \
+    else** — `append_raw` over `ParK` for `append_raw` over `Par`, `score_raw` over `ParS` for \
+    `gemv_raw` over `Par`, the binder because two `gemv_raw`s in one file would be one \
+    binding. **Only stage 4 changed**, and it changed by losing two of \
+    `examples/attention.lichen`'s three nests. `attend` carries `top`, the row maximum, `den`, \
+    the denominator, and `acc`, the weighted sum, because it is the **only** kernel there. In \
+    a chain the softmax is already a stage, so `weigh` keeps `acc` alone and reads the \
+    precomputed weight at `a[s(0) - 1]` where `attend` read `exp (s - m)`. **That change is not \
+    free, and the cost is in the last bit: `[8.888384, 10.773098]` against `[8.888383, \
+    10.773099]`** — this file's stage 4 beside `examples/attention.lichen`'s `attend` run \
+    verbatim over the same scores and the same appended `V'`, measured on `cpu`. The reason is \
+    **where the division sits**: hoisted, each of the `keys` weights is divided once and the \
+    weighted sum under it is exact; inline, one division at the write divides an accumulated \
+    sum. Neither is wrong, and a chain has to **choose** — so this file's declared row is the \
+    hoisted spelling's, and a step `n + 1` built on the other would not reproduce it. That is \
+    the first measurement on the ladder of a chain **choosing between two correct answerings \
+    of the same operator**.\n\n\
+    **The claim the values half now makes is the one attention's floor measurement names.** \
+    With the softmax hoisted there is no `exp` left to mark, and this node's written value \
+    **is** the fold — which is exactly the shape `docs/notes/llm-operators.md` measures \
+    refusing the fusion floor as `ElementWithoutProducer` and `BeyondANode`, *here `element` is \
+    the whole fold, so no element expression is left for a producer's value to flow into*. \
+    This file marks `element` on the fold result for attention's reason. **That refusal is \
+    cited, not re-measured here**, and with no floor installed nothing in this file consults \
+    one.\n\n\
+    **What a decode loop still needs, beyond the walls the two examples before this one \
+    name.** The known ones: the language has **no iteration form at all** — no `for`, no \
+    `while`, no loop keyword in any example — `@loop` is a fold **inside one lane**, \
+    `compute.call` inside a parallel body is refused with a `NodeId` (`code-audit.md` P1-39, \
+    `todo`), and nothing advances a position. Four more, and only the first is a wall. (a) **A \
+    position to write into** — `t` is a leaf of stage 1's argument, written out as the literal \
+    `2`, and step `n + 1` needs `t + 1`, which the language cannot produce because it holds \
+    no mutable state between calls. Nothing in this file's operator has to change for it to \
+    land, which is why the chain is worth landing first. (b) **Carried state is expressible \
+    inside one program and nowhere else.** A `plrun`'s output is a buffer a later `plrun` \
+    names as an input — this file proves it five times over, and `examples/silu.lichen` does \
+    it across two kernels — but a name that survives the step is not the same thing: `cached` \
+    is a binding in *this* term, so an `N`-step spelling repeats this program's shape `N` \
+    times with the cache literal and the incoming-row literal written out `N` times. \
+    **Chaining inside one program is free; chaining across programs is where the missing \
+    state is felt**, and that is what this file adds to the two slices before it: they \
+    measured the wall, this one measures where it bites. (c) **Nothing is reused** — every step \
+    allocates its own score, weight and output buffers and `collect` hands back every element \
+    of each, so `N` steps is `3N` buffers and none of them can be named again. (d) **`dim` is \
+    one number carried as three unrelated literals**: stage 1's `.dim`, stage 2's `.kdim` and \
+    stage 4's `.dim`, and nothing compares them. Stage 2's `kdim` is the *stride* `i · kdim + \
+    s(0) - 1`, so a `kdim` that is not stage 1's `dim` reads the cache at the wrong pitch and \
+    the score is wrong **silently**; a real decode step carries one number and the language \
+    has no spelling for a number that is one number.\n\n\
+    **The device leg, which this file cannot reach, and what it would meet.** The CLI installs \
+    no compute backend, so flipping every kernel in this program to `gpu` answers by name — \
+    *this parallel kernel was compiled for the `gpu` backend, but no compute backend is \
+    installed* — **measured, this program**. The two predecessors' measurements stand in for \
+    it, and a chain meets their walls **in order**. Stage 1 is refused **first**, because its \
+    incoming rows are `dim` = 2 wide against a count of 8, and a host input shorter than the \
+    count is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`); padding them \
+    to the cache's own length makes stage 1 run and agree with `cpu` element for element \
+    (`examples/kvcache.lichen`), and only then is stage 2 refused by the shape \
+    `examples/gemv.lichen` measured — the reduction `kdim = 2` is shorter than the output \
+    `n = 4`, which is the decode shape and every decode step. **Stage 4 is not that refusal**: \
+    its reduction `keys = 4` is *longer* than its output `dim = 2`, and its short operand, the \
+    4-long weights buffer, is no shorter than its count of 2. **That asymmetry is a reason a \
+    chained step may reach a device before a lone GEMV does**, and it is reasoned from the \
+    two measurements above, not measured here.\n\n\
+    **The graph leg, which this chain refuses at two more places.** `RaggedInputs` \
+    (`crates/lichen-graph-ir/src/run.rs:273`, with `ragged_host` at `:520-529`) compares \
+    **payload bytes** across a node's inputs, and **no two stages of this chain have two \
+    inputs of one length**: stage 1 is 8 against 2, stage 2 is 8 against 2, stage 4 is 4 \
+    against 8. So the chain meets `RaggedInputs` at stage 2 and again at stage 4, each before \
+    any of it reaches the fusion floor. The compile-order class defect \
+    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`) is measured on attention's \
+    two-kernel chain over a **recorded** graph, which is this chain's shape with a second \
+    query, so it is not a sixth wall here but **the same one**. What this chain adds to the \
+    ladder is the number of *distinct* shapes a real step has to satisfy at once — a \
+    four-input append, a two-input GEMV and a two-input weighted sum in one program — against \
+    a graph leg that requires every node's inputs to be one length.\n\n\
+    **What is exact and what is modelled.** **Exact, by hand and in `f32`:** the append, every \
+    element copied or replaced with integers below `2^24` and no `exp` and no `sqrt` in it; \
+    the four dot products `1`, `3`, `1`, `0`, every term a product of integers under 30; the \
+    row maximum `3.0`; the offsets `score - max`, which are the **exact** integers `-2, 0, -2, \
+    -3`; `exp(0) = 1.0` **exactly**, because the polynomial at a zero argument is `1.0` and \
+    seven squarings of `1.0` are `1.0`; and the four `weight · V` products and their sum, \
+    **given** the weights. **Modelled:** `exp(-2)` and `exp(-3)`, which are the degree-10 \
+    Taylor sum of `docs/notes/floating-point.md` §6 — clamped at `-128`, Horner over `x / \
+    2^7`, seven squarings — and **never** a reference `eˣ`; and everything downstream of them, \
+    the denominator `1.3204572`, the four weights `[0.10249112, 0.75731343, 0.10249112, \
+    0.03770435]`, and the declared row. **The declared output was derived independently**, by \
+    re-implementing that published sequence in `f32` outside the workspace, never calling the \
+    crate under test, and by reproducing the fold order the bodies actually have: an `@loop` \
+    counts **down**, so the denominator accumulates `exp(-3)`, `exp(-2)`, `exp(0)`, \
+    `exp(-2)` in that order, and the values fold accumulates `a[3] · V'[3]`, `a[2] · V'[2]`, \
+    `a[1] · V'[1]`, `a[0] · V'[0]` in that order. Every intermediate agrees with what the \
+    program prints: `K' = [1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 0.0, 0.0]`, `V' = [5.0, 6.0, 7.0, \
+    8.0, 30.0, 40.0, 0.0, 0.0]`, `scores = [1.0, 3.0, 1.0, 0.0]`, `maxima = [3.0, 3.0, 3.0, \
+    3.0]`. **For scale, the same chain over a reference `eˣ` in `f64` gives `[8.8883843, \
+    10.7731007]`**: the degree-10 Taylor costs about half an ulp in the first element and \
+    three in the second, which is its own error and not the fold order's.\n\n\
+    **Two workarounds, and neither is a rule.** Stage 4 does **not** reuse \
+    `examples/attention.lichen`'s `attend`; it reuses only the `acc` nest, and `top` and \
+    `den` are gone because stage 3 already computed what they computed. It could have kept \
+    them and still been a chain, at the cost of the same softmax twice and the last-bit \
+    difference measured above. **A preference**: the honest reason is that a chain should not \
+    compute a value twice, and the measured cost of the preference is that the choice is \
+    **visible in the answer**, which is why it has to be written down. Stage 4 also takes its \
+    column from `compute.col k` rather than from `compute.range k.n`, which for one query is \
+    the same number. **A preference too, cutting the other way**: the lane already knows its \
+    column, so the coordinate buys an instruction — but it is what makes `.keys` a legal \
+    **third** leaf, and it is attention's spelling. The rule underneath both is D17's, that a \
+    `compute.write` is **the value of an output position and not an effect** (`code-audit.md` \
+    P1-42, `wontfix:D17`), which is why every stage here is one lane per output with exactly \
+    one write, and which is also why the append rewrites the whole cache rather than one row."
+  output = "[8.888384, 10.773098]: array{Float, 2}"
+---
+KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
+KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+ArgK  = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
+append_raw = (k : ParK) => {
+  column = compute.row k
+  position = compute.col k
+  slot = position * k.dim + column
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  fresh = position == k.t
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+}
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+Gout = struct{.y (compute.Buf Float)}
+ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+ArgS = struct{.n Int, .kdim Int, .I Gin}
+score_raw = (k : ParS) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+}
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+Row  = struct{.x (compute.Buf Float)}
+Maxs = struct{.m (compute.Buf Float)}
+ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
+rowmax_raw = (k : ParM) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
+}
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
+Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
+OutY = struct{.y (compute.Buf Float)}
+ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
+softmax_raw = (k : ParY) => {
+  i = compute.range k.n
+  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  total = fold (k.n, 0.0 ~ "identity")
+  here = exp (compute.read ((compute.Read _)(.from k.in.x, .at i)) - m)
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
+}
+softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+AV   = struct{.a (compute.Buf Float), .v (compute.Buf Float)}
+OutW = struct{.o (compute.Buf Float)}
+ParW = struct{.n Int, .dim Int, .keys Int, .in AV, .out OutW}
+ArgW = struct{.n Int, .dim Int, .keys Int, .I AV}
+weigh_raw = (k : ParW) => {
+  i = compute.range k.n
+  column = compute.col k
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element")))
+}
+weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+nk = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
+nv = (compute.buffer ([30.0, 40.0] : array{Float, 2}) : (compute.Buf Float))
+q = (compute.buffer ([1.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
+cached = (compute.plrun append ((ArgK)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, .v vbuf, .nk nk, .nv nv))) : KVOut)
+scored = (compute.plrun score ((ArgS)(.n 4, .kdim 2, .I Gin(.w cached.k, .x q))) : Gout)
+topped = (compute.plrun rowmax ((compute.A Row)(.n 4, .I Row(.x scored.y))) : Maxs)
+weights = (compute.plrun softmax ((compute.A Soft)(.n 4, .I Soft(.x scored.y, .m topped.m))) : OutY)
+out = (compute.plrun weigh ((ArgW)(.n 2, .dim 2, .keys 4, .I AV(.a weights.y, .v cached.v))) : OutW)
+compute.collect out.o : array{Float, 2}
