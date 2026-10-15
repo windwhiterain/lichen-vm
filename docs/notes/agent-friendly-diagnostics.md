@@ -132,3 +132,41 @@ pins the `IndexTarget` wording; the positional-struct `raw[Int, Int]` offender, 
 two facts unchanged from the main report — the 37 examples do not run on `dev` (`invalid SlotMap key used`,
 `crates/lichen-lowlevel/src/evaluation.rs:517`, pre-existing) and the eight named compute binaries were
 never run.
+
+## 7. What became of the survey's items
+
+**`TableMiss` now names the key** (`91d236fd`). `Diag` gained `table_key: Option<P::Value>`, **mirroring
+`IndexOutOfBounds`'s `index`/`length`** — so the key stays a **value**, not a rendered sentence, and the
+source-blindness invariant at the head of `diagnostic.rs` is untouched. Measured on the language front end:
+
+```
+t = table(1 ==> 10, 2 ==> 20)   t <== 7
+before: table lookup missed — no entry for this key
+after:  table lookup missed — no entry for key 7
+```
+
+The span is unchanged at `(2,7)`, so **P2 still holds** and only the message gained the key. **Only scalar
+keys** are rendered: a non-scalar key needs the key's *type* node, and value and type are separate
+`ExprState` nodes rather than offsets, so there is no O(1) derivation for it — the spelling is missing
+there, not the reachability.
+
+**`DiagKind::IndexTarget` is settled by the pin, and stays unwired.** `tests/checker.rs:738` is *named* for
+`IndexTarget` but pins a different kind — `assert_eq!(diags[0].kind, DiagKind::Guard)` — with the expected
+side pinned as the **array kind**. So the contract is *"a statically non-indexable read is a `Guard` whose
+expected side is the array kind"*. For `(\x. x)[0]` the two spellings are `expected Array, found (Int ->
+Int)` today and `expected a tuple, array, or struct type, found (Int -> Int)` if wired — and wiring would
+both rewrite the pin **and** state a **weaker** requirement (a union of three shapes where the guard names
+one), changing every statically non-indexable read (`5[0]`, `(\x. x)[0]`, `"s"[0]`) with no bug reported.
+Not taken; pin and wiring both left alone.
+
+**The preprocessor's missing span is measured, and it is a contract question, not a defect.** The offset is
+available and discarded one layer up: `parse::parse` returns `LocatedDirective = (Directive, u32)`
+(`crates/lichen-preprocess/src/parse.rs:50`) and `block_directives` drops it with `.map(|(d, _)| d)`
+(`lib.rs:330`), so a `@depend` line's span **could** be carried. It is not, because the behaviour is
+documented as intended (`lib.rs:26-27`, `:42-43`, and the `Invariant` at `:403-407`) — so taking it means
+editing an `Invariant`, and it is left to the user's decision. **That Invariant and this note's P2
+disagree, which is the whole shape of the question.**
+
+**And one path correction:** there is no `crates/lichen-highlevel/src/render.rs`. The renderer is
+`crates/lichen-language/src/render.rs`, and `CheckerDiag` is an alias for
+`lichen_highlevel::diagnostic::Diag<P>` (`render.rs:3`) — which is why the `TableMiss` fix spans two crates.
