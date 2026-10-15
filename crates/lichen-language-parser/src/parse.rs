@@ -1709,3 +1709,7 @@ fn if_expr<'a, Er: GrammarError<'a>>(
 #[cfg(test)]
 #[path = "tests/parse_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/paren_arg_tests.rs"]
+mod paren_arg_tests;
