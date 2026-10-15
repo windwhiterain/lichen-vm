@@ -1,3 +1,4 @@
+mod class_agreement;
 mod common;
 
 mod conv_class;
