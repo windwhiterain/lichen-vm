@@ -17,7 +17,7 @@ mod diagnostics;
 #[path = "parse/error_blocks.rs"]
 mod error_blocks;
 
-use diagnostics::diag_from;
+use diagnostics::{Unclosed, diag_from, unclosed_delimiter};
 
 pub use error_blocks::collect_error_blocks;
 
@@ -148,6 +148,20 @@ pub fn parse(tokens: &[Token]) -> Parsed {
 /// The worker's result: the program plus its diagnostics.
 type ParseOut = (Program, Vec<ParseDiag>);
 
+/// Give the head of a cascade the earliest unclosed delimiter a diagnostic found.
+fn name_unclosed_at_head(errors: &mut [ParseDiag], found: &[Option<Unclosed>]) {
+    let Some(head) = errors.first_mut() else {
+        return;
+    };
+    if head.message.starts_with("unclosed ") {
+        return;
+    }
+    let Some(earliest) = found.iter().flatten().min_by_key(|u| u.line) else {
+        return;
+    };
+    head.message = format!("{}: {}", earliest.clause, head.message);
+}
+
 fn parse_inner(tokens: &[Token]) -> ParseOut {
     // The clean probe's answer stands only when it reports nothing
     // (`docs/notes/parse-clean-probe.md`).
@@ -168,12 +182,15 @@ fn parse_diagnostics(tokens: &[Token]) -> ParseOut {
     // Dedup by whole diagnostic content: chumsky emits the same rich error more
     // than once.
     let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
+    let mut unclosed: Vec<Option<Unclosed>> = Vec::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
         if seen.insert((diag.span, diag.message.clone())) {
+            unclosed.push(unclosed_delimiter(tokens, e));
             errors.push(diag);
         }
     }
+    name_unclosed_at_head(&mut errors, &unclosed);
     let mut program = match output {
         Some(program) => program,
         None => {
@@ -299,12 +316,15 @@ fn region_diagnostics(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let mut errors: Vec<ParseDiag> = Vec::new();
     // The same content-keyed dedup as [`parse_inner`]'s.
     let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
+    let mut unclosed: Vec<Option<Unclosed>> = Vec::new();
     for e in &errs {
         let diag = diag_from(region, e);
         if seen.insert((diag.span, diag.message.clone())) {
+            unclosed.push(unclosed_delimiter(region, e));
             errors.push(diag);
         }
     }
+    name_unclosed_at_head(&mut errors, &unclosed);
     let (statements, ranges) = region_result(output.unwrap_or_default(), start);
     (statements, ranges, errors)
 }
@@ -1713,3 +1733,11 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/paren_arg_tests.rs"]
 mod paren_arg_tests;
+
+#[cfg(test)]
+#[path = "tests/unclosed_delimiter_tests.rs"]
+mod unclosed_delimiter_tests;
+
+#[cfg(test)]
+#[path = "tests/unclosed_delimiter_probe.rs"]
+mod unclosed_delimiter_probe;
