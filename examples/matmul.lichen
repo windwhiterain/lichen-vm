@@ -1,0 +1,62 @@
+---
+  order = "19"
+  compute = import "compute.lichen"
+  doc = "Matmul: `C[m][n] = Σ_k A[m][k] · B[k][n]`, the product every transformer layer spends
+   its parameters on. It is **one lane per element of `C`** with the `k` loop **inside** the lane
+   — the `k` loop is an `@loop` fold over the lane's own invocation, exactly as RMSNorm's is — so
+   one lane reads `A[m][k]` and `B[k][n]` three times and writes one number. This is the **naive**
+   matmul: there is no shared-memory staging, no `k`-blocking and no double buffering here, and
+   all three of those need a **two-dimensional workgroup** that does not exist yet
+   (`Plan::group_width` is one number, `EXECUTION_MODE_LOCAL_SIZE` is `(x, 1, 1)`, and neither
+   `LocalInvocationId` nor `WorkgroupId` is bound at all). `docs/notes/two-dimensional-launch.md`
+   §3(b) is that wall and `docs/notes/llm-operators.md` is the ladder it stands on.
+   The row and the column are **hand-written**: `r = i / k.cols` and `c = i % k.cols` are the whole
+   spelling, because the language has no `compute.row`/`compute.col`; `k.cols` is the **second
+   extent** and travels as a runtime scalar (one as a graph edge, so the recording keeps it). The
+   language also has no two-dimensional array, so both matrices are **row-major flattened** and the
+   body indexes them itself: `A[r * 3 + k]` and `B[k * cols + c]`. The inner dimension `3` is a
+   **literal** and not a parameter, as RMSNorm's `eps` is, because a kernel parameter cannot cross
+   the graph path. An `@loop` fold counts **down** — RMSNorm's does too — so `k` runs `2, 1, 0` and
+   the last addend is the `k = 0` product; over exact integers the order changes nothing, and it is
+   stated here because it is the order the body actually has.
+   **The shape is square and that is measured, not decoration.** A device run uploads **only the
+   `count` first elements** of each host input and zeroes the rest
+   (`lichen-compute-gpu/src/dispatch.rs:1058`, an invariant at `:449-452`), and `count` here is
+   `m · n`, the number of output lanes. So an element a lane reads must be at an index **below
+   `m · n`**, which for this body means `K ≤ m` and `K ≤ n`; the device's own length rule asks the
+   opposite of `A` and `B` (`m · K ≥ m · n` and `K · n ≥ m · n`, i.e. `K ≥ n` and `K ≥ m`), because
+   a host input shorter than the count is refused outright
+   (`dispatch.rs:219-223`). Both rules together admit **only** `m = K = n`. Measured on the RTX
+   3060: this `3 × 3 · 3 × 3` answers **bit for bit** what the `cpu` path answers, while a
+   `2 × 3 · 3 × 2` over the same code answers `[25, 28, 28, 32]` there against `[58, 64, 139,
+   154]` here — every entry past index `3` read back as the zero padding. So the wall on a matmul
+   today is that upload width, **not** the two-dimensional launch and **not** the floor.
+   `A` is `1 2 3 / 4 5 6 / 7 8 9` and `B` is `10 11 12 / 13 14 15 / 16 17 18`, so
+   `C[0][0] = 1·10 + 2·13 + 3·16 = 84`, `C[0][1] = 1·11 + 2·14 + 3·17 = 90`,
+   `C[0][2] = 1·12 + 2·15 + 3·18 = 96`, `C[1][0] = 4·10 + 5·13 + 6·16 = 201`,
+   `C[1][1] = 4·11 + 5·14 + 6·17 = 216`, `C[1][2] = 4·12 + 5·15 + 6·18 = 231`,
+   `C[2][0] = 7·10 + 8·13 + 9·16 = 318`, `C[2][1] = 7·11 + 8·14 + 9·17 = 342` and
+   `C[2][2] = 7·12 + 8·15 + 9·18 = 366`. **The declared output is that arithmetic worked out by
+   hand, not a transcription of what the program printed.** Every entry is a product of integers
+   under `19`, the largest sum is `366`, and `f32` represents every integer up to `2^24` exactly —
+   so unlike SiLU and softmax, whose declared values are *modelled* because this language's `exp`
+   is a Taylor sum and its `sqrt` a Newton iteration, a matmul over small integers has no
+   approximation in it at all and this is an **exact** correctness check."
+  output = "[84.0, 90.0, 96.0, 201.0, 216.0, 231.0, 318.0, 342.0, 366.0]: array{Float, 9}"
+---
+Ain  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+OutC = struct{.c (compute.Buf Float)}
+Par  = struct{.n Int, .cols Int, .in Ain, .out OutC}
+Arg  = struct{.n Int, .cols Int, .I Ain}
+matmul_raw = (k : Par) => {
+  i = compute.range k.n
+  r = i / k.cols
+  c = i % k.cols
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * 3 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (3, 0.0 ~ "identity"))))
+}
+matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0] : array{Float, 9}) : (compute.Buf Float))
+b = (compute.buffer ([10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0] : array{Float, 9}) : (compute.Buf Float))
+out = (compute.plrun matmul ((Arg)(.n 9, .cols 3, .I Ain(.a a, .b b))) : OutC)
+compute.collect out.c : array{Float, 9}
