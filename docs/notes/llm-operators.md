@@ -81,6 +81,18 @@ fusion**, and neither is negotiable in the current surface:
   projection reading `i` is sound under that fused-reduction schedule, where the fused step iterates
   over the producer's growing extent and the composed body's own index is not the consumer's original
   one — only the elementwise chain/fan-in path was measured, and it does not transfer by assumption.
+  **And it does not transfer in fact either, measured**: under the fused **reduction** derivation the
+  same reads are refused *before* any contract question, because the derivation has **no vocabulary for
+  them**. A probe over the tiler's `Element::Function` reports, for `i`, `n`, `d + i` and `d + n` alike:
+  *"the datum `i` is not a function a kernel body computes: it reads a value the fold has no slot for, or
+  an operator…"* (`crates/lichen-fusion-bridge/src/tiled.rs:234`) — the fold's slots are the datum and the
+  producers, and the invocation is not among them. `RepairFunction` is narrower still: its free set is
+  `REPAIR_ARGUMENT | PRODUCER | PRODUCER_NEXT` (`crates/lichen-fusion/src/repair.rs:59`) and its refusal
+  (`:191`) fires for `x - i`, `x - n` **and `x - d`** — so a repair may not read the fold's datum either.
+  That makes the next decision bigger than "carry the invocation": the **reduction derivation would need a
+  slot for the step's own index**, and that is exactly where the soundness question lives — in this
+  schedule the fold runs over the **producer's growing extent**, so the step's index is **not** the
+  consumer's original lane, the one thing the elementwise measurement cannot settle.
 
 **A caveat that predates this work and is now load-bearing**: the reader claims "the body computes this
 operator", which is a **modelling claim, not a theorem**. `sqrt_body` is a Newton iteration — six steps
