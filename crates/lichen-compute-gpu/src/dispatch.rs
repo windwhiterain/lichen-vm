@@ -312,6 +312,15 @@ fn write_leaf(bytes: &mut [u8], offset: u32, module: ScalarClass, class: ScalarC
     bytes[offset as usize..][..width].copy_from_slice(&word[..width]);
 }
 
+/// How many elements of `width` a host input's own bytes hold.
+///
+/// # Invariant
+/// Whole elements only: a trailing partial element is not an element, so neither the staging
+/// reservation nor the copy counts one. Both ask here, so the two widths cannot drift apart.
+fn own_elements(data: &[u8], width: usize) -> usize {
+    data.len() / width
+}
+
 /// Turn a Vulkan failure into a named `RunError`.
 fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, RunError> {
     result.map_err(|code| RunError::Vulkan {
@@ -448,8 +457,8 @@ pub struct GpuContext {
     ///
     /// # Invariant
     /// Reuse is safe **without clearing**: every consumer of a buffer writes all of it —
-    /// an output across `[0, padded)` and an input across `[0, count)` — so no stale byte
-    /// is ever read back.
+    /// an output across `[0, padded)` and an input across `[0, len)`, the padding past `len`
+    /// filled on the device — so no stale byte is ever read back.
     recycled: Mutex<HashMap<(usize, ScalarClass), Vec<DeviceBuffer>>>,
     /// How many command buffers this context has handed to the queue.
     ///
@@ -948,10 +957,11 @@ impl GpuContext {
     /// The staging one dispatch's host inputs need, and whether they are long enough.
     ///
     /// # Invariant
-    /// The sum of each host input's own `count × byte_width()`, checked against that same
-    /// count — **the width is the buffer's own class**, not one module-wide answer, and a
-    /// device input stages nothing and has no length to check. Asked for before anything is
-    /// recorded, because that is when the reservation must be made.
+    /// The sum of each host input's own `len × byte_width()`, `len` being that slice's own
+    /// length in elements — **the width is the buffer's own class**, not one module-wide
+    /// answer, and a device input stages nothing and has no length to check. Asked for before
+    /// anything is recorded, because that is when the reservation is made, and it is the
+    /// width the upload copies.
     fn staged_bytes<'a>(
         &self,
         launch: &LaunchSet<'_>,
@@ -963,14 +973,15 @@ impl GpuContext {
         let mut bytes: vk::DeviceSize = 0;
         for (index, data) in hosts {
             let width = spirv::buffer_class_of(fragment, index, class).byte_width();
-            if data.len() < count * width {
+            let len = own_elements(data, width);
+            if len < count {
                 return Err(RunError::InputShorterThanCount {
                     buffer: index,
-                    len: data.len() / width,
+                    len,
                     count,
                 });
             }
-            bytes += count as vk::DeviceSize * width as vk::DeviceSize;
+            bytes += (len * width) as vk::DeviceSize;
         }
         Ok(bytes)
     }
@@ -1055,10 +1066,15 @@ impl GpuContext {
                 Bound::Host(data) => {
                     let buffer_class = spirv::buffer_class_of(fragment, index, class);
                     let element = buffer_class.byte_width() as vk::DeviceSize;
-                    let data_bytes = count as vk::DeviceSize * element;
-                    let padded_bytes = padded as vk::DeviceSize * element;
-                    let buffer = self.allocate(padded, buffer_class)?;
-                    // SAFETY: `offset` plus this block is inside the staging `reserve` sized per buffer, and the claimed slot is idle.
+                    // The buffer's own length, not the count: above it there are real elements too.
+                    let len = own_elements(data, buffer_class.byte_width()) as vk::DeviceSize;
+                    let data_bytes = len * element;
+                    // The allocation holds every one of them and still reaches a whole workgroup.
+                    let allocated = (padded as vk::DeviceSize).max(len);
+                    let padded_bytes = allocated * element;
+                    let buffer = self.allocate(allocated as usize, buffer_class)?;
+                    // SAFETY: `offset` plus this block is inside the staging `reserve` sized at this
+                    // width, and the claimed slot is idle.
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             data.as_ptr(),
@@ -1311,10 +1327,11 @@ impl GpuContext {
             });
         }
         let element = input_class.byte_width();
-        if input.len() < count * element {
+        let len = own_elements(input, element);
+        if len < count {
             return Err(RunError::InputShorterThanCount {
                 buffer: 0,
-                len: input.len() / element,
+                len,
                 count,
             });
         }
@@ -1338,8 +1355,10 @@ impl GpuContext {
             return Err(RunError::EmptyRun);
         }
         let element = element as vk::DeviceSize;
-        let data_bytes = count as vk::DeviceSize * element;
-        let padded_bytes = padded as vk::DeviceSize * element;
+        let data_bytes = len as vk::DeviceSize * element;
+        // The allocation holds every element the host holds and still reaches a whole workgroup.
+        let allocated = padded.max(len);
+        let padded_bytes = allocated as vk::DeviceSize * element;
 
         // One slot, its staging sized for the whole chain up front.
         let mut segment = self.acquire()?;
@@ -1349,9 +1368,9 @@ impl GpuContext {
             context: self,
             buffers: Vec::with_capacity(1),
         };
-        let source = self.allocate(padded, input_class)?;
+        let source = self.allocate(allocated, input_class)?;
         scratch.buffers.push(source);
-        // SAFETY: `reserve` sized and mapped this slot's staging for `count` elements.
+        // SAFETY: `reserve` sized and mapped this slot's staging for `len` elements.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 input.as_ptr(),
@@ -1816,8 +1835,8 @@ impl GpuContext {
                             size: transfer.bytes,
                         }],
                     );
-                    // The surplus lanes read past `count`, so the tail is cleared on the
-                    // device rather than uploaded as zeroes.
+                    // The padding past the buffer's own length is cleared on the device, so
+                    // a surplus lane reads a defined `0`.
                     if transfer.tail > 0 {
                         device.cmd_fill_buffer(
                             command,
@@ -2235,12 +2254,12 @@ struct Transfer {
     src_offset: vk::DeviceSize,
     /// The device-local buffer they are going to.
     dst: vk::Buffer,
-    /// The `count` elements the host actually holds.
+    /// The `len` elements the host actually holds.
     bytes: vk::DeviceSize,
     /// The allocation past [`Self::bytes`], which the surplus lanes read.
     ///
     /// # Invariant
-    /// Zeroed on the device rather than uploaded, so a run costs `count` elements of traffic and the
+    /// Zeroed on the device rather than uploaded, so a run costs `len` elements of traffic and the
     /// surplus lanes still read a defined `0`.
     tail: vk::DeviceSize,
 }
