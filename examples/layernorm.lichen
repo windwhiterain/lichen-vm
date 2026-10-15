@@ -23,8 +23,14 @@
    — the sum reads the maximum — so all three nodes group. **The folds are \
    two kernels and not two folds in one body**: two folds in one body is a chain of two \
    links, and a chain is not the shape this operator exists to measure. \
-   `eps = 1.0` is a **literal** and not a parameter, for the reason RMSNorm's `0.25` is — a \
-   kernel parameter cannot cross the graph path (`compute/graph.rs`) — and it is chosen so the \
+   `eps` is a **parameter now** — `k.eps`, passed as `1.0` — and that is measured here rather than \
+   assumed: a recorded config carries the first scalar leaf as the extent and **every other leaf for \
+   what it is, at any depth**, and the graph's value table carries a **float at its own class** \
+   (`c92b6471`, `e24d00fb`), where a kernel parameter used to cross the graph path not at all. Two \
+   limits are worth knowing: a `Float` leaf can only be a **literal or an argument**, never a value \
+   computed inside the source function; and `compute.graphrun` refuses the `"cpu"` backend, so driving \
+   `eps` *through a graph* would mean moving these kernels to `"gpu"` — the leg below is the direct \
+   one. The value is still chosen so the \
    denominator lands on an exact square, `1.25 + 1.0 = 2.25`. It is **not** a stabiliser a \
    production LayerNorm would ship; this example's job is the exact arithmetic and the shape. \
    **What is exact**: the row is `1, 2, 3, 4`, so `Σx = 10` and `Σx² = 30`; `mean = 10/4 = 2.5` \
@@ -67,13 +73,14 @@ row_sumsq_raw = (k : ParQ) => {
 row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
 Moments = struct{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}
 OutY    = struct{.y (compute.Buf Float)}
-ParY    = compute.P (compute.KT Float)(.I Moments, .O OutY)
+ArgY    = struct{.n Int, .eps Float, .I Moments}
+ParY    = struct{.n Int, .eps Float, .in Moments, .out OutY}
 normalise_raw = (k : ParY) => {
   i = compute.range k.n
   count = int2float k.n
   m = compute.read ((compute.Read _)(.from k.in.s, .at 0)) / count
   v = compute.read ((compute.Read _)(.from k.in.q, .at 0)) / count - m * m
-  d = sqrt (v + 1.0)
+  d = sqrt (v + k.eps)
   x = compute.read ((compute.Read _)(.from k.in.x, .at i))
   w = compute.read ((compute.Read _)(.from k.in.w, .at i))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((x - m) / d * w) ~ "element")))
@@ -83,5 +90,5 @@ x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Floa
 w = (compute.buffer ([3.0, 6.0, 3.0, 6.0] : array{Float, 4}) : (compute.Buf Float))
 sm = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
 sq = (compute.plrun row_sumsq ((compute.A Row)(.n 4, .I Row(.x x))) : Sumsq)
-out = (compute.plrun normalise ((compute.A Moments)(.n 4, .I Moments(.x x, .w w, .s sm.s, .q sq.q))) : OutY)
+out = (compute.plrun normalise ((ArgY)(.n 4, .eps 1.0, .I Moments(.x x, .w w, .s sm.s, .q sq.q))) : OutY)
 compute.collect out.y : array{Float, 4}

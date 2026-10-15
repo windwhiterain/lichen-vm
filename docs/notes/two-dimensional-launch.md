@@ -454,3 +454,46 @@ parameter must write it as a literal. Also: a scalar leaf whose expression canno
 the recording, so the refusal that surfaces is about the *function's return* — a late refusal naming the
 wrong thing; and a **literal** leaf in the middle of a shape leaves a hole in the graph's argument width
 (`rposition(occupied) + 1`), so `graphrun` wants an argument nobody reads.
+
+## 10. The value table carries a float (`e24d00fb`)
+
+§9's last paragraph ended with the one thing standing between "arbitrary scalars" and true: a `Float`
+scalar leaf could only be a **literal**, because a graph's value table held `i64` and `graphrun`
+classified a `Float` argument as *"neither a buffer nor a number"*. That is done, and the user
+authorised exactly this one change.
+
+**The sentence, before and after** (`crates/lichen-compute/src/compute/graph.rs`, `place()`'s `other`
+arm — before: *"…and a graph's value table holds only the caller's arguments and the values the graph's
+own nodes produced"*; after: *"…holds only the caller's arguments — a buffer, or a number that is an
+integer or a float — and the values the graph's own nodes produced"*.).
+
+**The class is the arm, so nothing re-reads bits.** `Value::Float(f32)` sits beside `Int(i64)` in
+`crates/lichen-graph-ir/src/value.rs` — **beside, not a flag on** — and `Value::bits_at(class)` is the
+one place a leaf meets a value; `RunArgument::Float(f32)`, `run_graph`'s `LowValue::Float(n) =>
+RunArgument::Float(n)`, and `leaves_of` reading `bits_at(class)` are the rest of it. The class-mismatch
+refusal §9 added **still fires, in both directions**, and neither direction reinterprets bits: *"…a leaf
+declared Float, and that value is a number of class Int. A launch reads a leaf at its own class, so this
+one would read those bits as Float rather than Int. Pass a value of the leaf's own class, or declare the
+leaf Int"*, and the same with the classes exchanged. Two additions were forced by the existing code and
+are worth naming: `RunResult::Float(f32)` (so `returned_role` stays exhaustive — **it has no test**,
+because it is the round trip of the same arm) and `GraphRefusal::ScalarClassMismatch` (the kept refusal
+relocated, since `ScalarNotANumber`'s sentence is wrong for a number of the wrong class).
+
+**The proof it was impossible before** is the refusal the previous slice earned on the pre-change tree,
+quoted verbatim in §9; the proof it works now is a `Float` **parameter**: a config
+`{.n Int, .cols Int, .scale Float, .in In1, .out Out1}` with `scale = 1.5` answers
+`[0.0, 1.5, 1.5, 3.0, 3.0, 4.5]` on `"gpu"` through **both** the direct `plrun` leg and `graphrun`,
+element for element, recorded as `Count::Value(0)`, `scalars [Value(1), Value(2)]`, `inputs [3]`.
+
+**And an operator uses it.** `examples/layernorm.lichen`'s `eps` is now a **parameter** (`k.eps`,
+passed as `1.0`) instead of a literal, on the direct `cpu` path, with its declared output unchanged —
+measured here, which is also the half the float slice did not measure: a `Float` leaf through `plrun`
+on `cpu`. Driving it *through a graph* would mean moving that example's kernels to `"gpu"`, because
+`graphrun` refuses the `cpu` backend.
+
+**Still not carried.** A literal leaf in the middle of a shape still leaves a hole in the argument width
+(`rposition(occupied) + 1`); a `Float` **extent** is still refused (the first scalar leaf must be an
+`Int`); a leaf **computed inside the source function** still never reaches the recording, and the
+refusal there stays accurate because a computed node is not in the table; and `f64` is inexpressible —
+`ScalarClass::Float` is 32-bit. A class mismatch is now a **run-time** refusal rather than a
+compile-time one.
