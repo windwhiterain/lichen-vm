@@ -1350,6 +1350,12 @@ afterwards: **twenty-two answers moved, every one of them a program that previou
 twenty-two now answering fully correct values and `Int` types, and **none of the other four hundred and
 seven answers moved**.
 
+**One budget expectation moved with the repair.** A type side instantiates once per apply, and each
+instantiation stamps its clones one level deeper than the apply, so evaluating an unbounded stream now
+reaches the apply-depth ceiling before the evaluate-depth ceiling. Which of the two guards trips first is a
+fact about how much work an apply does, so the test that watched it now asserts that a depth guard recorded
+its budget rather than which one.
+
 **Three routes to those slots were tried and refuted**, so a later attempt need not repeat them:
 evaluating the pair's own items changed no answer; evaluating the chain's operation-bearing producer
 changed no answer; and unifying the slot with the chain's value-bearing element is **harmful** — it turned
