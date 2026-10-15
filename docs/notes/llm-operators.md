@@ -19,7 +19,7 @@ test file.
 | **SiLU / MLP** | **landed** (`3f3693a7`): `silu(gate) × up` as two elementwise kernels. **The floor refuses the honest pair by name** — `InterfacesAreNotProved` — because `Elementwise` has no licence and an elementwise region has no reduction chain to prove; only the pack door is ajar (the schema derives, prints and hashes) |
 | **softmax** | **landed** (`f8645274`) and its **textbook three-kernel form now merges too** (`d364f547`): the diamond — the normalise step reading both `m` and `s`, with `m` also read by the sum — is a **fan-in**, and a fan-in is licensed now. A **chain of any length** landed earlier (`3f8007cc`). The licence was restated once, in the two places it was stated: *"a region two edges **arrive at** is that shape exactly when every one of those inputs is named and proven: a `Between` per arrival, each over a slot of its own"* — a diamond needs **both** halves (two arrive and two leave), and `m` read twice is why it can never be a chain |
 | **RoPE** | **landed** (`2f7214af`): `cos`/`sin` added to the language (definitions spliced by the lowerer, read by the bridge like `exp`/`sqrt`), then the pairwise rotation as three elementwise kernels. It is **one lane per element** — a rule, not a preference: a `.to` chain can fill both positions of a pair, but its outer link is contended and order is not a contract. Domain `|x| ≤ 8192`, bit-exact against a model; the clamp above that is a **silent `Select`**, so an unbounded angle gets `sin(8192)` |
-| **matmul** | **writable now, in the two-dimensional-index spelling.** `f4a4e470` landed the proposal's first slice: the second extent is **carried as a graph edge**, so a two-extent config records and runs through `compute.graphrun` **on the device**, answering the direct run element for element, and the admission rule is **stated** — *the extent, then at most one runtime scalar, then the buffers*. What is still missing is the **language spelling** (`compute.row`/`compute.col`; `r = i / cols` is hand-written) and the **workgroup geometry** (a real two-dimensional workgroup, a row-shaped `Shared` exchange, and the artifact-cache question a `TargetFacts` field raises). See [two-dimensional-launch](two-dimensional-launch.md) §8 |
+| **matmul** | **landed, naive and square** (`3fdedd3d`): one lane per element of `C`, the `k` fold inside the lane, on the two-extent spelling `r = i / cols`, `c = i % cols`. **The wall the measurement found is not the one this note predicted**: it is the **upload width**. *Only the first `count` elements of a host input are real* — `dispatch.rs` uploads `count × element` and zeroes the tail — so every index the body reads must be below `count`, while the device's only stated length rule refuses a host input **shorter** than the count. For `m×K · K×n` the two together admit **only `m = K = n`**, which is why the example is square; a non-square `2×3 · 3×2` answered `[25, 28, 28, 32]` on the device against `[58, 64, 139, 154]` on the CPU, **silently**, and the discriminator that rules out a lowering bug is that a body with **no `@loop`** disagrees identically. So the order is: the **upload width** first (`count` must become the buffer's own length before any tile is correct), then the language spelling, then the workgroup geometry |
 | **attention** | behind the matmul wall and the softmax licence — the licence is now there (`d364f547`), so matmul's plumbing is what is left |
 
 ## What RMSNorm measured
@@ -186,6 +186,16 @@ its tree now canonicalises to a `±inf` constant. And `tile ≡ body` is **bit-f
 need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
+
+- **A matmul's claim earns two refusals, and one of them names a mark that is there.** With the floor
+  installed, the recorded matmul reports `region 0 (nodes 0): refused: RoleNotMarked: the instance at 0
+  claims a `identity` role and its body carries no mark for it` — and again for the node — while the body
+  **does** carry `0.0 ~ "identity"`. Nothing merges and nothing tiles, which is right (a naive matmul has
+  no row reduction to fuse, since `k` lives inside one lane), so the licence is irrelevant here; what is
+  not explained is the sentence. Two facts worth carrying: the **instance id is not stable across runs**
+  of the same program (1, 4, 5, 8, 9 were seen) because the kernel registry is process-wide and
+  append-only, and `code-audit.md`'s **P1-39** (`compute.call` refused in a parallel body) stands as an
+  independent wall for a matmul that wants to call out to a helper.
 
 - **A `compute.write` is the *value* of an output position, not an effect** — so a second write naming
   the same buffer leaves the first a **dead expression**, by decision (`code-audit.md` P1-42,

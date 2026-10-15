@@ -507,6 +507,20 @@ branch-free. The tests pin **both** ends of that: a count that is not a multiple
 of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
 not).
 
+**What an author has to know, and what this note did not say.** The sentence a kernel
+writer needs is not "the padding is zeroed" but **only the first `count` elements of a
+host input are real**: every index the body reads must be **below `count`**, because
+`dispatch.rs` sizes the upload as `count × element` and clears the tail on the device.
+A read set that is not a prefix of the buffer therefore works on the `"cpu"` path and
+silently reads `0` on the device — **a wrong number, not a refusal**. A matmul is the
+standard victim: `m×K · K×n` needs `K ≤ m` and `K ≤ n`, while the only length rule the
+device states is the opposite one (a host input **shorter** than the count is refused),
+so the two rules together admit only the square case, `m = K = n`. That is why
+`examples/matmul.lichen` is committed square; the measurement, its discriminator (a body
+with **no** `@loop` shows the identical disagreement, so it is not a lowering bug) and
+what a tiled matmul would need are in
+[LLM operators](llm-operators.md#smaller-findings-each-with-the-thing-that-would-change).
+
 **The same padding discharges a workgroup barrier's convergence obligation, and
 it does so for free.** "A write is reached by every invocation" — the invariant
 the next paragraph rests on — is exactly what `OpControlBarrier` needs: a barrier
