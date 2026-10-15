@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use lichen_kernel_ir::KernelFragment;
+use lichen_kernel_ir::{KernelFragment, ScalarClass};
 
 /// Why a graph could not be built or run.
 ///
@@ -156,6 +156,19 @@ pub enum GraphRefusal {
         node: usize,
         value: usize,
         found: &'static str,
+    },
+    /// A node's runtime scalar resolved to a number of the other class.
+    ///
+    /// # Invariant
+    /// Separate from [`Self::ScalarNotANumber`] because the two are different mistakes: one
+    /// value is not a number at all, the other **is** a number whose bits are not the word
+    /// the leaf reads. `leaf` is what the parameter declared and `found` what the value is,
+    /// and converting between them would be the silent wrong answer this crate refuses.
+    ScalarClassMismatch {
+        node: usize,
+        value: usize,
+        leaf: ScalarClass,
+        found: ScalarClass,
     },
     /// An extent named a value that is not a buffer the device is holding.
     ///
@@ -322,6 +335,19 @@ impl fmt::Display for GraphRefusal {
                 "node {node} reads its runtime scalar from value {value}, and that value is \
                  {found}. A runtime scalar is a leaf of the kernel's parameter, so the only \
                  thing that can be one is a number."
+            ),
+            GraphRefusal::ScalarClassMismatch {
+                node,
+                value,
+                leaf,
+                found,
+            } => write!(
+                f,
+                "node {node} reads its runtime scalar from value {value} into a leaf declared \
+                 {leaf:?}, and that value is a number of class {found:?}. A launch reads a \
+                 leaf at its own class, so this one would read those bits as {leaf:?} rather \
+                 than {found:?}. Pass a value of the leaf's own class, or declare the leaf \
+                 {found:?}"
             ),
             GraphRefusal::ExtentNotADevice { node, value, found } => write!(
                 f,

@@ -4707,20 +4707,8 @@ where
             _ => None,
         });
     if let Some(placed) = found {
-        // A table's numbers are integers, and a leaf is read at its own class.
-        if class == ScalarClass::Float {
-            refuse(
-                module,
-                format!(
-                    "a dispatch's scalar leaf at parameter position {} is declared Float and its \
-                     value is a number the graph's table holds, which is an integer: a launch \
-                     reads a leaf at its own class, so this one would read those bits as a \
-                     float. Give the leaf a literal, or declare it Int",
-                    path_text(path)
-                ),
-            );
-            return None;
-        }
+        // Carried for what it is: the class travels with the value, and the run is
+        // the only point that sees what the value is.
         return Some(graph::Scalar::Value(placed));
     }
     // A literal only: inventing a node that produces a computed one writes nothing.
@@ -5399,13 +5387,17 @@ where
             .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
         else {
             // Not a compute value, so it is a number — the only other role a
-            // dispatch can read.
+            // dispatch reads, held at the class it is.
             match module
                 .node_value(*node)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
             {
                 Some(LowValue::USize(count)) => {
                     run_arguments.push(RunArgument::Count(count as i64));
+                    continue;
+                }
+                Some(LowValue::Float(number)) => {
+                    run_arguments.push(RunArgument::Float(number));
                     continue;
                 }
                 _ => {
@@ -5508,6 +5500,9 @@ where
                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
             }
             RunResult::Count(count) => <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
+            RunResult::Float(number) => {
+                <P::Value as From<LowValue>>::from(LowValue::Float(*number))
+            }
         }
     } else {
         let items: Vec<ArrayItem> = produced
@@ -5522,6 +5517,9 @@ where
                     ),
                     RunResult::Count(count) => {
                         <P::Value as From<LowValue>>::from(LowValue::USize(*count))
+                    }
+                    RunResult::Float(number) => {
+                        <P::Value as From<LowValue>>::from(LowValue::Float(*number))
                     }
                 };
                 let node = module.add_node(block, None, Some(value));
@@ -5539,13 +5537,14 @@ where
 /// # Invariant
 /// A dispatch's extent is the count role, not a buffer's length: the byte count a
 /// [`RunArgument::Buffer`] carries is divided at the class's own width, and a resident
-/// buffer's count is the count it was issued for. A value that is neither is `None`, so a
-/// count that reads a buffer is unanswered rather than answered with something else.
+/// buffer's count is the count it was issued for. Anything else is `None` rather than an
+/// answer with something else in it, a float included — an extent has no class to carry.
 fn argument_extent(arguments: &[RunArgument], value: GraphValueId) -> Option<usize> {
     match arguments.get(value)? {
         RunArgument::Count(count) => usize::try_from(*count).ok(),
         RunArgument::Buffer { class, data } => Some(data.len() / class.byte_width()),
         RunArgument::Resident(resident) => Some(resident.count),
+        RunArgument::Float(_) => None,
     }
 }
 

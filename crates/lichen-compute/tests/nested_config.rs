@@ -379,38 +379,12 @@ fn a_two_scalar_config_carries_both_and_runs_on_the_device() {
 /// A shape the graph still cannot carry is refused at the leaf that misses it.
 ///
 /// # Invariant
-/// Each case names the place it is missing — the parameter position of a scalar leaf, or
-/// the field position of a buffer the parameter has no group for — and arrives while the
-/// shape is read, not at the run. The late sentence this replaces named a **number** read
-/// as a **buffer**, which is a different mistake from the one made.
+/// The case names the place it is missing — the field position of a buffer the parameter
+/// has no group for — and arrives while the shape is read, not at the run. The late
+/// sentence this replaces named a **number** read as a **buffer**. The `Float` case that
+/// sat here is now carried; `float_leaf.rs` reads it at its own class.
 #[test]
 fn a_leaf_the_graph_cannot_carry_is_refused_at_its_own_path() {
-    let (lines, value) = reported_run(&nested(
-        "Float",
-        "struct{.rows Int, .cols Float, .in In2}",
-        "s.cols",
-    ));
-    assert!(
-        value.as_ref().and_then(recorded).is_none(),
-        "a `Float` leaf read from the value table records nothing"
-    );
-    let refusal = lines
-        .iter()
-        .find(|line| line.contains("scalar leaf at parameter position 0.1"))
-        .unwrap_or_else(|| {
-            panic!(
-                "the refusal names `.meta.cols` at its own path; the report was:\n  {}",
-                lines.join("\n  ")
-            )
-        });
-    assert!(
-        !lines.iter().any(|line| line.contains("as a buffer")),
-        "and no late refusal names a number read as a buffer:\n  {}",
-        lines.join("\n  ")
-    );
-    println!("a `Float` leaf the table cannot hold is refused by:\n  {refusal}");
-
-    // A buffer with no group to be read under is refused by the role walk.
     let (lines, _value) = reported_run(
         r#"
 ---
@@ -441,5 +415,10 @@ built
                 lines.join("\n  ")
             )
         });
+    assert!(
+        !lines.iter().any(|line| line.contains("as a buffer")),
+        "and no late refusal names a number read as a buffer:\n  {}",
+        lines.join("\n  ")
+    );
     println!("a buffer the parameter cannot name is refused by:\n  {refusal}");
 }

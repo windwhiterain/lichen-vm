@@ -7,7 +7,7 @@ use lichen_kernel_ir::{
 
 use crate::graph::{Count, Graph, KernelNode, Node, Scalar};
 use crate::refusal::GraphRefusal;
-use crate::value::Value;
+use crate::value::{BitsRefusal, Value};
 
 /// When the host submits, and when it waits.
 ///
@@ -423,10 +423,11 @@ impl<'backend> Runner<'backend> {
 /// The runtime scalars a node fixes beside its extent, resolved against the value table.
 ///
 /// # Invariant
-/// **As many as [`KernelFragment::runtime_scalars`]**: the list's length is the
-/// fragment's, since one too few or one too many places a value under a leaf the body
-/// never names. Each is read here rather than carried as a slot, because a scalar is a
-/// number the host already holds, not a buffer a dispatch reads through.
+/// **As many as [`KernelFragment::runtime_scalars`]**, and **each leaf read at its own
+/// class**: a leaf declared `Float` whose value is an integer is
+/// [`GraphRefusal::ScalarClassMismatch`], and so is the reverse, because the two are each
+/// other's bits. This is where the rule is kept rather than in the recording, which cannot
+/// see what the run will be handed.
 fn leaves_of(
     node: usize,
     kernel: &KernelNode,
@@ -449,22 +450,27 @@ fn leaves_of(
             match scalar {
                 Scalar::Constant(leaf) => Ok(ScalarLeaf { class, ..*leaf }),
                 Scalar::Value(value) => {
-                    let number = values
+                    let bits = values
                         .get(*value)
                         .ok_or(GraphRefusal::UnknownValue {
                             node,
                             value: *value,
                         })?
-                        .as_number()
-                        .map_err(|found| GraphRefusal::ScalarNotANumber {
-                            node,
-                            value: *value,
-                            found,
+                        .bits_at(class)
+                        .map_err(|refused| match refused {
+                            BitsRefusal::NotANumber(found) => GraphRefusal::ScalarNotANumber {
+                                node,
+                                value: *value,
+                                found,
+                            },
+                            BitsRefusal::Class(found) => GraphRefusal::ScalarClassMismatch {
+                                node,
+                                value: *value,
+                                leaf: class,
+                                found,
+                            },
                         })?;
-                    Ok(ScalarLeaf {
-                        class,
-                        bits: number,
-                    })
+                    Ok(ScalarLeaf { class, bits })
                 }
             }
         })

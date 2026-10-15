@@ -49,6 +49,20 @@ fn elements(class: ScalarClass, bytes: &[u8]) -> Vec<i64> {
         .collect()
 }
 
+/// Why a value could not be read as the one word a launch's scalar leaf holds.
+///
+/// # Invariant
+/// The two are separate arms because they are different mistakes: a value that is not a
+/// number at all is a role nobody asked it for, while a number of the other class is a
+/// re-reading of bits this crate refuses to perform, and the two have different repairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitsRefusal {
+    /// Not a number; `found` is what the value is.
+    NotANumber(&'static str),
+    /// A number, of the class named rather than the one asked for.
+    Class(ScalarClass),
+}
+
 /// A value a graph node produces.
 ///
 /// What a value in a graph's table is.
@@ -89,6 +103,14 @@ pub enum Value<'backend> {
     /// be named rather than wrapped into an enormous extent. A count is always an `Int`:
     /// an extent has no class to carry.
     Int(i64),
+    /// A machine float, a number of the class [`ScalarClass::Float`].
+    ///
+    /// # Invariant
+    /// Its own arm rather than a tagged [`Self::Int`], because the class travels with the
+    /// value and that is what keeps a launch from re-reading one class's bits as the
+    /// other's. [`Self::bits_at`] is where the two are held apart, and an extent still
+    /// refuses it: an extent has no class to carry.
+    Float(f32),
 }
 
 impl fmt::Debug for Value<'_> {
@@ -106,6 +128,7 @@ impl fmt::Debug for Value<'_> {
                 write!(f, "Host({} element(s))", data.len() / class.byte_width())
             }
             Value::Int(number) => write!(f, "Int({number})"),
+            Value::Float(number) => write!(f, "Float({number})"),
         }
     }
 }
@@ -139,13 +162,23 @@ impl<'backend> Value<'backend> {
         Value::Int(number)
     }
 
-    /// The class this value's elements are to be read as, or `None` for a number
-    /// (which has no elements).
+    /// A float, for a launch value or a graph's own argument.
+    pub fn float(number: f32) -> Self {
+        Value::Float(number)
+    }
+
+    /// The class at which this value's word is read, or `None` for an integer.
+    ///
+    /// # Invariant
+    /// A buffer answers the class its elements are packed at and a float answers its own;
+    /// an integer answers `None` because it is the ABI's default width, not because it is a
+    /// role — a demand is [`Self::slot`], [`Self::device_buffer`] or [`Self::bits_at`].
     pub fn class(&self) -> Option<ScalarClass> {
         match self {
             Value::Host { class, .. }
             | Value::Device { class, .. }
             | Value::Pending { class, .. } => Some(*class),
+            Value::Float(_) => Some(ScalarClass::Float),
             Value::Int(_) => None,
         }
     }
@@ -194,13 +227,14 @@ impl<'backend> Value<'backend> {
     /// # Invariant
     /// A pending value is a buffer: a dispatch against it names where the data will be,
     /// and the producing submission was recorded first. A number is refused rather than
-    /// borrowed — a one-element host vector would run a kernel nobody wrote. The failure
-    /// is this value's kind, not a refusal: a `GraphRefusal` here could name no node.
+    /// borrowed — a one-element host vector would run a kernel nobody wrote, and a float
+    /// would be the same mistake in the other class. The failure is this value's kind, not
+    /// a refusal: a `GraphRefusal` here could name no node.
     pub fn slot(&self) -> Result<BufferSlot<'_>, &'static str> {
         match self {
             Value::Host { data, .. } => Ok(BufferSlot::Host(data)),
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(BufferSlot::Resident(*id)),
-            Value::Int(_) => Err(self.state()),
+            Value::Int(_) | Value::Float(_) => Err(self.state()),
         }
     }
 
@@ -214,7 +248,7 @@ impl<'backend> Value<'backend> {
     pub fn device_buffer(&self) -> Result<ResidentId, &'static str> {
         match self {
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(*id),
-            Value::Host { .. } | Value::Int(_) => Err(self.state()),
+            Value::Host { .. } | Value::Int(_) | Value::Float(_) => Err(self.state()),
         }
     }
 
@@ -235,12 +269,30 @@ impl<'backend> Value<'backend> {
     /// # Invariant
     /// The mirror of [`Self::slot`], and separate for the same reason: a caller told only
     /// "wrong shape" has to work out which role they hit. A count is an extent, so
-    /// refusing a pointer is about the value, not the role. The number comes back as `i64`
-    /// and the extent is the caller's to decide — negative counts are reported, not wrapped.
+    /// refusing a pointer is about the value, not the role, and a float is refused too — an
+    /// extent has no class to carry. The number comes back as `i64`, negative counts
+    /// reported rather than wrapped.
     pub fn as_number(&self) -> Result<i64, &'static str> {
         match self {
             Value::Int(number) => Ok(*number),
             other => Err(other.state()),
+        }
+    }
+
+    /// The one word this value gives a launch's scalar leaf, read at `class`.
+    ///
+    /// # Invariant
+    /// The class is the **value's own**, never the leaf's: an integer read at
+    /// [`ScalarClass::Float`] and a float read at [`ScalarClass::Int`] are each the other's
+    /// bits, and a launch reads a leaf at the class its parameter declared, so each is
+    /// refused by name rather than answered.
+    pub fn bits_at(&self, class: ScalarClass) -> Result<i64, BitsRefusal> {
+        match (self, class) {
+            (Value::Int(number), ScalarClass::Int) => Ok(*number),
+            (Value::Float(number), ScalarClass::Float) => Ok(number.to_bits() as i64),
+            (Value::Int(_), ScalarClass::Float) => Err(BitsRefusal::Class(ScalarClass::Int)),
+            (Value::Float(_), ScalarClass::Int) => Err(BitsRefusal::Class(ScalarClass::Float)),
+            _ => Err(BitsRefusal::NotANumber(self.state())),
         }
     }
 
@@ -253,7 +305,7 @@ impl<'backend> Value<'backend> {
         match self {
             Value::Host { data, class } => Some(data.len() / class.byte_width()),
             Value::Device { count, .. } | Value::Pending { count, .. } => Some(*count),
-            Value::Int(_) => None,
+            Value::Int(_) | Value::Float(_) => None,
         }
     }
 
@@ -305,6 +357,7 @@ impl<'backend> Value<'backend> {
             Value::Device { .. } => "a device buffer that was waited for",
             Value::Pending { .. } => "a submission that has not been waited for",
             Value::Int(_) => "a number",
+            Value::Float(_) => "a float",
         }
     }
 }

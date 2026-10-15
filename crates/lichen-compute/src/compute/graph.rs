@@ -359,7 +359,8 @@ pub fn place(value: &ComputeValue, position: usize) -> Result<Placed, String> {
         )),
         other => Err(format!(
             "argument {position} of this dispatch is {}, and a graph's value table holds only \
-             the caller's arguments and the values the graph's own nodes produced",
+             the caller's arguments — a buffer, or a number that is an integer or a float — and \
+             the values the graph's own nodes produced",
             describe(other)
         )),
     }
@@ -502,7 +503,8 @@ pub fn record_return(values: Vec<Placed>) -> Result<(), String> {
 ///
 /// # Invariant
 /// Sorted by the caller, not here: deciding which is which is a question about a lichen value, and
-/// only the language can answer it.
+/// only the language can answer it. What the table ends up holding is a **buffer or a number, an
+/// integer or a float**, and a number's class is the arm it arrives in.
 pub enum RunArgument {
     /// Data the host already has, which a dispatch records against as host data.
     ///
@@ -515,7 +517,18 @@ pub enum RunArgument {
     /// A buffer a previous run left on a device, handed over as the id it is.
     Resident(ResidentBuffer),
     /// A number, which a dispatch may read as its extent.
+    ///
+    /// # Invariant
+    /// An extent has no class to carry, so this arm is [`ScalarClass::Int`] and nothing else:
+    /// a `Float` is its own arm below rather than a flag here.
     Count(i64),
+    /// A machine float, which a launch may read into a leaf its parameter declared `Float`.
+    ///
+    /// # Invariant
+    /// Its own arm rather than a class beside [`Self::Count`], so the class travels with the
+    /// value the whole way into the table and a run reads a leaf at the class it declared
+    /// rather than at whichever one the argument carried.
+    Float(f32),
 }
 
 /// Run a built graph on the backend its value names, and hand back the source
@@ -556,6 +569,7 @@ pub fn run(
                 Value::device(resident.id, resident.count, resident.class)
             }
             RunArgument::Count(count) => Value::int(*count),
+            RunArgument::Float(number) => Value::float(*number),
         })
         .collect();
     let table = Runner::new(&*backend, policy)
@@ -583,8 +597,8 @@ pub fn run(
 /// # Invariant
 /// Matched rather than asked, because the difference is who asks: [`Value::slot`] and
 /// [`Value::as_number`] answer a *demand* and refuse, which is right in the runner and wrong here,
-/// since a return is not a demand any node made. A number is therefore one of the three, and the
-/// extent is decided here.
+/// since a return is not a demand any node made. A number is therefore one of the four, and the
+/// extent is decided here — a float is handed back as the float the table held.
 fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
     Ok(match value {
         Value::Host { data, class } => RunResult::Buffer {
@@ -604,6 +618,7 @@ fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
         Value::Int(number) => usize::try_from(*number)
             .map(RunResult::Count)
             .map_err(|_| GraphRefusal::CountNegative { number: *number })?,
+        Value::Float(number) => RunResult::Float(*number),
     })
 }
 
@@ -620,4 +635,6 @@ pub enum RunResult {
     /// can be checked: handing an `i64` on is an `as usize` in somebody's `match`, and that is how
     /// `-1` becomes a very large number that looks like a length.
     Count(usize),
+    /// A float the function returned, with the class it was held at.
+    Float(f32),
 }
