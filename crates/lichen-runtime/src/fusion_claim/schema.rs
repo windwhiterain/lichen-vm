@@ -787,36 +787,97 @@ pub fn derive_regions(
 /// Which graph positions form each fusible region, in evaluation order.
 ///
 /// # Invariant
-/// The grouping [`derive_regions`] derives schemas for, and it is exposed because a rewrite has to
-/// name the graph nodes a region holds: a schema names its instances by kernel id, and a recorded
-/// node holds no kernel id.
+/// A region is a **weakly-connected component** of the producer/consumer relation, and an unclaimed
+/// node is its boundary: a node joins the component an earlier node of its run belongs to, **fed by
+/// it or feeding it**. Two independent producers are the siblings one consumer joins, and reading
+/// adjacency forward alone is what started a second region for the second one.
 pub fn region_positions(graph: &Graph, instances: &[Instance]) -> Vec<Vec<usize>> {
     let registry = Registry::new(instances);
     let starts = offsets(graph);
     let mut regions: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
+    let mut run: Vec<usize> = Vec::new();
     for (position, _) in graph.nodes().iter().enumerate() {
         if registry
             .matched(fragment_at(graph, position))
             .is_unclaimed()
         {
-            if !current.is_empty() {
-                regions.push(std::mem::take(&mut current));
-            }
+            // A node no row of the join holds is a boundary, so a component never spans one.
+            regions.extend(components(graph, &starts, std::mem::take(&mut run)));
             continue;
         }
-        let joined = current
-            .iter()
-            .any(|earlier| feeds(graph, &starts, *earlier, position));
-        if !current.is_empty() && !joined {
-            regions.push(std::mem::take(&mut current));
-        }
-        current.push(position);
+        run.push(position);
     }
-    if !current.is_empty() {
-        regions.push(current);
-    }
+    regions.extend(components(graph, &starts, run));
     regions
+}
+
+/// The weakly-connected components of one run of claimed nodes, each in evaluation order.
+///
+/// # Invariant
+/// **One component per pair the relation joins, in either direction**, and the run is walked
+/// **backwards**, so a node joins the component of every producer it reads: a recorded graph cannot
+/// express an edge before its producer, so one sweep is enough. A component is named by its
+/// **earliest** node, which is what puts the components in evaluation order.
+fn components(graph: &Graph, starts: &[usize], run: Vec<usize>) -> Vec<Vec<usize>> {
+    if run.len() < 2 {
+        return if run.is_empty() {
+            Vec::new()
+        } else {
+            vec![run]
+        };
+    }
+    let mut producer_of: HashMap<GraphValueId, usize> = HashMap::with_capacity(run.len());
+    for (index, &position) in run.iter().enumerate() {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        for value in starts[position]..starts[position] + node.fragment.outputs {
+            producer_of.insert(value, index);
+        }
+    }
+    let mut reach: Vec<usize> = (0..run.len()).collect();
+    for (later, &position) in run.iter().enumerate().rev() {
+        let Node::Kernel(node) = &graph.nodes()[position];
+        for value in node
+            .inputs
+            .iter()
+            .copied()
+            .chain(extent_of(graph, position))
+        {
+            if let Some(&earlier) = producer_of.get(&value)
+                && earlier < later
+            {
+                join(&mut reach, earlier, later);
+            }
+        }
+    }
+    let mut grouped: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (index, &position) in run.iter().enumerate() {
+        grouped
+            .entry(root(&mut reach, index))
+            .or_default()
+            .push(position);
+    }
+    grouped.into_values().collect()
+}
+
+/// The component `node` belongs to, after the roots on the way are flattened.
+fn root(reach: &mut Vec<usize>, mut node: usize) -> usize {
+    while reach[node] != node {
+        reach[node] = reach[reach[node]];
+        node = reach[node];
+    }
+    node
+}
+
+/// The two components become one, and the earlier root is the one's name.
+///
+/// # Invariant
+/// **The earlier root wins**, so a component is named by its earliest node and reading the
+/// components by name is reading them in evaluation order.
+fn join(reach: &mut Vec<usize>, one: usize, other: usize) {
+    let (one, other) = (root(reach, one), root(reach, other));
+    if one != other {
+        reach[other] = one;
+    }
 }
 
 /// The schema one region's nodes derive, or the refusal that names why they do not.
@@ -1105,19 +1166,6 @@ impl<'a> Registry<'a> {
         claims.dedup();
         claims
     }
-}
-
-/// Whether the node at `producer` produces a value the node at `consumer` reads.
-fn feeds(graph: &Graph, starts: &[usize], producer: usize, consumer: usize) -> bool {
-    let Node::Kernel(node) = &graph.nodes()[consumer];
-    let reads = node
-        .inputs
-        .iter()
-        .copied()
-        .chain(extent_of(graph, consumer));
-    reads
-        .into_iter()
-        .any(|value| produces(graph, starts, producer, value))
 }
 
 /// The value a node's extent reads, when it reads one.

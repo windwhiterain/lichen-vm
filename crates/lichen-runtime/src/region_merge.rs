@@ -102,15 +102,15 @@ struct Link {
 /// # Invariant
 /// **One producer, one consumer at a time**: a `compose` inlines a consumer *of one producer*, so
 /// a region is either a chain — every node reading the one before it — a fan-out, every node
-/// reading the first, or a **fan-in**, that chain with a node reading an earlier producer as well.
-/// A tree that is none of these names no single code the composition serves.
+/// reading the first, or a **fan-in**, one node reading two producers with every other body read
+/// by a body after it. A tree that is none of these names no single code the composition serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     /// Every node but the first reads the first.
     FanOut,
     /// Every node but the first reads the one before it, and no node reads two producers.
     Chain,
-    /// Every node but the first reads the one before it, and some node reads an earlier one too.
+    /// One node reads two producers, and every other node is read by a node after it.
     FanIn,
 }
 
@@ -513,10 +513,10 @@ fn first_input_class(schema: &RegionSchema) -> Option<ScalarClass> {
 /// The merge one region's nodes decide, or why they do not.
 ///
 /// # Invariant
-/// **A chain, a fan-in of it, or one producer's consumers**, in evaluation order, and every
-/// condition below is the pair's own: the shape is decided first, then one absorbed position per
-/// edge, and a merge that slipped past either would be a node reading a buffer the program never
-/// wired to it — the union cannot make one, and `PortsDoNotCorrespond` is where that stops.
+/// **A chain, a fan-in, or one producer's consumers**, in evaluation order, and every condition
+/// below is the pair's own: the shape is decided first, then one absorbed position per edge, and
+/// a merge that slipped past either would be a node reading a buffer the program never wired to it
+/// — the union cannot make one, and `PortsDoNotCorrespond` is where that stops.
 fn merge_region(
     graph: &Graph,
     starts: &[usize],
@@ -626,8 +626,8 @@ fn merge_region(
 /// # Invariant
 /// **One producer, one consumer at a time**, read off the edges and not off the node count: a
 /// chain is every node reading the one before it, a fan-in is that chain with a node reading an
-/// earlier producer as well, and a fan-out is every node reading the first. A node that reaches
-/// a region value as its **extent** reads nothing at an input position.
+/// earlier producer as well or **two siblings one consumer reads both**, and a fan-out is every
+/// node reading the first. A node that reaches a region value as its **extent** reads no input.
 fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, MergeRefusal> {
     let refused = MergeRefusal::RegionIsNotAPair {
         nodes: positions.len(),
@@ -650,7 +650,31 @@ fn shape(graph: &Graph, starts: &[usize], positions: &[usize]) -> Result<Shape, 
     let fan_out = positions[1..]
         .iter()
         .all(|position| reads(graph, starts, positions[0], *position));
-    fan_out.then_some(Shape::FanOut).ok_or(refused)
+    if fan_out {
+        return Ok(Shape::FanOut);
+    }
+    // **Two siblings and the one consumer that reads both**: the fan-in's own composition.
+    if siblings(graph, starts, positions) {
+        return Ok(Shape::FanIn);
+    }
+    Err(refused)
+}
+
+/// Whether the region is **two independent producers and the one consumer that reads both**.
+///
+/// # Invariant
+/// **Every node but the last feeds the last, and the last reads two or more of them**: the
+/// composition inlines each body but the last into the body that reads it and drops that body's
+/// own store, so a second reader is one that reads a value nothing writes, and a producer the
+/// last does not read has no reader to be inlined for.
+fn siblings(graph: &Graph, starts: &[usize], positions: &[usize]) -> bool {
+    let (last, producers) = positions
+        .split_last()
+        .expect("a shape is decided over two or more");
+    absorbed_count(graph, starts, positions, *last) > 1
+        && producers
+            .iter()
+            .all(|producer| reads(graph, starts, *producer, *last))
 }
 
 /// The input positions one node fills from a producer of the region.
