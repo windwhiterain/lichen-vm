@@ -1,0 +1,138 @@
+---
+  order = "22"
+  compute = import "compute.lichen"
+  doc = "KV-cache append: `K'[p][d] = K[p][d]` for every `p` but the one written, and \
+    `K'[t][d] = k_new[d]` at `t` — the write a decoding loop performs once per token and \
+    that no example above it in `docs/notes/llm-operators.md` performs. Attention is the \
+    **read** side of the same buffers; this is the write side, and it is the one that turns out \
+    to be the harder of the two.\n\n\
+    **The cache is `capacity` positions of `dim`-wide rows, and the launch is over \
+    `capacity * dim` elements — one lane per element of the cache, not one per new row.** The \
+    reason is a rule, measured: a `compute.write` names a slot of an output buffer that is \
+    **exactly as long as the launch's extent** (`crates/lichen-compute/src/compute.rs:5979`), and \
+    `compute.collect` hands back **every** element of it (`:1550-1621`), so a kernel that \
+    launched over `dim` and wrote one row could not hand the cache back at all. A second rule \
+    forces the rest: a `compute.write` is **the value of an output position, not an effect** \
+    (`code-audit.md` P1-42, `wontfix:D17`), so every lane must write and no two lanes may \
+    write the same slot. The spelling that satisfies both is a **bijection** from lane to slot, \
+    and this one is the **transpose** of the obvious one: lane `i` is \
+    `(column, position) = (i / capacity, i % capacity)` and writes at \
+    `position * dim + column`. Lane 1 writes slot 2 and lane 4 writes slot 1, so **the write \
+    address is computed and is not the lane's own index** — which is the whole point of the \
+    exercise. A row-major enumeration would make `.at i` and the question would not be asked. \
+    `compute.row` and `compute.col` are the **column** and the **position** here, in that \
+    order, because the **second** leaf is what they divide by (below).\n\n\
+    **The leaves are positional and the new ones go after the second.** The **first** scalar leaf \
+    is the launch extent (`scalar_leaf_classes`, \
+    `crates/lichen-compute/src/compute.rs:1849`) and the **second** is what `compute.row` / \
+    `compute.col` divide by (`crates/lichen-compute/src/compute/body.rs:788-815`). So `Par` is \
+    `.n` (the extent `8`), `.cap` (the divisor `4`), `.dim` (`2`) and `.t` (`2`) in that order: \
+    a new leaf goes **after** the divisor, as `examples/matmul.lichen` says for `k.k`. This \
+    kernel has **three** runtime scalars and runs on the direct path; the graph path carries all \
+    three beside the extent (measured, below).\n\n\
+    **The arithmetic is exact, and the declared output is worked out by hand.** The cache's \
+    filled prefix is positions `0` and `1` — `K = 1 2 / 3 4` and `V = 5 6 / 7 8` — positions `2` \
+    and `3` are spare, the new key row is `100 200`, the new value row is `300 400`, and `t = 2`, \
+    which is what a decode loop does: the new row lands on the **first unfilled** position. So \
+    `K' = 1 2 / 3 4 / 100 200 / 0 0` and `V' = 5 6 / 7 8 / 300 400 / 0 0`. Every element is an \
+    integer below `2^24`, every one of them is copied or replaced rather than computed, and \
+    there is no `exp` and no `sqrt` anywhere in the body — **nothing here is modelled**, unlike \
+    SiLU, softmax, LayerNorm and attention, whose declared values are the language's own \
+    transcendental sequences.\n\n\
+    **What the write rules say about a region past what the lane's own count covers — three \
+    rules, and they do not agree with each other.** (a) A write outside the span is **dropped \
+    silently** (`compute.rs:6255-6263`, whose own sentence is *a write outside the span is \
+    dropped rather than aliasing another worker's slots*). Measured, on both backends, with the \
+    kernel a decode loop would really want — one lane per **column** of the new row, writing at \
+    `t * dim + d`, which is `4` and `5` over a count of `2`: the `cpu` path answers `[0.0, 0.0]` \
+    and so does the RTX 3060. **No error, no refusal, no report line.** That is the shape this \
+    example cannot take, and it is why the cache is rewritten whole. (b) A host input is uploaded \
+    at its **own length** (`lichen-compute-gpu/src/dispatch.rs:320`, `:976-984`, `:1066-1078`), \
+    so a host input **shorter than the count** is refused by name: the same cache with its keys \
+    holding only the filled prefix, `[1, 2, 3, 4]`, is refused on the device by *input buffer 0 \
+    holds 4 element(s) but the run covers 8 index/indices, so a lane would read past it* \
+    (`InputShorterThanCount`, `dispatch.rs:219`), while the `cpu` path answers \
+    `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` — the elements past the input's own length \
+    reading as `0`, with nothing said (`compute.rs:6234`, whose `.unwrap_or(0)` is the rule). \
+    **So a cache whose capacity is larger than its filled prefix cannot be handed over as a \
+    shorter buffer: on the device it is refused, and on the host it is silently zero-filled \
+    past its own end.** This file therefore carries the whole cache, spare positions and all. (c) \
+    A body that reaches **past its buffer** while the count stays inside it is an \
+    out-of-bounds device read, uncaught (`examples/matmul.lichen` measures the half that is \
+    caught). And **a written-but-never-read region is not observable**: the output buffer is \
+    exactly `count` long on the host, and `collect` reads all of it, so there is no region past \
+    the count to see. On the device the output is allocated `padded` — a whole number of \
+    workgroups, `64` here (`dispatch.rs:1052`) — and `collect` still reads `count`, so the surplus \
+    lanes' slots are written and never handed back.\n\n\
+    **The device leg, measured, and it is the leg this operator is not ready for.** With the \
+    incoming row padded to the cache's own length — `nk = 100 200 0 0 0 0 0 0` — the RTX 3060 \
+    answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` and \
+    `[5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]` through the direct `compute.plrun` leg, \
+    **element for element what `cpu` answers**. As the example spells it — a `dim`-wide incoming \
+    row beside a `capacity * dim` cache — the device **refuses** by name, with the `InputShorterThanCount` \
+    sentence of (b) naming buffer 2, the new key row. That is rule (b) meeting an operator whose \
+    incoming row is *inherently* shorter than its cache, and it is why this file declares \
+    `cpu`, the backend the example suite runs.\n\n\
+    **The graph path records this body and then refuses to dispatch it — measured, both halves.** \
+    A single-kernel step over the same operator records cleanly: **1 node, 8 graph inputs, 10 \
+    values**, and `node 0: inputs [4, 5, 6, 7] / count Value(0) / scalars [Value(1), Value(2), \
+    Value(3)]` — the four buffers at inputs 4 to 7, the extent at value 0 and **all three** \
+    runtime scalars carried beside it, which is `record_launch`'s own rule (*the first scalar leaf \
+    is the extent, and every other leaf is carried for what it is*, \
+    `crates/lichen-compute/src/compute.rs`, §9 of `docs/notes/two-dimensional-launch.md`). The \
+    recording is **byte-identical** with the incoming row narrow and with it padded, so nothing in \
+    it looks at the data. The **run** is refused, by name, at submit: *the backend failed \
+    submitting a kernel node: input buffer 0 holds 4 element(s) but the run covers 8 \
+    index/indices*. The same program with 12-element inputs says *holds 6 element(s)*, and with \
+    16-element inputs it does not refuse at all — 32 bytes reads as 4, 48 as 6, 64 as 8, so the \
+    count this leg hands the backend is the payload length **in eight-byte elements** while every \
+    buffer here is `Float`. I did not trace that to a site, so it is stated as the arithmetic I \
+    measured and not as a diagnosis; what it costs is the whole graph leg for this operator. For \
+    contrast, the same crate's **one-buffer `Float` graph with no runtime scalar** runs on the \
+    device through `compute.graphrun` and answers `[2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]`, \
+    so the leg itself is available and the refusal is this operator's.\n\n\
+    **What a decode loop still needs, stated plainly.** Three things, and two of them are \
+    expressible today. (a) **Carried state across calls — yes.** A `compute.plrun`'s output is a \
+    buffer a later `compute.plrun` can name as an input; `examples/silu.lichen` and \
+    `examples/attention.lichen` both do it, and this operator's output is shaped to be fed \
+    straight back in, which is the only reason it rewrites the whole cache rather than one row. \
+    (b) **A second kernel reading what the first wrote — yes**, the same two steps. (c) **A loop — \
+    no, and this is a wall rather than a gap.** The language has **no iteration form at all**: no \
+    `for`, no `while`, no loop keyword appears in any of the 34 examples, and `@loop` is a fold \
+    *inside* one lane, not over dispatches. A kernel cannot loop over positions internally \
+    either, because a `compute.call` inside a parallel body is refused with a `NodeId` \
+    (`code-audit.md` P1-39, `todo`). So `N` decode steps are `N` source-level `compute.plrun` \
+    calls with `t` written out at each, and **there is no way to advance `t`**: it is a parameter \
+    the host hands in, and the language has no mutable state to hold a counter between calls. \
+    That is the missing piece, and nothing in this file's operator has to change for it to land.\n\n\
+    **One workaround, and it is a rule rather than a preference.** The lane enumerates the cache \
+    **column-major** so the write address is not the lane's own index. It could have enumerated \
+    it row-major and written `.at i`, which is shorter and answers the same numbers — but it \
+    would not have exercised the write side at all, and the whole reason this example exists is \
+    that the write address is computed. The rule underneath is D17's, that a write is the value \
+    of a position rather than an effect, which forces one write per lane per output and so \
+    forces the bijection."
+  output = "([1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0], [5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]): tuple{array{Float, 8}, array{Float, 8}}"
+---
+KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
+KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+Par   = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+Arg   = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
+append_raw = (k : Par) => {
+  column = compute.row k
+  position = compute.col k
+  slot = position * k.dim + column
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  fresh = position == k.t
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+}
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+nk = (compute.buffer ([100.0, 200.0] : array{Float, 2}) : (compute.Buf Float))
+nv = (compute.buffer ([300.0, 400.0] : array{Float, 2}) : (compute.Buf Float))
+out = (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, .v vbuf, .nk nk, .nv nv))) : KVOut)
+(compute.collect out.k : array{Float, 8}, compute.collect out.v : array{Float, 8})
