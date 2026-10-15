@@ -243,11 +243,13 @@ need a node-local producer for `r`.
   one-query step's output extent **is** the head dimension.
 - **`dim` is carried as three unrelated literals** (`.dim`, `.kdim`, `.dim`) and `.kdim` is the **stride**,
   so a mismatch reads the cache at the wrong pitch, silently.
-- **Where the loop wall bites.** Carried state is expressible **inside one program and nowhere else**: this
-  file proves it five times, and `cached` is a binding in *this* term — an `N`-step spelling repeats the
-  program's shape `N` times with the cache and the incoming-row literals written out `N` times. Nothing is
-  reused (`3N` buffers, none nameable again), and the one missing piece is **a position**: `t` is a literal
-  leaf, step *n + 1* needs `t + 1`, and nothing in this operator must change for that to land.
+- **Where the loop wall actually bites — not where this note first said it did**
+  (`wall-claims-audit.md` §3, §4). Carried state is expressible inside one program, and an `N`-step loop
+  **is written once**: a lichen function recurses and may dispatch a kernel on each step, so this file's
+  shape is not repeated `N` times. What is missing is narrower and it is about **silence**: a
+  **loop-carried** value cannot advance a launch, and the failure is **silent for a recursion state** and
+  loud for a parameter. `dim` is still carried as three unrelated literals (`.dim`, `.kdim`, `.dim`) and
+  `.kdim` is the **stride**, so a mismatch reads the cache at the wrong pitch, silently.
 - **A hypothesis worth testing**: the weighting stage is **not** the GEMV refusal — its reduction is
   *longer* than its output — so **a chained step may reach a device before a lone GEMV does**. Unverified:
   the chain's device and graph legs are inferred from the KV-cache and GEMV measurements, because the CLI
@@ -314,6 +316,13 @@ need a node-local producer for `r`.
   region is not observable**: `collect` reads every element of a buffer exactly `count` long
   (`compute.rs:1550-1621`) and on the device the output is allocated `padded` = 64 (`dispatch.rs:1052`)
   while `collect` still reads `count`, so the surplus lanes' slots are written and never handed back.
+  **The audit re-measured all three** (`wall-claims-audit.md` §6): the **drop is a spelling gap** — raising
+  the count so the write lands inside it works, which is why the committed operator rewrites the whole
+  buffer rather than one row — and **a third silent no-op sits beside it**: aiming the write at the
+  **input** buffer, the only in-place spelling, **runs and does nothing**, collecting the cache unchanged
+  with no error and no report line. That third one is **not** filed as a defect, because
+  `code-audit.md`'s `wontfix:D17` is a contract about what a write **is** — *the value of an output
+  position and not an effect* — and a write to an input is exactly the spelling that sentence declines.
 - **The graph path refuses this operator's run, and the arithmetic looks like eight-byte elements**
   (measured, not diagnosed). The recorded graph is one node holding the extent plus **all three** runtime
   scalars. At submit it refuses *"input buffer 0 holds 4 element(s) but the run covers 8"*; with 12-element
@@ -323,13 +332,16 @@ need a node-local producer for `r`.
   works and the refusal is this operator's. `ragged_host` (`graph-ir/src/run.rs:520`) compares payload
   bytes and its own `# Invariant` **admits a width-ratio blind spot**, but the counting site was not
   proven.
-- **What a decode loop still needs, measured.** Carried state across calls: **yes** — a `plrun` output is a
-  buffer a later `plrun` takes as an input, and the committed operator's output is shaped to be fed
-  straight back. A second kernel reading what the first wrote: **yes**, the same two steps. **A loop: no,
-  and that is a wall** — no `for`, `while` or loop keyword appears in any of the 34 examples; `@loop` is a
-  fold inside one lane; and `compute.call` inside a parallel body is refused with a `NodeId`
-  (`code-audit.md` P1-39, `todo`). **And there is no way to advance the position**: `t` is a parameter the
-  host hands in and the language holds no mutable state between calls.
+- **What a decode loop still needs, measured — and corrected** (`wall-claims-audit.md` §3, §4). Carried state
+  across calls: **yes** — a `plrun` output is a buffer a later `plrun` takes as an input, and the committed
+  operator's output is shaped to be fed straight back. A second kernel reading what the first wrote:
+  **yes**. **A loop: yes, and the claim that there is none was wrong** — a lichen function **recurses**, and
+  a recursive function may dispatch a kernel on each step, so an `N`-step decode loop is written **once**
+  instead of `N` times (measured end to end). The honest cost: the trip count is the **function's own
+  state**, so nothing else in the program can see it, and every launch inside it inherits the finding
+  below. **Advancing the position: a top-level binding already does it** — a binding becomes a runtime
+  scalar and the kernel follows it; what is absent is a **loop-carried** value, whose failure is **silent
+  for a recursion state and loud for a parameter**.
 - **The `examples` binary cannot currently give a verdict at all**: it panics with *"invalid SlotMap key
   used"* (`crates/lichen-lowlevel/src/evaluation.rs:517`) **on `dev` itself, with the new example removed**
   — a pre-existing failure that **masks** the four drift names the runner otherwise reports.
