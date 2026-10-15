@@ -267,3 +267,22 @@ the cell.**
 `refine_class_low_type`; and `a68e3320` deleted `Module::class_value` after measuring 817 corpus programs,
 which closes the class route (and matches this note's own measurement that it was `None` at the failing
 read). There is **no `wontfix:D<n>` line over the classing**.
+
+## 7. A second witness, from a real operator
+
+A GEMV written as an ordinary operator reaches the same wall without anything hand-built
+(`examples/gemv.lichen`, `da584de5`): recorded through the graph path, it is first refused at submit by
+**`RaggedInputs`** (`crates/lichen-graph-ir/src/run.rs:273`, `ragged_host` at `:520-529`) — *"node 0's
+inputs are not all the same length: 48 and 12"*, comparing **payload bytes**, which a GEMV's two inputs
+(`M · kdim` and `kdim`) can never satisfy unless `M = 1` — and **once the two inputs are equalised**, submit
+is refused by the class arm:
+
+```
+instruction 0 mixed an integer and a float in one operation … this is a malformed fragment
+rather than an unsupported shape
+```
+
+That is the same `unwrap_or(ScalarClass::Int)` chain as attention's `attend`
+(`compute.rs:2424-2430`), reached by an operator that a decoder would actually run. It refuses
+**earlier** than the eight-byte payload count the KV-cache slice measured (`§` the operators note): those
+are two different bugs, and neither this note nor that slice conflates them.
