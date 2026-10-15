@@ -131,8 +131,6 @@ fn compiled(extra: &str) -> Vec<String> {
 /// first returns a different answer for the same body, and the recorded graph then
 /// carries a kernel the program never wrote.
 #[test]
-#[ignore = "the element class is read from a lazily filled cell, so it answers Unknown when \
-attend compiles first: its fragment comes out Int where the program declares Float"]
 fn a_kernels_classes_do_not_depend_on_which_kernel_compiled_first() {
     let control = compiled(CONTROL);
     let recorded = compiled(STEP);
@@ -159,8 +157,6 @@ fn a_kernels_classes_do_not_depend_on_which_kernel_compiled_first() {
 /// Node 1 is the consumer by position: a chain records its dispatches in the order
 /// the body performs them, and the body dispatches `scores` first.
 #[test]
-#[ignore = "the consumer node is recorded with output_classes [Int]; see the sibling test's \
-reason"]
 fn the_recorded_consumer_carries_the_programs_float_class() {
     let (module, value, _root) = common::run(&format!(
         "---\n  compute = import \"compute.lichen\"\n---\n{KERNELS}{STEP}"

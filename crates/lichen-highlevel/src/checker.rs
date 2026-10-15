@@ -531,6 +531,23 @@ where
         for &func_node in &checker.lambda_value_nodes {
             checker.module.evaluate_node_deep(func_node, None);
         }
+        // A declared type is a fact about the template: every written type term is
+        // decided here, before any body runs.
+        for index in 0..checker.ir.expr.len() {
+            let expression = ExprId(index as u32);
+            let is_type = matches!(
+                checker.ir[expression].kind,
+                ExprKind::TypeFunction { .. }
+                    | ExprKind::TypeTuple(_)
+                    | ExprKind::TypeSet(_)
+                    | ExprKind::TypeTable(_)
+                    | ExprKind::TypeStruct { .. }
+                    | ExprKind::TypeArray { .. }
+            );
+            if is_type && let Some(term) = checker.state[expression].term {
+                checker.module.evaluate_node_deep(term, None);
+            }
+        }
         // The definition pass: run the program so the apply-time checks fire.
         if !checker.check_failed() {
             // Its order is user-visible, so functions are sorted by the IR
