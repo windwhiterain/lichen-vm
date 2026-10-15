@@ -1,0 +1,239 @@
+---
+  order = "25"
+  compute = import "compute.lichen"
+  doc = "Two decode steps, not one: `examples/decode.lichen`'s whole chain run twice by a \
+    recursive `drive`, with the cache, the transcript and the step's own output threaded \
+    through the recursion's argument. **The declared output has three entries, and each \
+    entry is one of the three things the loop is asked for.** The first is the \
+    **transcript**: two steps' outputs laid end to end, step zero's at slots 0 and 1 and \
+    step one's at slots 2 and 3. The second is **the last step's output alone**, \
+    `[11.235222, 13.9678135]`, which is the transcript's second row and the only step \
+    output anything outside the recursion can name. The third is **the trip count**, `2`.\n\n\
+    **The data is `decode.lichen`'s, unchanged, and that is the point of it.** The cache is \
+    `K = 1 2 / 3 4 / 0 0 / 0 0` and `V = 5 6 / 7 8 / 0 0 / 0 0`, the new row is `nk = 1 1` \
+    and `nv = 30 40`, the query is `q = 1 0`, `capacity = 4`, `dim = 2`, and the loop starts \
+    at `t = 2` — the first unfilled position, the same one `examples/decode.lichen` writes. \
+    **So step zero answers exactly what that file declares**, `[8.888384, 10.773098]`, \
+    because it *is* that file's program with the step inside a recursion, and step one \
+    answers a different row because the cache grew. A loop whose first step reproduces the \
+    single-step example bit for bit is a loop whose second step means something.\n\n\
+    **The state is the argument tuple, and the trip count is element zero of it.** `drive` \
+    takes four arguments and they arrive as `s(0)` through `s(3)`: the step index, the cache \
+    (`s(1)`, the `KVOut` of the two rewritten buffers), the transcript (`s(2)`), and the \
+    step's own output (`s(3)`). **The step is written once.** The guard is `s(0) == 2` and \
+    the base arm is `then s` — the last thing the recursion does is hand back the state it \
+    was given — so line 93 is the only place the chain appears. \
+    `docs/notes/wall-claims-audit.md` §3 spells the same loop with the step written **twice**, \
+    because its base case runs its own `plrun`; returning the state instead is shorter, and \
+    it is a **preference**, not a rule: a block is allowed as a `then` arm, measured.\n\n\
+    **A launch follows a loop-carried value — a buffer and a scalar alike — and that \
+    answers §4's open question.** The append's position leaf is `.t (s(0) + 2)` on line 87: \
+    written **inside** the recursion and computed from the function's own state, never handed \
+    in. The cache arrives as `s(1).k` and the transcript as `s(2)`. Measured on this machine \
+    at `dev@01da5a49`, three spellings, each its own program: a loop-carried **buffer** as \
+    an input answers `[1.0, 2.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0]`, position 0 then position \
+    1; the same loop with the trip count **itself** as `.t s(0)` answers that same row; and \
+    with the position **computed** as `.t (s(0) + 1)` it answers \
+    `[0.0, 0.0, 1.0, 2.0, 1.0, 2.0, 0.0, 0.0]`, position 1 then position 2. **Each of the \
+    two launches got its own value**, which a static read of the cell could not produce. So \
+    the shape the ladder has been planning around — *nothing advances a position* — is \
+    **narrower than written**: a launch follows a loop-carried scalar today, and \
+    `examples/decode.lichen`'s literal `2` is a choice rather than a wall.\n\n\
+    **What does not generalise is anything one level removed.** Move the same launch into a \
+    helper the recursion calls and it stops following, **silently**: a helper whose parameter \
+    is a buffer and whose **every leaf is a literal** collects `raw none` — no error, no \
+    refusal, no report line — and the same helper with a scalar leaf is refused loudly, \
+    *input buffer 0 holds Float elements, but this kernel reads that position as Int*. A \
+    `@gc` block over the same bindings answers `raw none` too, and a `@gc` block **inside** \
+    the recursion panics with *invalid SlotMap key used*. **So `raw none` is not the \
+    recursion's own symptom**, which is how `docs/notes/wall-claims-audit.md` §4 records \
+    it: it is the symptom of a launch whose buffer or scalar has crossed a function \
+    boundary or a block scope, and the recursion's own body is exactly where the launch does \
+    follow.\n\n\
+    **One leaf does not follow even that: the extent.** The same three spellings with the \
+    **first** scalar leaf — the launch extent, whatever it is called \
+    (`crates/lichen-compute/src/compute.rs:1849`) — computed from the state as `.n (s(0) * \
+    8)`, collect an **empty** buffer, again with no error and no report line. Every other \
+    leaf follows the recursion; the one that decides how many lanes run does not. That is \
+    the sharpest edge a growing cache meets below.\n\n\
+    **The trip count is not hidden, which §3's stated cost says it is.** \
+    `docs/notes/wall-claims-audit.md` §3 records the cost of the loop as *the trip count is \
+    a function's own state, so nothing else in the program can see it*. **The third entry \
+    of this file's declared output is `2`, read as `final(0)` outside the recursion.** An \
+    argument tuple is ordinary data and the recursion's answer is an ordinary value, so what \
+    is actually true is narrower and the other way round: the trip count is **decided by a \
+    literal in the recursion's own body**, and nothing outside can read or move it *while \
+    the loop runs*. Replacing that literal with a top-level `Int` binding is refused — \
+    *table lookup missed — no entry for this key* — against a control whose only difference \
+    is the literal, which runs. **What the loop can be asked afterwards is how far it got, \
+    not what it should have done.**\n\n\
+    **Collecting every step's output is the one thing the loop does not give for free, and \
+    the cost is the extent rule.** `weigh` launches over `dim = 2` and writes two slots, so \
+    it cannot also write a four-slot transcript: a `compute.write` names a slot of an output \
+    buffer **exactly as long as the launch's extent** \
+    (`crates/lichen-compute/src/compute.rs:5979`), and a write past that span is dropped in \
+    silence — the rule `examples/kvcache.lichen` measures, cited here rather than \
+    re-measured. **So the sixth kernel, `keep`, is that rule's spelling and nothing else.** \
+    It launches over the transcript's four slots and every lane writes **the value of its \
+    own slot** (`code-audit.md` P1-42, `wontfix:D17`): the step's output where \
+    `base <= lane < base + dim`, the old transcript everywhere else. Only the last step's \
+    `out` is reachable by name; **step zero's survives solely because a buffer was threaded \
+    for it**, and a loop that threaded none would answer one row.\n\n\
+    **The hand-offs are `decode.lichen`'s, plus one new row.** Stage 1 over \
+    `capacity · dim = 8`, stage 2 over 4, stages 3a and 3b over 4 each, stage 4 over 2 — the \
+    same five shapes, the same position-major cache, the same two address forms, the same \
+    whole-cache rule and the same two config spellings, all cited there rather than restated. \
+    **The sixth row is new**: `keep` launches over the transcript's four slots, reads `x` at \
+    4 and `o` at **2**, and writes 4 — the first kernel in this ladder whose output is \
+    longer than either input. Its leaves are `.n, .j, .dim`: the extent first, and because \
+    the body takes no coordinate the second leaf is an ordinary runtime scalar wherever it \
+    sits, which `examples/gemv.lichen` measures rather than this file. **Its device leg is \
+    not reached** — the CLI installs no backend — and on the measurements its predecessors \
+    recorded it is the leg that would refuse it first, `InputShorterThanCount` on the \
+    two-element step buffer: **that is reasoned from those measurements and not measured \
+    here.**\n\n\
+    **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — a \
+    wall.** Turning a step's output row into a token needs `ln` over the logits, and **`ln` \
+    does not exist**: its range reduction wants `floor`, a shift or a bitcast, the primitive \
+    set has none of the three, and no kernel computes it \
+    (`docs/notes/floating-point.md` §6). `max`, `floor` and `exp` are all here; the one \
+    operator a sampler needs is not. (b) **A stop condition — a wall**, measured in the \
+    trip-count paragraph above: the guard must be a literal, so a loop that cannot be told \
+    when to stop can unroll but cannot generate. (c) **A growing cache — mostly work, with \
+    one wall inside it.** Carrying a longer cache is a longer buffer and a larger `.n`, both \
+    writable today; what cannot be written is an **extent that follows the state**, which is \
+    the empty-collect paragraph above. Launching a fixed large extent and masking the unused \
+    tail is therefore the only spelling available, and it costs the lanes. (d) **Per-token \
+    rows — work.** `nk`, `nv` and `q` are top-level constants here, so both steps append the \
+    same row and ask the same question; making them vary is the launch-follows-a-loop-carried-\
+    buffer measurement read the other way, since they would be loop-carried buffers.\n\n\
+    **What is exact and what is modelled.** **Exact, in `f32`:** the append, every element \
+    copied or replaced being an integer below `2^24` and no `exp` or `sqrt` in it; the dot \
+    products `1, 3, 1, 0` then `1, 3, 1, 1`, every term a product of integers under 40; the \
+    row maximum `3.0`; the offsets `score - max`, which are the **exact** integers \
+    `-2, 0, -2, -3` and then `-2, 0, -2, -2`; `exp(0) = 1.0` **exactly**, because the \
+    polynomial at a zero argument is `1.0` and seven squarings of `1.0` are `1.0`; and \
+    every `weight · V` product and sum, **given** the weights. **Modelled:** `exp(-2)` and \
+    `exp(-3)` by the degree-10 Taylor sum of `docs/notes/floating-point.md` §6 — the \
+    argument clamped at `-128`, Horner over `x / 2^7`, seven squarings — and **never** a \
+    reference `e^x`; and everything downstream of them. **The declared output was derived \
+    independently**, by re-implementing that published sequence in `f32` outside the \
+    workspace, never calling the crate under test, and by reproducing the fold order the \
+    bodies have: an `@loop` fold counts **down**, so step zero's denominator accumulates \
+    `exp(-3), exp(-2), exp(0), exp(-2)` and its values fold accumulates `a[3]·V'[3]`, \
+    `a[2]·V'[2]`, `a[1]·V'[1]`, `a[0]·V'[0]`, while step one's denominator accumulates \
+    `exp(-2)` three times and then `1.0`. Every intermediate agrees with what the program \
+    prints: step zero's `scores = [1.0, 3.0, 1.0, 0.0]` and \
+    `maxima = [3.0, 3.0, 3.0, 3.0]`, step one's `[1.0, 3.0, 1.0, 1.0]` and the same \
+    maxima, and the weights are `[0.10249112, 0.75731343, 0.10249112, 0.03770435]` then \
+    `[0.09625506, 0.7112348, 0.09625506, 0.09625506]`. **For scale, the same arithmetic over \
+    a reference `e^x` in `f64` gives `[8.8883843, 10.7731007]` for step zero** — the \
+    degree-10 Taylor costs about half an ulp in the first element and three in the second, \
+    which is its own error and not the fold order's — and step one's weights as \
+    `[0.09625513525746869, 0.7112345942275937, ...]` against the modelled row above.\n\n\
+    **Three workarounds and two of them are rules.** (1) **The transcript is a sixth kernel \
+    rather than a wider `weigh`** — a **rule**, the extent rule named above. (2) **`keep` \
+    reads the step's output at `lane % k.dim`, not at `lane - base`** — a **rule**: on the \
+    lanes where `lane - base` leaves the two-element buffer the address would be out of \
+    range altogether, which answers `0` past a host buffer's end \
+    (`crates/lichen-compute/src/compute.rs:6234`) and is refused by name on a device, so the \
+    address is made total instead. (3) **The chain lives in the recursion's body and is not \
+    factored into a named `step` function** — a **rule**, measured above: the helper collects \
+    `raw none` in silence, which is the worst of the three failures because nothing says so. \
+    **Two things in this file are preferences and are named as such because neither is \
+    forced:** the base arm returns the state rather than repeating the step, and the incoming \
+    row and query are the same every step because a varying one would need buffers threaded \
+    for a reason this file does not otherwise exercise. The rule underneath all of it is \
+    D17's, that a `compute.write` is **the value of an output position and not an effect**, \
+    which is why `keep` writes every one of the transcript's four slots every step and takes \
+    the old value back where the step does not reach."
+  output = "([8.888384, 10.773098, 11.235222, 13.9678135], [11.235222, 13.9678135], 2): tuple{array{Float, 4}, array{Float, 2}, Int}"
+---
+KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
+KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+ArgK  = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
+append_raw = (k : ParK) => {
+  column = compute.row k
+  position = compute.col k
+  slot = position * k.dim + column
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  fresh = position == k.t
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+}
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+Gout = struct{.y (compute.Buf Float)}
+ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+ArgS = struct{.n Int, .kdim Int, .I Gin}
+score_raw = (k : ParS) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+}
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+Row  = struct{.x (compute.Buf Float)}
+Maxs = struct{.m (compute.Buf Float)}
+ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
+rowmax_raw = (k : ParM) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
+}
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
+Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
+OutY = struct{.y (compute.Buf Float)}
+ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
+softmax_raw = (k : ParY) => {
+  i = compute.range k.n
+  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  total = fold (k.n, 0.0 ~ "identity")
+  here = exp (compute.read ((compute.Read _)(.from k.in.x, .at i)) - m)
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
+}
+softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+AV   = struct{.a (compute.Buf Float), .v (compute.Buf Float)}
+OutW = struct{.o (compute.Buf Float)}
+ParW = struct{.n Int, .dim Int, .keys Int, .in AV, .out OutW}
+ArgW = struct{.n Int, .dim Int, .keys Int, .I AV}
+weigh_raw = (k : ParW) => {
+  i = compute.range k.n
+  column = compute.col k
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element")))
+}
+weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+KTIn  = struct{.o (compute.Buf Float), .x (compute.Buf Float)}
+KTOut = struct{.y (compute.Buf Float)}
+ParT  = struct{.n Int, .j Int, .dim Int, .in KTIn, .out KTOut}
+ArgT  = struct{.n Int, .j Int, .dim Int, .I KTIn}
+keep_raw = (k : ParT) => {
+  lane = compute.range k.n
+  base = k.j * k.dim
+  held = compute.read ((compute.Read _)(.from k.in.x, .at lane))
+  here = compute.read ((compute.Read _)(.from k.in.o, .at (lane % k.dim)))
+  fresh = (lane >= base) & (lane - base < k.dim)
+  mine = if fresh then here else held
+  compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (mine ~ "element")))
+}
+keep = compute.parallel (keep_raw ~ "claim:Reduction(element)") "cpu"
+kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
+nk = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
+nv = (compute.buffer ([30.0, 40.0] : array{Float, 2}) : (compute.Buf Float))
+q = (compute.buffer ([1.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
+log = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
+spare = (compute.buffer ([0.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
+drive = s => if s(0) == 2 then s else { cached = (compute.plrun append ((ArgK)(.n 8, .cap 4, .dim 2, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk nk, .nv nv))) : KVOut)
+  scored = (compute.plrun score ((ArgS)(.n 4, .kdim 2, .I Gin(.w cached.k, .x q))) : Gout)
+  topped = (compute.plrun rowmax ((compute.A Row)(.n 4, .I Row(.x scored.y))) : Maxs)
+  weights = (compute.plrun softmax ((compute.A Soft)(.n 4, .I Soft(.x scored.y, .m topped.m))) : OutY)
+  out = (compute.plrun weigh ((ArgW)(.n 2, .dim 2, .keys 4, .I AV(.a weights.y, .v cached.v))) : OutW)
+  logged = (compute.plrun keep ((ArgT)(.n 4, .j s(0), .dim 2, .I KTIn(.o out.o, .x s(2)))) : KTOut)
+  drive (s(0) + 1, cached, logged.y, out) }
+final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
+(compute.collect final(2) : array{Float, 4}, compute.collect final(3).o : array{Float, 2}, final(0))
