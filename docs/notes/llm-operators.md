@@ -22,6 +22,7 @@ test file.
 | **RoPE** | **landed** (`2f7214af`): `cos`/`sin` added to the language (definitions spliced by the lowerer, read by the bridge like `exp`/`sqrt`), then the pairwise rotation as three elementwise kernels. It is **one lane per element** — a rule, not a preference: a `.to` chain can fill both positions of a pair, but its outer link is contended and order is not a contract. Domain `|x| ≤ 8192`, bit-exact against a model; the clamp above that is a **silent `Select`**, so an unbounded angle gets `sin(8192)` |
 | **matmul** | **landed, naive and non-square** (`3fdedd3d`, the upload fix `08c15c45`): one lane per element of `C`, the `k` fold inside the lane, with the coordinates **named** by `compute.row`/`compute.col` (`459f3663`). The wall the measurement found was not the one this note predicted — it was the **upload width**: a device run uploaded `count × element` and zeroed the tail, so a read set that was not a prefix of its buffer silently answered `0`, and for `m×K · K×n` the device's two length rules together admitted **only `m = K = n`** (a non-square `2×3 · 3×2` answered `[25, 28, 28, 32]` against the CPU's `[58, 64, 139, 154]`, silently, and a body with **no `@loop`** disagreed identically, which ruled out a lowering bug). **That is now fixed**: a host input is uploaded at its **own length** (the invariant is `[0, len)`, the padding past `len` filled on the device), so `2×3 · 3×2` answers what the CPU answers, element for element, and `examples/matmul.lichen` is committed **non-square** for that reason. What remains, in order: the host still cannot see the body's read set, so a body reaching **past its buffer** while the count is inside is an out-of-bounds device read (the silent-zero region shrank from `[count, padded)` to `[len, padded)` rather than closing), and a host input **shorter than the count** is refused by name; then the **workgroup geometry** (a real two-dimensional workgroup, a row-shaped `Shared` exchange). **An operator's shape can now be a parameter** (`c92b6471`): a recorded config carries the first scalar leaf as the extent and **every other leaf for what it is, at any depth** — and `examples/matmul.lichen` uses it, since its inner dimension is `k.k` rather than a `3` (`97e6ad91`) — and **a `Float` leaf is carried too** (`e24d00fb`): the graph's value table holds a float at its own class, so `eps`, a scale or a temperature can be an argument rather than a literal; the two remaining limits are that a leaf cannot be a value computed *inside* the source function, and that `f64` is inexpressible. **But two leaves are positional, and getting them wrong is silent**: the **first** is the extent, and the **second** is what `compute.row`/`compute.col` divide by — so a new leaf goes *after* `cols`. Putting `k` between them does not refuse; it answers different numbers (measured: `[58.0, 64.0, 31.0, 139.0]` instead of `[58.0, 64.0, 139.0, 154.0]`), which is the same silent-wrong-answer class as the upload width |
 | **attention** | **landed, naive** (`576c9229`): two kernels — `scores` (a dot product per query/key pair, one lane each, `query = compute.row k`, `key = compute.col k`) then `attend` (softmax × V, three `@loop` nests with the row maximum carried in the value fold's state) — over `Q = 2 0 1 1 / 0 0 2 1`, `K = 1 1 0 0 / 0 1 1 0`, `V = 1 2 3 4 / 5 6 7 8`. Exact by hand except `exp`, which is modelled from its own sequence; `sqrt(dim) = sqrt(4)` is exact because the Newton definition's reduction is the identity on `4`. On the device `attend` answers the declared line with **six of eight entries differing in the last bit** (this device's `f32` division; the slice that landed this example first reported three, and its own run could not be reproduced because flipping only `attend` to `"gpu"` trips a different rule — `attend`'s lanes are `queries × dim = 8` while the `cpu` `scores` buffer holds 4, so the upload rule refuses it — and the six-of-eight measurement is a whole-example run), and **`scores` was refused outright until `b6dea46c`**: *"a `Select`'s two arms are computed in different classes ([Int, Float])"* — reproducible as `sqrt (int2float k.dim)` failing while `sqrt 4.0` and `sqrt (int2float k.dim + 0.0)` both run, i.e. the `Select` inside `sqrt_body` is left with one arm unclassed when an `int2float` of a config leaf feeds it directly. **The wall the row used to describe is a rule, not a missing feature**: a `@loop` nest **cannot be applied inside another nest's step** (see the finding below), so the one-kernel form — score recomputed per lane — is **not writable**, and this is a demonstration rather than a schedule anyone would ship |
+| **KV-cache append** | **landed** (`1f79786d`): one `compute.parallel` kernel over `count = capacity · dim`, one lane per cache element, writing **both** the key and the value row back at `position · dim + column` — a **bijection** (8 lanes → 8 slots), so no lane contends and the write address is genuinely computed rather than the lane's own index (lane 1 writes slot 2, lane 4 slot 1). Exact integers throughout, **nothing modelled**. It rewrites the whole cache because **a write past the count is dropped in silence** — see the first finding below, which is what a one-lane-per-column append actually hits. The graph path **records** it (1 node, the extent plus all three runtime scalars) but **refuses the run** at submit; the direct device leg agrees with `cpu` element for element once the incoming row is padded |
 
 ## What RMSNorm measured
 
@@ -219,6 +220,41 @@ its tree now canonicalises to a `±inf` constant. And `tile ≡ body` is **bit-f
 need a node-local producer for `r`.
 
 ## Smaller findings, each with the thing that would change
+
+- **The write side has three measured rules, and the first is silent on both backends.** (1) **A write past
+  the count is dropped in silence**: the host output is sized at exactly `count` (`compute.rs:5979`) and a
+  write outside the span is dropped (`compute.rs:6255-6263`, whose own sentence is *"a write outside the
+  span is dropped rather than aliasing another worker's slots"*). Measured with the kernel a decode loop
+  actually wants — one lane per **column**, writing at `t · dim + d` = 4 and 5 over a count of 2 — the
+  `cpu` path answers `[0.0, 0.0]` **and so does the RTX 3060**: no error, no refusal, no line. That is why
+  the committed KV-cache operator rewrites the whole cache instead of one row. (2) **Capacity against
+  filled prefix is asymmetric**: a host input **shorter than the count** is *refused on the device by name*
+  (`dispatch.rs:219`, `InputShorterThanCount`, because an input is uploaded at its own length) while the
+  **host path silently zero-fills the tail** (`compute.rs:6234`) — a cache holding only its filled prefix
+  `[1, 2, 3, 4]` is refused on the device (*"input buffer 0 holds 4 element(s) but the run covers 8"*) and
+  answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` on `cpu` with nothing said. (3) **A written-but-never-read
+  region is not observable**: `collect` reads every element of a buffer exactly `count` long
+  (`compute.rs:1550-1621`) and on the device the output is allocated `padded` = 64 (`dispatch.rs:1052`)
+  while `collect` still reads `count`, so the surplus lanes' slots are written and never handed back.
+- **The graph path refuses this operator's run, and the arithmetic looks like eight-byte elements**
+  (measured, not diagnosed). The recorded graph is one node holding the extent plus **all three** runtime
+  scalars. At submit it refuses *"input buffer 0 holds 4 element(s) but the run covers 8"*; with 12-element
+  inputs *"holds 6"*; with 16-element inputs there is **no refusal** — 32 → 4, 48 → 6, 64 → 8, i.e.
+  **payload bytes counted in eight-byte elements while every buffer is `Float`**. For contrast, the same
+  crate's one-buffer `Float` graph **with no runtime scalar** dispatches and answers correctly, so the leg
+  works and the refusal is this operator's. `ragged_host` (`graph-ir/src/run.rs:520`) compares payload
+  bytes and its own `# Invariant` **admits a width-ratio blind spot**, but the counting site was not
+  proven.
+- **What a decode loop still needs, measured.** Carried state across calls: **yes** — a `plrun` output is a
+  buffer a later `plrun` takes as an input, and the committed operator's output is shaped to be fed
+  straight back. A second kernel reading what the first wrote: **yes**, the same two steps. **A loop: no,
+  and that is a wall** — no `for`, `while` or loop keyword appears in any of the 34 examples; `@loop` is a
+  fold inside one lane; and `compute.call` inside a parallel body is refused with a `NodeId`
+  (`code-audit.md` P1-39, `todo`). **And there is no way to advance the position**: `t` is a parameter the
+  host hands in and the language holds no mutable state between calls.
+- **The `examples` binary cannot currently give a verdict at all**: it panics with *"invalid SlotMap key
+  used"* (`crates/lichen-lowlevel/src/evaluation.rs:517`) **on `dev` itself, with the new example removed**
+  — a pre-existing failure that **masks** the four drift names the runner otherwise reports.
 
 - **A class had two sources of truth, and the emitter's was the wrong one** (fixed at `b6dea46c`). The
   GPU emitter's `value_class` derived a **result's** class from **its operand 0**
