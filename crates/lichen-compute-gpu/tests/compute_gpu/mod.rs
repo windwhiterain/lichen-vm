@@ -1,3 +1,4 @@
+mod call_class;
 mod class_agreement;
 mod common;
 

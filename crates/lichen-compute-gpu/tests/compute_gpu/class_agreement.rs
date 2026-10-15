@@ -6,25 +6,32 @@
 //! off an operand is a fact about that operand, asked of a different value. The guard drives
 //! each instruction through the public emitter and reads the class the emitter reports.
 
+use std::collections::HashMap;
+
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelId, KernelInstr, KernelRoles,
+    KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator, ValueId,
 };
 
-/// Two inputs and one output: the second input holds the stated class, the first the module's.
+/// Two inputs and one output: the second input holds the oracle's class, the first the module's.
 const BINDING: Binding = Binding {
     inputs: 2,
     outputs: 1,
 };
 
-/// One probe: an instruction, the class it states, and the steps that leave its result on
-/// top of the stack.
+/// The callee a `CallKernel` probe names, and the position the set holds it at.
+const CALLEE: KernelId = 7;
+
+/// One probe: an instruction, the class it must be reported in, and the steps that leave
+/// its result on top of the stack.
 ///
 /// # Invariant
-/// **The module is declared in the class the instruction does _not_ state**, so neither the
-/// module's own class nor an operand's can stand in for the answer: a value the emitter
-/// classed from the wrong source is refused rather than quietly agreed with.
+/// **The module is declared in the class the instruction must _not_ be reported in**, so
+/// neither the module's class nor an operand's can stand in for the answer: a value the emitter
+/// classed from the wrong source is refused rather than quietly agreed with. A
+/// [`KernelInstr::CallKernel`] reads its answer from the callee's declaration, which states one
+/// where the instruction cannot.
 struct Probe {
     /// How `every_variant` names the instruction, so a failure names a variant.
     name: &'static str,
@@ -32,12 +39,14 @@ struct Probe {
     subject: KernelInstr,
     /// The steps that push the instruction's operands and then the instruction.
     reach: Vec<FlatOp>,
-    /// The class `own_class` states for the instruction.
-    stated: ScalarClass,
+    /// The class the emitter must report for the value the instruction produces.
+    oracle: ScalarClass,
     /// The class the probe's buffers declare, which is the module's class.
     module: ScalarClass,
     /// The slices the instruction's own accesses name.
     slices: Vec<Slice>,
+    /// The callee a call probe compiles beside the caller, which is what a call's class is.
+    callee: Option<KernelFragment>,
 }
 
 /// One probe over the fragment's `(unused, config, index)` domain, its result left on the stack.
@@ -45,14 +54,14 @@ fn probe(
     name: &'static str,
     subject: KernelInstr,
     operands: Vec<FlatOp>,
-    stated: ScalarClass,
+    oracle: ScalarClass,
 ) -> Probe {
     let mut reach = operands;
     reach.push(FlatOp::Instr(subject));
-    let module = other(stated);
+    let module = other(oracle);
     let slices = if matches!(subject, KernelInstr::SliceReadCall(_)) {
         vec![Slice {
-            class: stated,
+            class: oracle,
             count: 64,
             space: Space::Shared,
         }]
@@ -63,9 +72,73 @@ fn probe(
         name,
         subject,
         reach,
-        stated,
+        oracle,
         module,
         slices,
+        callee: None,
+    }
+}
+
+/// A probe for [`KernelInstr::CallKernel`], whose class is a callee's and not its own.
+///
+/// # Invariant
+/// **The callee takes one leaf of the class the probe must not be reported in and returns one
+/// value of the oracle**, so reading operand `0` and falling back to the module both reach the
+/// one wrong class — the shape this guard exists to catch, and the one a call could not be
+/// probed for at all while `own_class` stated nothing for it.
+fn call(oracle: ScalarClass) -> Probe {
+    let argument = other(oracle);
+    let mut probe = probe(
+        "CallKernel",
+        KernelInstr::CallKernel(CALLEE),
+        vec![constant(argument)],
+        oracle,
+    );
+    probe.callee = Some(callee(oracle, argument));
+    probe
+}
+
+/// A callee taking one leaf of `argument` and returning one value of `result`.
+fn callee(result: ScalarClass, argument: ScalarClass) -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Scalar(argument),
+        body: KernelBody::from_flat(
+            1,
+            &[
+                FlatOp::Read(0),
+                FlatOp::Instr(KernelInstr::Conv {
+                    from: argument,
+                    to: result,
+                }),
+            ],
+        ),
+        inputs: 0,
+        outputs: 0,
+        input_classes: Vec::new(),
+        output_classes: Vec::new(),
+        result_classes: vec![result],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    }
+}
+
+/// The class a declaration states for the value `probe` produces, or `None` when nothing the
+/// compile reads states one.
+///
+/// # Invariant
+/// **Read from a declaration rather than from the emitter's own account of the value**, the answer
+/// under test: `own_class` is the instruction's own form and `result_classes` the callee's, both
+/// inputs to a compile rather than answers one gives. A call states no class of its own, so its
+/// oracle is the declared result list both emissions type the slot by.
+fn oracle_of(probe: &Probe) -> Option<ScalarClass> {
+    match &probe.callee {
+        Some(callee) => callee.result_classes.first().copied(),
+        None => probe.subject.own_class(),
     }
 }
 
@@ -74,8 +147,8 @@ fn probe(
 /// # Invariant
 /// **The whole covered set, and each one in both classes where the class is the instruction's
 /// own.** `operand_class` is the answer a dropped `own_class` would leave: a read answers `Int`
-/// at position `0` whatever the buffer holds, so probing only `Int` would agree. Both crossings
-/// are probed in both directions, the same shape that must not answer alike.
+/// at position `0` whatever the buffer holds, so probing only `Int` would agree. A call is probed
+/// beside a callee stating the class it is *not* called with.
 fn probes() -> Vec<Probe> {
     let mut probes = Vec::new();
     for (stated, operand) in [
@@ -106,6 +179,7 @@ fn probes() -> Vec<Probe> {
             vec![ordinal(0), ordinal(0), ordinal(0)],
             stated,
         ));
+        probes.push(call(stated));
     }
     probes.push(probe(
         "Conv",
@@ -166,12 +240,6 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
             "`own_class` states none for it — its class is its arms', which is what \
              `conv_class.rs` already pins",
         ),
-        (
-            "CallKernel",
-            "`own_class` states none for it: the callee's result class is link-time, so the IR has \
-             no class of its own to state. Nothing here says where the classing gets its answer, \
-             and that is worth reading rather than pinning",
-        ),
     ]
 }
 
@@ -230,24 +298,29 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
 /// # Invariant
 /// **The `Select` is the instrument and needs no device.** `select_class` reads each arm
 /// through `value_class`, a constant states its own class, and there are two classes, so the arms
-/// can agree only when the emitter classes the probed value as `own_class` says.
-/// `input_classes` is `[module, stated]`, so a read at position `1` is a buffer of the stated class.
+/// can agree only when the emitter classes the probed value as the oracle says.
+/// `input_classes` is `[module, oracle]`, so a read at position `1` is a buffer of the oracle's class.
 fn fragment_of(probe: &Probe) -> KernelFragment {
     let mut ops = probe.reach.clone();
-    ops.push(constant(probe.stated)); // the arm the probed value is compared with
+    ops.push(constant(probe.oracle)); // the arm the probed value is compared with
     ops.push(ordinal(1)); // the condition
     ops.push(FlatOp::Instr(KernelInstr::Select));
+    // **A call's arity is the callee's own**, so a flat body would leave it with no arguments.
+    let body = match &probe.callee {
+        None => KernelBody::from_flat(3, &ops),
+        Some(callee) => called_body(&ops, callee),
+    };
     KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
-            KernelShape::Scalar(probe.stated),
+            KernelShape::Scalar(probe.oracle),
             KernelShape::Scalar(ScalarClass::Int), // the invocation index
         ]),
-        body: KernelBody::from_flat(3, &ops),
+        body,
         inputs: 2,
         outputs: 1,
-        input_classes: vec![probe.module, probe.stated],
+        input_classes: vec![probe.module, probe.oracle],
         output_classes: vec![probe.module],
         result_classes: vec![probe.module],
         target: TargetFacts {
@@ -257,6 +330,55 @@ fn fragment_of(probe: &Probe) -> KernelFragment {
         slices: probe.slices.clone(),
         marks: Vec::new(),
     }
+}
+
+/// The flat builder's own walk, over a body holding a call.
+///
+/// # Invariant
+/// **One rule differs from [`KernelBody::from_flat`], and it is the one the call needs**: a call
+/// takes as many arguments as the callee's own parameter leaves, the same fact the emission checks
+/// its arity against, and `from_flat` takes none because `arity` answers `None` for a call. Every
+/// other step is that builder's discipline unchanged.
+fn called_body(ops: &[FlatOp], callee: &KernelFragment) -> KernelBody {
+    let domain = callee.param_shape.leaf_classes().len();
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let mut parameters = Vec::new();
+    for _ in 0..3 {
+        parameters.push(body.add_param(entry));
+    }
+    let mut values: Vec<ValueId> = Vec::new();
+    for step in ops {
+        match *step {
+            FlatOp::Read(index) => {
+                let Some(value) = parameters.get(index).copied() else {
+                    continue;
+                };
+                values.push(value);
+            }
+            FlatOp::Instr(op) => {
+                let taken = match op {
+                    KernelInstr::CallKernel(_) => domain,
+                    _ => op.arity().unwrap_or(0),
+                }
+                .min(values.len());
+                let arguments = values.split_off(values.len() - taken);
+                let classes = if op.produces() == 0 {
+                    Vec::new()
+                } else {
+                    vec![op.own_class().unwrap_or(ScalarClass::Int)]
+                };
+                values.push(body.add_op(entry, op, arguments, classes));
+            }
+        }
+    }
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: values.last().copied().into_iter().collect(),
+        },
+    );
+    body
 }
 
 /// A constant of `class` holding zero, which is the `Float` `+0.0` and the `Int` `0` alike.
@@ -285,34 +407,40 @@ fn other(class: ScalarClass) -> ScalarClass {
     }
 }
 
-/// The class the emitter reports for a value an instruction produces is the class the
-/// instruction states.
+/// The class the emitter reports for a value is the class its declaration states.
 ///
 /// # Invariant
-/// **`own_class` is the oracle**, because a definition states the class of what it leaves behind
-/// and an operand's class is a different fact about a different value. Each probe's module is
-/// declared in the *other* class and its `Select` arm is a constant of the stated one, so an
-/// emitter that read the answer from the module or from an operand is refused — the shape
-/// `Conv` had.
+/// **The declaration is the oracle**, because a definition states the class of what it leaves
+/// behind and an operand's class is a fact about a different value. Each probe's module is declared
+/// in the *other* class and its `Select` arm a constant of the oracle's, so an emitter reading the
+/// answer from the module or an operand is refused — the shape `Conv` had, and `CallKernel`'s.
 #[test]
 fn the_class_the_emitter_reports_is_the_class_the_instruction_states() {
     let mut disagreements = Vec::new();
     for probe in probes() {
-        let stated = probe.stated;
+        let stated = probe.oracle;
         assert_eq!(
-            probe.subject.own_class(),
+            oracle_of(&probe),
             Some(stated),
-            "the probe names a class `own_class` must agree with, so a probe that disagrees is \
+            "the probe names a class its declaration must state, so a probe that disagrees is \
              wrong here before the emitter is asked"
         );
         let fragment = fragment_of(&probe);
-        match spirv::compile(&LaunchSet::single(&fragment), BINDING) {
+        let outcome = match probe.callee.clone() {
+            None => spirv::compile(&LaunchSet::single(&fragment), BINDING),
+            Some(callee) => {
+                let ordered = [fragment, callee];
+                let index: HashMap<KernelId, u32> = [(CALLEE, 1)].into();
+                spirv::compile(&LaunchSet::new(&ordered, &index), BINDING)
+            }
+        };
+        match outcome {
             Ok(_) => {}
             // **Every disagreement is collected**, because one class with two truths is rarely
             // alone.
             Err(SpirvRefusal::SelectArmClassesDisagree { classes }) => disagreements.push(format!(
                 "the emitter reports one of {classes:?} for the value `{}` produces, and \
-                 `own_class` states {stated:?}",
+                 the declaration states {stated:?}",
                 probe.name
             )),
             Err(refusal) => panic!(
@@ -323,7 +451,7 @@ fn the_class_the_emitter_reports_is_the_class_the_instruction_states() {
     }
     assert!(
         disagreements.is_empty(),
-        "`own_class` and the emitter's own account of the values these instructions produce \
+        "the declaration and the emitter's own account of the values these instructions produce \
          disagree:\n  {}",
         disagreements.join("\n  ")
     );
@@ -333,10 +461,9 @@ fn the_class_the_emitter_reports_is_the_class_the_instruction_states() {
 ///
 /// # Invariant
 /// **Exactly one of the two, for every variant `every_variant` names.** The guard's claim is
-/// that it is exhaustive over the instruction list rather than over one spelling of it, and
-/// this is what the claim is checked against: a variant in neither list is a hole the file
-/// does not admit to, and one in both is a reason written beside a probe that does not
-/// hold.
+/// that it is exhaustive over the instruction list rather than one spelling of it: a variant in
+/// neither list is a hole the file does not admit to, and one in both is a reason beside a probe
+/// that does not hold. A probed variant must leave a value; its class is read from a declaration.
 #[test]
 fn every_variant_is_either_probed_or_named_as_unasked_with_a_reason() {
     let probes = probes();
@@ -359,9 +486,11 @@ fn every_variant_is_either_probed_or_named_as_unasked_with_a_reason() {
             );
         }
         if probed {
-            assert!(
-                instr.own_class().is_some(),
-                "`{name}` is driven, so `own_class` must state a class for it to agree with"
+            assert_eq!(
+                instr.produces(),
+                1,
+                "`{name}` is driven, so it must leave a value for the emitter to have a class \
+                 for — a variant that leaves none is what `unasked` is for"
             );
         }
     }

@@ -2086,9 +2086,9 @@ fn stated_class(
 ///
 /// # Invariant
 /// A value's class is its **definition's**: an instruction states the class its emission reads and
-/// writes in, and a parameter's is what its reads say ([`read_class`]) or, if nothing reads it,
-/// what its edges carry. `visiting` bounds that walk, so a cycle of parameters nothing reads takes
-/// the module's class — a value no operation observes has no class to be wrong about.
+/// writes in, and a call the callee's **result** class — what both emissions type the slot it
+/// leaves by, not its first argument's. A parameter's is what its reads say ([`read_class`]) or
+/// what its edges carry where nothing reads it. `visiting` bounds that walk.
 fn value_class(
     fragment: &KernelFragment,
     launch: &LaunchSet<'_>,
@@ -2115,10 +2115,14 @@ fn value_class(
         if matches!(op, KernelInstr::Select) {
             return select_class(fragment, launch, module, args, visiting);
         }
-        return Ok(op
-            .own_class()
-            .or_else(|| operand_class(launch, op, 0))
-            .unwrap_or(module));
+        // **A call states the callee's result class**, never its first argument's.
+        let stated = match op {
+            KernelInstr::CallKernel(callee) => launch
+                .callee(*callee)
+                .and_then(|(_, target)| target.result_classes.first().copied()),
+            _ => op.own_class(),
+        };
+        return Ok(stated.unwrap_or(module));
     };
     let (block, index) = (*block, *index as usize);
     if let Some(class) = read_class(fragment, launch, module, block, value, visiting)? {
