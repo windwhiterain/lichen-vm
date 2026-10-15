@@ -1896,7 +1896,8 @@ pub enum RoleUnread {
     /// The parameter's type has not resolved yet: a later pass compiles the kernel
     /// once the annotation states the struct.
     Undecided,
-    /// A named refusal: the parameter is not a kernel ABI, and this is why.
+    /// A named refusal: the parameter is not a kernel ABI, or a class it declares
+    /// is not decidable, and this is why.
     Refusal(String),
 }
 
@@ -2409,17 +2410,26 @@ where
         base: 0,
         roles: Some(roles.clone()),
     }];
-    // The class a buffer read is declared in: the first write's class, a fallback.
+    // The class a buffer read is declared in: the first write's own class.
 
     // Read through the slots like the emission ([`node_class_in`]), or a consumer
     // would refuse the chain.
-    let class = outputs
-        .iter()
-        .filter_map(|output| {
-            write_value_node(module, *output).map(|value| node_class_in(module, &params, value))
-        })
-        .next()
-        .unwrap_or(ScalarClass::Int);
+
+    // **An undecided class is refused by name, never an invented `Int`.**
+    let class = match outputs.iter().find_map(|output| {
+        write_value_node(module, *output).map(|value| node_class_in(module, &params, value))
+    }) {
+        Some(class) => class,
+        None => {
+            return Err(RoleUnread::Refusal(format!(
+                "no output of this parallel index function carries a decided scalar class: its \
+                 codomain names {} output(s) and none of them is a `compute.write` of a decided \
+                 scalar, so the element class a `compute.Buf` read carries cannot be read. An \
+                 undecided class is not an `Int` (`docs/notes/compile-order-class.md` §3)",
+                outputs.len()
+            )));
+        }
+    };
     // **The outputs are the codomain's**, and each position must hold a
     // `compute.write` naming that same position.
     let mut tally = Positions::for_params(&params);
