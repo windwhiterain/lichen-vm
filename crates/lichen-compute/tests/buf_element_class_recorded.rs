@@ -59,7 +59,7 @@ fn the_module_holds_a_decided_float_element_type() {
 /// through `low_type_of_slot`, which is the class the parameter's own `Buf Float` states.
 /// The cell it reads belongs to the type term `static_node_apply` cloned out of the frozen
 /// `compute.lichen`, and nothing has merged that cell into a decided `Float` class yet.
-    #[ignore = "the declared element class reaches the fragment as Int: this is the minimal reproduction, and it is the fix's target"]
+#[ignore = "the declared element class reaches the fragment as Int: this is the minimal reproduction, and it is the fix's target"]
 #[test]
 fn the_compiled_fragment_names_the_declared_element_class() {
     let (module, _value, _root) = common::run(PROGRAM);
@@ -82,7 +82,7 @@ fn the_compiled_fragment_names_the_declared_element_class() {
 ///
 /// The recording is the artefact a device run replays, so a class the compiler read from
 /// an empty cell is carried into it whole: this fails with `in [Int] out [Int]`.
-    #[ignore = "the declared element class reaches the fragment as Int: this is the minimal reproduction, and it is the fix's target"]
+#[ignore = "the declared element class reaches the fragment as Int: this is the minimal reproduction, and it is the fix's target"]
 #[test]
 fn the_recorded_node_carries_the_declared_element_class() {
     let (_module, value, _root) = common::run(PROGRAM);
