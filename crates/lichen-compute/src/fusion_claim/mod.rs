@@ -54,7 +54,7 @@ fn kernel_id_of(module: &Module<LangProgram>, value: NodeId) -> Option<KernelId>
 /// The compute value a node's class holds, or `None` when it holds none.
 fn compute_value(module: &Module<LangProgram>, value: NodeId) -> Option<ComputeValue> {
     module
-        .class_value(value)
+        .node_value(AnyNodeId::Dynamic(value))
         .or_else(|| module.node_value(AnyNodeId::Dynamic(value)))
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
 }

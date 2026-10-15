@@ -1,6 +1,9 @@
 # One channel for a class's value and its low type
 
-> Status: **§1.1 is the author's decision on the write rule, and it is landed** —
+> Status: **the accessor this note's title names is gone** — `Module::class_value`, its
+> `class_committed_value` forwarder and the committed carrier were deleted after a scan of
+> all 817 corpus programs found no read where a member's own slot differed from the class's.
+> The passages below that describe them are the record of how that was decided. **§1.1 is the author's decision on the write rule, and it is landed** —
 > unconditional write, the operation-bearing member as the one veto, an
 > already-valued member compared by the unify recursion and left at its own value
 > when the two cannot be one.  It also records the half that landed before it:
@@ -51,7 +54,7 @@ The lowlevel is class-routed, and says so:
 
 | Site | What it states |
 |---|---|
-| `Module::class_value` (`equality.rs:77-87`) | "the class's value, read **through its representative** — the value the unification machinery sees" |
+| ~~`Module::class_value`~~ | **deleted**: your invariant is the contract — a class holds one value, every member's own slot carries it, and ill_class_holes/propagate_class_value keep it so. A read through the representative answered the same value in all 817 corpus programs, so the accessor and the committed carrier went with the read. |
 | `Module::class_low_type` / `low_type_of_node` (`equality.rs:89-113`) | "read through its representative … so a read **never depends on which member of the class resolved first**" |
 | `Module::write_node_value` (`equality.rs:310-322`) | "the **single choke-point** for value writes"; it propagates the value over the class's operation-free members and calls `observe_class_low_type` — one of the low-type layer's **two observation sites** (`Module::add_node` is the other) |
 | `Module::seed_class_low_type` (`equality.rs:115-125`) | "a layer above the lowlevel **that has the type** calls this" — the write half of the same channel |

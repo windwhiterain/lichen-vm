@@ -59,7 +59,7 @@ to be answered:
 |---|---|
 | two pending operations in one class — whose value counts? what if they disagree? | nobody: `force_pending` resolves before the merge, `alias_index` removes the read, `defer`+pin commits one value |
 | one operation already computed, another has not — which is authoritative? (invalidate upstream caches and low types?) | `force_pending`'s reconcile against the class's committed value |
-| what does a lazy reader (the `Parameterized` resolution path, `TableGet`'s undecided branch) see? | the class's committed value, via `class_committed_value` |
+| what does a lazy reader (the `Parameterized` resolution path, `TableGet`'s undecided branch) see? | the value the node itself holds |
 | how do snapshot consumers (the deep pass's `undecided` verdict, freeze, the codec) tell a promised value from a computed one? | they cannot: they read `node.value` |
 
 `reconcile_value` **is** the answer to the first two — a class's committed

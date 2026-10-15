@@ -140,7 +140,7 @@ fn recorded(module: &Module<LangProgram>, value: &lichen_compute::language::Lang
         panic!("the graph comes from a frozen artifact");
     };
     let value = module
-        .class_value(node)
+        .node_value(AnyNodeId::Dynamic(node))
         .or_else(|| module.node_value(AnyNodeId::Dynamic(node)))
         .and_then(|value| AsEnum::<lichen_compute::ComputeValue>::as_enum(&value));
     let Some(lichen_compute::ComputeValue::Graph(id, _)) = value else {

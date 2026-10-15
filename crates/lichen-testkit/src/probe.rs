@@ -183,18 +183,6 @@ where
         self.build.state[expr].val
     }
 
-    /// The named expression's class: every member with its own slot value, representative
-    /// first.
-    ///
-    /// # Invariant
-    /// A member's slot can differ from the class's answer, which is the representative's:
-    /// this reading exists to show both. An expression with no value node answers empty.
-    pub fn class_of(&mut self, name: &str) -> Vec<(NodeId, Option<P::Value>)> {
-        self.try_node_of(name)
-            .map(|node| self.build.module.class_members_with_values(node))
-            .unwrap_or_default()
-    }
-
     // --- a node's origin ---------------------------------------------------
 
     /// The expression `node` lowered from, or `None` when this build attributed

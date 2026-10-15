@@ -400,7 +400,7 @@ fn recorded(module: &Module<LangProgram>, root: NodeId) -> Result<Graph, Vec<Str
         return Err(vec!["the graph comes from a frozen artifact".to_string()]);
     };
     let value = module
-        .class_value(node)
+        .node_value(AnyNodeId::Dynamic(node))
         .or_else(|| module.node_value(AnyNodeId::Dynamic(node)))
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value));
     let Some(ComputeValue::Graph(id, _)) = value else {

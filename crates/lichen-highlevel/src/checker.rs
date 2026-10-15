@@ -1074,10 +1074,9 @@ where
         index
     }
 
-    /// The value currently held by `node`'s equality class, or `None` when the
-    /// class is undecided. Read-only.
-    pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
-        self.module.class_value(node)
+    /// The value `node` holds, or `None` when it holds nothing. Read-only.
+    pub fn node_value(&self, node: NodeId) -> Option<P::Value> {
+        self.module.node_value(AnyNodeId::Dynamic(node))
     }
 
     // --- the check -------------------------------------------------------
@@ -1389,7 +1388,7 @@ where
         Checker::check_unify_relaxed(self, a, b, loc, kind, is_subtype)
     }
 
-    fn class_value(&self, node: NodeId) -> Option<P::Value> {
-        Checker::class_value(self, node)
+    fn node_value(&self, node: NodeId) -> Option<P::Value> {
+        Checker::node_value(self, node)
     }
 }

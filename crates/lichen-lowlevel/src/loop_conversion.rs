@@ -209,7 +209,7 @@ impl<P: Program> Module<P> {
         let callee = *self.operands_of(node).ok()?.first()?;
         let value = self
             .node_value(AnyNodeId::Dynamic(callee))
-            .or_else(|| self.class_value(self.class_root(callee)))?;
+            .or_else(|| self.nodes[self.class_root(callee)].value)?;
         match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::Function(crate::AnyFunctionId::Dynamic(f))) => Some(f),
             _ => None,

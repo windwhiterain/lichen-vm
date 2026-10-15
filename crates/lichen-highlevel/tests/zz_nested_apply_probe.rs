@@ -73,12 +73,7 @@ fn report(label: &str, mut probe: Probe<ProgramImpl>) {
         }
         let pair = probe.pair_of(&name);
         let value_slot = probe.try_node_of(&name);
-        let members: Vec<(_, Option<LowValue>)> = probe
-            .class_of(&name)
-            .into_iter()
-            .map(|(member, value)| (member, value.and_then(|value| value.as_enum())))
-            .collect();
-        println!("    {name}: pair={pair:?} value_slot={value_slot:?} class_members={members:?}");
+        println!("    {name}: pair={pair:?} value_slot={value_slot:?}");
         println!("        {}", probe.explain(pair));
     }
 }

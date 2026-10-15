@@ -170,7 +170,7 @@ fn freeze_cells<P>(
         let Some(pair) = build.state[expr.0 as usize].term else {
             continue;
         };
-        if build.module.class_value(pair).is_none() {
+        if build.module.node_value(AnyNodeId::Dynamic(pair)).is_none() {
             continue;
         }
         let key = registry.allocate_cell_key();

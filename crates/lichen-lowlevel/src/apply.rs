@@ -133,7 +133,7 @@ impl<P: Program> Module<P> {
             // SAFETY: `array` is `result`'s live payload; this covers the `items()` call.
             Some(LowValue::Array(array)) if unsafe { array.items() }.len() >= 2 => {
                 // The result is written only into a class that holds nothing.
-                if self.class_value(node).is_none() {
+                if self.nodes[node].value.is_none() {
                     self.write_node_value(node, result);
                 }
                 self.unify(node, applied);

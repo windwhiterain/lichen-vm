@@ -27,10 +27,9 @@ a workspace member and a dev-dependency of `lichen-highlevel`.
   `type_of` for a slot, `explain` for a node's origin in the program's words,
   `diagnostics`/`diagnostic_of` for what the check recorded.
 - **For an investigation**, prefer the readings that report rather than panic:
-  `try_value_of` (an undecided value is a finding, not a failure), `try_node_of` (an
+  `try_value_of` (an undecided value is a finding, not a failure) and `try_node_of` (an
   apply's `state.val` is empty by construction, so its answer lives in its pair's own
-  value slot), and `class_of` (a class's members each keep their own slot value, which
-  can differ from the class's answer).
+  value slot).
 - **A probe is a test file that prints and asserts nothing** — `cargo test -p
   lichen-highlevel --test <probe> -- --nocapture` — and it stays in the tree while the
   investigation it serves is open.

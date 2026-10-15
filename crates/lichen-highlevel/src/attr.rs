@@ -225,11 +225,11 @@ pub fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
 where
     P::Value: ValueType + AsEnum<LowValue>,
 {
-    let Some(value) = ctx.class_value(slot) else {
+    let Some(value) = ctx.node_value(slot) else {
         return slot;
     };
     match AsEnum::<LowValue>::as_enum(&value) {
-        // SAFETY: `items` is the payload of `ctx.class_value(slot)` — a value
+        // SAFETY: `items` is the payload of `ctx.node_value(slot)` — a value
         // of a live node of the checked module.
         Some(LowValue::Array(items)) => match unsafe { items.items() }.first().map(|i| i.node) {
             Some(AnyNodeId::Dynamic(node)) => node,

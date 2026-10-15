@@ -120,10 +120,11 @@ Two facts make the in-memory scope the cheap one:
   outlives its module must be *frozen* to `StaticNodeId`s first, which is what
   §1.2's whole-file rows do and what this note now declines to do per
   sub-expression.
-- **The value memo is the class, not the node** (`class_value` reads through the
-  union-find representative; `propagate_class_value` distributes a write to the
-  class's operation-free members). A reused answer would have to carry its
-  class, which is exactly what an in-memory scope gets for free.
+- **The value memo is the class, not the node**: a write lands in the node that
+  holds it and `propagate_class_value` distributes it to the class's
+  operation-free members, so no member of one class answers a different value. A
+  reused answer would have to carry its class, which is exactly what an in-memory
+  scope gets for free.
 
 And one fact is a semantic input rather than a hint: the apply clone walk decides
 bake-vs-clone from `proven_concrete` (`function.rs:318-338`), and baking a node

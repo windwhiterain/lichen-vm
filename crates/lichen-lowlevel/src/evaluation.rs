@@ -201,11 +201,11 @@ impl<P: Program> Module<P> {
                                                         // The wildcard answers no reader: a read of it
                                                         // is undecided, never the value `Any`.
                                                         match self
-                                                            .class_committed_value(rep)
+                                                            .node_value(Dyn(rep))
                                                             .and_then(|value| value.as_enum())
                                                         {
                                                             Some(LowValue::Any) => None,
-                                                            _ => self.class_committed_value(rep),
+                                                            _ => self.node_value(Dyn(rep)),
                                                         }
                                                     } else {
                                                         self.evaluate_node(
@@ -534,7 +534,7 @@ impl<P: Program> Module<P> {
             self.deep_depth -= 1;
             return Some(P::Value::from(LowValue::Error));
         }
-        let value = match self.class_committed_value(node) {
+        let value = match self.nodes[node].value {
             // A wildcard is decided content for the verdict: it must never make
             // a structure unprovable.
             Some(value) if matches!(value.as_enum(), Some(LowValue::Any)) => {

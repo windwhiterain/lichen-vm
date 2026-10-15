@@ -134,7 +134,7 @@ fn recorded(module: &Module<LangProgram>, value: &LangValue) -> Graph {
         panic!("the graph comes from a frozen artifact");
     };
     let graph = module
-        .class_value(node)
+        .node_value(AnyNodeId::Dynamic(node))
         .or_else(|| module.node_value(AnyNodeId::Dynamic(node)));
     let Some(lichen_compute::ComputeValue::Graph(id, _)) = graph
         .as_ref()

@@ -179,14 +179,14 @@ where
     /// holds for any `sub`.  An undecided value is not a subtype.
     fn is_subtype(&self, ctx: &dyn Ctx<P>, sub: NodeId, sup: NodeId) -> bool {
         let value_of = |node: NodeId| -> Option<usize> {
-            let value = ctx.class_value(node)?;
+            let value = ctx.node_value(node)?;
             match AsEnum::<LowValue>::as_enum(&value) {
                 Some(LowValue::USize(n)) => Some(n),
-                // SAFETY: `items` is the payload of `ctx.class_value(node)` —
+                // SAFETY: `items` is the payload of `ctx.node_value(node)` —
                 // a value of a live node of the checked module.
                 Some(LowValue::Array(items)) => match unsafe { items.items() }.first()?.node {
                     AnyNodeId::Dynamic(n) => {
-                        let elem0 = ctx.class_value(n)?;
+                        let elem0 = ctx.node_value(n)?;
                         match AsEnum::<LowValue>::as_enum(&elem0) {
                             Some(LowValue::USize(n)) => Some(n),
                             _ => None,

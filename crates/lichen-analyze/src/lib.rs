@@ -7,15 +7,12 @@ use lichen_language::package::PackageStore;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 
-/// One node as this crate reports it: the node's own slot and its class's
-/// committed value side by side.
+/// One node as this crate reports it, with the value slot it holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeReport {
     pub node: NodeId,
     /// The node's own slot ([`Module::node_value`]).
     pub own: Option<LangValue>,
-    /// The class's committed value ([`Module::class_value`]).
-    pub class: Option<LangValue>,
     /// The number of items when the node holds an array, `None` otherwise.
     pub width: Option<usize>,
     /// The node this one was cloned from, when it is an apply's clone.
@@ -114,13 +111,11 @@ impl Analysis {
     /// One node, with the two value axes and the structural facts.
     pub fn node(&mut self, node: NodeId) -> NodeReport {
         let own = self.build.module.node_value(AnyNodeId::Dynamic(node));
-        let class = self.build.module.class_value(node);
         let width = unsafe { self.build.module.array_items(node) }.map(|items| items.len());
         NodeReport {
             node,
             undecided: own.is_none(),
             own,
-            class,
             width,
             origin: self.build.module.node_origin(node),
             evaluated_deep: self
@@ -187,19 +182,17 @@ impl Analysis {
         ))
     }
 
-    /// The value a node carries, in one line: its own slot, its class's, and
-    /// whether it is undecided.
+    /// The value a node carries, in one line, and whether it is undecided.
     pub fn describe(&mut self, node: NodeId) -> String {
         let report = self.node(node);
         let own = short(report.own.as_ref());
-        let class = short(report.class.as_ref());
         let deep = match report.evaluated_deep {
             Some(true) => "undecided",
             Some(false) => "concrete",
             None => "unevaluated",
         };
         format!(
-            "{node:?} width={:?} own={own} class={class} deep={deep} undecided={} origin={:?}",
+            "{node:?} width={:?} value={own} deep={deep} undecided={} origin={:?}",
             report.width, report.undecided, report.origin
         )
     }

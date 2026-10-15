@@ -66,7 +66,7 @@ where
     /// is the predicate's own value node — no re-wrapping, and the apply's
     /// subject is the very function the user wrote.
     fn constraint(&self, ctx: &mut dyn Ctx<P>, value_pair: NodeId, slot: NodeId) -> Option<NodeId> {
-        let pair = ctx.class_value(slot)?;
+        let pair = ctx.node_value(slot)?;
         let Some(LowValue::Array(items)) = pair.as_enum() else {
             return None;
         };

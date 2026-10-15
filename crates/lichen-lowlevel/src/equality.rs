@@ -89,8 +89,8 @@ impl<P: Program> Module<P> {
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let left = self.class_low_type(a).cloned();
         let right = self.class_low_type(b).cloned();
-        let left_value = self.class_committed_value(a);
-        let right_value = self.class_committed_value(b);
+        let left_value = self.nodes[a].value;
+        let right_value = self.nodes[b].value;
         let representative = disjoint::union(&mut self.nodes, a, b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
@@ -121,30 +121,6 @@ impl<P: Program> Module<P> {
         disjoint::find(&mut self.nodes, node)
     }
 
-    /// The class's value through its representative; a read, so no path compression.
-    pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
-        let mut root = node;
-        while let Some(parent) = self.nodes[root].equality.parent() {
-            root = parent;
-        }
-        self.nodes[root].value
-    }
-
-    /// Every member of `node`'s class with its own slot value, representative first.
-    ///
-    /// # Invariant
-    /// A read: the walk compresses nothing, and a member's slot may differ from
-    /// [`Self::class_value`], which answers with the representative's.
-    pub fn class_members_with_values(&self, node: NodeId) -> Vec<(NodeId, Option<P::Value>)> {
-        let mut root = node;
-        while let Some(parent) = self.nodes[root].equality.parent() {
-            root = parent;
-        }
-        self.class_members(root)
-            .map(|member| (member, self.nodes[member].value))
-            .collect()
-    }
-
     /// The class's **low type** through its representative. See docs/notes/lowlevel-low-types.md.
     pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
         self.nodes.get(self.class_root(node))?.low_shape.as_ref()
@@ -173,7 +149,7 @@ impl<P: Program> Module<P> {
 
     /// The array items of `node`'s class value, read through the representative.
     fn class_array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
-        let LowValue::Array(array) = self.class_value(node)?.as_enum()? else {
+        let LowValue::Array(array) = self.nodes[node].value?.as_enum()? else {
             return None;
         };
         // SAFETY: the slice points into the value's home arena, alive for this borrow.
@@ -284,7 +260,7 @@ impl<P: Program> Module<P> {
             "a value a slot holds is never replaced by another: {node:?}"
         );
         debug_assert!(
-            value.is_none() || self.class_value(node).is_none(),
+            value.is_none() || self.nodes[node].value.is_none(),
             "a value enters a class once, so only a class holding nothing is written: {node:?}"
         );
         self.set_node_value(node, value);
@@ -343,7 +319,7 @@ impl<P: Program> Module<P> {
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
-        let held = self.class_committed_value(node);
+        let held = self.nodes[node].value;
         let agrees = self.unify_inner(
             Side::value(Some(value)),
             Side::value(held),
@@ -398,7 +374,7 @@ impl<P: Program> Module<P> {
         };
         Side {
             node: Some(node),
-            value: self.class_committed_value(node),
+            value: self.nodes[node].value,
         }
     }
 
@@ -846,7 +822,7 @@ impl<P: Program> Module<P> {
         // A wildcard target answers no reader, so there is no class to join.
         let wildcard = self.nodes[target]
             .value
-            .or_else(|| self.class_committed_value(target));
+            .or_else(|| self.nodes[target].value);
         if matches!(
             wildcard.and_then(|value| value.as_enum()),
             Some(LowValue::Any)
@@ -857,11 +833,6 @@ impl<P: Program> Module<P> {
         self.unify_errors.truncate(errors.start);
         let block = self.nodes[target].block;
         self.evaluate_node(Dyn(target), Some(block));
-    }
-
-    /// The concrete value `rep`'s class has committed, or `None`. See docs/notes/lowlevel-vm.md.
-    pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
-        self.class_value(rep)
     }
 
     /// Record a conflict between two classes, with the descent that reached them.

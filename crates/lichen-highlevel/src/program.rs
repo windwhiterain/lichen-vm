@@ -166,7 +166,7 @@ pub trait Ctx<P: Program> {
     ///
     /// # Invariant
     /// The `is_subtype` callback receives the curated context, so relation reads
-    /// go through [`Self::class_value`], never raw node inspection.
+    /// go through [`Self::node_value`], never raw node inspection.
     fn check_unify_relaxed(
         &mut self,
         a: NodeId,
@@ -175,9 +175,8 @@ pub trait Ctx<P: Program> {
         kind: DiagKind,
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     );
-    /// The value currently held by `node`'s equality class — read-only, for
-    /// an attribute's subtype relation.
-    fn class_value(&self, node: NodeId) -> Option<P::Value>;
+    /// The value `node` holds — read-only, for an attribute's subtype relation.
+    fn node_value(&self, node: NodeId) -> Option<P::Value>;
 }
 
 /// A literal — the operator-like value-extension point. See

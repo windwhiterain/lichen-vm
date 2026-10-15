@@ -508,7 +508,7 @@ than a second scan, so the text and the `(line, col)` name the same line.
 - **`lichen-analyze` is the debugger of last resort** for a graph question that
   neither a rendered value nor a diagnostic answers: which node holds what, and
   through which class. It asks the same questions the printers and the backends
-  ask — a node's own value, the class's committed value, the width of its item
+  ask — the value a node holds, the width of its item
   list, the class it shares — and every read goes through the lowlevel's public
   API, so a conclusion drawn from it is a conclusion about the compiled program
   and not about a second implementation of it. `Analysis::evaluate` exists because

@@ -425,7 +425,7 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   values, consulted **after** a failed equality unify: if it holds, the failure's
   error is suppressed and the check passes.  Its default is `false`, so exact
   equality is required; implementations read the two slot values with
-  `Ctx::class_value`, and an undecided value (a runtime-dependent perspective)
+  `Ctx::node_value`, and an undecided value (a runtime-dependent perspective)
   should return `false` so the check stays conservative.
 - `combine` merges the direct sub-expressions' attribute slots into one node — a
   perspective runs the language's meet operator over the operand array, a lazy

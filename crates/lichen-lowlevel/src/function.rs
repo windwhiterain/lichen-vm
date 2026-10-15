@@ -373,9 +373,7 @@ impl<P: Program> Module<P> {
             return clone;
         }
         // One shared node: each reach mints its own undecided cell, never a cached one.
-        let wildcard = self.nodes[node]
-            .value
-            .or_else(|| self.class_committed_value(node));
+        let wildcard = self.nodes[node].value.or_else(|| self.nodes[node].value);
         if matches!(
             wildcard.and_then(|value| value.as_enum()),
             Some(LowValue::Any)

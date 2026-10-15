@@ -276,9 +276,8 @@ only moment two classes could start doing so is a merge, and the merge does not 
 is why `(n => ([1,2,3] : array{Int, n})) 5` is still refused — the apply compares a pinned
 `3` against the argument `5`, and neither ever entered the other's class.
 
-`class_value` / `class_committed_value` read the class's value through its
-representative, `class_root` walks the union-find without path compression so a
-read can hold a shared borrow, and `alias_read` is how a pure read joins the
+`class_root` walks the union-find without path compression so a read can hold a
+shared borrow, and `alias_read` is how a pure read joins the
 class of the cell it read, so a later bind replicates the value to the reader.
 The full semantics, and the reason a read can be taken too early, are
 [eval-before-unify](eval-before-unify.md)'s subject.
