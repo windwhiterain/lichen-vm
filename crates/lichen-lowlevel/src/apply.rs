@@ -137,10 +137,16 @@ impl<P: Program> Module<P> {
                     self.write_node_value(node, result);
                 }
                 self.unify(node, applied);
-                // Every element is resolved; the deep pass replicates to no member.
-                for item in unsafe { array.items() } {
-                    let item = self.as_dynamic(item.node, block);
-                    self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
+                // Only a deep pass resolves the unmasked elements; a shallow one leaves
+                // them as the body wrote them.
+                if self.deep_depth > 0 {
+                    for item in unsafe { array.items() } {
+                        if item.shallow {
+                            continue;
+                        }
+                        let item = self.as_dynamic(item.node, block);
+                        self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
+                    }
                 }
                 result
             }
