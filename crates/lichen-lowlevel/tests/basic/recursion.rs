@@ -400,8 +400,7 @@ fn deep_evaluating_an_infinite_stream_records_the_deep_budget() {
     let arg = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
-    // Which of the two depth guards trips first is a fact about how much work an apply
-    // does; what the test guards is that a guard records a budget instead of panicking.
+    // Which depth guard trips first depends on the apply's work; either may record.
     assert!(
         matches!(
             m.budget_exhausted,
