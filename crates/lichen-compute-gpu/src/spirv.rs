@@ -1578,7 +1578,12 @@ fn emit_function(
                                 as_condition(popped, &ids, &mut literals, &mut code, &mut next),
                             );
                         }
-                        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
+                        KernelInstr::Exp
+                        | KernelInstr::Sqrt
+                        | KernelInstr::Floor
+                        | KernelInstr::Ln
+                        | KernelInstr::Sin
+                        | KernelInstr::Cos => {
                             return Err(SpirvRefusal::UnexpandedTranscendental { at });
                         }
                         KernelInstr::Select => {
@@ -2209,7 +2214,10 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
         | KernelInstr::I32WrapI64
         | KernelInstr::Exp
         | KernelInstr::Sqrt
-        | KernelInstr::Floor => None,
+        | KernelInstr::Floor
+        | KernelInstr::Ln
+        | KernelInstr::Sin
+        | KernelInstr::Cos => None,
     }
 }
 

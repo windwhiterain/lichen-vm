@@ -3598,7 +3598,8 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         | TypeOperator::Sqrt
         | TypeOperator::Floor
         | TypeOperator::Sin
-        | TypeOperator::Cos => return None,
+        | TypeOperator::Cos
+        | TypeOperator::Ln => return None,
         // A membership test is a refinement's check, not a computation: the
         // checker registers it as an assert beside the body.
         TypeOperator::InDomain => return None,
@@ -3637,7 +3638,8 @@ fn unary_class(operator: TypeOperator) -> Option<ScalarClass> {
         | TypeOperator::Sqrt
         | TypeOperator::Floor
         | TypeOperator::Sin
-        | TypeOperator::Cos => Some(ScalarClass::Float),
+        | TypeOperator::Cos
+        | TypeOperator::Ln => Some(ScalarClass::Float),
         _ => None,
     }
 }

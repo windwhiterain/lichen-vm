@@ -123,9 +123,13 @@ fn check(
         }
         // The narrowing a `0`/`1` scalar takes to become a condition.
         KernelInstr::I32WrapI64 => Ok(OperandClass::Condition),
-        // The exponential and the square root are `Float`'s own instructions, so they state
-        // their class.
-        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
+        // Every transcendental is `Float`'s own instruction, so it states its class.
+        KernelInstr::Exp
+        | KernelInstr::Sqrt
+        | KernelInstr::Floor
+        | KernelInstr::Ln
+        | KernelInstr::Sin
+        | KernelInstr::Cos => {
             as_operand_class(class_of(&args[0]), ScalarClass::Float, at)?;
             Ok(OperandClass::Scalar(ScalarClass::Float))
         }

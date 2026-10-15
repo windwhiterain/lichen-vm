@@ -107,6 +107,9 @@ pub enum TokenKind {
     /// The `cos` keyword — the cosine of one `Float`, at the prefix level, defined in
     /// `crates/lichen-kernel-ir/src/unary.rs`.
     KwCos,
+    /// The `ln` keyword — the natural logarithm of one `Float`, at the prefix level
+    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    KwLn,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -228,6 +231,7 @@ impl TokenKind {
             TokenKind::KwFloor => "'floor'",
             TokenKind::KwSin => "'sin'",
             TokenKind::KwCos => "'cos'",
+            TokenKind::KwLn => "'ln'",
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
@@ -360,6 +364,8 @@ enum RawToken {
     KwSin,
     #[token("cos")]
     KwCos,
+    #[token("ln")]
+    KwLn,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -783,6 +789,7 @@ fn raw_to_kind(
             "floor" => TokenKind::KwFloor,
             "sin" => TokenKind::KwSin,
             "cos" => TokenKind::KwCos,
+            "ln" => TokenKind::KwLn,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -811,6 +818,7 @@ fn raw_to_kind(
         RawToken::KwFloor => Some(TokenKind::KwFloor),
         RawToken::KwSin => Some(TokenKind::KwSin),
         RawToken::KwCos => Some(TokenKind::KwCos),
+        RawToken::KwLn => Some(TokenKind::KwLn),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

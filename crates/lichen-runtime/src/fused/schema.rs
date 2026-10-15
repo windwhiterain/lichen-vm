@@ -129,6 +129,15 @@ pub enum KernelInstr {
     /// The largest integral `Float` not above one `Float`.
     #[facet(rename = "floor")]
     Floor,
+    /// The natural logarithm of one `Float`.
+    #[facet(rename = "ln")]
+    Ln,
+    /// The sine of one `Float`.
+    #[facet(rename = "sin")]
+    Sin,
+    /// The cosine of one `Float`.
+    #[facet(rename = "cos")]
+    Cos,
     /// A cross-kernel call.
     #[facet(rename = "call_kernel")]
     CallKernel {

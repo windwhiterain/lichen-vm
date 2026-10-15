@@ -108,6 +108,8 @@ pub enum PrefixOp {
     Sin,
     /// `cos x` — the cosine of one `Float`.
     Cos,
+    /// `ln x` — the natural logarithm of one `Float`.
+    Ln,
 }
 
 /// The [`TypeOperator`] each [`PrefixOp`] runs, as [`BinOp`] does.
@@ -123,6 +125,7 @@ impl From<PrefixOp> for TypeOperator {
             PrefixOp::Floor => TypeOperator::Floor,
             PrefixOp::Sin => TypeOperator::Sin,
             PrefixOp::Cos => TypeOperator::Cos,
+            PrefixOp::Ln => TypeOperator::Ln,
         }
     }
 }

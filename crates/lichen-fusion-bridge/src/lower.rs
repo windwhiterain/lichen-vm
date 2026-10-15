@@ -201,6 +201,18 @@ impl Walk<'_> {
                 Ok(UnaryOp::Sqrt.apply(operand))
             }
             KernelInstr::Floor => Err(BridgeRefusal::Floor),
+            KernelInstr::Ln => {
+                let operand = self.argument(args, 0)?;
+                Ok(UnaryOp::Ln.apply(operand))
+            }
+            KernelInstr::Sin => {
+                let operand = self.argument(args, 0)?;
+                Ok(UnaryOp::Sin.apply(operand))
+            }
+            KernelInstr::Cos => {
+                let operand = self.argument(args, 0)?;
+                Ok(UnaryOp::Cos.apply(operand))
+            }
             KernelInstr::Conv { from, to } => self.conversion(args, from, to),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),

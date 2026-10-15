@@ -615,6 +615,12 @@ fn expression<'a, Er: GrammarError<'a>>(
                 ),
                 prefix_op(
                     tokens,
+                    TokenKind::KwLn,
+                    PrefixOp::Ln,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
                     TokenKind::KwMax,
                     PrefixOp::Max,
                     operand(tokens, atom.clone()),

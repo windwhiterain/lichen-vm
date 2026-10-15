@@ -396,6 +396,9 @@ fn instruction(at: &str, instr: &schema::KernelInstr) -> Result<ir::KernelInstr,
         schema::KernelInstr::Exp => ir::KernelInstr::Exp,
         schema::KernelInstr::Sqrt => ir::KernelInstr::Sqrt,
         schema::KernelInstr::Floor => ir::KernelInstr::Floor,
+        schema::KernelInstr::Ln => ir::KernelInstr::Ln,
+        schema::KernelInstr::Sin => ir::KernelInstr::Sin,
+        schema::KernelInstr::Cos => ir::KernelInstr::Cos,
         schema::KernelInstr::CallKernel { kernel } => {
             ir::KernelInstr::CallKernel(wide(&format!("{at}.kernel"), kernel)?)
         }
@@ -434,6 +437,9 @@ impl From<ir::KernelInstr> for schema::KernelInstr {
             ir::KernelInstr::Exp => schema::KernelInstr::Exp,
             ir::KernelInstr::Sqrt => schema::KernelInstr::Sqrt,
             ir::KernelInstr::Floor => schema::KernelInstr::Floor,
+            ir::KernelInstr::Ln => schema::KernelInstr::Ln,
+            ir::KernelInstr::Sin => schema::KernelInstr::Sin,
+            ir::KernelInstr::Cos => schema::KernelInstr::Cos,
             ir::KernelInstr::CallKernel(kernel) => schema::KernelInstr::CallKernel {
                 kernel: kernel as u64,
             },

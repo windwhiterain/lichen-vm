@@ -304,7 +304,12 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         // The arms are the value, so either one's type is the result's.
         KernelInstr::Select => operands.first().copied(),
         KernelInstr::Conv { to, .. } => Some(super::assemble::value_type(to)),
-        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => Some(Type::F32),
+        KernelInstr::Exp
+        | KernelInstr::Sqrt
+        | KernelInstr::Floor
+        | KernelInstr::Ln
+        | KernelInstr::Sin
+        | KernelInstr::Cos => Some(Type::F32),
         KernelInstr::CallKernel(callee) => {
             let at = *context.index.get(&callee)?;
             let target = context.callees.get(at as usize)?;
@@ -424,7 +429,12 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 }
             }
         }
-        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
+        KernelInstr::Exp
+        | KernelInstr::Sqrt
+        | KernelInstr::Floor
+        | KernelInstr::Ln
+        | KernelInstr::Sin
+        | KernelInstr::Cos => {
             return Err(format!(
                 "compute.wasm: {op:?} is defined by its expansion into the primitive operators, \
                  which `Lower` applies before a fragment is registered — a body that still holds \

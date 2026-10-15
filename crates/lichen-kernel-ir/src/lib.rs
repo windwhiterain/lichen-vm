@@ -30,8 +30,8 @@ pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{
     TRANSCENDENTALS, cos_body, cos_value, exp_body, exp_value, floor_body, floor_value,
-    inlined_cos_operand, inlined_exp_operand, inlined_sin_operand, inlined_sqrt_operand, sin_body,
-    sin_cos_value, sin_value, sqrt_body, sqrt_value,
+    inlined_cos_operand, inlined_exp_operand, inlined_sin_operand, inlined_sqrt_operand, ln_body,
+    ln_value, sin_body, sin_cos_value, sin_value, sqrt_body, sqrt_value,
 };
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`
@@ -772,6 +772,29 @@ pub enum KernelInstr {
     /// class, because the conversion and the subtraction it is written with are.
     /// `docs/notes/floating-point.md` §7.
     Floor,
+    /// The natural logarithm of one `Float`.
+    ///
+    /// # Invariant
+    /// Defined by the IR, like [`Self::Exp`]: no target has a logarithm the two read
+    /// alike, so every backend lowers it by [`KernelBody::expand_transcendentals`]. The
+    /// reduction needs no shift and no bitcast — it is the fold [`Self::Sqrt`] uses.
+    ///
+    /// It **divides once**, and `OpFDiv` misrounds here, so it carries a cross-backend
+    /// divergence of up to a unit in the last place (§4.4).
+    Ln,
+    /// The sine of one `Float`.
+    ///
+    /// # Invariant
+    /// Defined by the IR and named in [`crate::TRANSCENDENTALS`] like [`Self::Exp`], so
+    /// every backend lowers it by [`KernelBody::expand_transcendentals`]. It used to carry
+    /// no instruction of its own and to be spliced by `lichen-compute` instead; the two
+    /// mechanisms now are one.
+    Sin,
+    /// The cosine of one `Float`.
+    ///
+    /// # Invariant
+    /// As [`Self::Sin`]'s.
+    Cos,
     /// A cross-kernel call: its `args` are the argument, and a backend resolves this to
     /// a call to the callee.
     CallKernel(KernelId),
@@ -901,7 +924,10 @@ impl KernelInstr {
             | KernelInstr::Conv { .. }
             | KernelInstr::Exp
             | KernelInstr::Sqrt
-            | KernelInstr::Floor => 1,
+            | KernelInstr::Floor
+            | KernelInstr::Ln
+            | KernelInstr::Sin
+            | KernelInstr::Cos => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
             KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => 3,
@@ -920,7 +946,12 @@ impl KernelInstr {
             KernelInstr::Const(class, _) => Some(*class),
             KernelInstr::Bin(class, _) => Some(*class),
             KernelInstr::Conv { to, .. } => Some(*to),
-            KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => Some(ScalarClass::Float),
+            KernelInstr::Exp
+            | KernelInstr::Sqrt
+            | KernelInstr::Floor
+            | KernelInstr::Ln
+            | KernelInstr::Sin
+            | KernelInstr::Cos => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)
             }

@@ -60,6 +60,9 @@ pub enum PrefixOp {
     Sin,
     /// `cos x` — the cosine of one `Float` (`crates/lichen-kernel-ir/src/unary.rs`).
     Cos,
+    /// `ln x` — the natural logarithm of one `Float`
+    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    Ln,
 }
 
 impl PrefixOp {
@@ -76,7 +79,8 @@ impl PrefixOp {
             | PrefixOp::Sqrt
             | PrefixOp::Floor
             | PrefixOp::Sin
-            | PrefixOp::Cos => 1,
+            | PrefixOp::Cos
+            | PrefixOp::Ln => 1,
             PrefixOp::Max | PrefixOp::Min => 2,
         }
     }

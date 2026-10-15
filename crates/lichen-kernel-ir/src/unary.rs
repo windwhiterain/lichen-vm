@@ -11,10 +11,13 @@ use crate::{KernelBin, KernelBody, KernelInstr, ScalarClass, Terminator, ValueDe
 /// **One list, so the expansion and the instructions cannot disagree**: a transcendental
 /// the IR names but this table omits would reach a backend unexpanded, which each emitter
 /// refuses by name. See `docs/notes/floating-point.md` §6, §7.
-pub const TRANSCENDENTALS: [(KernelInstr, fn() -> KernelBody); 3] = [
+pub const TRANSCENDENTALS: [(KernelInstr, fn() -> KernelBody); 6] = [
     (KernelInstr::Exp, exp_body),
     (KernelInstr::Sqrt, sqrt_body),
     (KernelInstr::Floor, floor_body),
+    (KernelInstr::Ln, ln_body),
+    (KernelInstr::Sin, sin_body),
+    (KernelInstr::Cos, cos_body),
 ];
 
 /// How many times the polynomial's argument is halved, and therefore how many times its
@@ -494,10 +497,9 @@ fn quadrant(
 ///
 /// # Invariant
 /// Straight line, one block, one parameter and one returned value — the shape
-/// [`KernelBody::expand_transcendentals`] inlines. **Every instruction here is one the
-/// two backends already emit**, because this definition is inlined by the language's
-/// own lowering rather than named as an instruction, and so it carries no operand of
-/// [`crate::TRANSCENDENTALS`] for that rewrite to expand.
+/// [`KernelBody::expand_transcendentals`] inlines, and named in
+/// [`crate::TRANSCENDENTALS`] like every other transcendental. **Every instruction here
+/// is one the two backends already emit**, so the expansion is what a target sees.
 pub fn sin_body() -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -760,6 +762,252 @@ pub fn floor_value(x: f32) -> f32 {
     } else {
         integral
     }
+}
+
+/// The band the `ln` reduction leaves its argument in: `[1/sqrt(2), sqrt(2))`.
+///
+/// # Invariant
+/// **Round to nearest: the band is what makes the answer usable.** `[1, 2)` lands
+/// arguments next to `2`, so the answer is `ln(v) - ln 2` from two terms near `0.693` —
+/// worst **relative** error `1.000`, measured. This one bounds `|ln(v)|` by `0.347`, so
+/// `k != 0` implies an answer at least that and the addition cannot cancel.
+/// §3.3 of `transcendentals-as-operators.md` measures both.
+const LN_BAND_LOW: f32 = 0.707_106_78;
+const LN_BAND_HIGH: f32 = 1.414_213_5;
+/// The edge below which one `2^-4` step would leave the band: `16/sqrt(2)`.
+///
+/// # Invariant
+/// **The fine step's guard is `value >= this`, not `value >= LN_BAND_HIGH`.** A `2^-4`
+/// step from inside the band leaves it, and a guard on the band's upper edge overshot
+/// below for **1,604,117,031** of the positive class. This is the step size's own
+/// product with the band, so the step can never leave it.
+const LN_FINE_EDGE: f32 = LN_BAND_LOW * 16.0;
+
+/// The coarse step, the fine step and the unit step, each an exact power of two.
+///
+/// # Invariant
+/// **Powers of two, so the reduction is exact and the track stays exact.** `k` is a
+/// `Float` summing these counts and never leaves `[-160, 32]`, which the class holds
+/// exactly, so `k` is the true exponent rather than a rounded one.
+const LN_COARSE_STEP: f32 = 4_294_967_296.0;
+const LN_FINE_STEP: f32 = 1.0 / 16.0;
+const LN_UNIT_STEP: f32 = 0.5;
+
+/// How many steps of each kind the reduction runs.
+///
+/// # Invariant
+/// **The smallest counts that reduce every positive class value into the band**,
+/// measured exhaustively over all `2,130,706,431` positive `f32`: **0** fell outside and
+/// **0** went non-finite. Forty-two conditional scalings, the same order as
+/// [`COARSE_STEPS`] and [`FINE_STEPS`] between them.
+const LN_COARSE_STEPS: u32 = 5;
+const LN_FINE_STEPS: u32 = 32;
+const LN_UNIT_STEPS: u32 = 5;
+
+/// `ln 2` in this class, the track's unit.
+const LN_TWO: f32 = std::f32::consts::LN_2;
+
+/// `ln`'s `atanh` coefficients `1/(2i+1)`, ascending in `z^2`.
+///
+/// # Invariant
+/// The reduced argument is within `1/sqrt(2)` of one, so `|z| <= 0.1716` and ten terms
+/// truncate at a measured `2.9e-10` relative — below a hundredth of the class's own
+/// resolution, so this degree is not the limiting term.
+const LN_COEFFICIENTS: [f32; 10] = [
+    1.0,
+    1.0 / 3.0,
+    1.0 / 5.0,
+    1.0 / 7.0,
+    1.0 / 9.0,
+    1.0 / 11.0,
+    1.0 / 13.0,
+    1.0 / 15.0,
+    1.0 / 17.0,
+    1.0 / 19.0,
+];
+
+/// One `ln` reduction step, and the exponent it moved the value by.
+///
+/// # Invariant
+/// **The track is added to, not multiplied**: `k` is the exponent, so it sums exact
+/// integers where a scaled track would carry a rounding per step. The value multiplies
+/// rather than divides, for the reason [`rescale`] gives.
+fn ln_scale(
+    body: &mut KernelBody,
+    block: usize,
+    value: ValueId,
+    track: ValueId,
+    below: bool,
+    edge: f32,
+    step: f32,
+    track_step: f32,
+) -> (ValueId, ValueId) {
+    let edge = constant(body, block, edge);
+    let comparison = if below { KernelBin::Lt } else { KernelBin::Geq };
+    let condition = condition(body, block, comparison, value, edge);
+    let factor = constant(body, block, step);
+    let scaled = float_bin(body, block, KernelBin::Mul, value, factor);
+    let value = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![scaled, value, condition],
+        vec![ScalarClass::Float],
+    );
+    let count = constant(body, block, track_step);
+    let counted = float_bin(body, block, KernelBin::Add, track, count);
+    let track = body.add_op(
+        block,
+        KernelInstr::Select,
+        vec![counted, track, condition],
+        vec![ScalarClass::Float],
+    );
+    (value, track)
+}
+
+/// The logarithm: a reduction into the band, then the `atanh` series and `k ln 2`.
+///
+/// # Invariant
+/// Straight line, one block, one parameter and one returned value — the shape
+/// [`KernelBody::expand_transcendentals`] inlines. **The one operation not shared is the
+/// division in `(v-1)/(v+1)`**, and `OpFDiv` does not round correctly on this device
+/// (`floating-point.md` §7), so unlike the others this one carries a cross-backend
+/// divergence of up to a unit in the last place.
+pub fn ln_body() -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let x = body.add_param(entry);
+
+    // A non-positive operand answers `-inf`; `select` evaluates both arms, so pin it.
+    let zero = constant(&mut body, entry, 0.0);
+    let positive = condition(&mut body, entry, KernelBin::Gt, x, zero);
+    let floor = constant(&mut body, entry, LN_BAND_LOW);
+    let mut value = body.add_op(
+        entry,
+        KernelInstr::Select,
+        vec![x, floor, positive],
+        vec![ScalarClass::Float],
+    );
+    let mut track = constant(&mut body, entry, 0.0);
+
+    for _ in 0..LN_COARSE_STEPS {
+        (value, track) = ln_scale(
+            &mut body,
+            entry,
+            value,
+            track,
+            true,
+            LN_BAND_LOW,
+            LN_COARSE_STEP,
+            -32.0,
+        );
+    }
+    for _ in 0..LN_FINE_STEPS {
+        (value, track) = ln_scale(
+            &mut body,
+            entry,
+            value,
+            track,
+            false,
+            LN_FINE_EDGE,
+            LN_FINE_STEP,
+            4.0,
+        );
+    }
+    for _ in 0..LN_UNIT_STEPS {
+        (value, track) = ln_scale(
+            &mut body,
+            entry,
+            value,
+            track,
+            false,
+            LN_BAND_HIGH,
+            LN_UNIT_STEP,
+            1.0,
+        );
+    }
+
+    let one = constant(&mut body, entry, 1.0);
+    let shifted = float_bin(&mut body, entry, KernelBin::Sub, value, one);
+    let raised = float_bin(&mut body, entry, KernelBin::Add, value, one);
+    let z = float_bin(&mut body, entry, KernelBin::Div, shifted, raised);
+    let square = float_bin(&mut body, entry, KernelBin::Mul, z, z);
+    let last = LN_COEFFICIENTS.len() - 1;
+    let mut series = constant(&mut body, entry, LN_COEFFICIENTS[last]);
+    for coefficient in LN_COEFFICIENTS[..last].iter().rev() {
+        let product = float_bin(&mut body, entry, KernelBin::Mul, series, square);
+        let addend = constant(&mut body, entry, *coefficient);
+        series = float_bin(&mut body, entry, KernelBin::Add, product, addend);
+    }
+    let two = constant(&mut body, entry, 2.0);
+    let doubled = float_bin(&mut body, entry, KernelBin::Mul, z, two);
+    let reduced = float_bin(&mut body, entry, KernelBin::Mul, doubled, series);
+
+    let unit = constant(&mut body, entry, LN_TWO);
+    let exponent = float_bin(&mut body, entry, KernelBin::Mul, track, unit);
+    let answer = float_bin(&mut body, entry, KernelBin::Add, reduced, exponent);
+
+    let infinity = constant(&mut body, entry, f32::NEG_INFINITY);
+    let answer = body.add_op(
+        entry,
+        KernelInstr::Select,
+        vec![answer, infinity, positive],
+        vec![ScalarClass::Float],
+    );
+
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: vec![answer],
+        },
+    );
+    body
+}
+
+/// The number the logarithm's definition computes for `x`.
+///
+/// # Invariant
+/// **The definition, not a reference implementation**: the emitters run [`ln_body`]'s
+/// sequence rather than call this, so the two agree because the sequence is this one,
+/// and the interpreter has an answer without a backend. The steps are the body's own,
+/// in the same order, on the value the band guard admits.
+pub fn ln_value(x: f32) -> f32 {
+    if !(x > 0.0) {
+        return f32::NEG_INFINITY;
+    }
+    let (value, track) = ln_reduce_value(x);
+    let z = (value - 1.0) / (value + 1.0);
+    let square = z * z;
+    let last = LN_COEFFICIENTS.len() - 1;
+    let mut series = LN_COEFFICIENTS[last];
+    for coefficient in LN_COEFFICIENTS[..last].iter().rev() {
+        series = series * square + coefficient;
+    }
+    2.0 * z * series + track * LN_TWO
+}
+
+/// [`ln_body`]'s reduction evaluated in Rust, in the same order and the same arithmetic.
+fn ln_reduce_value(x: f32) -> (f32, f32) {
+    let mut value = x;
+    let mut track = 0.0f32;
+    for _ in 0..LN_COARSE_STEPS {
+        if value < LN_BAND_LOW {
+            value *= LN_COARSE_STEP;
+            track -= 32.0;
+        }
+    }
+    for _ in 0..LN_FINE_STEPS {
+        if value >= LN_FINE_EDGE {
+            value *= LN_FINE_STEP;
+            track += 4.0;
+        }
+    }
+    for _ in 0..LN_UNIT_STEPS {
+        if value >= LN_BAND_HIGH {
+            value *= LN_UNIT_STEP;
+            track += 1.0;
+        }
+    }
+    (value, track)
 }
 
 /// The exponential's definition: a one-parameter, one-result body over the primitives
