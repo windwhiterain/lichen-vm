@@ -150,26 +150,54 @@ unify descends this kernel's parameter type** — the one `compute.parallel` alr
    and it is the same reason the brief's earlier `evaluate_node` attempt had no effect.
 
 That last point is the real shape of the defect and the next step: **the class is filled by a
-unification that the language's own carry rule skips.** A fix has to either make the parameter's
-element class decided without waiting for that unify — for example by having the checker, which
-builds the `Buf` type term and knows the declared element, seed `Float` into the element value
-half's class at construction rather than leaving it to a later unification — or by having
-`compile_parallel_fragment` refuse (`RoleUnread::Undecided`) instead of falling through to
-`ScalarClass::Int`, which is a behaviour change to `compute.rs:2424-2430` and would need its own
-acceptance. **Neither was implemented or measured here.**
+unification that the language's own carry rule skips.** The route this note first proposed — have the
+checker, *which builds the `Buf` type term and knows the declared element*, seed the class at
+construction — **is wrong, and measuring that was the next slice's first result**: the checker does not
+build the term. It builds **one node** for the `compute.Buf Float` application
+(`crates/lichen-highlevel/src/checker/lambda.rs:316`) and it *does* know the class there (the argument's
+value node is the shared `Float` node and its cell holds `TypeValue(TypeFloat)`), but the type **term** is
+materialised later by the VM — `static_function_apply` → `static_node_apply`
+(`crates/lichen-lowlevel/src/static_module/apply.rs:112`) **cloning the frozen `compute.lichen`
+template** — and the cell `walk_role` reads is **one of those clones**. So **no site both knows the class
+and holds the cell**; they are in different crates and different phases. Two seeding experiments were
+built and discarded: putting a `Parameter` element's own binding value cell in its slot's value position
+(`crates/lichen-highlevel/src/checker/tuples.rs`) does fire
+(`kind=Parameter value=Some(NodeId(290v1))`) but leaves the cell empty at the first walk, and evaluating a
+literal argument at check time has no effect (the literal's value node already held `TypeFloat`).
 
-## 4. Files
+**The measured missing fact**: at **every** `compute.Buf` application (`applied = StaticFunctionId(22)`),
+`apply_parameter_check` sees `param = [..=None, ..=None]` and `arg = [..=None, ..=None]` — **the binding
+the application exists to make never happens there**. The class arrives only when the kernel's own
+parameter unify later descends the struct type and merges the cell into the decided `Float` class. A seed
+and that merge *could* disagree, and the machinery has an answer for it — `write_node_answer`/
+`unify_inner`'s `(Some, Some)` arm calls `record_error(ra, rb, …)`, a recorded unify error naming both
+nodes — but with no seeding site reachable that is untested.
 
-* `crates/lichen-compute/tests/classfill_probe.rs` — the probe; prints, asserts nothing.
-* `crates/lichen-lowlevel/src/probe_write.rs` — the recorder (temporary).
-* `equality.rs`, `module.rs`, `lib.rs`, `compute.rs` — instrumentation only.
+So the two honest candidates are both **lowlevel** changes to the carry rule or the apply ordering, and
+neither was chosen: **(i)** carry the parameter binding into the `.element` slot's value position **at
+clone time** in `static_node_apply`, or **(ii)** make the `Buf` application's argument **decided before
+its `apply_parameter_check`**. Both need a decision that this note does not make.
 
-## Reproducing
+## 4. One half of that did land: an undecided class is refused, not guessed
 
-```
-cargo test -p lichen-compute --test classfill_probe -- --nocapture            # CONTROL
-$env:PROBE_CASE='step'; cargo test -p lichen-compute --test classfill_probe -- --nocapture
-```
+`compile_parallel_fragment` now returns `RoleUnread::Refusal` naming what it could not read
+(`crates/lichen-compute/src/compute.rs:2414-2432`) instead of falling through to
+`unwrap_or(ScalarClass::Int)`. **Its blast radius was measured as zero**: A/B against the commit reverted,
+over the whole `lichen-compute` suite, the runs are identical, failing exactly the six pre-existing
+`lowlevel` binaries with the same counts. No legitimate program hit the refusal, so it was neither
+narrowed nor widened. One sentence changed to say what the refusal now covers —
+*"A named refusal: the parameter is not a kernel ABI, **or a class it declares is not decidable**, and
+this is why."* (`compute.rs:1899-1900`); the `RoleUnread` invariant block itself needed no change.
 
-The probe's instrumentation is temporary and is **not** part of the fix; it exists so the numbers
-above can be re-derived.
+**It does not flip the pin above, and that is the interesting part**: at the failing read a write *is*
+found, so the default was never what produced the `Int` here. The refusal is a net for the *other* sites
+where an undecided class used to become `Int` silently — not a fix for this defect.
+
+## 5. Re-deriving the measurement
+
+The probe and the `#[track_caller]` recorder that produced §1–§3 were **not committed**: their
+investigation is closed, and the defect stays pinned by the ignored assertions in
+`crates/lichen-compute/tests/compile_order_class.rs`. To re-derive them, instrument the five write sides
+of `Node::value` named in *What proved it*, share one ordered log with the `walk_role` reads and a
+per-`compile_parallel_fragment` counter, and run the two programs — the same write appears in both, only
+its position differs (CONTROL 7422/7447 against a compile at 7854; STEP 8865 against 7961).
