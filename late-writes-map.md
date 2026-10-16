@@ -16,6 +16,13 @@
 > read). Every code change described here was a scratch probe behind an env var and
 > was **reverted**; `git diff dev...HEAD --name-only` on this branch lists exactly one
 > file, this one.
+>
+> **Where the decision itself lives.** This map is the measurement the decision in
+> [incremental-evaluation](docs/notes/incremental-evaluation.md) §7 already records —
+> that commit (`557a8265`, on `dev` after this branch was cut) names "the three
+> lowlevel epoch tests and the four compute late-write tests … as the first map of
+> those defects". This file is that map, with the per-test traces; it deliberately
+> restates no prose from that note.
 
 ## 0. The goal, in the maintainer's terms
 
