@@ -1817,4 +1817,55 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
 (compute.collect final(2) : array{Float, 4}, compute.collect final(3).o : array{Float, 2}, final(0))
 ```
 
+### `ln.lichen`
+
+```text
+---
+  order = "26"
+  compute = import "compute.lichen"
+  doc = "The natural logarithm over a kernel body: `y[i] = ln x[i]`, one lane per element, and the \
+    first example of this ladder to *apply* `ln` — `decode_loop` names the operator as the wall a \
+    sampler still has, and nothing else in `examples/` computes one. The operator is **a range \
+    reduction, not a polynomial over the operand**: three straight-line phases — 5 steps of \
+    `×2^32`, 32 of `×2^-4` and 5 of `×2^-1` — bring the argument into the band \
+    `[1/sqrt(2), sqrt(2))`, a ten-term `atanh` series in `z^2` gives `ln v` there, and the track \
+    adds `k·ln 2`. \
+    **Eight of these ten lanes are exact, and one product is all the arithmetic leaves.** Every \
+    power of two reduces to *exactly* `1`: each step is a power of two, so the scaling is exact \
+    and the track is an exact integer; `z = 0`, so the series is multiplied by zero and \
+    contributes nothing. Lane `k` is then `k·ln 2`, and for every `k` in this table \
+    (`0, ±1, ±2, 3, 40`) that carries the same bits the correctly rounded `ln` of that power of \
+    two has. `ln 1 = 0` is the one lane with no multiplication at all, and `2^40` — ten `2^-4` \
+    steps and a track of exactly `40`, the furthest lane from one — answers `27.725887`. \
+    `0.99999994` is exact too, and it is the operand `transcendentals-as-operators.md` §3.3 \
+    measured: it is `1 - 2^-24` in this class, it is already inside the band, so `k` is `0` and \
+    nothing is subtracted, `z` is small enough that the series is `1.0`, and the answer is \
+    `-2^-24` — the correctly rounded logarithm of it. A `[1, 2)` reduction answers that same \
+    operand with a relative error of `1.000`, the right size only by a factor of two, which is \
+    why this band is `[1/sqrt(2), sqrt(2))` and not `[1, 2)`. \
+    **The last two lanes are the modelled ones, and they are the ones that make the band \
+    observable.** They are its own edges, `1/sqrt(2)` and `sqrt(2)`, where the reduced argument is \
+    not `1` and the series does the work. **Halving `sqrt(2)` in this class lands exactly on \
+    `1/sqrt(2)`**, so those two lanes reduce to the same argument and differ by one correctly \
+    rounded `ln 2` and nothing else — which is why they read `-0.34657362` and `0.34657356` \
+    rather than as negatives of each other. \
+    `ln` is the one operator on this ladder whose GPU column is unmeasured: `(v-1)/(v+1)` is a \
+    float division, which that device does not round correctly. Every example, this one \
+    included, runs on the `cpu` backend."
+  output = "[0.0, 0.6931472, -0.6931472, 1.3862944, -1.3862944, 2.0794415, -0.000000059604645, -0.34657362, 0.34657356, 27.725887]: array{Float, 10}"
+---
+Args = struct{.x (compute.Buf Float)}
+Outs  = struct{.v (compute.Buf Float)}
+Par  = compute.P (compute.KT Float)(.I Args, .O Outs)
+logged = (k : Par) => {
+  i = compute.range k.n
+  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  compute.write ((compute.Write _)(.to k.out.v, .at i, .value (ln x ~ "element")))
+}
+kernel = compute.parallel (logged ~ "claim:Elementwise(element)") "cpu"
+args = (compute.buffer ([1.0, 2.0, 0.5, 4.0, 0.25, 8.0, 0.99999994, 0.70710678, 1.4142135, 1099511627776.0] : array{Float, 10}) : (compute.Buf Float))
+out = (compute.plrun kernel ((compute.A Args)(.n 10, .I Args(.x args))) : Outs)
+compute.collect out.v : array{Float, 10}
+```
+
 <!-- end: examples -->
