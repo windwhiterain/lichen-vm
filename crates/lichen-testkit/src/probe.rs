@@ -280,14 +280,11 @@ where
     fn finish_run(&mut self) {
         let root_val = self.build.root_val;
         let root_ty = self.build.root_ty;
-        let value = self.build.module.evaluate_node_deep(root_val, None);
+        let _ = self.build.module.evaluate_node_deep(root_val, None);
         let _ = self.build.module.evaluate_node_deep(root_ty, None);
-        let produced_nothing = match &value {
-            None => true,
-            Some(value) => matches!(value.as_enum(), Some(LowValue::Error)),
-        };
+        // The CLI's own predicate, so a probe and a run agree on what a refusal is.
         assert!(
-            !(produced_nothing && !self.build.module.extension_diagnostics.is_empty()),
+            !self.build.module.has_extension_failures(),
             "a runtime refusal was recorded: {:?}",
             self.build.module.extension_diagnostics
         );

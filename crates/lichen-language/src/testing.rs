@@ -84,10 +84,9 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    // Laxer than the CLI, which reports every recorded refusal (`docs/notes/language-toolchain.md`).
-    let produced_nothing = !crate::run::answer_arrived(&module, value);
+    // The CLI's own predicate, so a suite and a run agree on what a refusal is.
     assert!(
-        !(produced_nothing && !module.extension_diagnostics.is_empty()),
+        !module.has_extension_failures(),
         "a runtime refusal was recorded: {:?}",
         module.extension_diagnostics
     );

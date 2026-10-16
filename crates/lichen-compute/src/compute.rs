@@ -613,7 +613,8 @@ where
     match parsed {
         Ok(backend) => Some(backend),
         Err(reason) => {
-            module.record_extension_diagnostic(ExtensionDiagnostic::note(category, None, reason));
+            module
+                .record_extension_diagnostic(ExtensionDiagnostic::failure(category, None, reason));
             None
         }
     }
@@ -1022,7 +1023,7 @@ where
             if graph::is_recording()
                 && let Some(reason) = unrecordable(self, module, &operand)
             {
-                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                     GRAPH_DIAGNOSTIC,
                     None,
                     reason,
@@ -1064,7 +1065,7 @@ where
                         Err(err) => {
                             // Outside the kernel-safe subset, or an undecided
                             // domain: a lazy value plus the reason.
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 JIT_DIAGNOSTIC,
                                 None,
                                 err,
@@ -1092,7 +1093,7 @@ where
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(args) => args,
                         Err(reason) => {
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 reason,
@@ -1105,7 +1106,7 @@ where
                         Err(err) => {
                             // Whatever the wasm run said is recorded as it stands,
                             // not replaced by a summary that names none of them.
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 err,
@@ -1131,7 +1132,7 @@ where
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(collected) => collected,
                         Err(reason) => {
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 reason,
@@ -1144,7 +1145,7 @@ where
                         Err(err) => {
                             // As in `Launch`: the run's own message is this
                             // refusal's cause, so it is recorded as it stands.
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 KERNEL_LAUNCH_DIAGNOSTIC,
                                 None,
                                 err,
@@ -1195,11 +1196,13 @@ where
                             match err {
                                 RoleUnread::Undecided => return None,
                                 RoleUnread::Refusal(why) => {
-                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
-                                        PARALLEL_DIAGNOSTIC,
-                                        None,
-                                        why,
-                                    ));
+                                    module.record_extension_diagnostic(
+                                        ExtensionDiagnostic::failure(
+                                            PARALLEL_DIAGNOSTIC,
+                                            None,
+                                            why,
+                                        ),
+                                    );
                                     None
                                 }
                             }
@@ -1239,7 +1242,7 @@ where
                     let leaf_classes = match parallel_leaf_classes(id) {
                         Ok(classes) => classes,
                         Err(err) => {
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 PARALLEL_DIAGNOSTIC,
                                 None,
                                 err,
@@ -1265,7 +1268,7 @@ where
                             (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
                             (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
                             (ScalarClass::Int, Some(LowValue::Float(_))) => {
-                                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                     PARALLEL_DIAGNOSTIC,
                                     None,
                                     if position == 0 {
@@ -1279,7 +1282,7 @@ where
                                 return None;
                             }
                             (ScalarClass::Float, Some(LowValue::USize(_))) => {
-                                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                     PARALLEL_DIAGNOSTIC,
                                     None,
                                     "a parallel parameter's scalar leaf is Float here and the \
@@ -1437,7 +1440,7 @@ where
                         Err(err) => {
                             // The refusal is recorded: `BudgetExhausted`'s renderings
                             // would say "never terminates", which is false here.
-                            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                                 PARALLEL_DIAGNOSTIC,
                                 None,
                                 err,
@@ -1520,11 +1523,13 @@ where
                                 Err(err) => {
                                     // A failed fetch is a refusal like any other:
                                     // it is recorded and the read stays undecided.
-                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
-                                        PARALLEL_DIAGNOSTIC,
-                                        None,
-                                        err,
-                                    ));
+                                    module.record_extension_diagnostic(
+                                        ExtensionDiagnostic::failure(
+                                            PARALLEL_DIAGNOSTIC,
+                                            None,
+                                            err,
+                                        ),
+                                    );
                                     return None;
                                 }
                             }
@@ -1586,11 +1591,13 @@ where
                             match fetch_resident(resident, 0) {
                                 Ok(data) => data,
                                 Err(err) => {
-                                    module.record_extension_diagnostic(ExtensionDiagnostic::note(
-                                        PARALLEL_DIAGNOSTIC,
-                                        None,
-                                        err,
-                                    ));
+                                    module.record_extension_diagnostic(
+                                        ExtensionDiagnostic::failure(
+                                            PARALLEL_DIAGNOSTIC,
+                                            None,
+                                            err,
+                                        ),
+                                    );
                                     return None;
                                 }
                             }
@@ -4484,7 +4491,7 @@ where
     P: Program,
     P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
 {
-    module.record_extension_diagnostic(ExtensionDiagnostic::note(
+    module.record_extension_diagnostic(ExtensionDiagnostic::failure(
         PARALLEL_DIAGNOSTIC,
         None,
         format!(
@@ -4518,7 +4525,7 @@ where
             .node_value(item.node)
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
         else {
-            module.record_extension_diagnostic(ExtensionDiagnostic::note(
+            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                 BUFFER_DIAGNOSTIC,
                 None,
                 format!(
@@ -4533,7 +4540,7 @@ where
             LowValue::USize(word) => (ScalarClass::Int, word as i64),
             LowValue::Float(word) => (ScalarClass::Float, float_bits(word)),
             _ => {
-                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                     BUFFER_DIAGNOSTIC,
                     None,
                     format!(
@@ -4548,7 +4555,7 @@ where
         match class {
             None => class = Some(position_class),
             Some(fixed) if fixed != position_class => {
-                module.record_extension_diagnostic(ExtensionDiagnostic::note(
+                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
                     BUFFER_DIAGNOSTIC,
                     None,
                     format!(
@@ -4584,7 +4591,7 @@ where
     P: Program,
     P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
 {
-    module.record_extension_diagnostic(ExtensionDiagnostic::note(
+    module.record_extension_diagnostic(ExtensionDiagnostic::failure(
         BUFFER_DIAGNOSTIC,
         None,
         format!(
@@ -4686,7 +4693,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
             GRAPH_DIAGNOSTIC,
             None,
             reason,
@@ -4783,7 +4790,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
             GRAPH_DIAGNOSTIC,
             None,
             reason,
@@ -5009,7 +5016,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator> + From<LowOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
             GRAPH_DIAGNOSTIC,
             None,
             reason,
@@ -5365,7 +5372,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
-        module.record_extension_diagnostic(ExtensionDiagnostic::note(
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
             GRAPH_DIAGNOSTIC,
             None,
             reason,

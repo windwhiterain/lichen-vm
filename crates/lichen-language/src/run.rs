@@ -21,7 +21,6 @@ use crate::render::{print_type_lang, print_value_lang, render_attributes, value_
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_lowlevel::Module;
-use lichen_utils::extend::AsEnum;
 
 /// Whether a run says what the passes it dispatched did.
 ///
@@ -70,62 +69,6 @@ fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>, categories: &[&st
         .collect()
 }
 
-/// Whether the program's answer carries a value a reader could call one.
-///
-/// # Invariant
-///
-/// The question is asked of the answer's **own value graph**, not of its root slot: an
-/// empty root and a container whose every demanded position is empty are one verdict —
-/// nothing arrived. A **shallow** position is a lazy region the walk never entered, so
-/// it counts neither way; a decided position beside one is. See
-/// docs/notes/language-toolchain.md.
-pub(crate) fn answer_arrived<P>(module: &Module<P>, answer: Option<P::Value>) -> bool
-where
-    P: LangProgramShape,
-    P::Value: ValueType + 'static,
-{
-    let mut entered = std::collections::HashSet::new();
-    value_arrived(module, answer, &mut entered)
-}
-
-/// [`Self::answer_arrived`] over one value, entering each node once.
-fn value_arrived<P>(
-    module: &Module<P>,
-    value: Option<P::Value>,
-    entered: &mut std::collections::HashSet<lichen_lowlevel::AnyNodeId>,
-) -> bool
-where
-    P: LangProgramShape,
-    P::Value: ValueType + 'static,
-{
-    let Some(value) = value else { return false };
-    match AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value) {
-        Some(lichen_lowlevel::LowValue::None | lichen_lowlevel::LowValue::Error) => false,
-        Some(lichen_lowlevel::LowValue::Array(array)) => {
-            // SAFETY: `array` is the payload of `value`, read from a live node of `module`;
-            // the walk releases no block.
-            unsafe { array.items() }
-                .iter()
-                .filter(|item| !item.shallow)
-                .any(|item| {
-                    entered.insert(item.node)
-                        && value_arrived(module, module.node_value(item.node), entered)
-                })
-        }
-        Some(lichen_lowlevel::LowValue::Table(table)) => {
-            // SAFETY: `table` is the payload of `value`, read from a live node of `module`;
-            // the walk releases no block.
-            unsafe { table.items() }.iter().any(|item| {
-                [item.key, item.value].into_iter().any(|node| {
-                    entered.insert(node) && value_arrived(module, module.node_value(node), entered)
-                })
-            })
-        }
-        // Every other atom is a cached value, the wildcard included: a reader may name it.
-        _ => true,
-    }
-}
-
 /// Run a checked build to its output text: `value<attributes>: type`, and the
 /// stage lines when the run reports.
 ///
@@ -146,11 +89,12 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    if !module.extension_diagnostics.is_empty() {
+    if module.has_extension_failures() {
         // The refusing layer's own text; no span. See docs/notes/compiler-plugin.md.
         return Err(module
             .extension_diagnostics
             .iter()
+            .filter(|entry| entry.fails_build)
             .map(|entry| {
                 Diag::unattributed(
                     crate::diag::Stage::Check,
