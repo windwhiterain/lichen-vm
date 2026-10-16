@@ -1,6 +1,5 @@
-//! Probe for the `gc.lichen` panic: separates a stale key (state carried across
-//! applications) from a foreign one, and isolates which part of the runner's
-//! setup the panic needs. See docs/notes/examples-panic-diagnosis.md.
+//! Probe: stale or foreign key, and the setup factor that triggers it.
+//! docs/notes/examples-panic-diagnosis.md
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -87,10 +86,6 @@ fn gc_variants() {
             Some(file.as_path()),
             &mut store,
         );
-        "ran".to_string()
-    });
-    guarded("file-on-disk-no-store-no-base", || {
-        lichen_language::testing::evaluate::<LangProgram>(&source_on_disk);
         "ran".to_string()
     });
     std::panic::set_hook(previous);

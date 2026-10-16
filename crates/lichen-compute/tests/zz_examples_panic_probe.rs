@@ -1,5 +1,5 @@
-//! Probe for the `examples` panic: names the example the binary dies on, and
-//! collects the drift verdicts the panic hides. See docs/notes/examples-panic-diagnosis.md.
+//! Probe: the culprit example, and the drift the panic hides.
+//! docs/notes/examples-panic-diagnosis.md
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -21,9 +21,13 @@ fn per_example_survey() {
     let mut panicked = Vec::new();
     let mut drifted = Vec::new();
     let mut clean = 0usize;
+    let only = std::env::var("PROBE_EXAMPLE").ok();
     for (name, file) in examples {
         if WORK_IN_PROGRESS.contains(&name.as_str()) {
             println!("PROBE: {name}: SKIPPED (work in progress)");
+            continue;
+        }
+        if only.as_ref().is_some_and(|want| *want != name) {
             continue;
         }
         let source = readme::read_normalized(&file);
