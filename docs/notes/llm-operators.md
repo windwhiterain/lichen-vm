@@ -355,9 +355,23 @@ need a node-local producer for `r`.
     than the count: *"this function's return is not a value a graph can hand back, so there is no graph to
     record: a graph's value table holds what its dispatches produced and the arguments it was run with, and
     this body's own value is not one of those"*. **So a growing loop is a `plrun` loop and not a
-    `graphrun` one**, and the sentence above is quoted from the source rather than captured from a run:
+    `graphrun` one**, and ~~the sentence above is quoted from the source rather than captured from a run:
     the CLI's graph body shapes that reach the count all fail on the graph's return value first, and no
-    probe of mine surfaced the count's own sentence.
+    probe of mine surfaced the count's own sentence.~~ **What is written now**, measured at
+    `dev@dd13f417` ([recorded-extent-count](recorded-extent-count.md)): **the count's own sentence is
+    reachable from the CLI, in three spellings**, captured from a run rather than quoted —
+    *"error: compute.graph: a dispatch's count is Str("five"), and a count has to be a literal or one of
+    this function's arguments: a graph's extent is either known while it is built or read from its own
+    value table at run time"*. **So the first half of this paragraph stands and the second does not.** A
+    count computed *inside* the recording is still intercepted by the return-value rule first, which is
+    what `.n (a.n + 1)` measured here and what the slice confirmed in every shape it tried; what the
+    slice adds is *why* the rule is there — **principled**: the graph's value table holds a caller's
+    arguments and a dispatch's outputs and **no node kind produces a number**, so a count the host
+    computed while recording has nothing replay could re-read it from. **And two counts that do
+    record**, which this paragraph did not separate: the count **as the graph's own argument** (as
+    `.n a.n` measured here), and a count **computed on the host** before recording. What is left of
+    the old sentence is the *diagnostic*, not the rule — `{found}` is a `Debug` render, so an
+    array-valued count prints an arena address.
   - **Two bounds that are rules rather than walls.** The extent is still read as an **`Int`**, and a
     `Float` first leaf is refused by name (`scalar_leaf_classes`, `compute.rs:1850`), so *"the extent
     follows the state"* does not mean any value; and a count past **`MAX_PARALLEL_ELEMENTS` = 2^20** is
