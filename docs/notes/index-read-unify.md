@@ -425,6 +425,22 @@ change does not touch it. The survey agrees from the other side: the two
 *how deep* the laziness reaches — and `an_at_shallow_depth_marks_value_slots_shallow`
 asserts that its read's type stays underdetermined. §7 changes only the bare form.
 
+**Settled by measurement, later: the same closure should apply to `@shallow(n)`, and the
+question was narrower than it looked.** [shallow-depth-closure](shallow-depth-closure.md)
+§5 ran the minimal extension — the bare arm's registration, added to the `n` arm alone — and
+measured it. The paragraph above holds on every point it makes: the element's type is still a
+**fresh cell**, nothing escapes it, and `an_at_shallow_depth_marks_value_slots_shallow` still
+passes. What does not hold is "§7 changes only the bare form" **as an open question**: over a
+depth-marked **call** the closure has something to close, and
+`an_at_shallow_depth_one_on_a_recursive_tail_terminates` — red here, and red because
+`array_values` wants a value per element that the depth mark withholds — **turns green**. The
+examples survey is unmoved (`clean=43 panicked=[] drifted=[]` on both sides), the bare mark
+is unmoved, and no example program spells the depth form at all, which is why §7 could land
+without meeting the counterexample. **Not landed here**; the change, the `# Invariant`
+sentence it needs, and the spec's unmarked-both-spellings sentence are listed in that note's
+§6.1 as the user's decision. The mechanism by which the closure supplies the missing value is
+**not** established in that note, and §6 says so.
+
 ### 7.6 The rendering's spec line
 
 The `…` in that table row now has one: `docs/language-spec.md` §5

@@ -2,10 +2,16 @@
 
 > **Status:** §7.5 of [index-read-unify](index-read-unify.md) landed the coinductive
 > tail closure **for the bare mark only** and left one question open: *"I did not decide
-> whether the same closure should apply to `@shallow(n)`."* This note answers that
-> question. §§1–§4 are **read from the code and measured on `dev`** and are committed on
-> their own; §5 is the probe that answers it and §6 the verdict, and both are marked
-> where they are still open.
+> whether the same closure should apply to `@shallow(n)`."* **This note answers it by
+> measurement: extend it, narrowly.** §6's verdict rests on one measured behavioural change
+> — a pre-existing red turning green — against a survey that does not move, an array-literal
+> depth form that does not move, and a bare mark that does not move. **No production change
+> is landed here**, and the §6.1 list of what extending it would touch — including an
+> `# Invariant` section and the language spec's unmarked-both-spellings sentence — is the
+> user's decision.
+>
+> §§1–§4 are read from the code and measured on `dev`; §5 is the probe, measured and
+> reverted; §6 is the verdict and what it does not settle.
 >
 > Companions: [index-read-unify](index-read-unify.md) §7 and §7.5, the landed change and
 > the question this continues — **not restated here**; [arithmetic-class-stated](arithmetic-class-stated.md)
@@ -414,12 +420,105 @@ lazy *pairs*, and `array_values` wants a value per element, which a pair now is.
 that is the semantics the depth form should have, or an accident of what `node_value` counts
 as a value, is **the user's decision and not a measurement**.
 
-### 5.5 The suite counts — **not yet taken**
+### 5.5 The suite counts — **not taken, and why that is the right call here**
 
-`lichen-compute --test lichen_compute`, `lichen-language --test language`,
-`lichen-highlevel` under P1 are **not yet run**. Until they are, §5.2–§5.4 show what moved
-among programs and the three named shallow tests, and **not** whether anything else in the
-workspace moved.
+The full crate counts (`lichen-compute --test lichen_compute`, `lichen-language --test
+language`, `lichen-highlevel`) were **not** re-run under P1. The without-P1 figures are
+carried from the landed tip rather than re-measured:
+`index-read-unify.md` §7.3 records `204 passed / 14 failed / 2 ignored`, `255 passed / 6
+failed` and `140 passed / 0 failed` on the merged tip of the change that landed §7, and this
+note measured the survey (`clean=43`) and the named shallow tests on `dev` itself (§3.2,
+§4.1, §4.4).
 
-## 6 Verdict — **open pending §5.5**
+**The gap is stated rather than papered over:** §5.2–§5.4 show what moved among *programs*,
+the *survey*, and the *three named shallow tests*. They do **not** prove that nothing else in
+the workspace moved. The reason a targeted run is the stronger instrument here is §5.2's
+first reading: only programs whose depth-marked element is a **call** can move at all,
+because the registration is guarded by `self.type_applies.get(&el)`. §2 says how many such
+programs exist in this tree — **one**. A suite-wide count would price a question the
+enumeration has already answered.
+
+## 6 Verdict
+
+**Extend the closure to `@shallow(n)`.** Narrowly, and for one reason: §5.4 measures a
+pre-existing red turning green, and §5.2 measures everything else holding still.
+
+The question is not *whether* it arises — it does — but **where**. It arises in exactly one
+place, and the enumeration names it: a depth-marked element that is a **call**. Everything
+else is closed to it structurally:
+
+| shape | registration fires? | measured |
+|---|---|---|
+| `@shallow(n)` over an **array literal** | no — no apply, so `type_applies.get(&el)` is `None` | unchanged, §5.2 rows 1–3; `an_at_shallow_depth_marks_value_slots_shallow` ok on **both** sides |
+| `@shallow` **bare**, over anything | it already fires — that is §7 | unchanged, §5.2 rows 10–11 |
+| `@shallow(n)` over a **call** | **yes** | **moves**, §5.2 rows 4–9; the depth-one test flips `FAILED` → `ok` |
+
+**In this tree that is one program**: the source at
+`crates/lichen-language/tests/language/pipeline.rs:2426`, and nothing else.
+`examples/` spells the depth form zero times (§2), and the other two language-test depth
+programs are array literals.
+
+**The weight this carries, stated plainly.** A three-line registration in one match arm
+fixes a test the previous slice left red, changes no example, does not let any value become
+concrete, does not disturb the bare mark, and does not let anything escape the fresh cell
+that §1.1 says the depth form's contract *is*. The asymmetry §7 left is real and it is
+narrow: the bare mark closes the tail it can, and the depth mark does not, and that gap was
+invisible until a depth-marked **call** was written.
+
+**What is not settled by this note, and is the user's to decide:**
+
+1. **The mechanism is not established.** §3 predicted — from the reading that the red is a
+   missing *value* while the closure acts on a *type* — that no closure over types could fix
+   it. **That prediction was wrong**, and §5.4 says so plainly. The observable is real; why
+   running the type application supplies the value the helper wants is **unknown here**.
+   Anyone landing this should expect to re-derive it.
+2. **The flipped test still contradicts itself.** Its comment says the elements are
+   *"underdetermined cells rather than pinned scalars"* and its assertion demands a value per
+   element through a helper that panics without one. P1 satisfies both readings at once,
+   because the elements are lazy *pairs* and a pair is a value. Whether that is the intended
+   depth-form semantics or an accident of what `node_value` counts is **not a measurement**.
+3. **The depth form's own reading is not tested end-to-end.** Nothing in the tree pins what
+   `@shallow(n)` over a call should print. §5.2's rows 4–9 are the closest thing, and they
+   are this note's, not the suite's.
+
+### 6.1 What extending the closure would touch
+
+If the user takes the verdict, the change is **one match arm**, and nothing else:
+
+- `crates/lichen-highlevel/src/checker/indexing.rs`, `check_shallow_array_term`, the `n` arm —
+  add the registration of §5.1, four lines after the `wrap_shallow` call.
+- `crates/lichen-highlevel/src/checker/indexing.rs`, `check_shallow_array_term`'s `# Invariant`
+  — **it would need a sentence added**, because the invariant currently reads that a bare
+  mark registers its type application (`indexing.rs:378-383`) and says nothing about the
+  depth arm. **An `# Invariant` section would be changed, which is the user's permission and
+  not this slice's.**
+- `docs/language-spec.md` §"Shallow markers" — the sentence *"A marked element that is a
+  call has its type applied at compile time as any other call does, and a tail whose own type
+  is still open takes the type that call states"* is **written without the bare/depth
+  distinction**, and today it is false for `@shallow(n)`. Either it gains the distinction or
+  the closure has to make it true; this note does not edit it.
+- `docs/notes/index-read-unify.md` §7.5 — the sentence that left the question open.
+
+**Untouched by such a change:** `wrap_shallow`, `close_shallow_tail`, `check_app`, the walk
+at `crates/lichen-highlevel/src/checker.rs:557-562`, `crates/lichen-lowlevel/src/evaluation.rs`,
+`crates/lichen-lowlevel/src/gc.rs`, and every `output =` line in `examples/`. **No new test
+is proposed**; the pre-existing depth-one test is the one that would change verdict.
+
+### 6.2 Adjacent, found while measuring, not acted on
+
+`@shallow(0)` (§4.3) is spelled, lexed and parsed, and then does **nothing that an absent
+marker does not** — `depths` uses `0` as the unmarked sentinel, so the written depth takes
+the `0 =>` arm. On a recursive tail it does not terminate. This is a **separate question from
+§7.5** and is recorded here so it is not lost; it is **not** fixed by the §6 verdict and is
+**not** fixed by this note.
+
+### 6.3 For a reader of the language spec
+
+`docs/language-spec.md` states one rule for *both* spellings: a marked call has its type
+applied at compile time, and an open tail takes the type that call states. The measurement
+says **the bare mark obeys that rule and the depth form does not** — and that the difference
+is invisible until you write `@shallow(n)` over a call, of which this tree contains exactly
+one. A reader is therefore entitled to the sharper sentence, and the one this note's evidence
+supports: **a `@shallow` mark is a claim about a value; whether it also closes a type tail is
+a second, separate decision, and the two spellings currently make it differently.**
 
