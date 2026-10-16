@@ -5,8 +5,12 @@
 > `Module::pair_type_half` answers `None` for a **frozen** type half, so the
 > `unify` binding an apply's result type cell to the callee's decided return type
 > was never called. §9 traces it, §10 fixes it, §10.2 attributes what remains.
-> §1–§8 are kept as the diagnosis that led there; where §10 answers one of their
-> open questions, they say so.
+> **§10.2's account of the fourth is partly superseded** — §10.2b, after the
+> measurement in [arithmetic-class-stated](arithmetic-class-stated.md); the
+> attribution to `arithmetic_class` holds, the identification of the undecided
+> cell and the "checker-side question" conclusion do not. §1–§8 are kept as the
+> diagnosis that led there; where §10 answers one of their open questions, they
+> say so.
 >
 > Companions: [examples-panic-diagnosis](examples-panic-diagnosis.md) §"What the
 > runner says once past the panic", which first tabulated these four with the
@@ -545,6 +549,14 @@ two frozen modules and two hops, and §6.3's open question is answered in §6.3 
 
 ### 10.2 Family B — attributed, and it is not the apply's join
 
+> **Partly superseded by [arithmetic-class-stated](arithmetic-class-stated.md) §4.**
+> The control table below and the `71v1`/`66v1` reading both reproduce; the sentence
+> "what is undecided is the **array's element type slot**" does **not**, and neither
+> does the conclusion that B is a checker-side question. That note measured the class
+> of every cell in this family and then ran the decision this section left open. It
+> is kept here as the diagnosis that led there, with §10.2b carrying what the
+> measurement changed.
+
 The join **runs** on `lazy_infinite.lichen`: measured, `inf = f 0`'s result cell `71v1`
 sits in a class whose representative `66v1` is decided. What is undecided is the
 **array's element type slot** — §6.2's own read — and the discriminator is
@@ -576,6 +588,43 @@ neither operand states a class — and it is the user's call, as §7 framed A's.
 fixed here.** §6.2's "not traced: the write that should have carried a type into that
 element slot" is now **located**: it is the class commit `arithmetic_class` defers to
 its refinement assert, not a write a reader skipped.
+
+### 10.2b What the decision measurement changed
+
+[arithmetic-class-stated](arithmetic-class-stated.md) ran the question this section
+left open. Three of its findings reach here.
+
+**The array's element type slot is decided; the apply's own cell is not.** The class
+of `lazy_infinite.lichen`'s element cell `32v1` is `22v1`, **fifteen members, all
+fifteen decided**. The two `f`-apply result cells `43v1` and `51v1` are **undecided
+singletons**, and so are the three cells that print `?a`/`?b`/`?c` — `102v1`,
+`142v1`, `195v1`, which is the set §2 already named. §9.6's probe read the *array
+element* class (`269v1`, `307v1`, `376v1` and their partners are all members of `22v1`)
+as a decided *apply* cell; the error is §9.6's own lesson, one section further on.
+
+For the table above the shape is the reverse — there the element cell `29v1` and the
+two apply cells `44v1`/`62v1` are **one** undecided class of three, which is why this
+section's sentence fits the controls and not the example.
+
+**`arithmetic_class`'s open branch does not run in the user's program.** `+ - * / <
+<= > >=` route onto the frozen prelude, so the branch fires while `core.lichen` is
+being checked and **zero** times in the user's own check. `max`/`min` are the one
+user-code path to it. `arithmetic_class` was therefore the right place to have looked
+and the wrong place to have left the question.
+
+**So B is not a checker-side question.** Deciding the `else` branch — unifying
+`left_ty` with `int_type` and returning `int_type` — was measured: it leaves
+`lazy_infinite.lichen` byte for byte where it was, and costs twelve `examples` (ten
+panicking, two drifting) plus the `Float` add, the `Float` maximum and the
+polymorphic `x + y`. The remaining carry is the index read's own, from a container
+element cell that is already decided:
+`Checker::check_index`'s `elem_cell` (`crates/lichen-highlevel/src/checker/indexing.rs:70-83`),
+[compound-element-slots](compound-element-slots.md) §"The read path". That is a
+`lichen-lowlevel` question and a separate slice. **§7's framing — a checker-side decide
+— is retired for B.**
+
+§10.2's history is kept above; nothing in it was deleted, because the control table it
+recorded is what the measurement was checked against, and it reproduces.
 
 ### 10.3 What the fix does not change
 
