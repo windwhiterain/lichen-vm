@@ -175,13 +175,17 @@ rather than inventing one. `Debug` switches to an exponent only for a finite val
 which is the case the digits above avoid it for, and `-0.0` is finite: it prints
 `-0.0` and reads back as the sign it is.
 
-The price is stated rather than assumed: **a non-finite float no longer round-trips.**
-`inf` is a name, not a literal, so a reader refuses it — which is what `NaN` already
-did, deliberately and pinned, for the same reason. The round trip therefore holds of
-the **finite** family alone, and `crates/lichen-language/tests/language/float_printer.rs`
-now says so in its own two arms: a table of finite values that must re-lex, and one
-deliberate refusal. `NaN`'s refusal was never an oddity to be tidied away; it was
-this rule with the rest of the family missing.
+The price is stated rather than assumed, and **it was taken deliberately**: this is
+**the user's decision**, taken with both halves visible, not an agent tidying a
+contract to match its code. What it **costs** is the round trip — **a non-finite
+float no longer round-trips**, because `inf` is a name and not a literal, so the
+round trip holds of the **finite** family alone. What it **buys** is a printed form
+that maps to its bits in one step, which is the whole of the reason. `NaN` already
+refused to read back on exactly this ground, so the refusal is now **one rule over
+three values** rather than an oddity with a family missing;
+`crates/lichen-language/tests/language/float_printer.rs` says so in its own two arms
+and pins all three — a table of finite values that must re-lex, and one deliberate
+refusal carrying `inf`, `-inf` and `NaN`.
 
 ### 3.6 The artifact codec — three tag spaces
 

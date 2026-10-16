@@ -240,9 +240,9 @@ fn letter_name(i: usize) -> String {
 ///
 /// The digits are `f32`'s own positional `Display`, never `{:?}`, whose exponent
 /// the lexer has no literal for; a `.` is forced, since the bare digits read back
-/// as an `Int`; an infinity is a magnitude past the round-to-infinity threshold,
-/// the only form the lexer reads back, and `NaN` keeps Rust's spelling.  See
-/// docs/notes/floating-point.md.
+/// as an `Int`.  A non-finite float prints as its own name — `NaN`, `inf`,
+/// `-inf` — and a name is not a literal the reader accepts, so the reader
+/// refuses it as it already refused `NaN`.  See docs/notes/floating-point.md.
 fn float_literal(value: f32) -> String {
     if !value.is_finite() {
         // A non-finite float prints under `Debug`'s own class name: `NaN`, `inf`, `-inf`.
