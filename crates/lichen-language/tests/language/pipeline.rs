@@ -2422,14 +2422,24 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
 
     // The compile-time wrap cannot descend the undecided spine, so the
     // definition pass terminates.
+
+    // `@shallow(n)` puts the call's `[value, type]` pair in the
+    // element, where the bare mark puts the call's value.
+
+    // So a read under the depth's mark needs one subscript more
+    // than the same read under the bare mark.
+
+    // `docs/notes/shallow-depth-element-values.md` §1 has the
+    // measurement behind this, and §4 the arity.
+
+    // A length could not tell `1, 2, 3` from a pair, a shape and
+    // a kind marker; the numbers are what this asserts.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
+        "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0)(0), inf(1)(0)(1)(0)(0), inf(1)(0)(1)(0)(1)(0)(0))",
     );
-    // The reads stay lazy under the mark, so an element holds a value the
-    // deep pass never forced: a pair is one.
     assert_eq!(
-        common::array_values(&module, &value).len(),
-        3,
-        "a tuple value"
+        common::usize_array(&module, &value),
+        vec![1, 2, 3],
+        "the depth-marked reads reach the arithmetic"
     );
 }

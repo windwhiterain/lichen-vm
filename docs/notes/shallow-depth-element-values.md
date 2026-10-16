@@ -1,12 +1,16 @@
 # What a depth-marked element holds, and where the arithmetic went
 
-> **Status:** measurement. It answers the question
+> **Status:** measurement, **and its fix landed** on the user's decision. It answers
+> the question
 > [shallow-depth-mechanism](shallow-depth-mechanism.md) §4.1 left open — *"the reads
 > still answer with the marked structure rather than 1, 2 and 3; the test asserts
 > only a value per element"* — and it answers it **by re-measuring, not by reading
 > forward**. That note established *which registration* makes the depth form's cells
 > hold anything; this one asks *what they hold*, element by element, and whether the
-> numbers are reachable at all.
+> numbers are reachable at all. §4 carries the decision the measurement led to:
+> **the held test's own program was given the arity its spelling needs and its
+> assertion was strengthened from `.len() == 3` to the three numbers**, and no
+> production code was touched.
 >
 > Measured in the worktree `.worktrees/dmev` on `feature/dmev`, branched from
 > `feature/shx` at `b96cd332` (which is three commits ahead of `dev` at `7323cf6b`),
@@ -255,15 +259,33 @@ One `(0)` per level undoes the level `wrap_shallow` adds, and the depth form's
 contract is intact: the declared slots stay open (`?a, ?b, ?c`), exactly as
 [index-read-unify](index-read-unify.md) §7.5 says they must.
 
-**The change is therefore in the held test, not in the checker** — and this slice
-does not make it: a test is the user's to author. What it would touch:
+**The change is therefore in the held test, not in the checker** — and by the user's
+decision, taken on this measurement, that is what was done:
 
-| what | where |
-|---|---|
-| the held test's program, one `(0)` deeper per read | `crates/lichen-language/tests/language/pipeline.rs:2426` |
-| the held test's assertion, `.len() == 3` → the three numbers | `pipeline.rs:2430-2434` |
-| the held test's comment, which currently describes the pair and not the arity | `pipeline.rs:2428-2429` |
-| `docs/language-spec.md` §"Shallow markers", **only** if the depth form's declared slot is meant to become `Int` — it is not, so probably not at all | `docs/language-spec.md:277-292` |
+| what | where | state |
+|---|---|---|
+| the held test's program, one `(0)` deeper per read | `crates/lichen-language/tests/language/pipeline.rs` | **done** |
+| the held test's assertion, `.len() == 3` → the three numbers | same test, `common::usize_array(…) == vec![1, 2, 3]` | **done** |
+| the held test's comment, which described the pair and not the arity | same test | **done** — it now states the arity rule and points here |
+| `docs/language-spec.md` §"Shallow markers" | `docs/language-spec.md` | **untouched** — its declared slot is not meant to become `Int`, so nothing there needed changing |
+| `an_at_shallow_depth_marks_value_slots_shallow` | `pipeline.rs` | **untouched by decision**, and see below for why that is the reason the fix belongs in the arity |
+
+**The strengthened assertion was checked for teeth before it was kept.** The old
+spelling `(inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))`, run against the new assertion,
+**fails** — `usize_of` panics at `crates/lichen-language/src/testing.rs:104` with
+`expected a usize value, got LowValue(Array(… metadata: 2))`, which is exactly the
+pair §2's table measured for element `[0]`. The new assertion therefore cannot pass on
+a type structure or a kind marker, which is what `.len() == 3` could not tell. The
+test's **name is unchanged** — `an_at_shallow_depth_one_on_a_recursive_tail_terminates`
+still says what it was written to pin, and every companion that names it still
+resolves.
+
+**The arity is one extra `(0)` immediately after `inf(1)`, not one at the end of each
+read.** Measured both ways: the suffix form `inf(1)(1)(0)(0)` does **not** reach the
+arithmetic, because `(1)` is the element pair's **type** half, so a further `(0)` lands
+inside the type's shape list. The spelling that works — and the one the test now
+carries — takes the element's value half first and then walks it exactly as the bare
+mark's reads do.
 
 **If the user instead wants the same spelling to answer the arithmetic**, that is a
 semantics change in the checker, and it would touch **`wrap_shallow` and the `n`
@@ -289,7 +311,7 @@ code for `@shallow(n)`; §2 stands.
 
 ## 5 What the held test can and cannot tell
 
-`pipeline.rs:2430-2434` asserts, in full:
+Before this slice's change, `pipeline.rs` asserted, in full:
 
 ```rust
 assert_eq!(
@@ -313,24 +335,27 @@ sharpens it: it is green on values that are not the arithmetic **because the pro
 reads one level too few for its own mark**, not because the mark answers a type
 where a number belongs.
 
-**A stronger assertion** is available today and needs no production change:
-`common::usize_array(&module, &value) == vec![1, 2, 3]` on the one-level-deeper
-program of §4. It would demand that the depth-marked reads reach the arithmetic —
-and it would pass, measured.
+**A stronger assertion** was available with no production change, and **by the user's
+decision it is what the test now carries**: `common::usize_array(&module, &value) ==
+vec![1, 2, 3]` on the one-level-deeper program of §4. It demands that the
+depth-marked reads reach the arithmetic — and it passes, measured, and the old
+spelling fails it, measured. What it bought is exactly what `.len() == 3` could not
+say: the three elements are the three **numbers**, not a pair, a shape list and a kind
+marker that happen to exist.
 
 **Can the program answer the arithmetic at all under a depth mark?** Yes — measured,
 `[1, 2, 3]` and `(raw 1, raw 2, raw 3)`. **Is a type-shaped element the mark's
-correct answer?** For the program **as spelled**, yes, and the spec says so:
-`docs/language-spec.md:286-289`, added by `990094e1`, says the depth form's declared
-slot "keeps open, **so a read under the depth's mark is answered by the marked levels
+correct answer?** For a read spelled at the bare mark's arity, yes, and the spec says
+so: `docs/language-spec.md`, added by `990094e1`, says the depth form's declared slot
+"keeps open, **so a read under the depth's mark is answered by the marked levels
 themselves**". That sentence is **confirmed by this measurement** — but it is a
 statement about the *marked levels*, not a licence for the *test's arity*. **So the
-green is not wrong; the test is.** It pins a mis-spelled program with a
+green was not wrong; the test was.** It pinned a mis-spelled program with a
 length-only assertion, and its comment — *"an element holds a value the deep pass
-never forced: a pair is one"* — describes the pair correctly while leaving the
-missing `(0)` unnamed. The two readings that note's comment leaves open are both
-right for different elements, and only one of them is the reason the numbers are
-missing.
+never forced: a pair is one"* — described the pair correctly while leaving the missing
+`(0)` unnamed. The two readings that comment left open are both right for different
+elements, and only one of them is the reason the numbers were missing. The comment now
+states the arity rule instead, and the assertion now says the numbers.
 
 ## 6 Corrections to the companions
 
@@ -407,9 +432,11 @@ first is the code at `indexing.rs:501-507` plus §2's identical read chains; the
 second follows from that test's own assertion at `pipeline.rs:2406-2411` and was not
 tried, because it is a production change this slice does not make.
 
-**Unknown here:** whether the user wants the held test strengthened, or the depth
-form's element shape changed — both are stated in §4 as decisions with their costs
-and neither is taken. And, unchanged by this slice: what `@shallow(n)` should print
-for a marked call end-to-end
+**Unknown here:** what `@shallow(n)` should print for a marked call end-to-end
 ([shallow-depth-closure](shallow-depth-closure.md) §6.1 item 3), which no test in
-the tree pins.
+the tree pins — the strengthened test reads values through `testing`, not the
+printer, so it says nothing about the printed form either way. **Not a question any
+longer:** whether the held test should be strengthened, and whether the depth form's
+element shape should change. The first was the user's decision and is taken (§4); the
+second was declined, because §4 measures that changing it would break
+`an_at_shallow_depth_marks_value_slots_shallow`.
