@@ -221,16 +221,26 @@ written down: `schema::KernelInstr` carries `Exp`, `Sqrt` and `Floor`
 list was closed against `Sin` and `Cos` by choice and not by structure, so the
 change withdraws a stale justification rather than trading a guarantee away.
 
-### 5.1 The one `Invariant` this did **not** touch
+### 5.1 The second `Invariant`, and the fifth reader that closed the asymmetry
 
-`lichen-fusion-bridge`'s `inlined_transcendental` says **"The four are
-disjoint"** — `exp`, `sqrt`, `sin`, `cos` — and it still does, because no reader
-was added for `ln`. So a `ln` in a registered fragment reads as its **expanded
-primitive chain** rather than as `UnaryOp::Ln`, while an `exp` reads as the
-operator. **That is a real asymmetry, left in place on purpose**: adding a fifth
-reader would have meant editing a second `Invariant` that no decision covers.
-The cheap fix is `inlined_ln_operand` in `unary.rs` beside the four existing
-readers, and it is the next step rather than this one.
+This section first recorded an asymmetry left in place on purpose: a `ln` in a registered fragment read
+as its **expanded primitive chain** while an `exp` read as the operator, because `inlined_transcendental`
+said **"The four are disjoint"** and no reader was added for `ln`. **The user then decided to add the
+fifth reader and edit that sentence**, so the asymmetry is closed (`41066dcf`): the contract now reads
+**"The five are disjoint"**, and a registered `ln` reads as `UnaryOp::Ln` exactly as `exp` does. It says
+*five* rather than naming them, because `inlined_operand` requires **every** instruction of a definition
+with matching opcode and arity — a match is the whole instruction set, and two definitions cannot claim
+one subtree — so the count is what the contract asserts.
+
+**What that slice also corrected, which this note had wrong.** The bridge was **not** missing an `Ln`
+reading in general: `crates/lichen-fusion-bridge/src/lower.rs` already had an arm reading `UnaryOp::Ln`,
+and it is **dead for a registered fragment** — `expand_transcendentals`
+(`crates/lichen-kernel-ir/src/body.rs:398`) rewrites the instruction **in place**, so the value that held
+`KernelInstr::Ln` goes on to hold the definition's last instruction and `match op` is reached with the
+chain's own opcode, never `Ln`. **After expansion the reader list is the only live path.** `floor` is the
+contrast and is untouched: it has no reader and its arm **refuses**, so it still reads as the `Select` its
+expansion holds. Measured before and after: `Err(BridgeRefusal::Select)` becomes
+`Ok(UnaryOp::Ln.apply(2 · datum))`, with `floor` unmoved.
 
 ## 6. Decision record
 
