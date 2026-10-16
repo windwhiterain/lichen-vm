@@ -507,7 +507,7 @@ forms, including the forms that answer correctly — so references to earlier ge
 ubiquitous here and separate nothing.
 
 ## 18. The instrument, and what it does not do yet
-`crates/lichen-highlevel/tests/zz_nested_apply_probe.rs` reproduces the failing shape at
+`crates/lichen-highlevel/tests/highlevel/zz_nested_apply_probe.rs` reproduces the failing shape at
 the IR level and prints readings by name: the root, body and call answers through their
 pairs' own value slots, each expression's pair together with its class and its class
 members' slots. It reproduces the undecided root — and it reports an undecided root for

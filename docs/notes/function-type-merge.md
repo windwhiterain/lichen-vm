@@ -172,7 +172,7 @@ of one expression applied to one argument, and they must unify.
 - **The frozen written-arrow reduction is closed.** A written arrow annotation in
   a frozen module used to collapse the parameter's cell onto the `Function`
   marker; the imported wrapper and its local control now render identically and
-  `crates/lichen-language/tests/frozen_function_type.rs` passes. A written arrow
+  `crates/lichen-language/tests/language/frozen_function_type.rs` passes. A written arrow
   in a frozen module is therefore *not* a live cause of anything, and the two
   compute tests the old reading parked now run. What remains of that family is
   measured, with its reproductions, in

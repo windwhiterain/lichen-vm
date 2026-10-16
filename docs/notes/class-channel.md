@@ -703,7 +703,7 @@ owns — so the migration's acceptance is 57 of 58, with the honest answer for t
 struct spelling being `array{?d, ?e}`, which is *more* correct than the array
 spelling's accidental `Int`.
 
-**Not to forget**: the migration touches `crates/lichen-language/tests/*`,
+**Not to forget**: the migration touches `crates/lichen-language/tests/language/*`,
 `crates/lichen-language/examples/*`, and the docs' code blocks; the script must
 handle nested occurrences innermost-first (`compute.write ((compute.Write _)(.to a, .at b, .value compute.read ((compute.Read _)(.from c, .at d))))`).
 

@@ -26,8 +26,8 @@
 > `crates/lichen-lowlevel/src/apply.rs` (`wire_apply_result`),
 > `crates/lichen-lowlevel/src/evaluation.rs` (the `Index` arm and
 > `evaluate_node_body`), `crates/lichen-lowlevel/tests/basic/equality.rs`,
-> `crates/lichen-highlevel/tests/wildcard_positions.rs`,
-> `crates/lichen-language/tests/prelude_reads.rs`.
+> `crates/lichen-highlevel/tests/highlevel/wildcard_positions.rs`,
+> `crates/lichen-language/tests/language/prelude_reads.rs`.
 >
 > Companions: [function-type-merge](function-type-merge.md) is the precedent — the
 > function kind's element slots — and its *What is open* named both the repair this
@@ -64,7 +64,7 @@ operation over a parameter** it is not.
 |---|---|
 | `ba67cbe5` | `LowValue::Function` becomes an arm of the value match beside `Array`, descending `[parameter, return]`; the `function_type_function` gate, `unify_function_types` and the node-keyed `function_signature` are deleted |
 | `b0e6b761` | a class pair met again on the descent **agrees** (`path.contains` answers true), because a function type's slot 1 is its own `↺`; the pinned lowlevel contract moves from `..._record_an_error_instead_of_looping` to `..._unify_instead_of_looping` |
-| `70397dd5` | `crates/lichen-highlevel/tests/wildcard_positions.rs` and `crates/lichen-language/tests/prelude_reads.rs` |
+| `70397dd5` | `crates/lichen-highlevel/tests/highlevel/wildcard_positions.rs` and `crates/lichen-language/tests/language/prelude_reads.rs` |
 | `56b41d46`, `98b5b7bb`, `16a773db`, `f17e78c3` | the wildcard filters: `alias_read` skips a wildcard target (slot **or** class), the `Index` arm and `evaluate_node_body` answer undecided for one, the clone mints an undecided cell for a wildcard however it stands, and an apply that produced one answers undecided |
 
 Measured on the 18-program matrix, dev against this branch: the refusals this
@@ -144,7 +144,7 @@ what made per-call freshness.
 - **A closure that reads `none` for a captured parameter — diagnosed and repaired.**
   `a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4` **used to** answer
   `[1, 2, none, 4]` (dev: `[1, 2, 3, 4]`, pinned by
-  `crates/lichen-language/tests/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`);
+  `crates/lichen-language/tests/language/pipeline.rs::a_nested_function_captures_the_applied_outer_parameter`);
   it now answers `[1, 2, 3, 4]` and that test passes, the cause being the non-uniform
   copying recorded in §6. Every measurement below was taken **before** the repair.
   Every link of the chain is measured on this branch. **The process, in order:** check time
@@ -412,8 +412,8 @@ rather than by a candidate's side effect.
 Scratch programs (gitignored, `C:\resource\lichen-vm\.scratch-core\`): `n1` (the
 minimal refusal), `u3` (the capture loss), `p1` (the capture merge), `v1`–`v5`,
 `k3`/`k5`/`k6`, `q1`/`q2`/`q4`/`q7`. The two committed test files are
-`crates/lichen-highlevel/tests/wildcard_positions.rs` (every parameter owns an
+`crates/lichen-highlevel/tests/highlevel/wildcard_positions.rs` (every parameter owns an
 undecided value cell, and an applied parameter still computes) and
-`crates/lichen-language/tests/prelude_reads.rs` (an operation over an applied
+`crates/lichen-language/tests/language/prelude_reads.rs` (an operation over an applied
 parameter records no read failure in the program's own pass; the CLI's own entry
 accepts a compiled body).

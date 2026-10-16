@@ -358,7 +358,7 @@ version check and recompile; there is no compatibility path.
   `lichen_utils::cache::compiler_slot_key` over the same repository and the same
   plugin set. A second derivation — or the same derivation over a different
   repository — on either side makes the compiler read a directory nothing ever
-  writes to. `crates/lichen-language/tests/persist.rs` is the only test that
+  writes to. `crates/lichen-language/tests/language/persist.rs` is the only test that
   spans the two crates, because nothing else links them.
 - **`alloc` reserves a key before the compile publishes it.** A process that dies
   in between leaves a record with no artifact file beside it; the next run reads

@@ -19,7 +19,7 @@
 > sites), `crates/lichen-highlevel/src/checker/structs.rs` (the instantiation's
 > own reconciliation), `crates/lichen-highlevel/src/shape.rs` (the element-slot
 > readers), `crates/lichen-render/src/render/{type_printer,value_printer}.rs`
-> (`@any`), `crates/lichen-language/tests/struct_element_attributes.rs`.
+> (`@any`), `crates/lichen-language/tests/language/struct_element_attributes.rs`.
 
 ## `Any`, the wildcard
 

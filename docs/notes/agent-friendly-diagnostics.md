@@ -119,7 +119,7 @@ gap is **narrowed, not closed**.
   `RuntimeIndexTarget` (a distinct runtime variant) and `EvalError::IndexTarget` (a different type in
   another crate). So the correct message for `expected TypeArray, found Type` exists and was **never
   wired**. Wiring it is a **semantic** change to which diagnostic exists, on a path whose test
-  (`crates/lichen-highlevel/tests/checker.rs:738`, named
+  (`crates/lichen-highlevel/tests/highlevel/checker.rs:738`, named
   `indexing_a_function_reports_expected_tuple_or_array`) was not read.
 
 **And one claim confirmed verbatim, now fixed**: `crates/lichen-preprocess/src/lib.rs:429-432` used to
@@ -207,7 +207,7 @@ error: dependency 'probe_dep_span' is not fetched (…) — run `lichen fetch` f
 `PreprocessDiag` it built itself (`crates/lichen-language/src/package.rs:1005`), whose span may
 genuinely be absent, and `preprocess` overwrites it with the import's own position
 (`lib.rs:271`). That is a real boundary where a span is not yet known, not a forgotten one. Two
-tests in `crates/lichen-language/tests/preprocess.rs` pinned the old contract
+tests in `crates/lichen-language/tests/language/preprocess.rs` pinned the old contract
 (`span.is_none()` and "renders without a line-1 caret"); the user's decision invalidates them, so
 they now pin the directive's line instead.
 

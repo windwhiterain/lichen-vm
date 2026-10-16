@@ -116,7 +116,7 @@ one level, because `a | b & c` reading as `(a | b) & c` is a footgun every reade
 would have to learn. They sit **tighter than a comparison** — so `a & b == c` is
 `(a & b) == c`, which is the reading every modern language uses and the opposite
 of C's. Both choices are pinned by `operator_precedence_and_associativity` in
-`crates/lichen-language/tests/pipeline.rs`.
+`crates/lichen-language/tests/language/pipeline.rs`.
 
 A comparison is one level, left-associative, so `1 < 2 == 1` is `(1 < 2) == 1`.
 
@@ -261,7 +261,7 @@ language does not cross; this section is about what the crossing cost.
 Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 `a_conversion_applied_to_the_other_class_is_refused_by_name` and
 `a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered`
-(`crates/lichen-language/tests/pipeline.rs`), and on the kernel side by
+(`crates/lichen-language/tests/language/pipeline.rs`), and on the kernel side by
 `a_jit_kernel_crosses_the_two_classes_both_ways`,
 `a_body_may_compute_in_one_class_and_cross` and
 `a_varying_float_element_is_seeded_from_the_index`
@@ -312,10 +312,10 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 
 - Interpreter: `the_extended_operator_set_evaluates` and
   `an_int_is_unsigned_where_the_two_readings_differ`
-  (`crates/lichen-language/tests/pipeline.rs`).
+  (`crates/lichen-language/tests/language/pipeline.rs`).
 - Membership: `a_membership_test_compares_a_value_with_a_sets_members` and
   `a_membership_test_matches_a_type_value_against_a_class_domain`
-  (`crates/lichen-language/tests/membership.rs`); its parse (the comparison rung
+  (`crates/lichen-language/tests/language/membership.rs`); its parse (the comparison rung
   and the left-associativity) is pinned by
   `an_at_in_membership_test_parses_at_the_comparison_level`
   (`crates/lichen-language-parser/src/tests/parse_tests.rs`).

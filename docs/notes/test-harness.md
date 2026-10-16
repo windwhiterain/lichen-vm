@@ -3,7 +3,7 @@
 > Status: current
 > Points at: `crates/lichen-testkit/src/writer.rs` (`Writer`, `Program`),
 > `crates/lichen-testkit/src/probe.rs` (`Probe`),
-> `crates/lichen-highlevel/tests/` (every IR a test writes),
+> `crates/lichen-highlevel/tests/highlevel/` (every IR a test writes),
 > [lowering-map](lowering-map.md) (what `explain` reads).
 
 Three crates each rolled their own way of building an IR — `lichen-highlevel`'s

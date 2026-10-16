@@ -2,7 +2,7 @@
 
 > Status: current — a rule from the maintainer.
 > Points at: every test that
-> renders a `TypePrinter`/`ValuePrinter` result — `crates/lichen-language/tests/`
+> renders a `TypePrinter`/`ValuePrinter` result — `crates/lichen-language/tests/language/`
 > and `crates/lichen-compute/tests/`
 > (`*_render_*`, the kernel value/type assertions), `crates/lichen-language-server`
 > (hovers, statement values), `crates/lichen-render`'s own renderer tests.
@@ -57,7 +57,7 @@ two of them equal is what would make a comparison of two backends vacuous.
 was recorded is a failure, not an empty answer. A refusal explains a value that
 never arrived; a program that produced one has nothing to explain.
 
-**The moved suites made the rule cheap to keep.** `crates/lichen-language/tests/table.rs`
+**The moved suites made the rule cheap to keep.** `crates/lichen-highlevel/tests/highlevel/table.rs`
 and `loop_run.rs` now live in `crates/lichen-highlevel` as IR
 ([test-harness](test-harness.md)); their ten table assertions became `DiagKind`
 comparisons where they had matched on message text, because the highlevel

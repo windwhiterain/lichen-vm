@@ -16,7 +16,7 @@
 > (the evaluator's read and run gates), `crates/lichen-highlevel/src/checker/operators.rs`
 > (`check_binop`), `crates/lichen-highlevel/src/checker/structs.rs` (`check_field`,
 > `check_named_field`, `slot_read`), `crates/lichen-highlevel/src/program.rs`
-> (`TypeOperator::IsStructType`), and `crates/lichen-language/tests/`
+> (`TypeOperator::IsStructType`), and `crates/lichen-language/tests/language/`
 > (`merge_carry.rs`, `field_read_kinds.rs`).
 >
 > Companions: [class-channel](class-channel.md) (the write-side half — a fact is

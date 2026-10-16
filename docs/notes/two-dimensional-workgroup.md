@@ -154,7 +154,7 @@ number this crate collects and never reads", `device.rs:8-12`).
   parse**, so a new field breaks them at the parse, not at the assertion.
 - **Pinned pack text** — `crates/lichen-compiler/tests/pack_install.rs:104, 358, 390`, the
   `"group_width": 64` inside `"plan": { "staging": [ … ] }`.
-- **The digest-identity tests** — `crates/lichen-kernel-ir/tests/fragment_identity.rs` asserts
+- **The digest-identity tests** — `crates/lichen-kernel-ir/tests/kernel_ir/fragment_identity.rs` asserts
   which pairs of fragments are the *same* artifact. Adding a field keeps every such assertion
   true and moves every number.
 - **The device gate** — `DeviceFacts` gains a field, `check` (`:223`) gains a comparison, and its

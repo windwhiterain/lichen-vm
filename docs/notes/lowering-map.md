@@ -6,7 +6,7 @@
 > `crates/lichen-highlevel/src/checker.rs` (`Build::lowerings`, and
 > `check_ann`'s attribute stamp), `crates/lichen-highlevel/src/checker/diagnostics.rs`
 > (the `loc(e, slot)` the edges are recorded with),
-> `crates/lichen-highlevel/tests/lowering.rs`.
+> `crates/lichen-highlevel/tests/highlevel/lowering.rs`.
 
 A lowlevel `NodeId` is dense, positional and meaningless: `node 41` says nothing
 about the expression that produced it. The question "which of my expressions is
