@@ -437,8 +437,8 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        let template_answer =
-            self.nodes[node].runned != 0 && self.nodes[node].evaluated_deep.is_some();
+        // The deep pass makes an answer a fact every call shares; `runned` is another axis.
+        let template_answer = evaluated_deep.is_some();
         // A wildcard answer is never carried: the clone's own
         // cell is its replacement.
         let wildcard_answer = value.is_some_and(|value| value.as_enum() == Some(LowValue::Any));

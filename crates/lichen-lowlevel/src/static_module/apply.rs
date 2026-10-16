@@ -126,9 +126,8 @@ impl<P: Program> Module<P> {
                     .operand
                     .map(|operand| self.static_node_apply(operand, ctx)),
             });
-            // The carry rule (`Module::node_apply`): only a template fact travels.
-            let template_answer = runned && evaluated_deep.is_some();
-            let carried = operation.is_none() || template_answer;
+            // The carry rule: the deep pass makes an answer a fact every call shares.
+            let carried = operation.is_none() || evaluated_deep.is_some();
             // The mapping runs only for a value that is kept: a dropped answer
             // must not clone a closure into the target block.
             let value = ctx.module.read(local);

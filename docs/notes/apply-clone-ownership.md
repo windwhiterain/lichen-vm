@@ -85,6 +85,11 @@ and they are not to be conflated:
 - `evaluated_deep` — the **deep pass** evaluated this node, which is what makes
   the answer a template fact every call shares.
 
+**The author's ruling on presence** (`compile-order-class.md` §8): *what a template computes is the same
+for every apply, and a generic or dependent template computes nothing decided* — so the gate is the deep
+pass alone, `evaluated_deep`, and `runned` is a separate axis that does not decide carriage. A value a
+unification wrote is carried for the same reason: no value is wrong, only a unify conflict is (ruling 7).
+
 **The author's ruling on what the gate is for** (`compile-order-class.md` §8, ruling 7): *"啥叫错误的值？
 没有值会是错误的。有的只有 unify 冲突。"* A carried value is never wrong — a disagreement with a later
 computation surfaces as a unify conflict and is reported. So the question the gate answers is "is this a
