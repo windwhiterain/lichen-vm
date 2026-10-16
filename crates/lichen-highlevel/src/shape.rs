@@ -28,8 +28,8 @@ use crate::program::{HighProgram, ValueType};
 
 // A new marker takes the next unused tag, deliberately NOT the next position.
 
-// `TypeValue::TypeId` holds tag `8` there, so a new kind marker starts at
-// `9`. See `docs/notes/code-audit.md` P1-36.
+// `TypeValue::TypeId` holds tag `8`, so a new marker starts at `9`.
+// `KIND_MARKER_TAGS` checks both halves.
 
 // A consumer macro receives the whole list; an optional `[ args… ]` group is
 // forwarded verbatim for call-site context.
@@ -69,6 +69,31 @@ macro_rules! for_each_kind_marker {
     };
 }
 pub(crate) use for_each_kind_marker;
+/// The registry's tags, so its compatibility contract is checked at compile time.
+macro_rules! define_kind_marker_tags {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        const KIND_MARKER_TAGS: &[u32] = &[ $( $tag ),* ];
+    };
+}
+for_each_kind_marker!(define_kind_marker_tags);
+
+// A registry tag is unique, and none claims the codec's own `TypeId` tag.
+const _: () = {
+    let tags = KIND_MARKER_TAGS;
+    let mut left = 0;
+    while left < tags.len() {
+        assert!(
+            tags[left] != 8,
+            "a kind marker claims the codec's TypeId tag"
+        );
+        let mut right = left + 1;
+        while right < tags.len() {
+            assert!(tags[left] != tags[right], "two kind markers claim one tag");
+            right += 1;
+        }
+        left += 1;
+    }
+};
 
 // --- pair layout: `[value, type, attrs…]`, one spelling of the slots ---------
 

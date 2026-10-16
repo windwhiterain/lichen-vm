@@ -36,7 +36,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | fixed — the type-conflict refusal no longer reproduces; the residual stop is the budget (P1-40) |
-| P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
+| P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | fixed — the registry's tags are checked at compile time |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
@@ -293,7 +293,7 @@ that names two identical types. Worth recording because **the shape of the
 example is carrying a constraint the note does not state**, and the cost is paid
 by every program written the obvious way rather than by the one that is shown.
 
-### P1-36 — A duplicate kind-marker tag shadows a codec arm and warns instead of failing `verified`
+### P1-36 — A duplicate kind-marker tag shadows a codec arm and warns instead of failing `fixed`
 
 `verified` at `dev@04b5aef`, first-hand at the cited lines; found while adding a
 ninth kind marker, which is recorded in
@@ -332,6 +332,14 @@ broken. It is a trap for the next person who adds one, which is the same class a
 `P1-26` and `P1-27`: the format's guarantee lives in a comment rather than in a
 check.
 
+**Fixed — the guarantee is a compile-time check.** `crates/lichen-highlevel/src/shape.rs` now expands the
+registry through a second consumer, `define_kind_marker_tags`, into `KIND_MARKER_TAGS`, and a `const _`
+block asserts both halves of the contract: no two markers claim one tag, and none claims tag `8`, the
+codec's own `TypeId` tag. Measured by making each collision in turn: `TypeSet` moved to tag `0` fails the
+build with `error[E0080]: evaluation panicked: two kind markers claim one tag`, and to tag `8` with
+`error[E0080]: evaluation panicked: a kind marker claims the codec's TypeId tag`. Before, the same edits
+produced only `unreachable_patterns` and `cargo check` passed. The registry's own comment no longer points
+at this item; it names the check.
 Note the asymmetry, which is correct and worth preserving: a *gap* in the tag
 space falls through to `tag => return Err(format!("unknown type-value tag {tag}"))`
 (`:582`) and is a clean error, while a *collision* shadows an arm and corrupts
