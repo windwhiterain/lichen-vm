@@ -1,35 +1,11 @@
 # Incremental evaluation within one build: the settled cut
 
-> Status: **proposed** — step 0 is measured (§1.3); the `settled` cut of §4 is not
-> built.  This note is the **within-build** half of the incrementality question; the
-> cross-build half is [incremental-update](incremental-update.md).
-> The evaluation counterpart of
-> [incremental-parse-compile](incremental-parse-compile.md), whose `T1`–`T4`
-> cover `lex → parse → resolve → lower → check`; this note asks what the *same*
-> question costs one layer down, in the runtime.
->
-> **Scope: one build's own redundancy.**  A build makes many deep-pass entry
-> points, each re-descending subtrees its predecessors already decided (§1.3), and
-> the question here is what such a pass may safely skip.  The cross-build question
-> — what a *later* build may reuse, and how an edit invalidates it — is not this
-> note's; §3's mutation inventory and §3.3's stability predicates are shared with
-> [incremental-update](incremental-update.md), which is where the cross-build
-> answers live.
->
-> The frame is still **incremental computation with a `dirty` flag**, as the
-> superior framed it — but in this scope the flag turns out to be a *stability*
-> property rather than a tracked invalidation (§4.2): a verdict that cannot be
-> written into needs no reverse index to protect it, and the writes that could
-> invalidate one are exactly the ones such a subtree cannot contain.
->
-> Points at: `crates/lichen-lowlevel/src/{evaluation,equality,function,gc,table,module,lib,utils,apply}.rs`,
-> `crates/lichen-highlevel/src/checker.rs` + `checker/lambda.rs`,
-> `crates/lichen-language/src/run.rs`,
-> and the notes [lowlevel-vm](lowlevel-vm.md), [static-modules](static-modules.md),
-> [code-audit](code-audit.md), and [stalled-rerun-epoch](stalled-rerun-epoch.md)
-> (the orthogonal half: a *stalled* operation whose reads would decide the same is
-> skipped by a value epoch, while this note's cut is the decided subtree).
-
+> Status: **proposed; the `settled` cut itself is REJECTED.** Step 0 is measured (§1.3). The maintainer
+> rejected §4's second bit in these words: "重构的目标就是要只跑一次啊，加了settled等于没重构" — adding it means
+> the refactor did not happen. The goal is that a node is evaluated and decided **once**, so that
+> `evaluated` (the value-epoch stamp) and `evaluated_deep.is_some()` are sufficient gates. The writes
+> §4.3 would have tolerated are therefore **elimination targets**, not a cost to accept; §7 records the
+> decision and §5's roadmap is amended to match.
 ## 1. What is being asked, and what it costs today
 
 ### 1.1 There is no separate "evaluation" stage to make incremental
@@ -206,7 +182,7 @@ then say who can write what:
 - **A node with a value cannot gain an operand edge.** `close_operation_cycle`
   asserts the node is undecided and never evaluated (`module.rs:261-272`).
 
-## 4. The design: a settled cut, with no index and no dirty tracking
+## 4. The rejected design: a settled cut, with no index and no dirty tracking
 
 ### 4.1 The property
 
@@ -314,9 +290,11 @@ entry point, and that nothing further should be built.
    the pass's share of a build's **wall-clock** — the counters do not separate
    (deep pass) from (check) from (lex+parse), and without that split "1.65–8.15×
    redundant" does not say how much of a build it is.
-1. **The settled bit and the cut** (§4): `EvaluatedDeep::settled`, computed inside
-   the existing verdict walk, plus one early return. No reverse index, no dirty
-   propagation, no hooks beyond clearing the bit where the verdict is cleared.
+1. **Rejected: the settled bit and the cut** (§4). What replaces it is elimination, not
+   tolerance: every write that lands after a verdict is a defect, and removing it is what
+   lets `evaluated_deep.is_some()` be the whole gate. Mapping those writes is the first
+   step of the replacement work, and the three epoch tests count as a question for the
+   maintainer rather than as a cost to accept.
 2. **The differential harness** — required, not optional. Run the pass with and
    without the cut over the existing test corpus and compare every value, every
    verdict and **every diagnostic**. It is the only oracle for §4.3's two
@@ -345,6 +323,13 @@ entry point, and that nothing further should be built.
 
 **Decided (the superior):**
 
+- **The `settled` bit is rejected** (this note's §4, and §5's step 1 with it). The words:
+  "重构的目标就是要只跑一次啊，加了settled等于没重构". The goal is that a node is evaluated and
+  decided exactly once, so that `evaluated` (the value-epoch stamp) and
+  `evaluated_deep.is_some()` are sufficient gates. A write that lands after a verdict is
+  therefore a defect to remove at its source — not a reason for a second bit, and not a
+  cost to accept. The three lowlevel epoch tests and the four compute late-write tests are
+  the first map of those defects.
 - **No cross-rebuild reuse *of this note's kind*.** The fine-grained `StaticModule`
   design (`M3`), the same-module resume (`M2`), the value-digest memo (`M1`) and the
   `T3` resume are **withdrawn**, not deferred, and Q2/Q3/Q4/Q7 (what identifies a
