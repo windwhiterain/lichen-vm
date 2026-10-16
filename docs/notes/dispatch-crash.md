@@ -260,13 +260,19 @@ switched `"cpu"` → `"gpu"`, installed backend, RTX 3060:
 |---|---|---|---|
 | `sample.lichen` | `[3.0, 2.0, 3.0, 0.0, 3.0]` | **`0xC0000005`** | `[3.0, 2.0, 3.0, 0.0, 3.0]` — **bit-exact** |
 | `topk.lichen` | two 15-arrays | **`0xC0000005`** | the same two arrays — **bit-exact** |
-| `generate.lichen` | `([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0])` | **`0xC0000005`** | **refused by name**: `input buffer 3 holds 1 element(s) but the run covers 5` |
+| `generate.lichen` | `([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0])` | **`0xC0000005`** | ~~**refused by name**: `input buffer 3 holds 1 element(s) but the run covers 5`~~ → **runs, bit-exact**: see [device-leg](device-leg-of-the-ladder.md) §5 |
 
 So **the sampler is reachable on this device**, which §5 of
 [device-leg-of-the-ladder](device-leg-of-the-ladder.md) could not say. The generation loop no
-longer crashes but is **not yet runnable either**: it stops at the *upload rule* §1 already
-recorded for the KV-cache append and the scoring row — a short input buffer beside a wider launch
-— which is a separate rule from this defect and is **not fixed here**.
+longer crashes. **Corrected by [device-leg](device-leg-of-the-ladder.md) §5: it runs too, and bit
+exact**, so the upload rule is no longer what stands between it and a device. ~~It stops at the
+upload rule §1 already recorded for the KV-cache append and the scoring row — a short input buffer
+beside a wider launch — which is a separate rule from this defect and is **not fixed here**.~~
+**What §5 measured is that this note's reading of *which* input was short was wrong**: the
+refusing input was `nv`, a host buffer, and not the sampler's own one-element output, which is a
+launch output and outside the check. One `compute.buffer`'s width is the whole repair, and it
+changes no production code — so the separate rule this note deferred is answered without touching
+the emitter at all.
 
 **Not fixed, and not attempted.** §5's three negatives stand (whether 429 words is the minimum);
 and `wontfix:D17`, the `code-audit.md` contract §6 declined to implicate, is untouched — no
