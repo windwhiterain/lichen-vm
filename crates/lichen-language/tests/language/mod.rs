@@ -21,3 +21,4 @@ mod registry;
 mod shallow_zero_depth;
 mod std_native;
 mod struct_element_attributes;
+mod tuple_open_field_list;

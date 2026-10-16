@@ -1015,12 +1015,23 @@ slot, so the reader sees that the type does not end.  A lazy value's spine —
 (`examples/struct_recursion.lichen`) cut the same way.  The cut is per walk, so
 it fires at the first revisit and a cycle of any length terminates; what bounds
 the printer is a nesting depth and not the cycle
-([code-audit](notes/code-audit.md) `P4-10`).  Three readings share the `…` and
+([code-audit](notes/code-audit.md) `P4-10`).  Two readings share the `…` and
 `?` vocabulary and each means something different: a repeated `?a` says two
 slots are one unification class, a cut `…` says the spine is back at a node it
-has already shown, and the `…` in `tuple{?a, …}` says the field list is
-**undecided** — a shape the check has not fixed, which is finite so far and may
-stop there.  A cycle inside a raw dump is cut the same way, and that is what
-keeps the universe's self-loop from unrolling
+has already shown.  The field list of a **decided** tuple type is always
+finite, so a `…` inside `tuple{…}` is that cut and never an arity marker:
+`tuple{?a, …}` reads as "a cell beside a node the walk has already shown", not
+as a shape the check has not fixed.  A cycle inside a raw dump is cut the same
+way, and that is what keeps the universe's self-loop from unrolling
 ([raw-rendering-mark](notes/raw-rendering-mark.md) §1).
+
+The printer has a second arm for a tuple type whose field list is **undecided**
+— a shape slot holding no array at all — and it prints that same
+`tuple{?a, …}`, so the spelling alone cannot tell the two apart.  **No program
+in the language can reach it.** `f4c2b93a` ("checker: a positional read
+requires the tuple *kind*, never binds the type") removed the only front-end
+site that built one; every site passes an `array_node` now, so the arm is
+reachable from IR alone.  A reader who finds it is looking at an orphaned arm,
+not hunting for the program that triggers it
+([index-read-unify](notes/index-read-unify.md) §7.6).
 

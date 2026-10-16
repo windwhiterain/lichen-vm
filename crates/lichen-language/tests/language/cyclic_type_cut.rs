@@ -29,10 +29,10 @@ fn a_coinductive_spine_is_cut_at_the_first_revisited_node() {
     );
 }
 
-/// The §7.6 alternating pair, on the open list's spelling; `?a, …` moves first.
+/// The §7.6 alternating pair: a cut beside a decided field list.
 #[test]
-fn a_two_name_cycle_stops_on_the_open_field_lists_spelling() {
-    // "the `…` in `tuple{?a, …}` says the field list is **undecided**" — spec §5.
+fn a_two_name_cycle_stops_on_a_cut_beside_a_decided_field_list() {
+    // "a `…` inside `tuple{…}` is that cut and never an arity marker" — spec §5.
     assert_eq!(
         root_type("f = x => [x, @shallow g x]; g = y => [y, @shallow f y]; inf = f 0.0; inf"),
         "tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}"

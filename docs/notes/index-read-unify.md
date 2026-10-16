@@ -446,8 +446,11 @@ sentence it needs, and the spec's unmarked-both-spellings sentence are listed in
 The `…` in that table row now has one: `docs/language-spec.md` §5
 ["Checker spellings"](../../docs/language-spec.md) states the cut, and why a cut
 type is a **finite notation for an infinite type** rather than a truncation of
-one, and which of the three readings that share the `…` and `?` vocabulary a
-given `…` is. [raw-rendering-mark](raw-rendering-mark.md) §1 already owned the
+one, and which of the **three** readings that share the `…` and `?` vocabulary a
+given `…` is.  Two of the three remain; the third — an undecided field list —
+is **displaced by the two-sided probe** recorded below, which measured this
+section's own alternating-pair row as a cut and left the arm reachable from IR
+only.  [raw-rendering-mark](raw-rendering-mark.md) §1 already owned the
 same cut for the raw fallback and the universe's self-loop, so the spec line
 cites it rather than restating it.
 
@@ -459,7 +462,7 @@ cites it rather than restating it.
 | `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, …}}}` |
 | `xs = [@shallow xs]` ; `xs` | — | `tuple{tuple{…}}` — the same cut on a one-element list spine |
 | `g = f => [f, @shallow g f]` ; `inf = g g` ; `inf` | `tuple{?a -> tuple{?a, ?b}, ?c}` | `?a -> tuple{?a, tuple{?a, tuple{?a, …}}}` — the cut inside an **arrow** |
-| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating pair ends on the **undecided-field** `…`, not the cut |
+| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating pair ends on the **cut**, beside a decided field list (see "The `…` in `tuple{?a, …}`" below) |
 | `A = struct{.f Int, .g A}` ; `A` | `struct{.f Int, .g struct{.f Int, .g …}}` | **unchanged** — pre-existing, and pinned by `examples/struct_recursion.lichen`'s declared `output` |
 | `A = struct{.g B}; B = struct{.g C}; C = struct{.g A}` ; `A` | — | `struct{.g struct{.g struct{.g struct{.g …}}}}` — a 3-cycle, cut after four levels |
 | the same over `A…E` (a 5-cycle) | — | `struct{.g struct{.g struct{.g struct{.g struct{.g struct{.g …}}}}}}` |
@@ -482,6 +485,36 @@ holds twelve), all exited 0, and at `dev` they took 57–93 ms each.  The first
 run after each build was 2.2–2.4 s, which is the binary's pages being faulted
 in, not the printer.  The printer's own limit is a nesting depth, not a cycle
 ([code-audit](code-audit.md) `P4-10`, closed `wontfix:D9`).
+
+#### The `…` in `tuple{?a, …}`: the alternating pair's spelling, re-read
+
+**What this section used to say, and why it was wrong.** The row above used to
+read "the alternating pair ends on the **undecided-field** `…`, not the cut" —
+it took the `…` in `tuple{?a, …}` to be a field list the check had not fixed.
+That is the **cut**: measured on `feature/trl`, the shape slot at the level
+this program prints as `tuple{?a, …}` (depth 3 of 3, after three
+`tuple{Float, …}`) **holds an array of two fields**, so the printer's
+undecided-field arm does not apply to it at all.  The two fields read as an
+undecided cell (`?a`) and a node the walk has already met (`…`).
+
+**The two readings print the same string, which is why the row was written the
+way it was.** A tuple type whose shape slot holds **no array at all** takes the
+printer's second arm and prints `tuple{?a, …}` as well.  Measured on the same
+build, by hand: a module holding `[shape, [TypeTuple, K]]` with a value-less
+`shape` node prints `tuple{?a, …}`; the same term with a two-element array for
+`shape` prints `tuple{?a, ?a}`.  The spelling is therefore ambiguous between
+"the field list is undecided" and "a cell beside a cut", and this note resolved
+it wrongly.
+
+**The arm is orphaned, not dead.** Its only construction site was the pin
+`f4c2b93a` ("checker: a positional read requires the tuple *kind*, never binds
+the type") replaced; every front-end site passes an `array_node` now.  Measured:
+zero hits across four whole test binaries and 55 candidate programs, so **no
+language program can make it true** — the arm is reachable from IR alone, and a
+hand-built module does render it.  `docs/language-spec.md` §5 "Checker
+spellings" now says so, and
+`crates/lichen-language/tests/language/tuple_open_field_list.rs` pins the
+rendering.  Nothing under `crates/lichen-render/` changed: the arm stays.
 
 ### 7.7 The files
 

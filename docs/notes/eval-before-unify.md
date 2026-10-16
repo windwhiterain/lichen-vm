@@ -106,10 +106,21 @@ the guard there. The runtime `Index` cannot: arrays and tuples are both
 `10`. The deferral path silently dropped a check the other order enforced.
 
 **Landed:** the guard is gone. `check_field` states the requirement as a unify —
-an undecided container is pinned to a fresh tuple type `[?shape, [TypeTuple, K]]`
-(the `check_index` mirror), and a decided container is refused where it stands
-with the same stated requirement. Both orders refuse now, and what differs is
+an undecided container is registered as a per-apply assert on its **kind** (the
+`check_index` mirror), and a decided container is refused where it stands with
+the same stated requirement. Both orders refuse now, and what differs is
 *whether* the program is accepted rather than which diagnostic fires.
+
+**What this used to say, and what replaced it.** The sentence above used to
+read, in the present tense, that `check_field` "is pinned to a fresh tuple type
+`[?shape, [TypeTuple, K]]`".  That pin is **gone** — it is the pattern
+`f4c2b93a` replaced, and the message it went with is re-measured in §2.4's
+"The wording moved on".  `crates/lichen-highlevel/src/checker/structs.rs:46-81`
+is what stands there now, and its two paths are both about the **kind** rather
+than the type: a decided container unifies its kind read against
+`tuple_kind_requirement()`, and an open one registers an `IsTupleType`
+condition as a per-apply assert.  Neither path writes a tuple type into the
+cell, so no undecided cell is ever pinned to a `[?shape, [TypeTuple, K]]` pair.
 
 **The wording moved on (measured).** The tables of §2.2 and §2.4 quote what the
 requirement reads now, re-measured through the front end on `dev`: `f = x => x(0)`
