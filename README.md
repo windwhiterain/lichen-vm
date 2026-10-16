@@ -2023,4 +2023,178 @@ out = (compute.plrun greedy ((Arg)(.n 5, .w 4, .I Row(.x scores))) : Pick)
 compute.collect out.p : array{Float, 5}
 ```
 
+### `topk.lichen`
+
+```text
+---
+  order = "28"
+  compute = import "compute.lichen"
+  doc = "Top-`k`: three ranks per row, gathered into one buffer. The rung after \
+    `examples/sample.lichen`, which is greedy sampling — one lane per row and one position out. Here \
+    the same row yields its **three** best positions, and the step that was **not taken** there — a \
+    buffer every rank is addressable in — is taken here. The scores are that file's five rows \
+    unchanged, `3 9 4 9 / 5 1 5 2 / 7 7 7 7 / 8 6 4 2 / 1 2 3 4`, so **kernel one is its \
+    `greedy_raw` verbatim** and answers that file's declared row `[3, 2, 3, 0, 3]` bit for bit.\n\n\
+    **The declared output has two entries and each is a different address layout of the same three \
+    ranks.** `.p` is **rank-major**: rank zero's five, then rank one's five, then rank two's five, \
+    end to end in one `15`-slot buffer — `[3, 2, 3, 0, 3, 1, 0, 0, 1, 2, 2, 3, 1, 2, 1]`. `.t` is \
+    **row-major**: each row's three ranks side by side, so entry `row * ranks + rank` is row `row`'s \
+    rank `rank` — `[3, 1, 2, 2, 0, 3, 3, 0, 1, 0, 1, 2, 3, 2, 1]`. **Both land from the same launch, \
+    in the same body, into two different outputs**, which is what `docs/notes/gather-spelling.md` \
+    §2.1 measured and what `.t` is for: **`.t` is the layout `examples/decode_loop.lichen`'s `keep` \
+    can gather from**, because there `lane % k.dim` is a coordinate a consumer can compute without \
+    knowing a rank's row. `.p` is the cheaper one and it is free for a reason worth stating: it is \
+    written at **`.at lane`**, because `rank * rows + row` **is** the lane index whenever `rank = \
+    lane / rows` and `row = lane % rows`. There is nothing to concatenate; a launch of `n * k` lanes \
+    writing at its own index *is* `k` `n`-long buffers laid end to end.\n\n\
+    **What three ranks cost: `k` launches, one buffer, and `6` folds per row where `3` would do.** The \
+    launches are `.n 5`, then `.n 10`, then `.n 15` — each one widening the same buffer by one rank \
+    and re-reading the ranks it already has. **The reason is the one wall \
+    `docs/notes/gather-spelling.md` §2.4 found beside `keep`**: a rank that exists only as a \
+    `@loop` result inside a lane cannot exclude anything in a following `@loop`, so rank two's fold \
+    may not read rank one's position. Putting it in a buffer is what makes it a read, and that costs \
+    one launch per rank. **Counted from the extents and not timed**: the three launches run `1 + 2 + \
+    3 = 6` folds per row — every lane of a gather launch carries the deepest fold in its body and \
+    the `Select` picks between two values rather than guarding one — where a one-lane-per-row \
+    spelling would run `3`. **Nothing here shortens `k` passes to one.** A rank is a **guard factor \
+    and a `Select` arm**, not a new form: ranks one and two differ from each other by one more \
+    conjunct, `(1 * (i != mid))`, and from rank zero by being in `Int`.\n\n\
+    **The `k`-tuple spelling runs too, and it is the cheaper one on launches.** Three `@loop` \
+    nests in **one** body, each result bound at lane level — `first = f0 (k.w, ((0.0 - 1.0) / 0.0) ~ \
+    `identity`, 0)`, `second = f1 (k.w, 0, 0)`, `third = f2 (k.w, 0, 0)` — the next nest's step \
+    reading `first` in `(1 * (i != first))`, and three writes returned as a **tuple in output-field \
+    order**. Measured here at `k = 3`: it **runs**, and answers `([3, 2, 3, 0, 3], [1, 0, 0, 1, 2], \
+    [2, 3, 1, 2, 1])` — the same three ranks, in **one launch and three buffers**. So the \
+    comparison is a straight trade and neither side wins: **the tuple is `1` launch where the gather \
+    is `3`, and `3` buffers where the gather is `1`**, the tuple pays no address arithmetic and the \
+    gather pays `rank`, `row` and one write per layout. **This file ships the gather anyway, for the \
+    one thing the tuple does not have**: its ranks are **addressable by arithmetic**, which is what a \
+    consumer like `keep` needs and what `gather-spelling.md` §3 says the one-buffer answer buys. \
+    `gather-spelling.md` §2.4 quotes a refusal for a nest's result crossing into the next nest; **the \
+    shape above did not reproduce it**, and no attempt was made to find the boundary, so that \
+    sentence is reported as measured here and not as settled.\n\n\
+    **Ties: the three ranks do not share one rule, and that is a choice with three measured \
+    answers.** Rank zero is `examples/sample.lichen`'s `Float` fold with `>`, and a fold counts \
+    **down**, so a later visit never displaces an equal value and the **highest** position wins. \
+    Ranks one and two are `Int` folds with `>=`, where a later visit **does** displace an equal \
+    value and the **lowest** wins. On the tie row `7 7 7 7` this file answers rank zero `3`, rank one \
+    `0`, rank two `1`; **with `>` written in all three places the same program answers `3`, `2`, \
+    `1`**, and with `>=` in all three it would answer `0`, `1`, `2`. Three correct top-3 answers to \
+    one row, chosen by one character. **The same position is in two ranks never, on this data, and \
+    the reason is structural rather than lucky**: the exclusion is a **conjunct of the guard**, so a \
+    fold cannot select an excluded position even when it holds the row's largest value — which is \
+    why a tie row is the case that exercises it. **The one way a position repeats is the seed, and \
+    the next paragraph is that case.**\n\n\
+    **The finite seed's consequence is a refusal, not a wrong answer.** Ranks one and two seed their \
+    folds with `(k.w, 0, 0)` where rank zero seeds with `((0.0 - 1.0) / 0.0)`, and **a row whose \
+    values go below that seed never gets that far**: `examples/convert.lichen` records that \
+    `float2int` refuses a float with no `Int` to truncate toward — `NaN`, an infinity, **a \
+    negative** — as `operator.out_of_range`, and inside a kernel body that refusal arrives as \
+    `compute.parallel: integer overflow`. Measured here by adding a sixth row of negatives below \
+    the seed: **rank zero still answers it** (`3` for `-5 -2 -9 -1`, its fold having no conversion \
+    anywhere) and **the program stops**, rather than answering rank one and rank two from the seed. \
+    So the reach of the second and later ranks is **exactly the non-negative integers**, which is a \
+    narrower statement than the range `examples/sample.lichen` names, and it is why these two \
+    kernels claim `Reduction(combine)` and **not** `Reduction(combine,identity)`: the claim is \
+    refused by name — *`the kernel claims Reduction and its body carries no mark for its \
+    identity role`* — and the honest claim is that **this fold has no identity**. A sampler over \
+    signed logits therefore cannot be written in this spelling at all, and that is the wall the \
+    ladder actually meets at `k >= 2`.\n\n\
+    **Everything here is exact; nothing is modelled.** The scores are integers under `2^24` and every \
+    one of them non-negative, so `float2int` on each is exact; the comparisons are `Int` order \
+    comparisons; `i`, `base + i` and every product of a `0`/`1` guard by an integer under `4` are \
+    exact; `int2float` of a position under `4` is exact; and rank zero's only non-integer is \
+    `((0.0 - 1.0) / 0.0)`, which is the signed infinity `BinaryOp`'s invariant gives it rather than \
+    a large number. **The declared row was derived by hand before the program was run**, and the \
+    derivation is at the end.\n\n\
+    **Six workarounds, and which of them is a rule.** (1) **Ranks one and two are wholly in \
+    `Int`** — a **rule**: `&` is refused by the kernel (*`BitAnd has no float form`*) and writing \
+    `and` in `Float` is refused by the type checker (*`expected Float, found Int`*), both measured \
+    and recorded in `examples/sample.lichen`, cited rather than re-measured. (2) **The guard is \
+    arithmetic and carries the `1 *` anchor** — a **rule**, the same refusal: a product with the \
+    comparison on its left does not lower. (3) **The claim drops the `identity` role** — a \
+    **rule**, by name, quoted above. (4) **Three writes come back as a tuple in output-struct \
+    order** — a **rule** (*`output 0 of the parallel index function is a compute.write to output \
+    1`*). (5) **`.rows` and `.ranks` are ordinary runtime leaves placed after `.w`** — a \
+    **preference**: only the **first** leaf is bound by a rule (it is the launch extent), and \
+    `examples/gemv.lichen` measures that a body taking no coordinate may read its second leaf \
+    wherever it likes. (6) **Kernel one is left verbatim rather than unified with the other two** \
+    — a **preference**, chosen so this file's first five entries are `examples/sample.lichen`'s \
+    declared row by construction rather than by agreement. **The rule underneath all six** is \
+    `docs/notes/code-audit.md` P1-42's `wontfix:D17`, that a `compute.write` is **the value of an \
+    output position and not an effect** — which is why every lane writes exactly one slot per \
+    output, and why the ranks have to be in a buffer before a later launch may read them.\n\n\
+    **The hand derivation, before the run.** Five rows of width four. **Rank zero**, the \
+    `examples/sample.lichen` fold over each row counting `3, 2, 1, 0` with `9 > -inf` at position \
+    `3` standing and nothing displacing it — row `3 9 4 9` gives `3`; `5 1 5 2` gives `2`, its \
+    leading `5` only tied at the end; `7 7 7 7` gives `3`, the highest of four equals; `8 6 4 2` \
+    gives `0`, whose `8` is visited **last** and stands; `1 2 3 4` gives `3`. So rank zero is \
+    `[3, 2, 3, 0, 3]`. **Rank one**, the `Int` fold with `>=` excluding rank zero's position and \
+    seeded at `0`: row 0 loses position `3` and counts down over `9, 4, 3`, so `1`; row 1 loses \
+    position `2` and counts down over `2, 1, 5`, so `0`; row 2 loses position `3` and every \
+    survivor is `7`, so the **lowest** survivor `0` wins; row 3 loses position `0` and counts down \
+    over `2, 4, 6`, so `1`; row 4 loses position `3` and counts down over `3, 2, 1`, so `2`. Rank \
+    one is `[1, 0, 0, 1, 2]`. **Rank two**, the same fold with one more conjunct, excluding both: \
+    row 0 loses `3` **and** `1`, leaving `{3, 4}` at `0` and `2`, so `2` — the other `9` is **not** \
+    still there, and reading it as though it were gives `3`; row 1 loses `2` and `0`, leaving `1` at \
+    `1` and `2` at `3`, so `3`; row 2 loses `3` and `0`, leaving two `7`s at `1` and `2`, so the \
+    lower `1`; row 3 loses `0` and `1`, leaving `2` at `3` and `4` at `2`, so `2`; row 4 loses `3` \
+    and `2`, leaving `1` at `0` and `2` at `1`, so `1`. Rank two is `[2, 3, 1, 2, 1]`. Lay the three \
+    rank-major for `.p` and row-major for `.t` and the two rows above are what the program prints."
+  output = "([3.0, 2.0, 3.0, 0.0, 3.0, 1.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 1.0], [3.0, 1.0, 2.0, 2.0, 0.0, 3.0, 3.0, 0.0, 1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0]): tuple{array{Float, 15}, array{Float, 15}}"
+---
+Row  = struct{.x (compute.Buf Float)}
+Pick = struct{.p (compute.Buf Float)}
+Par0 = struct{.n Int, .w Int, .in Row, .out Pick}
+Arg0 = struct{.n Int, .w Int, .I Row}
+rank0_raw = (k : Par0) => {
+  lane = compute.range k.n
+  base = lane * k.w
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+}
+rank0 = compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu"
+Sel  = struct{.x (compute.Buf Float), .q (compute.Buf Float)}
+Cat1 = struct{.p (compute.Buf Float)}
+Cat2 = struct{.p (compute.Buf Float), .t (compute.Buf Float)}
+Par1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel, .out Cat1}
+Arg1 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel}
+rank1_raw = (k : Par1) => {
+  lane = compute.range k.n
+  rank = lane / k.rows
+  row = lane % k.rows
+  base = row * k.w
+  low = float2int (compute.read ((compute.Read _)(.from k.in.q, .at row)))
+  @loop fold = s => if s(0) == 0 then s(2) else { i = s(0) - 1
+    ri = float2int (compute.read ((compute.Read _)(.from k.in.x, .at (base + i))))
+    hit = (1 * (ri >= s(1))) * (1 * (i != low))
+    fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
+  mine = if rank == 0 then low else (fold (k.w, 0, 0))
+  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element")))
+}
+rank1 = compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu"
+Par2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel, .out Cat2}
+Arg2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel}
+rank2_raw = (k : Par2) => {
+  lane = compute.range k.n
+  rank = lane / k.rows
+  row = lane % k.rows
+  base = row * k.w
+  low = float2int (compute.read ((compute.Read _)(.from k.in.q, .at row)))
+  mid = float2int (compute.read ((compute.Read _)(.from k.in.q, .at (k.rows + row))))
+  @loop fold = s => if s(0) == 0 then s(2) else { i = s(0) - 1
+    ri = float2int (compute.read ((compute.Read _)(.from k.in.x, .at (base + i))))
+    hit = (1 * (ri >= s(1))) * (1 * (i != low)) * (1 * (i != mid))
+    fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
+  mine = if rank == 0 then low else (if rank == 1 then mid else (fold (k.w, 0, 0)))
+  (compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element"))), compute.write ((compute.Write _)(.to k.out.t, .at (row * k.ranks + rank), .value (int2float mine ~ "element"))))
+}
+rank2 = compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu"
+scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
+r0 = (compute.plrun rank0 ((Arg0)(.n 5, .w 4, .I Row(.x scores))) : Pick)
+r1 = (compute.plrun rank1 ((Arg1)(.n 10, .w 4, .rows 5, .ranks 2, .I Sel(.x scores, .q r0.p))) : Cat1)
+r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scores, .q r1.p))) : Cat2)
+(compute.collect r2.p : array{Float, 15}, compute.collect r2.t : array{Float, 15})
+```
+
 <!-- end: examples -->
