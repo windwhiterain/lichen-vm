@@ -534,6 +534,8 @@ PROBE FORMAT_VERSION = 2
 
 ### 9.3 The refusal, measured — and `64 × 4` is **not** accepted
 
+**Committed cover, added later (`0d120e4d`).** The four `PROBE` lines below were produced by probes that were removed; the two refusals they show are now pinned by tests that need no device — `crates/lichen-compute-gpu/tests/compute_gpu/workgroup_height.rs` (three cases: a single row accepted, a rectangle under the ceiling refused as `WorkgroupTallerThanOneRow`, a height past the ceiling refused as `LaneHeightTooWide`), so a regression that swapped the two rules would fail rather than pass silently. The suite went 78 → 81 passed for it.
+
 Against a hand-made table answering `max_workgroup_lanes 1024`, `max_workgroup_lanes_y 64`:
 
 ```
