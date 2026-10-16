@@ -18,5 +18,6 @@ mod pipeline;
 mod prelude_reads;
 mod preprocess;
 mod registry;
+mod shallow_zero_depth;
 mod std_native;
 mod struct_element_attributes;
