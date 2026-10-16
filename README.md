@@ -2199,4 +2199,219 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scor
 (compute.collect r2.p : array{Float, 15}, compute.collect r2.t : array{Float, 15})
 ```
 
+### `generate.lichen`
+
+```text
+---
+  order = "29"
+  compute = import "compute.lichen"
+  doc = "Autoregressive generation, the ladder's last rung, as **one program**: a model step, \
+    `examples/sample.lichen`'s greedy sampler, `examples/kvcache.lichen`'s append, and a \
+    recursive `generate` that steps **while the sampled token is not the sentinel**. It runs \
+    three steps, and **no trip count is written anywhere in it** — the length is the guard's \
+    own decision. `docs/notes/llm-operators.md`'s `generation` row records this shape as measured \
+    on `dev@4b9bd7a9`; this file is it landing as an example rather than as a probe.\n\n\
+    **The declared output has three entries and each answers a different question.** The first \
+    is the **sequence**, `collect final(1).k`, which is `[1.0, 2.0, 2.0, 0.0, 3.0]`: the prompt \
+    `1 2` at positions `0` and `1`, then the three tokens this loop generated, `2`, `0`, `3`, in \
+    that order. The second is the **trip count**, `final(0)`, which is `3` — the loop's length, \
+    read from outside the recursion. The third is the **logit row the loop stopped on**, \
+    `collect final(2).y`, which is `[-1.0, -4.0, -7.0, 3.0]`: the four scores the sampler saw on \
+    its last step, whose largest is the sentinel at position `3`. **So the answer states the \
+    sequence, its length, and the row the length came from**, and the third is checkable by hand \
+    in one line of the derivation at the end.\n\n\
+    **Three of the four kernels are another example's body, unchanged.** `append_raw` is \
+    `examples/kvcache.lichen`'s **verbatim**, all twelve lines, including the column-major lane \
+    enumeration and the `position == k.t` freshness test. `greedy_raw` is \
+    `examples/sample.lichen`'s **verbatim**, with its `(counter, best value, best position)` \
+    fold and its `1 *` anchor. `logits_raw` is `examples/decode_loop.lichen`'s `score_raw` \
+    **verbatim** — the same GEMV, the same `i * k.kdim + (s(0) - 1)` address, the same `0.0` \
+    identity — with **only the binder renamed**, because this file already uses the name. What \
+    changed is the **launch configuration, not the bodies**: `dim` is `1` rather than `2`, the \
+    sampler runs `.n 1 .w 4` over one row rather than `.n 5 .w 4` over five, and the GEMV is \
+    `.n 4 .kdim 5`. **The model is the smallest thing that makes the loop a feedback loop**: a \
+    fixed integer weight matrix of `4 * 5`, row-major, token by token, read against the cache, \
+    so each step's logits are a function of what every earlier step wrote. `examples/decode.lichen` \
+    is where a real model's score stage lives; this file's is `decode_loop`'s GEMV over integer \
+    data, so that nothing here is modelled.\n\n\
+    **The guard reads a token a kernel sampled.** `bit = (compute.collect tok.p : \
+    array{Float, 1})[0]` collects the sampler's own one-slot output and reads it, and the test \
+    is `if bit == sentinel then ...`, with `sentinel = 3.0` a top-level binding and no literal \
+    of it in the body. **Neither the sentinel nor a trip count is in the recursion's shape**: \
+    `generate`'s spine is a test and a step, and the step is `generate (s(0) + 1, cached, \
+    scored)`. **The base arm returns the state after the append**, so the sampled token is **in** \
+    the sequence and the last slot is the sentinel itself — which is what an end-of-sequence \
+    token is. `docs/notes/llm-operators.md` measured that a guard may read a top-level binding or \
+    an element collected from a buffer; this file uses the third form it names, a token a kernel \
+    sampled, and the loop's length is the number of tokens before one matched.\n\n\
+    **The `@loop` marker is what makes the trip count a number rather than a `raw`, and that is \
+    measured here.** The same program both ways, one character apart: unmarked, the second entry \
+    prints `raw 3` and the tuple's second slot has no class; marked, it prints `3` and `Int`. \
+    Nothing else differs. `examples/decode_loop.lichen`'s trip count does print as an `Int`, and \
+    the reason is visible in its own body: its guard compares `s(0)` against a **literal**, so \
+    the count is decided and the recursion expands, and a decided count has a class. **Here the \
+    count is undecided**, and the measured shape of the conversion \
+    (`crates/lichen-highlevel/tests/highlevel/loop_marker.rs`) carries **one slot per element of \
+    the state tuple**, with the counter at slot zero — so the marker is where an undecided trip \
+    count is given its type. **Without it the second declared entry would not be a fact about \
+    the loop at all, only a `raw` cell**, and this file would have no observable length.\n\n\
+    **What bounds the loop, measured, and it is not the pair of constants the ladder records.** \
+    The checker's budget is a tuned pair — `apply_depth_limit = 500` and `apply_total_limit = \
+    2_000` (`crates/lichen-highlevel/src/checker.rs:384-389`) — and both refusals are worded as \
+    **non-termination** rather than as a stop condition that was not met. Four minimal recursions \
+    with a buffers-derived guard that never fires, each its own program, at `dev@c2c04546`: with \
+    a body that **dispatches nothing**, the unmarked spelling reports `nested applications \
+    exceeded 500 levels` and the `@loop` spelling reports `it applied a function more than 2000 \
+    times`; with **one `compute.plrun` in the body**, **both spellings report `it applied a \
+    function more than 2000 times`**. **So the marker is what moves the bound, and it does not \
+    move it for a recursion that dispatches kernels** — this file's body dispatches three, so its \
+    bound is the cumulative one whichever way it is written. That is what `sentinel = 4.0`, a \
+    value no sampled row answers, produces here, in about two seconds: `this binding never \
+    terminates — it applied a function more than 2000 times (non-terminating recursion)`. **It is \
+    a non-termination report and not a refusal**: the program is not told its stop condition \
+    failed, it is told it ran too long, and nothing distinguishes the two at the call site. The \
+    mechanism behind the first row is **not traced here** — the guard reads the applied node's \
+    own depth (`crates/lichen-lowlevel/src/apply.rs:44`) — and the four runs are the whole of the \
+    claim.\n\n\
+    **Why a missed sentinel does not merely keep going, measured.** The cache has `capacity = 5` \
+    and the loop takes three steps, so a fourth would ask for `.t = 5` — and `position` is \
+    `lane % capacity`, so it is never `5`. **No lane is fresh, the append rewrites the whole \
+    cache with its own contents, and the loop samples the same token forever.** Measured by \
+    starting the recursion at step `3` with `sentinel = 2.0`, which takes exactly one step and \
+    hands back `[1.0, 2.0, -1.0, -1.0, -1.0]`: **the cache unchanged, with no error, no \
+    refusal and no report line**. That is `examples/kvcache.lichen`'s write-side rule meeting a \
+    fixed extent, and it is why the constraint \
+    `docs/notes/llm-operators.md` paragraph (c) records — an extent that follows the state is \
+    not writable, so a fixed extent plus masking is the only spelling available — is a **rule \
+    here and not a preference**. This loop cannot overrun into a refusal; it silently stops \
+    advancing.\n\n\
+    **Ties: `>` is written in both places, deliberately, and the data has a tie row on \
+    purpose.** The fold counts **down** and the comparison is strict, so among equal values the \
+    **highest** position wins — `examples/sample.lichen`'s rule, cited rather than re-measured. \
+    Step zero's row is `[5.0, 8.0, 8.0, 4.0]`: positions `1` and `2` both hold the maximum, \
+    position `2` is visited first and `>` does not displace an equal value, so the first token \
+    is `2`. **The counterfactual is measured rather than argued**: the same program with `>=` in \
+    that one place answers `[1.0, 2.0, 1.0, 0.0, 3.0]`, the same trip count `3`, and a last \
+    logit row of `[2.0, 1.0, -1.0, 6.0]`. **So the tie rule is the body's, it changed the \
+    sequence, and it did not change the loop's length here** — a stop condition built on a \
+    sampled token inherits whatever the fold's comparison says, and a tie that straddled the \
+    sentinel would change the length as well.\n\n\
+    **The seed's reach, and where this file sits against `examples/topk.lichen`.** Rank zero's \
+    fold seeds with `((0.0 - 1.0) / 0.0)`, the signed infinity `BinaryOp`'s invariant gives it, \
+    so its comparison is against every representable `Float` — and step one's logit row is \
+    `[-4.0, -7.0, -10.0, -5.0]`, **all four negative**, so that seed is load-bearing rather than \
+    decorative. `examples/topk.lichen` measured the narrower reach of the ranks that seed with \
+    `0`: an `Int` fold seeded at `0` covers the non-negative integers only and **refuses** below \
+    it rather than answering. **So a greedy sampler reaches negative logits and a top-`k` of rank \
+    two or more does not**, which is that file's own wall at `k >= 2` and is unchanged by \
+    anything here.\n\n\
+    **What is exact and what is modelled. Nothing is modelled.** Every cache slot, every weight \
+    and every logit is an integer below `2^24`; the largest magnitude anywhere is `36`, and each \
+    dot product sums exactly representable `f32` values whose partial sums are integers, so the \
+    fold order reproduces the hand derivation term for term. The arithmetic is `+`, `-`, `*` and \
+    the four order comparisons: there is **no `exp`, no `sqrt`, no `ln`, no division and no \
+    `float2int` on data** anywhere in the program, and `int2float` of a position under `4` is \
+    exact. The only non-integer values in the whole file are the `-inf` seed and the type \
+    annotations. **Every verdict here is host-only**: the CLI installs no compute backend, so \
+    nothing in this file is a device result.\n\n\
+    **The hand derivation, before the run.** The cache starts at `1 2 -1 -1 -1`: a two-token \
+    prompt and three spare slots, holding `-1` because that is outside the vocabulary `0 1 2 3` \
+    and a spare slot must not be confusable with a generated `0`. Negative numbers are spelled \
+    `(0.0 - n)` throughout, because the grammar has no negative literal \
+    (`docs/language-spec.md`: *non-negative decimal literals*). **Step zero**, cache `1 2 -1 -1 \
+    -1`: `2 + 4 + 3 - 3 - 1 = 5`, `4 + 4 + 5 - 3 - 2 = 8`, `0 + 8 + 6 - 3 - 3 = 8`, `5 + 8 + 3 - \
+    8 - 4 = 4` — so `[5, 8, 8, 4]`, a tie for the maximum between positions `1` and `2`, \
+    resolved to `2`. Token `2` is appended at position `2`. **Step one**, cache `1 2 2 -1 -1`: \
+    `2 + 4 - 6 - 3 - 1 = -4`, `4 + 4 - 10 - 3 - 2 = -7`, `0 + 8 - 12 - 3 - 3 = -10`, `5 + 8 - 6 \
+    - 8 - 4 = -5` — so `[-4, -7, -10, -5]`, every entry negative, maximum `-4` at position `0`. \
+    Token `0` is appended at position `3`. **Step two**, cache `1 2 2 0 -1`: `2 + 4 - 6 + 0 - 1 \
+    = -1`, `4 + 4 - 10 + 0 - 2 = -4`, `0 + 8 - 12 + 0 - 3 = -7`, `5 + 8 - 6 + 0 - 4 = 3` — so \
+    `[-1, -4, -7, 3]`, maximum `3` at position `3`, **which is the sentinel**. Token `3` is \
+    appended at position `4` and the recursion returns. Three steps, so the trip count is `3` and \
+    the cache is `1 2 2 0 3`.\n\n\
+    **Five decisions, and which of them is a rule.** (1) **`dim = 1`** — a **preference**: the \
+    cache holds one token per position, which is what a generated sequence is, and with `dim = \
+    1` the append's write address is the identity on the lane index. `examples/kvcache.lichen` \
+    is where the computed address is measured and this file gives it up — and the consequence is \
+    that **the cache is also the transcript, so no gather kernel is needed at all** where \
+    `examples/decode_loop.lichen` needed `keep` as a sixth; `docs/notes/gather-spelling.md` §2.2 \
+    and §2.4 are where the gather shapes are measured, and neither is reached here. (2) **The \
+    incoming key row is the sampler's own output buffer**, `.nk tok.p` — a **preference** that \
+    costs nothing: a `plrun`'s output named as the next one's input is the chaining \
+    `examples/decode.lichen` measures, and there is no copy anywhere in the file. (3) **The \
+    value half is written and never read** — a **consequence** of (1): `column` is `0` at every \
+    lane when `dim = 1`, so `nv` is one element long and every lane writes the same number into \
+    `cached.v`. It is written rather than dropped because `append_raw` is reused verbatim and a \
+    `compute.write` is **the value of an output position and not an effect** \
+    (`docs/notes/code-audit.md` P1-42, `wontfix:D17`), so dropping the second write would mean \
+    editing a measured body. (4) **The trip count is a state slot rather than a second \
+    launch** — a **preference**, and it is `examples/decode_loop.lichen`'s own third entry read \
+    the same way. (5) **Only the last step's logit row is observable** — a **preference**: the \
+    state carries `scored`, so the third entry is the row the loop stopped on rather than every \
+    row it ever saw. **The rule underneath all five is D17's** — one value per output position, \
+    every position written on every lane — which is why the append rewrites the whole cache \
+    instead of one row, why the sampler's single lane writes one slot, and why a launch cannot \
+    grow with the loop.\n\n\
+    **What this file does not reach.** The **device** leg is not reached: the CLI installs no \
+    backend, and `examples/kvcache.lichen` records that this append's narrow incoming row is \
+    refused on a device by `InputShorterThanCount` while the sampler here is one element long by \
+    construction, so that leg would refuse first — **reasoned from those measurements, not \
+    measured here**. The **graph** leg is not reached either, and `examples/decode.lichen` \
+    records the two-input refusal that would meet it. And **a growing cache remains unwritten**: \
+    the extent is a literal `5`, which is the one wall paragraph (c) names."
+  output = "([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0]): tuple{array{Float, 5}, Int, array{Float, 4}}"
+---
+KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
+KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+ArgK  = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
+append_raw = (k : ParK) => {
+  column = compute.row k
+  position = compute.col k
+  slot = position * k.dim + column
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  fresh = position == k.t
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+}
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+Gout = struct{.y (compute.Buf Float)}
+ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+ArgS = struct{.n Int, .kdim Int, .I Gin}
+logits_raw = (k : ParS) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+}
+logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+Row  = struct{.x (compute.Buf Float)}
+Pick = struct{.p (compute.Buf Float)}
+Par  = struct{.n Int, .w Int, .in Row, .out Pick}
+Arg  = struct{.n Int, .w Int, .I Row}
+greedy_raw = (k : Par) => {
+  lane = compute.range k.n
+  base = lane * k.w
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+}
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu"
+weights = (compute.buffer ([2.0, 2.0, (0.0 - 3.0), 3.0, 1.0, 4.0, 2.0, (0.0 - 5.0), 3.0, 2.0, 0.0, 4.0, (0.0 - 6.0), 3.0, 3.0, 5.0, 4.0, (0.0 - 3.0), 8.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
+kbuf = (compute.buffer ([1.0, 2.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0)] : array{Float, 5}) : (compute.Buf Float))
+vbuf = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
+nv = (compute.buffer ([0.0] : array{Float, 1}) : (compute.Buf Float))
+blank = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
+sentinel = 3.0
+@loop generate = s => {
+  scored = (compute.plrun logits ((ArgS)(.n 4, .kdim 5, .I Gin(.w weights, .x s(1).k))) : Gout)
+  tok = (compute.plrun greedy ((Arg)(.n 1, .w 4, .I Row(.x scored.y))) : Pick)
+  cached = (compute.plrun append ((ArgK)(.n 5, .cap 5, .dim 1, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk tok.p, .nv nv))) : KVOut)
+  bit = (compute.collect tok.p : array{Float, 1})[0]
+  if bit == sentinel then (s(0) + 1, cached, scored) else generate (s(0) + 1, cached, scored) }
+final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
+(compute.collect final(1).k : array{Float, 5}, final(0), compute.collect final(2).y : array{Float, 4})
+```
+
 <!-- end: examples -->
