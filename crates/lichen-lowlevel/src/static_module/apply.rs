@@ -101,7 +101,7 @@ impl<P: Program> Module<P> {
         }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
-        let (undecided, runned, evaluated_deep, template_operation) = (
+        let (undecided, _runned, evaluated_deep, template_operation) = (
             node.undecided(),
             node.runned,
             node.evaluated_deep,
