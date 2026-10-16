@@ -295,6 +295,20 @@ entry point, and that nothing further should be built.
    lets `evaluated_deep.is_some()` be the whole gate. Mapping those writes is the first
    step of the replacement work, and the three epoch tests count as a question for the
    maintainer rather than as a cost to accept.
+   **Done, as the concrete-only gate** (`feature/concrete-gate`, `evaluation.rs`'s
+   `evaluate_node_deep_inner`): the walk cuts a node whose verdict **decided** and is
+   asked again only for an `undecided` one. No second bit and no new state — a decided
+   verdict's value is read as the answer, an `undecided` verdict is "ask me again", so
+   the gate is strictly weaker than this step's goal and the step's elimination work is
+   still owed. Measured against a pristine `dev` in the same worktree, private target,
+   `-j 1`, **name sets compared with `Compare-Object`, never counts**:
+   `lichen-lowlevel` 147 / 13 (empty delta), `lichen-highlevel` 140 / 0,
+   `lichen-compute` 204 / 14 / 2 (empty delta) — identical to `dev` in all three.
+   **The three epoch tests pass unchanged under it**, by `--exact` name, so
+   [stalled-rerun-epoch](stalled-rerun-epoch.md)'s run stamp is **not** retired: this
+   gate does not cut the `undecided` verdict they turn on.
+   [late-writes-map](late-writes-map.md) §11 holds the measurement, and §11.3–§11.4
+   correct this note's step-1 premise about where the first elimination is.
 2. **The differential harness** — required, not optional. Run the pass with and
    without the cut over the existing test corpus and compare every value, every
    verdict and **every diagnostic**. It is the only oracle for §4.3's two
@@ -353,6 +367,17 @@ entry point, and that nothing further should be built.
 
 - **Q6 — the verdict's in-progress state** — the verdict's `None` conflated "never ran" with "in
   progress"; the split landed, and §4.4 depends on it.
+- **The concrete-only deep gate, as §5 step 1's replacement.** `evaluate_node_deep_inner`
+  returns the cached value of a node whose verdict **decided**, and re-descends an
+  `undecided` one. It is not §4's `settled` bit: no state is added, and nothing is
+  computed that was not computed before — it reads `evaluated_deep` and the value slot
+  the same walk already wrote. What it establishes is narrower than the goal this note
+  states, and honestly so: a verdict that decided is final, a verdict that could not
+  decide is still re-asked, so the redundancy §1.3 measures is only removed over
+  decided subtrees. All three suites are identical to a pristine `dev` by name set
+  (§5 step 1), and the three epoch tests pass unchanged under it, so §4's design stays
+  rejected and [stalled-rerun-epoch](stalled-rerun-epoch.md) stays current.
+  [late-writes-map](late-writes-map.md) §11 is the measurement.
 
 **Open:**
 
@@ -370,8 +395,8 @@ entry point, and that nothing further should be built.
 | Step | File / function | Change |
 |---|---|---|
 | 0 | `evaluation.rs` `evaluate_node_deep_inner` + the two entry points | **removed**: the temporary walks / visits / cheap / revisit counters that took §1.3's numbers; re-add them (or a real profile) for the wall-clock split |
-| 1 | `lib.rs` `EvaluatedDeep`; `evaluation.rs` `value_is_undecided` + `evaluate_node_deep_inner` | the `settled` bit and the early return |
-| 1 | `module.rs` `close_operation_cycle` | clear `settled` with the verdict it invalidates |
+| 1 | `evaluation.rs` `evaluate_node_deep_inner` | **rejected and replaced**: the `settled` bit was rejected (§5 step 1); what landed is the concrete-only cut, one early return over `evaluated_deep` + the value slot, in the same function |
+| 1 | `module.rs` `close_operation_cycle` | moot — the `settled` bit it would clear does not exist; the verdict it already clears is all the landed gate reads |
 | 2 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness: with and without the cut, over the existing corpus |
 | 3 | — | re-run the measurement; the delta is the decision |
 

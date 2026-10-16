@@ -1,8 +1,14 @@
 # Late writes under a plain deep gate — the elimination map
 
-> Slice: measurement only. **No behaviour change lands here.** The gate below is a
-> scratch edit that is reverted before the commit; what this file holds is the
-> per-test trace of every write that arrives *after* the deep verdict, the site
+> **§1–§10 are the measurement slice and are kept as it was written**: that slice
+> changed no behaviour, and its gate was a scratch edit reverted before the commit.
+> **§11 records what has since landed** — the concrete-only deep gate, the suites it
+> was measured on, and the correction §11.3 makes to this map's own §8. Where §8
+> names a first target, read §11.3 with it.
+>
+> Slice: measurement only, as §1–§10 stand. **No behaviour change landed there.** The
+> gate below is a scratch edit that is reverted before the commit; what this file holds
+> is the per-test trace of every write that arrives *after* the deep verdict, the site
 > that wrote the verdict, and the sanctioned site that should have produced the
 > write instead.
 >
@@ -14,7 +20,7 @@
 > any kind, no `# Invariant` touched, no test edited, and no write to
 > `lichen-compute`, `lichen-compute-gpu` or `lichen-language-server` (they were
 > read). Every code change described here was a scratch probe behind an env var and
-> was **reverted**; `git diff dev...HEAD --name-only` on this branch lists exactly one
+> was **reverted**; `git diff dev...HEAD --name-only` on that branch lists exactly one
 > file, this one.
 >
 > **Where the decision itself lives.** This map is the measurement the decision in
@@ -433,6 +439,12 @@ sanctioned site #2 and is already where `checker.rs:537-539` deep-evaluates lamb
 value nodes — makes verdict and write agree, and takes out half the compute delta in
 one move.
 
+> **Superseded by §11.3.** This ordering is right about the *plain* gate and wrong as
+> a first move under the concrete-only gate that landed. Measured there: the codomain
+> bind produces **no** late write that reaches a decided verdict at all, and hoisting
+> it contradicts a landed decision — [eval-before-unify](eval-before-unify.md) §7.1
+> records the checker-side bind being deleted for exactly this reason.
+
 **Second: the capture edge (the `graph_jit` pair).** Same mechanism, but the writer
 is `apply_parameter_check` (`apply.rs:78`) merging a free variable's class. A
 capture is a *free variable*, so under "the checker does the initial unify" it
@@ -493,5 +505,147 @@ write to a node that already held a verdict, with a `Backtrace` naming the path,
 printed the two verdict-write sites; under the gate it additionally printed a
 `CUTLATEWRITE` for the write that landed on a node the gate had already decided,
 which is the per-test signal used above.
+
+## 11. What landed on top of this map
+
+> Slice: `feature/concrete-gate`, worktree `.worktrees/concrete`, base `dev@e3bb7c2b`.
+> Build: private target `C:\resource\lichen-vm\.worktrees\concrete\target`, `-j 1`,
+> `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
+> `git diff dev...HEAD --name-only` lists `crates/lichen-lowlevel/src/evaluation.rs`
+> and the two notes, and nothing else.
+
+### 11.1 The concrete-only deep gate
+
+`crates/lichen-lowlevel/src/evaluation.rs`, `evaluate_node_deep_inner`, between the
+`Dyn(node)` match and the structural cycle-cut arm:
+
+```rust
+        // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
+        // again (late-writes-map.md §8).
+        if let Some(deep) = self.nodes[node].evaluated_deep
+            && !deep.undecided
+            && let Some(value) = self.nodes[node].value
+        {
+            return Some(value);
+        }
+```
+
+This is §4.1's last row and §7's judgement, landed as code: **a decided verdict is
+final, an `undecided` one is a request to be asked again.** It is not §4's rejected
+`settled` bit — no second bit, no new state, nothing computed that was not computed
+before. It is weaker than the refactor's goal, because an undecided node is still
+re-descended; §11.3 says what that costs.
+
+### 11.2 The suites, measured against a pristine `dev` in the same worktree
+
+Both sides ran in `.worktrees/concrete`, the baseline before the edit and the gate
+after it, so the artifact tree and the commit differ by exactly the one file.
+
+| suite | pristine `dev` | with the gate | name-set delta |
+|---|---|---|---|
+| `cargo test -p lichen-lowlevel -j 1 --no-fail-fast` | 147 / 13 | **147 / 13** | `Compare-Object`: **empty** |
+| `cargo test -p lichen-highlevel -j 1` | 140 / 0 | **140 / 0** | **empty** |
+| `cargo test -p lichen-compute -j 1 --no-fail-fast` | 204 / 14 / 2 | **204 / 14 / 2** | `Compare-Object`: **empty** |
+
+The compute name set is §3's fourteen, unchanged. Both `Compare-Object` comparisons
+were run on **names**, never on counts.
+
+**The three epoch tests pass, unchanged and by name** (`--exact`, all `ok`):
+
+- `evaluation::a_stalled_operator_reruns_only_after_a_value_changed`
+- `assert::an_untriggered_assert_is_decided_by_a_later_drain`
+- `function::function_call_operator_preserves_undecided_operand_chain`
+
+So [stalled-rerun-epoch](stalled-rerun-epoch.md) is **not** retired by this gate: the
+run stamp it landed keeps its own job, and §7's question about the three tests is
+unanswered because the gate does not reach the thing they pin.
+
+### 11.3 What this map's §8 got wrong, measured
+
+**The four compute tests §6 traces were never red under this gate.** All four pass
+under the plain gate's *failure* list being the right reading — and under the
+concrete-only gate they pass on `dev` too, so they were never in a baseline failure
+set to begin with:
+
+| test | on `dev` | plain gate (§4.4) | concrete-only gate |
+|---|---|---|---|
+| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | **ok** | new failure | **ok** |
+| `graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one` | **ok** | new failure | **ok** |
+| `graph_structure::a_body_dispatches_through_an_apply_whose_callee_holds_the_operator` | **ok** | new failure | **ok** |
+| `graph_structure::the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct` | **ok** | new failure | **ok** |
+
+(Each confirmed by name with `--exact`: `4 passed; 0 failed`.)
+
+The reading is the one §4.1's last row already implied and §7 stated: **the delta is
+about the `undecided: true` verdict, not about re-descending decided subtrees.** The
+plain gate cuts undecided verdicts too, so it is the seven late writes of §5 and §6
+that break. The concrete-only gate cuts only decided ones, and those seven writes all
+land on undecided verdicts — so they are writes the gate never made final.
+
+**So §8's first target does not fire under the gate that landed.** Measured with the
+same trace §10 describes, re-instrumented behind `LICHEN_LATE_TRACE=1` under the
+concrete-only gate and run over all three suites:
+
+| suite | late writes | landing on a **concrete** verdict | landing on an `undecided` verdict |
+|---|---|---|---|
+| `lichen-lowlevel` | 0 | **0** | 0 |
+| `lichen-highlevel` | 0 | **0** | 0 |
+| `lichen-compute` | 201 | **0** | 201 |
+
+**Zero** of them is `static_module/apply.rs:90`. Where the 201 come from, by the
+frame under `set_node_value`:
+
+| count | path |
+|---|---|
+| 148 | `unify` → `add_equality` → `fill_class_holes` — a class merge filling an empty member, most through the structural `all::check` walk |
+| 16 | `evaluate_node_operation` → `write_node_answer` → `write_node_value_if_absent` → `propagate_class_value` |
+| 15 | `unify_inner` → `write_node_value` (the `all::try_fold` / `all::check` walks) |
+| 15 | `unify_inner` → `write_node_value` → `propagate_class_value` |
+| 6 | `try_unify` → `unify` → `add_equality` → `fill_class_holes` |
+| 1 | `static_function_apply` → `wire_apply_result` (`static_module/apply.rs:137`) |
+
+`apply_parameter_check` (`static_module/apply.rs:78`) does not appear either.
+
+**What remains** is therefore one class of write, not seven sites: a **unify that
+merges a class and fills an empty member** (`fill_class_holes`), which is where 154
+of the 201 arrive. That is the class of write the refactor's own rule — "beyond
+checker / function-birth normalization / apply, no unify is produced dynamically" —
+already names as illegitimate. It is a real target; it is not §8's.
+
+> **The probe is not free, and this run shows it.** `Backtrace::force_capture` on
+> every late write moved compute from 204 / 14 / 2 to 203 / 15 / 2, adding exactly
+> `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched`.
+> That failure is the probe's, not the gate's — §4.2's trap, met again. Every suite
+> number in §11.2 is from a run with no probe in the crate.
+
+### 11.4 Why the codomain bind was not hoisted
+
+The brief's Part 2 was to move `module.unify(cell, codomain)` to the moment the
+function is born. It is not done, and the reason is not effort:
+
+1. **The codomain is minted by the apply, so at function birth it does not exist.**
+   `static_module/apply.rs:84` reads `pair_type_item(applied)` where `applied =
+   static_node_apply(r#return, …)` — the **clone** the call minted
+   (`static_module/apply.rs:40`, `:286`). Hoisting to the template's `return_type` is
+   a *different unify against a different node*.
+2. **That different unify is a landed decision, already tried and measured.**
+   [eval-before-unify](eval-before-unify.md) §7.1: the checker-side bind that read
+   the template's own cells "made the same two comparisons in `check_app`, against
+   the template's **own** cells, so a call site *decided* them: with `type_of = x =>
+   {t = _; x: t; t}`, dev answers `(Int, Type)` … the checker-side version answered
+   `expected Int, found Type` — the template was monomorphic after its first call."
+   Commit `1ed5f353` deleted it: "The checker-side domain/codomain unification is
+   deleted with it."
+3. **It contradicts an `# Invariant`.** `Module::function_cells`
+   (`crates/lichen-lowlevel/src/equality.rs:519-522`): "These are the template's own
+   cells, so **only a clone may descend them**: a caller that descended the template
+   would decide its signature by the first reader."
+4. **The clone's codomain carries more than the template's.** [index-read-unify](index-read-unify.md)
+   §7.2 measures the clone's tail as "the *clone's own* result cell, in a class of its
+   own", which is why `close_shallow_tail` exists as a second step.
+
+Per the brief's own stop condition, this is reported with the measurement rather than
+substituted. The site is untouched.
+
 
 
