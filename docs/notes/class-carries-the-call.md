@@ -31,6 +31,12 @@ consequences, all from the same two forms:
 | copy the member's fact onto the clone instead of merging | the copied fact and the value this call computes differ, so the conflict appears anyway |
 | walk the members and clone them all (no merge) | the topology is rebuilt over clones that should not exist, and the pass closes over the module (52 s against 0.2 s) |
 
+Two figures belong beside the table, from the branch's own commits. The first form — merging every in-place
+member — was measured **before** the carry rule changed, and it ran the compute suite to **8 passing targets
+against 41 failing**: the shared value reached every test that applies a function at all. And the conflict
+itself is worth naming precisely: both sides were **singleton** classes, one holding `GraphValue(0)` and the
+other `GraphValue(1)`, reported from `write_node_answer` after the `alias_read` that joined them.
+
 ## What the design therefore needs
 
 Sharing a fact **without** sharing the class — the maintainer's own framing of the difficulty ("a class
