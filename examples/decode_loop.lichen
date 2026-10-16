@@ -92,11 +92,11 @@
     recorded it is the leg that would refuse it first, `InputShorterThanCount` on the \
     two-element step buffer: **that is reasoned from those measurements and not measured \
     here.**\n\n\
-    **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — a \
-    wall.** Turning a step's output row into a token needs `ln` over the logits, and **`ln` \
-    does not exist**: its range reduction wants `floor`, a shift or a bitcast, the primitive \
-    set has none of the three, and no kernel computes it \
-    (`docs/notes/floating-point.md` §6). `max`, `floor` and `exp` are all here; the one \
+    **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — no \
+    longer `ln`.** Turning a step's output row into a token needs `ln` over the logits, and it \
+    is a **named operator** now (`82640443`, `examples/ln.lichen`): two of the three blockers \
+    once recorded here are gone — `floor` is a `KernelInstr`, and the reduction needs neither a \
+    shift nor a bitcast, being the power-of-two fold `sqrt` already uses. So the wall a sampler \
     operator a sampler needs is not. (b) **A stop condition — a wall**, measured in the \
     trip-count paragraph above: the guard must be a literal, so a loop that cannot be told \
     when to stop can unroll but cannot generate. (c) **A growing cache — mostly work, with \
