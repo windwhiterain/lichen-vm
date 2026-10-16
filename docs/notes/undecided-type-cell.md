@@ -406,6 +406,56 @@ K3 is excluded by the order of the statements (`evaluate_node(Dyn(applied))` run
 the file the §7 route-naming reserved, so the choice §7 left to the user does not have
 to be made again.
 
+### 9.5 The measurement — the join call is never reached
+
+One probe in `static_function_apply`'s tail, printing the cloned return pair's element 1
+and which arm of `pair_type_half` answers, run through the CLI on each example and on
+`add [1, 2]` for the contrast. `int_type` is the frozen module's **static index 11** in
+every program below, so `[1] Static(…, index 11)` is the decided `int_type` of §6.1.
+
+| program | the apply's result cell (`c`) | pair element 1 | `pair_type_half(applied)` | the cell's class after the bind |
+|---|---|---|---|---|
+| `add [1, 2]` → `3: Int` | `NodeId(34v1)` | `Dynamic(NodeId(50v1))`, decided | **`Some(NodeId(50v1))`** | joins, `Int` |
+| `assert.lichen` → `(raw 1, 5)` | `NodeId(37v1)` | `Static(ModuleKey(0), index 11)` | **`None`** | singleton `37v1`, empty |
+| `assert_in_function.lichen` → `raw 1` | `NodeId(83v1)` | `Static(ModuleKey(0), index 11)` | **`None`** | singleton `83v1`, empty |
+| `assert_in_function.lichen` → `raw 1` | `NodeId(154v1)`, `227v1` | `Static(ModuleKey(0), index 11)` | **`None`** | singleton, empty |
+
+**`34v1` and `37v1` are the very ids §6.1 named**, so this is that measurement, not a
+second one: the same cell `34v1` that joins `int_type`'s class for `add` stays a
+singleton for `less_or_equal`, and the difference is entirely whether
+`pair_type_half` answers.
+
+**Which candidate this settles.** K1 and K2 are the same event read from two ends, and
+the probe shows both halves: element 1 is `Dynamic` **iff** the frozen node was
+undecided, exactly `static_remap_value`'s two-clause guard. K3 is **refuted** — where
+the read is taken at all, the codomain is already decided (`[1] Dynamic(NodeId(50v1))
+decided=true`), so this is not an ordering fault. The condition is:
+
+> **A decided return type is carried into the clone as a frozen `Static` ref, and
+> `pair_type_half` answers `None` for a frozen type half, so
+> `static_function_apply`'s `unify(cell, codomain)` is never called.**
+
+The `?a` cell is a singleton with an empty value because the one call that could have
+filled it was skipped — not because a class was refused and not because the value was
+mislaid. §6.1's "the static-materializer path that carries a frozen callee's return
+pair" is this: the materializer carries it, and the reader declines it.
+
+### 9.6 Families B and C are **not** this condition — measured
+
+The same probe on the other two examples shows the opposite of family A: **every** apply
+whose bind *does* run ends with its cell in a class whose every member is decided.
+
+| example | binds that ran | the cell's class after the bind |
+|---|---|---|
+| `import/_.lichen` | `126v1 → 154v1`, `194v1 → 265v1`, `333v1 → 345v1`, `382v1 → 394v1`, `68v1 → 255v1`, `528v1 → 556v1`, `492v1 → 588v1` | **all members decided** (`m=…:true` throughout; the largest class has 22) |
+| `lazy_infinite.lichen` | `269v1 → 328v1`, `307v1 → 397v1`, `376v1 → 466v1` | **all members decided** |
+
+So the cells that print `?a` in B and C are **not** an apply's result cell that missed a
+bind — they are decided, and the `?a` sits somewhere else (the note's §6.2 element slot
+and §6.3 frozen-module carry). **Fixing A is therefore not expected to move B or C**,
+which is what §4 warned against assuming. §10 records what each does after the fix.
+
+
 ## Coordination
 
 Two commits landed on `dev` while this note was being written, both in the same neighbourhood as
