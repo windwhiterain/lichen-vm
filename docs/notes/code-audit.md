@@ -38,7 +38,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
-| P1-40 | medium | lowlevel | The apply budget refuses a long **terminating** loop as non-terminating | todo |
+| P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
@@ -398,7 +398,7 @@ looking at together. Recorded in
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed)
 §4.1 and §8.
 
-### P1-40 — The apply budget refuses a long *terminating* loop as non-terminating `verified`
+### P1-40 — The apply budget refuses a long *terminating* loop as non-terminating `fixed`
 
 `verified` at `dev@cd1ddeb`, first-hand, via `crates/lichen-compute/examples/recursion.rs`.
 
@@ -431,6 +431,20 @@ probe completes trips 1 and 10 and overflows on 100. So the figure above is the
 low end on a thread with a larger stack, and the low end is a property of the
 thread as much as of the walk.
 
+**Fixed — the refusal names its budget.** The conflated verdict was the four arms of `DiagKind::NonTerminating`
+in `crates/lichen-language/src/render.rs`: each asserted *"this binding never terminates"* before naming the
+counter that tripped. They now say the checker stopped and which budget stopped it, e.g.
+
+```text
+error: the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The program may still terminate when run.
+```
+
+Measured on the same program (0.4 s, `sum_to (4000, 0)`): before, `this binding never terminates — nested
+applications exceeded 500 levels (non-terminating recursion)`; after, the sentence above. The engine already
+knew which budget tripped — `Module::budget_exhausted` carries `ApplyDepth`/`ApplyTotal`/`EvaluateDepth` and
+`NonTerminating::budget` carries it into the diagnostic — so nothing but the wording changed. No test asserted
+the old wording, and `compute.rs` has a comment saying the old sentence "would say 'never terminates', which
+is false here", which is the workaround this removes.
 **The overflow was `emit_node`, and it is now a named refusal.** Instrumented
 first-hand, the walk reaches level ~175 of ~1 MiB of main-thread stack and dies
 — and the `Flow` walk behind it never runs at all (a conditional lowers to a

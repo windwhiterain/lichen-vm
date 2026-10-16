@@ -329,15 +329,15 @@ where
         DiagKind::NonTerminating => match d.budget {
             // The recorded guard and its limit name the runaway shape exactly.
             Some(BudgetExhausted::ApplyDepth { limit }) => format!(
-                "this binding never terminates — nested applications exceeded {limit} levels (non-terminating recursion)"
+                "the checker stopped on its apply-depth budget: nested applications exceeded {limit} levels. The program may still terminate when run."
             ),
             Some(BudgetExhausted::ApplyTotal { limit }) => format!(
-                "this binding never terminates — it applied a function more than {limit} times (non-terminating recursion)"
+                "the checker stopped on its work budget: it applied a function more than {limit} times. The program may still terminate when run."
             ),
             Some(BudgetExhausted::EvaluateDepth { limit }) => format!(
-                "this binding never terminates — its value grows deeper than {limit} levels (non-terminating evaluation)"
+                "the checker stopped on its evaluate-depth budget: its value grows deeper than {limit} levels. The program may still terminate when run."
             ),
-            None => "this binding never terminates (non-terminating recursion)".to_string(),
+            None => "the checker stopped on a budget before it could decide this binding. The program may still terminate when run.".to_string(),
         },
         DiagKind::LoopNotRecorded => {
             // The wording names what the program said and what is missing, so a

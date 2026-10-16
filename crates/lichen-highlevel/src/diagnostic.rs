@@ -138,8 +138,7 @@ pub enum DiagKind {
     /// `a`/`b` are unused.  The public `Checker::build` and `Checker::build_in`
     /// install none.
     NoAttributeExtension,
-    /// A top-level binding whose value computation never terminates — the VM's
-    /// guard fired while the build evaluated it.
+    /// A top-level binding the checker stopped on a budget before deciding: a refusal, not a verdict.
     NonTerminating,
     /// A `@loop`-marked recursion whose trip count was not decided and whose
     /// shape does not convert to a loop.
