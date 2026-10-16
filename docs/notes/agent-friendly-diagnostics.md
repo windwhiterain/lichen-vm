@@ -214,3 +214,26 @@ they now pin the directive's line instead.
 **And one path correction:** there is no `crates/lichen-highlevel/src/render.rs`. The renderer is
 `crates/lichen-language/src/render.rs`, and `CheckerDiag` is an alias for
 `lichen_highlevel::diagnostic::Diag<P>` (`render.rs:3`) — which is why the `TableMiss` fix spans two crates.
+
+## 8. A new offender, measured on the operator ladder (`23aa0f26`)
+
+Writing greedy sampling exposed two refusals that fail **P1** — neither names the fix — and one of them names a
+**cause it is not**, which is worse than silence:
+
+* **A comparison cannot select inside a fold's step.** `if (read > s(1)) then (s(0) - 1) else s(2)` is refused
+  with *"a kernel body reached a node with neither a value nor an operation, so there is nothing to emit for it
+  (node=NodeId(1707v1))"* — a sentence about a `let` alias filled at run time, for a mistake that is about a
+  `Select` inside a reduction step. It is **not** the `~` mark: the same body with the mark moved onto `max` and a
+  pass-through slot compiles and runs. So a reader is told the wrong cause, and a node id is not something they can
+  act on. The working spelling is arithmetic on the comparison's `0`/`1`, with a load-bearing `1 *` anchor — without
+  it the same body is refused as *"instruction 15 mixed an integer and a float in one operation"*, which at least
+  names a class.
+* **A fold's base arm may return exactly one state slot, and the refusal is terse.** A whole-state or two-slot-tuple
+  base arm is refused with *"…the domain is NodeId(135v1) … with leaves [NodeId(135v1)]"*. It does point at the
+  domain — the domain is built from the base arm's value (`crates/lichen-lowlevel/src/loop_conversion.rs:131`) and
+  exactly that one value is emitted (`crates/lichen-compute/src/compute/body.rs:1195`) — but it does not say the rule
+  a reader has to satisfy, so the consequence (a carried maximum is unobservable afterwards) has to be inferred.
+
+Both are recorded here rather than fixed: the first needs a diagnostic that distinguishes a step whose value has no
+`Select` from one whose alias is filled later, and the second needs a sentence naming the one-slot rule. Neither is
+a message change, so neither belongs to the slice that fixed the unclosed delimiter.
