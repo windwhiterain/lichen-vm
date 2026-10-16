@@ -8,13 +8,14 @@
 > two halves of the closure does the work and why.
 >
 > Measured in the worktree `.worktrees/shhx` on `feature/shx`, from `dev` at `d2f280c4`,
-> through `lichen-language`'s own `testing::evaluate` (the faithful runner for a runtime
-> value, per [test-harness](test-harness.md) §"Verify") with an instrumented
-> `crates/lichen-highlevel/src/checker.rs` shallow walk. **Every probe was reverted before
-> any commit**: an `eprintln` in the `n` arm of `check_shallow_array_term` and in the
-> walk at `crates/lichen-highlevel/src/checker.rs:557-562`, and a
-> `crates/lichen-language/tests/language/zz_shx_probe.rs` that printed each element node
-> of the root tuple. No test was added.
+> re-verified on `dev` at `7323cf6b`, through `lichen-language`'s own `testing::evaluate`
+> (the faithful runner for a runtime value, per [test-harness](test-harness.md) §"Verify")
+> with an instrumented `crates/lichen-highlevel/src/checker.rs` shallow walk. **Every
+> probe was reverted before any commit**: an `eprintln` in the `n` arm of
+> `check_shallow_array_term` and in the walk at
+> `crates/lichen-highlevel/src/checker.rs:557-562`, and a
+> `crates/lichen-language/tests/language/zz_shx_probe.rs` that printed each element
+> node of the root tuple. No test was added.
 >
 > Companions: [shallow-depth-closure](shallow-depth-closure.md) §§1.1–§1.3 and §5, the
 > measurement this completes — **not restated here**; [index-read-unify](index-read-unify.md)
