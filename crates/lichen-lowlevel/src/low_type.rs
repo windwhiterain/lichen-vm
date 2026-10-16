@@ -98,6 +98,8 @@ impl<P: Program> Module<P> {
                 };
                 *value
             }
+            // `Instantiate` answers the instance pair, so no shape is stated.
+            LowOperator::Instantiate => return None,
         })
     }
 

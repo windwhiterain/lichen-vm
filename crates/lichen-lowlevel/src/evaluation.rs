@@ -250,7 +250,42 @@ impl<P: Program> Module<P> {
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            // An extension operator reports undecided as `None`, which is what this answers.
+            Some(LowOperator::Instantiate) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("Instantiate expects an operand array node")
+                };
+                // An undecided operand — the body's own parameter during the
+                // definition pass — stays lazy.
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(LowValue::Array(array)) = operand.as_enum() else {
+                    // Never answer `Error`: it caches as a decided value.
+                    return self.ran_undecided(node);
+                };
+                // SAFETY: `array` is the value the module just evaluated for the
+                // operand node; its home block is alive and not dropped.
+                let operands = unsafe { array.items() };
+                let (term, values) = (operands[0].node, operands[1].node);
+                let term_node = self.as_dynamic(term, block);
+                if self.evaluate_node(term, Some(block)).is_none() {
+                    return self.ran_undecided(node);
+                }
+                // The field-type list is element 0 of the term's value pair.
+                // SAFETY: `term` is live; nothing here drops its block.
+                let shape = match unsafe { self.array_items(term_node) }.and_then(|items| items.first()) {
+                    Some(item) => item.node,
+                    None => return self.ran_undecided(node),
+                };
+                let shape = self.as_dynamic(shape, block);
+                let slots = self.as_dynamic(operands[2].node, block);
+                self.unify(shape, slots);
+                // The answer is the instance pair the checker used to build.
+                let items = [crate::ArrayItem::new(values), crate::ArrayItem::new(term)];
+                let value = P::Value::from(LowValue::Array(self.alloc_array(&items, block)));
+                self.write_node_answer(node, value);
+                Some(value)
+            }            // An extension operator reports undecided as `None`, which is what this answers.
             None => operator.run_deferred(operation.operand, block, self),
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {

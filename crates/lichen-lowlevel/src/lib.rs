@@ -251,6 +251,8 @@ pub enum LowOperator {
     ///
     /// A miss records a [`EvalError`] and yields [`LowValue::Error`].
     TableGet,
+    /// - `operand`: the struct type's term, the field values, the arguments' type slots.
+    Instantiate,
 }
 
 /// What a program-specific value may look at while declaring the nodes it keeps alive.

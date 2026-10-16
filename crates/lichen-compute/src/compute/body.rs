@@ -672,7 +672,11 @@ where
             return match low {
                 LowOperator::Index => self.index(node),
                 LowOperator::Apply => self.apply(node, operand),
-                LowOperator::TableGet => Err(
+                LowOperator::Instantiate => Err(
+                "unsupported instantiate operator in kernel body (kernel-safe subset is scalar \
+                 arith)"
+                    .into(),
+            ),            LowOperator::TableGet => Err(
                     "unsupported tableget operator in kernel body (kernel-safe subset is scalar \
                      arith)"
                         .into(),

@@ -183,7 +183,8 @@ impl OperatorExt<TestProgram> for TestOperator {
                 // them through `AsEnum` before falling through.
                 TestOperator::LowOperator(LowOperator::Index)
                 | TestOperator::LowOperator(LowOperator::Apply)
-                | TestOperator::LowOperator(LowOperator::TableGet) => {
+                | TestOperator::LowOperator(LowOperator::TableGet)
+                | TestOperator::LowOperator(LowOperator::Instantiate) => {
                     unreachable!("structural operators are dispatched by the VM")
                 }
                 TestOperator::Id => operand,
