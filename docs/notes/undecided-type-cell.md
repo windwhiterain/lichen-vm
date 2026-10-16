@@ -10,7 +10,9 @@
 > attribution to `arithmetic_class` holds, the identification of the undecided
 > cell and the "checker-side question" conclusion do not. §1–§8 are kept as the
 > diagnosis that led there; where §10 answers one of their open questions, they
-> say so.
+> say so. **The index-read route §10.2b ended on is measured and closed in
+> [index-read-unify](index-read-unify.md)** — not a skipped unify, and not on the
+> cell that route named.
 >
 > Companions: [examples-panic-diagnosis](examples-panic-diagnosis.md) §"What the
 > runner says once past the panic", which first tabulated these four with the
@@ -616,12 +618,21 @@ and the wrong place to have left the question.
 `left_ty` with `int_type` and returning `int_type` — was measured: it leaves
 `lazy_infinite.lichen` byte for byte where it was, and costs twelve `examples` (ten
 panicking, two drifting) plus the `Float` add, the `Float` maximum and the
-polymorphic `x + y`. The remaining carry is the index read's own, from a container
-element cell that is already decided:
+polymorphic `x + y`. The remaining carry was re-homed to the index read's own, from
+a container element cell that is already decided:
 `Checker::check_index`'s `elem_cell` (`crates/lichen-highlevel/src/checker/indexing.rs:70-83`),
 [compound-element-slots](compound-element-slots.md) §"The read path". That is a
 `lichen-lowlevel` question and a separate slice. **§7's framing — a checker-side decide
 — is retired for B.**
+
+> **Superseded by [index-read-unify](index-read-unify.md).** The re-homing above
+> names the wrong cell: `check_index`'s `lazy_index_path` `elem_cell` is built
+> **zero** times across the examples suite, and the `?a` cells of
+> `lazy_infinite.lichen` are minted by `checker/structs.rs`'s `slot_read` lazy arm.
+> No unify is skipped, and the decided cell the carry was supposed to come from is
+> not on this path. That note measures the chain and says what would have to change
+> instead; §7's framing is retired for B **for the second and final time**, and B is
+> not a checker-side question by either route.
 
 §10.2's history is kept above; nothing in it was deleted, because the control table it
 recorded is what the measurement was checked against, and it reproduces.

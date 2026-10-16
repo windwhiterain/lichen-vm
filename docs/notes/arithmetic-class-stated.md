@@ -9,6 +9,11 @@
 > twelve examples and three language features. §4 corrects §10.2's account of which
 > cell is undecided, which the same measurement refutes.
 >
+> **§5's re-homing is superseded by [index-read-unify](index-read-unify.md)**: the
+> cell §5 names is not the cell that prints `?a`, and it is never built by any
+> example. §5 is kept as the recommendation that was measured; that note carries
+> what the follow-up instrumented run found.
+>
 > Companions: [undecided-type-cell](undecided-type-cell.md) for the family, the
 > three fixes and the history this continues; [operator-polymorphism](operator-polymorphism.md)
 > §5 for the `add [1.5, 2.5]` result the open class buys and §7.1 for the
@@ -208,6 +213,13 @@ checker-side question at all, because deciding there does not reach any of B's c
 
 ## 5. Verdict, and what stays broken under each option
 
+> **The re-homing below is superseded by [index-read-unify](index-read-unify.md) §2.**
+> It is kept as the recommendation that was measured, and it is wrong about the
+> cell: `check_index`'s `lazy_index_path` `elem_cell` is never built by any example
+> in the suite — measured, 734 `check_index` calls over all 52 files, **zero** on
+> the lazy arm — and the `?a` cells come from the *sibling* read in
+> `checker/structs.rs`. The "missing write" is not a write; that note measures it.
+
 **Recommendation: leave `arithmetic_class` alone and re-home family B.** Deciding the
 branch is measured over-constraint (§3: twelve examples, three features, one printer
 regression, zero fixes). What the measurement actually points at is the *other* half
@@ -264,6 +276,10 @@ reader of its spelling at `render.rs:299`.
 
 **Unknown** — whether the index read's carry has a fix that does not cost the open
 class. Nothing here measures one; §5 says where to look, not what to write.
+**[index-read-unify](index-read-unify.md) answers it: there is no carry to write.**
+The cell §5 names is never built, the cell that prints `?a` is a different one, and
+what the chain needs is the type of an `@shallow` infinite tail — undecided by
+construction.
 
 **Not this note's subject** — the `Refinement` *flavour* being unreachable. Measured,
 recorded in §1, and left alone: [operator-polymorphism](operator-polymorphism.md) §8.5

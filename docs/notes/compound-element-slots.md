@@ -248,6 +248,16 @@ consequences of taking that seriously:
   that class, not the container's read. §10.2 there measures the discriminator; this
   note records the intent, and the open question is a checker-side one about
   `arithmetic_class`, not about this read path.
+  **And that closing sentence is now measured wrong, twice over.**
+  [arithmetic-class-stated](arithmetic-class-stated.md) §3 measured that deciding
+  the class changes nothing here and costs twelve examples; and
+  [index-read-unify](index-read-unify.md) instrumented this read path and found the
+  container's type cell is undecided **by construction** on `lazy_infinite.lichen` —
+  it is the type of an `@shallow` infinite tail, and its class has four members, all
+  undecided. So the read that prints `?a` never receives a write to skip: the
+  `Index` chain dies one link earlier, at the container's shape. The read path's own
+  rule is not in question; the question is whether an unmaterialisable container
+  type may be read past, and that is a user decision.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
   (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
   container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an
