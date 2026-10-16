@@ -582,6 +582,26 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     };
                     produced = Scalar::Float(lichen_kernel_ir::floor_value(x));
                 }
+                // The logarithm, read in the one definition the IR gives it.
+                KernelInstr::Ln => {
+                    let Scalar::Float(x) = operand(0) else {
+                        panic!("the logarithm is a float's own instruction")
+                    };
+                    produced = Scalar::Float(lichen_kernel_ir::ln_value(x));
+                }
+                // The two share one definition; each takes its own half of it.
+                KernelInstr::Sin => {
+                    let Scalar::Float(x) = operand(0) else {
+                        panic!("the sine is a float's own instruction")
+                    };
+                    produced = Scalar::Float(lichen_kernel_ir::sin_value(x));
+                }
+                KernelInstr::Cos => {
+                    let Scalar::Float(x) = operand(0) else {
+                        panic!("the cosine is a float's own instruction")
+                    };
+                    produced = Scalar::Float(lichen_kernel_ir::cos_value(x));
+                }
                 KernelInstr::BufferReadCall(_) => {
                     let element_index = operand(1).as_index();
                     let position = operand(0).as_index();

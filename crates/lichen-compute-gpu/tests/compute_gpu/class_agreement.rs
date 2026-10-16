@@ -221,6 +221,12 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
         ("Sqrt", "the same refusal as `Exp`"),
         ("Floor", "the same refusal as `Exp`"),
         (
+            "Ln",
+            "the same refusal as `Exp`: `TRANSCENDENTALS` holds it beside `Exp`",
+        ),
+        ("Sin", "the same refusal as `Exp`"),
+        ("Cos", "the same refusal as `Exp`"),
+        (
             "BufferWriteCall",
             "`produces()` is 0 and the emission stores without leaving a slot, so there is no \
              value for the emitter to have a class for",
@@ -260,6 +266,9 @@ fn every_variant() -> Vec<(&'static str, KernelInstr)> {
         KernelInstr::Exp,
         KernelInstr::Sqrt,
         KernelInstr::Floor,
+        KernelInstr::Ln,
+        KernelInstr::Sin,
+        KernelInstr::Cos,
         KernelInstr::BufferReadCall(ScalarClass::Int),
         KernelInstr::BufferWriteCall(ScalarClass::Int),
         KernelInstr::SliceReadCall(ScalarClass::Int),
@@ -282,6 +291,9 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
         KernelInstr::Exp => "Exp",
         KernelInstr::Sqrt => "Sqrt",
         KernelInstr::Floor => "Floor",
+        KernelInstr::Ln => "Ln",
+        KernelInstr::Sin => "Sin",
+        KernelInstr::Cos => "Cos",
         KernelInstr::BufferReadCall(_) => "BufferReadCall",
         KernelInstr::BufferWriteCall(_) => "BufferWriteCall",
         KernelInstr::SliceReadCall(_) => "SliceReadCall",
