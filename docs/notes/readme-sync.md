@@ -3,7 +3,7 @@
 > Status: current
 > Points at: `crates/lichen-tools/src/readme.rs` (the renderer),
 > `crates/lichen-tools/src/bin/sync-readme.rs` (the on-demand command),
-> `crates/lichen-compute/tests/readme.rs` (the self-healing check), and the
+> `crates/lichen-compute/tests/lichen_compute/readme.rs` (the self-healing check), and the
 > `examples/` tree itself. The `---…---` block *syntax* is the spec's business:
 > [language-spec.md §2.2](../language-spec.md).
 
@@ -58,18 +58,18 @@ for `examples/` and exceeding it is reported, never a silent truncation.
 
 - `cargo run -p lichen-tools --bin sync-readme` regenerates and writes the section on
   demand — run it right after changing an example to commit the result.
-- `cargo test` self-heals the *generated* part: `tests/readme.rs` rewrites the README's
+- `cargo test` self-heals the *generated* part: `tests/lichen_compute/readme.rs` rewrites the README's
   example section in place on drift, so a stale README fixes itself on the next test run
   instead of failing the suite. A program's declared `output =` is not among the things it
   rewrites, and the next bullet says why.
 - `sync-readme` is idempotent: running it on an already-synced tree produces the same
   README.
-- The README's embedded example section is **derived documentation**, so `tests/readme.rs`
+- The README's embedded example section is **derived documentation**, so `tests/lichen_compute/readme.rs`
   rewrites it in place on drift instead of failing. An example's own `output = "…"`
   metadata is the opposite case — a claim about observable behaviour — so
-  `tests/examples.rs` asserts it against the program's actual output and fails on a
+  `tests/lichen_compute/examples.rs` asserts it against the program's actual output and fails on a
   difference. That is why `readme::sync_output_comments` is called only by the `sync-readme`
-  binary and never from `tests/readme.rs`: `cargo test` heals the generated section, not a
+  binary and never from `tests/lichen_compute/readme.rs`: `cargo test` heals the generated section, not a
   program's declared output.
 - A behaviour change therefore belongs in a reviewable diff: update the `output =` entry in
   the same commit, or run `sync-readme` on demand. A silently rewritten declaration would make

@@ -6,7 +6,7 @@ The question the brief asks: **in the passing program, which write fills the ele
 `walk_role` reads?** Everything here is measured. The probe and the `#[track_caller]` recorder that
 produced the measurement were **removed before this note was committed** — the investigation they served
 is closed — so §2's *What proved it* names every write side and the trace positions, which is what makes
-the measurement re-derivable. The defect itself was **fixed** afterwards: `7eedb125` (*highlevel: a written type term is decided before the definition pass*) un-ignored the three assertions in `crates/lichen-compute/tests/buf_element_class_recorded.rs`, and they are **ordinary passing tests now** (3 passed, 0 ignored) — `the_compiled_fragment_names_the_declared_element_class`, `the_module_holds_a_decided_float_element_type`, `the_recorded_node_carries_the_declared_element_class`.
+the measurement re-derivable. The defect itself was **fixed** afterwards: `7eedb125` (*highlevel: a written type term is decided before the definition pass*) un-ignored the three assertions in `crates/lichen-compute/tests/lichen_compute/buf_element_class_recorded.rs`, and they are **ordinary passing tests now** (3 passed, 0 ignored) — `the_compiled_fragment_names_the_declared_element_class`, `the_module_holds_a_decided_float_element_type`, `the_recorded_node_carries_the_declared_element_class`.
 
 ## 1. The cell is not the element node — it is that node's pair **value half**
 
@@ -201,7 +201,7 @@ where an undecided class used to become `Int` silently — not a fix for this de
 ### 4.1 What is literally undecided when this refusal fires — measured, and it is not a class
 
 The refusal's sentence names a scalar class. The measurement says the class was never consulted.
-`crates/lichen-compute/tests/graph_structure.rs`'s `BACK_TO_FRONT` is the program that trips it (it
+`crates/lichen-compute/tests/lichen_compute/graph_structure.rs`'s `BACK_TO_FRONT` is the program that trips it (it
 answers `[6, 8, 10, 12]` on `dev`, so the program works), and instrumenting the read at
 `crates/lichen-compute/src/compute.rs:2428-2432` with `write_node`/`node_value` probes before the
 `find_map` gives **three attempts and one refusal**:
@@ -234,7 +234,7 @@ and has no spelling for "undecided" at all; it is reached only inside
 ### 4.2 Who decides it, and in which phase
 
 **All three attempts are inside the check.** The test's own helper panics at
-`crates/lichen-compute/tests/graph_structure.rs:32` — the `assert!(report.ok(), …)` — which is
+`crates/lichen-compute/tests/lichen_compute/graph_structure.rs:32` — the `assert!(report.ok(), …)` — which is
 before it calls `evaluate_node_deep` at all, so nothing that follows is the run. Attempt 1 is the
 checker evaluating `compute.parallel doubler` while the rest of the program is still unevaluated;
 attempts 2 and 3 are the **same checker**, re-evaluating as more of the program is demanded, and by
@@ -339,7 +339,7 @@ that to one read moves the whole decision onto the first attempt — and then `B
 written in §4.1** is a program that should fail, not one that happens to pass.
 
 **So the fixture is corrected on this branch, as the ruling directs.**
-`crates/lichen-compute/tests/graph_structure.rs`'s `BACK_TO_FRONT` declares `compute.Buf Int` on
+`crates/lichen-compute/tests/lichen_compute/graph_structure.rs`'s `BACK_TO_FRONT` declares `compute.Buf Int` on
 `OutA`, `InB` and `OutB` instead of `compute.Buf _`. **That is the author's ruling applied to a test
 fixture, not a convenience**: it is the same edit a user makes to their own program, and it is what
 makes the program honest under the read the refactor is heading for. Its answer, `[6, 8, 10, 12]`, is
@@ -359,8 +359,8 @@ the undecided-type refusal is what the refactor will give a real error at `UNDEC
 the run gate reads `Module::has_extension_failures()` has one predicted consequence, and it is
 measured rather than argued:
 
-* if `crates/lichen-compute/tests/swallowed_refusal.rs` and
-  `crates/lichen-compute/tests/refusal_over_an_answer.rs` still pass, `1198` can be a note at no cost
+* if `crates/lichen-compute/tests/lichen_compute/swallowed_refusal.rs` and
+  `crates/lichen-compute/tests/lichen_compute/refusal_over_an_answer.rs` still pass, `1198` can be a note at no cost
   and this branch simply leaves it so;
 * if they fail, that is the measurement that **`1198` and the gate are one decision**: the misplaced
   write is a refusal *only* because the site records it as one, so with the site a note there is
@@ -370,7 +370,7 @@ measured rather than argued:
 ## 5. Re-deriving the measurement
 
 The probe and the `#[track_caller]` recorder that produced §1–§3 were **not committed**: their
-investigation is closed, and the defect has since been **fixed** (7eedb125), with its three pins now ordinary passing tests in crates/lichen-compute/tests/buf_element_class_recorded.rs. To re-derive them, instrument the five write sides
+investigation is closed, and the defect has since been **fixed** (7eedb125), with its three pins now ordinary passing tests in crates/lichen-compute/tests/lichen_compute/buf_element_class_recorded.rs. To re-derive them, instrument the five write sides
 of `Node::value` named in *What proved it*, share one ordered log with the `walk_role` reads and a
 per-`compile_parallel_fragment` counter, and run the two programs — the same write appears in both, only
 its position differs (CONTROL 7422/7447 against a compile at 7854; STEP 8865 against 7961).
@@ -396,7 +396,7 @@ built = compute.graph ((a : GArg) => {
 built
 ```
 
-It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-compute/tests/`
+It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-compute/tests/lichen_compute/`
 `buf_element_class_recorded.lichen` (shows it) and `buf_element_class_direct.lichen` (does not), whose
 kernel, parameter and buffers are **byte-identical** — **the root expression is the only difference**
 (`k` against the `compute.graph` step). Each is its own test binary, so a single process's compile order
@@ -404,7 +404,7 @@ cannot be what decides either answer. The historical record of the defect is the
 were #[ignore]d with their reason so the suite stayed green while the defect was open; **the fix (7eedb125) removed the ignores**, and one command now shows them passing:
 
 ```
-cargo test -p lichen-compute --test buf_element_class_recorded
+cargo test -p lichen-compute --test lichen_compute buf_element_class_recorded
 [when the defect was open] left: (1, [Int])   right: (1, [Float])
 [when the defect was open] left: [Int]        right: [Float]
 ```

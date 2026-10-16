@@ -8,7 +8,7 @@
 > `LangValue`/`LangOperator`/`LangProgram` composition and the virtual
 > `compute.lichen`),
 > `crates/lichen-highlevel/src/native.rs` (the `NativeOp`/`NativeOps` extension point),
-> and `crates/lichen-compute/tests/compute.rs` (the end-to-end suite).
+> and `crates/lichen-compute/tests/lichen_compute/compute.rs` (the end-to-end suite).
 
 `lichen-compute` is a compiler plugin — a native wrapper package (think `numpy`)
 that jit-compiles a lichen function to a **wasm kernel** and runs it. The user-facing
@@ -747,7 +747,7 @@ the class to emit the real expression.
 
 ## 7. Tests
 
-`tests/compute.rs` covers scalar/tuple domains, all the safe ops, conditionals, closure
+`tests/lichen_compute/compute.rs` covers scalar/tuple domains, all the safe ops, conditionals, closure
 constants, cross-kernel calls (bare, sub-expression, and the wrapper form), inline lichen
 functions (nested), and the parallel `parallel`/`plrun`/`range`/`read`/`write`/`collect`
 family — as `value: type` end-to-end runs. The cross-kernel group pins the multi-arity argument

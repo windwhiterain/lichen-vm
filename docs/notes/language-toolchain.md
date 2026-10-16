@@ -454,7 +454,7 @@ than a second scan, so the text and the `(line, col)` name the same line.
   value. **Every recorded refusal is reported**, whatever the answer is: the gate
   that once asked whether a value had arrived (`answer_arrived`) was deleted, because
   an answer that arrived does not make a recorded refusal go away — the program in
-  `crates/lichen-compute/tests/inplace_write_refusal.lichen` collects an **input**
+  `crates/lichen-compute/tests/lichen_compute/inplace_write_refusal.lichen` collects an **input**
   buffer, which has a value whatever the kernel did, and the in-place write it
   performed was refused by name and answered as if nothing had happened. What replaced
   it is one predicate: `run::render_build` refuses on `Module::has_extension_failures()`,

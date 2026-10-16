@@ -649,7 +649,7 @@ that **the definitions' own doc invariants said the right thing and the Rust mir
 (`reduce_angle_value` computes `if x < 0 { -x } else { x }`) — the emitted body contradicted
 **both**. A mirror is not a reference for the body: it agrees with `f64` whether or not the body
 does, and only a check of **emitted against modelled** catches the difference. That check is
-`crates/lichen-compute/tests/trig_domain.rs`, and it fails on the commit that had the reversed
+`crates/lichen-compute/tests/lichen_compute/trig_domain.rs`, and it fails on the commit that had the reversed
 arms.
 
 **What is now proven.** The **SPIR-V** path for a spliced `sin`/`cos` body has been run:

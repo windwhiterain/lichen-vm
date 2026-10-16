@@ -977,7 +977,7 @@ done** — the acceptance case at item 5 runs on both backends:
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant. **Landed: `a_kernel_loop_reduces_a_runtime_buffer_length`**
-   (`crates/lichen-compute/tests/compute.rs`) answers `10` at a length of four,
+   (`crates/lichen-compute/tests/lichen_compute/compute.rs`) answers `10` at a length of four,
    `28` at seven and `180_300` at six hundred, on **both** backends, against the
    hand-derived triangle number `length(length + 1)/2`.
 
@@ -1194,7 +1194,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      `lichen-language`'s `loop_run.rs` said so in its first line, and no
      `compute.jit` / `compute.parallel` program in any test was marked. The walk
      and its case landed together: `a_kernel_loop_nest_carries_a_runtime_state`
-     (`crates/lichen-compute/tests/compute.rs`) is a `@loop` inside a
+     (`crates/lichen-compute/tests/lichen_compute/compute.rs`) is a `@loop` inside a
      `compute.parallel` body whose carried state is a **run-time buffer read**, so
      the checker cannot expand it and the kernel reader must; it runs on both
      backends.

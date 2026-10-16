@@ -40,7 +40,7 @@ Read by hand before running, this looked like it went through
 that**: the panic happens during *compilation*, and `render_build` is never
 reached. The measured chain, outermost first:
 
-1. `crates/lichen-compute/tests/examples.rs:42` — the single `#[test]` calls
+1. `crates/lichen-compute/tests/lichen_compute/examples.rs:42` — the single `#[test]` calls
    `readme::program_output(&file, &source)`.
 2. `crates/lichen-tools/src/readme.rs:150` — `evaluate_raw(source, Some(file), &mut store)`
    over a fresh `new_store(None)` built at `readme.rs:149`.
@@ -145,7 +145,7 @@ There is **no test-name filter** that isolates it — `examples.rs` is a single
 reason. The probe here reproduces it with `PROBE_EXAMPLE=gc.lichen`:
 
 ```
-cargo test -p lichen-compute --test zz_examples_panic_probe -- --exact per_example_survey --nocapture
+cargo test -p lichen-compute --test lichen_compute -- --exact lichen_compute::zz_examples_panic_probe::per_example_survey --nocapture
 ```
 
 ## What the runner says once past the panic
@@ -195,10 +195,10 @@ narrowing to one of them is a bisect, which this slice did not run. **Unknown.**
 Two probe test files, both printing and asserting nothing, left in the tree while
 the investigation is open:
 
-- `crates/lichen-compute/tests/zz_examples_panic_probe.rs` — the per-example
+- `crates/lichen-compute/tests/lichen_compute/zz_examples_panic_probe.rs` — the per-example
   survey: names the culprit and collects the drift verdicts. Honours
   `PROBE_EXAMPLE=<name>` to run one example alone.
-- `crates/lichen-compute/tests/zz_gc_panic_probe.rs` — the setup discriminator
+- `crates/lichen-compute/tests/lichen_compute/zz_gc_panic_probe.rs` — the setup discriminator
   table above.
 
 Neither changes a production file, an example, or a test expectation. The two

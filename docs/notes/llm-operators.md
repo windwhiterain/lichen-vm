@@ -8,7 +8,7 @@
 
 **Writing an operator is the sharpest test of the machinery**, so each operator is committed as an
 `examples/*.lichen` program — an example *is* a test here (it declares its own `output = "…"` and
-`crates/lichen-compute/tests/examples.rs` runs it), which keeps the operator verifiable without a new
+`crates/lichen-compute/tests/lichen_compute/examples.rs` runs it), which keeps the operator verifiable without a new
 test file.
 
 ## The ladder, as measured rather than hoped
@@ -116,17 +116,17 @@ runs on a device, and `2a62591e` converted the **three** that had not (`automati
 `fused_region`, `consumer_guard`) — measured 1 failure in 16 runs before, 0 in 16 after, on the binary
 that had the defect (`lichen-compute`, not the GPU crate, whose helpers return a context by value and
 never touch the slot). **The duplication is gone**: `e766020b` moved the guard into
-`crates/lichen-compute/tests/common/mod.rs` — one `static DEVICE`, `device_slot()` for the lock alone, and
+`crates/lichen-compute/tests/lichen_compute/common.rs` — one `static DEVICE`, `device_slot()` for the lock alone, and
 `device()` for the ten-copy helper — so `git grep -c 'static DEVICE' -- crates/lichen-compute/tests` went
 **nine files → one**, and ten → two across both crates. Measured after the collapse: **23 binaries ×
 8 runs at `--test-threads 2`, 207 runs, zero failures**. What is left, and what it costs:
 
-- **`tests/combine_fold.rs` was the last unguarded one, and `f818cc57` converted it** — it had justified
+- **`tests/lichen_compute/combine_fold.rs` was the last unguarded one, and `f818cc57` converted it** — it had justified
   its own `install_default()` by "this case owns its test binary", and the comment went with the
   function it justified. It takes `common::device()`, **not** `device_slot()`: the lock-only spelling
   installs no backend, and since a device is reached through `ParallelBackend` the test would have
   silently stopped exercising a device at all.
-- **`tests/compute.rs` has the only two surviving `install_default()` calls, and both are guarded** —
+- **`tests/lichen_compute/compute.rs` has the only two surviving `install_default()` calls, and both are guarded** —
   each takes `common::device_slot()` on the line above. They are deliberately not routed through
   `device()`: one asserts `installed_backend_name() == None` after an explicit `uninstall()`, and the
   other runs the **CPU** backend *before* installing the GPU one. Both would change behaviour, so the
@@ -358,7 +358,7 @@ need a node-local producer for `r`.
   with no error and no report line. **Corrected later by measurement (`4891068f`): that sentence is true of
   what a reader sees and false of the mechanism.** The refusal for that spelling **already exists** —
   `compute.rs:2465`, the `None` arm beside the per-output `write_value_node` gate, pinned by
-  `crates/lichen-compute/tests/compute.rs:2191` — and it **fires** as soon as the same program collects the
+  `crates/lichen-compute/tests/lichen_compute/compute.rs:2191` — and it **fires** as soon as the same program collects the
   kernel's *output* instead of its input. What used to hide it was a second, unrelated rule: `render_build`
   (`crates/lichen-language/src/run.rs:152`) gated the report on `produced_nothing &&`, by an `# Invariant`
   saying *"a runtime refusal explains a value that never arrived, so it is reported only when evaluation
@@ -368,7 +368,7 @@ need a node-local producer for `r`.
   The other two shapes are not gaps: an in-place write bound but unused never reaches the graph, and one read
   back is refused by the read gate. So the finding was not a missing refusal but **a refusal a language-wide
   gate withheld**. The reproduction is committed as
-  `crates/lichen-compute/tests/inplace_write_refusal.lichen`.
+  `crates/lichen-compute/tests/lichen_compute/inplace_write_refusal.lichen`.
   `code-audit.md`'s `wontfix:D17` is a contract about what a write **is** — *the value of an output
   position and not an effect* — and a write to an input is exactly the spelling that sentence declines.
 - **The graph path refuses this operator's run, and the arithmetic looks like eight-byte elements**
@@ -512,7 +512,7 @@ need a node-local producer for `r`.
   `recording = false`), the class route through `class_value`/`class_low_type` (both empty), the term's
   *type half* (which made it `[Int, Int]`, worse), and forcing the slot with `evaluate_node` (no effect) —
   so **no source change shipped**; the defect is pinned instead by
-  `crates/lichen-compute/tests/compile_order_class.rs`, **ignored by default** (the repo's precedent in
+  `crates/lichen-compute/tests/lichen_compute/compile_order_class.rs`, **ignored by default** (the repo's precedent in
   `graph_structure.rs`) so the suite stays green while `--ignored` shows both assertions red. **Still
   open**: which write fills that element cell in the passing program — proved *not*
   `seed_template_term_low_types`, *not* `infer_template_low_types`, and *not* any of those 4738 calls.
@@ -538,7 +538,7 @@ need a node-local producer for `r`.
   *can* fill both positions of a pair — the second write's target is the first write's **value** — and at
   eight lanes it answers **element for element** what the independent one-lane-per-slot spelling answers.
   What does not hold is contention: a chain's **outer** link has two lanes landing on one slot, the last
-  writer wins, and order is not a contract (`tests/compute.rs` says so in its own comment). **So one lane
+  writer wins, and order is not a contract (`tests/lichen_compute/compute.rs` says so in its own comment). **So one lane
   per element is the only spelling whose answer does not depend on a schedule** — which is why
   `examples/rope.lichen` is written that way, as a rule rather than a preference.
 - **A refused kernel can be swallowed by a tuple** — a hole that is *not* in `code-audit.md`. A body that

@@ -742,7 +742,7 @@ lichen program could provoke**.
 launch set the caller supplies, so a `compute.call` inside a parallel body runs
 on the CPU and on a device — see
 [lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module)
-and the cross-backend test in `crates/lichen-compute/tests/compute.rs`. What
+and the cross-backend test in `crates/lichen-compute/tests/lichen_compute/compute.rs`. What
 closed it was not the message: the fragment alone cannot name a callee, so the
 *set* had to reach both backends. The other two rows are still open.
 

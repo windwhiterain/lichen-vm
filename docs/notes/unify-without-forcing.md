@@ -205,5 +205,5 @@ Order, so the risk stays auditable:
    computed value is authoritative; a committed value is a constraint
    reconciled when it runs*, and write down what a disagreeing pair does.
 3. Only then remove `force_pending`/`defer`/`pin`, one mechanism per commit,
-   re-measuring the compute extension (`crates/lichen-compute/tests/compute.rs`,
+   re-measuring the compute extension (`crates/lichen-compute/tests/lichen_compute/compute.rs`,
    62/0 on `dev`) at each step.

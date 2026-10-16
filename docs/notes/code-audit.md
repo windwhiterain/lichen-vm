@@ -991,7 +991,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   measurement for the same reason the package store's `compiled`/
   `loaded_from_cache` are.
 
-  Pinned by `lichen-compute/tests/buffer_payload.rs` (a pointer comparison, not
+  Pinned by `lichen-compute/tests/lichen_compute/buffer_payload.rs` (a pointer comparison, not
   a content read — a dangling bump payload frequently still *reads* correctly,
   so a content-only test would pass on a broken relocation) and by the two
   `kernel_intern_tests` in `compute.rs`.  All three were watched to go red: with

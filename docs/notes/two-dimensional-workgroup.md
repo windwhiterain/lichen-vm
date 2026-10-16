@@ -144,12 +144,12 @@ number this crate collects and never reads", `device.rs:8-12`).
 ## 3. What it breaks, named
 
 - **Tests that pin one-dimensional arithmetic.** `LOCAL_SIZE_X + 5` at
-  `crates/lichen-compute/tests/compute.rs:1531`; `tiled_count`/`tail` at `tests/tiled_reduction.rs:404`;
-  `tests/reduction_chain.rs:369-386`; `tests/plan_staging.rs:200, 263, 307-337`;
-  `tests/pack_placement.rs:217-228, 382-384`; `crates/lichen-compute-gpu/tests/compute_gpu/warp_exchange.rs:249-276`;
-  `tests/upload_width.rs`; `tests/automatic_tiling.rs:27, 36, 503`; `tests/tiling_visibility.rs:18`.
-- **Pinned artifact text** — six literal strings in `crates/lichen-compute/tests/fused_kernel.rs`
-  (`:167, 260, 308, 372, 403, 466`) and one in `tests/fused_landing.rs:46`, all
+  `crates/lichen-compute/tests/lichen_compute/compute.rs:1531`; `tiled_count`/`tail` at `tests/lichen_compute/tiled_reduction.rs:404`;
+  `tests/lichen_compute/reduction_chain.rs:369-386`; `tests/lichen_compute/plan_staging.rs:200, 263, 307-337`;
+  `tests/lichen_compute/pack_placement.rs:217-228, 382-384`; `crates/lichen-compute-gpu/tests/compute_gpu/warp_exchange.rs:249-276`;
+  `tests/upload_width.rs`; `tests/lichen_compute/automatic_tiling.rs:27, 36, 503`; `tests/lichen_compute/tiling_visibility.rs:18`.
+- **Pinned artifact text** — six literal strings in `crates/lichen-compute/tests/lichen_compute/fused_kernel.rs`
+  (`:167, 260, 308, 372, 403, 466`) and one in `tests/lichen_compute/fused_landing.rs:46`, all
   `"target": { "int_width": "i64", "lane_width": 64 }`. They are **inputs to a `deny_unknown_fields`
   parse**, so a new field breaks them at the parse, not at the assertion.
 - **Pinned pack text** — `crates/lichen-compiler/tests/pack_install.rs:104, 358, 390`, the

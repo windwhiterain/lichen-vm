@@ -10,7 +10,7 @@
 > Points at: `crates/lichen-compute/src/compute/body.rs` (the lowering that
 > assigns `KernelInstr` classes), `crates/lichen-compute/src/compute/wasm/mixed.rs`
 > (the shared class check), `crates/lichen-compute-gpu/src/spirv.rs` (the SPIR-V
-> module contract), and `crates/lichen-compute/tests/compute.rs` (the
+> module contract), and `crates/lichen-compute/tests/lichen_compute/compute.rs` (the
 > end-to-end pins).
 
 ## The class of a value is a fact of the value

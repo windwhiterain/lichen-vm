@@ -258,7 +258,7 @@ compute.write ((compute.Write _)(.to k.in.k, .at (k.t * k.dim + d), .value (comp
 
 collects `[1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]`, **the cache unchanged, with no error and no report
 line**. **Corrected later by measurement**: the refusal for that spelling already exists (`compute.rs:2465`,
-pinned by `crates/lichen-compute/tests/compute.rs:2191`) and was **withheld** by the answer gate in
+pinned by `crates/lichen-compute/tests/lichen_compute/compute.rs:2191`) and was **withheld** by the answer gate in
 `render_build` (`crates/lichen-language/src/run.rs:152`), whose `# Invariant` reported a runtime refusal only
 when evaluation produced nothing. That gate has since been **deleted, on the user's decision**, so this
 spelling reports the refusal by name instead of answering. The reproduction is committed (`4891068f`). **See

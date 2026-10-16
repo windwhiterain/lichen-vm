@@ -363,7 +363,7 @@ outright, stating the same requirement. The predicate pair
 it. The §6.2 option-1 machinery is what the **named** read's undecided tier takes
 instead, because its accepted set *cannot* be narrowed to one kind.
 
-One structural consequence, measured in `tests/graph_structure.rs`: a positional
+One structural consequence, measured in `tests/lichen_compute/graph_structure.rs`: a positional
 read of a *parameter* used to put one cell per read into the parameter's type
 tuple, so an unapplied function's arity was readable from it; the pin replaces
 that with one open tuple type, so the arity is no longer readable before the apply

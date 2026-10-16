@@ -249,8 +249,8 @@ beside a value. The classification, one line per site:
 
 **24 refusals, 1 stage observation.** The anchor is 1198: a `compute.parallel` whose body
 writes each other's output is refused by name (`output N … is a compute.write to output
-M`), and both `crates/lichen-compute/tests/swallowed_refusal.rs` and
-`crates/lichen-compute/tests/refusal_over_an_answer.rs` pin that a run refuses over it even
+M`), and both `crates/lichen-compute/tests/lichen_compute/swallowed_refusal.rs` and
+`crates/lichen-compute/tests/lichen_compute/refusal_over_an_answer.rs` pin that a run refuses over it even
 when the program's own answer arrived.
 
 **5488 is the one that must stay a note, and the reason is a category, not a spelling.**

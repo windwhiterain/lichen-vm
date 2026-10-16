@@ -120,7 +120,7 @@ printer fix landed):
 
 - `a_kernel_value_and_type_render_by_name` and
   `a_tuple_domain_kernel_type_renders_as_a_function` in
-  `crates/lichen-compute/tests/compute.rs`;
+  `crates/lichen-compute/tests/lichen_compute/compute.rs`;
 - `compute_kernel_bindings_render_by_name_not_raw_layout` in
   `crates/lichen-language-server/tests/statement_values.rs` (the LSP-visible
   half: the same kernel type through the language server's snapshot).

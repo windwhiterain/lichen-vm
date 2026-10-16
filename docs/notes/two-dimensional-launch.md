@@ -231,7 +231,7 @@ it is the only one of the three that does not stand on the tile-equivalence clai
   **digest**: every kernel id in the tree is new, so every cached artifact and every region hash
   moves. `lichen-runtime/src/fused/schema.rs:310-321` mirrors it as `Target` with
   `#[facet(deny_unknown_fields)]`, and the pack text `"target": { "int_width": "i64",
-  "lane_width": 64, "lane_height": 1 }` is pinned by `crates/lichen-compute/tests/fused_landing.rs:46`
+  "lane_width": 64, "lane_height": 1 }` is pinned by `crates/lichen-compute/tests/lichen_compute/fused_landing.rs:46`
   and `fused_kernel.rs:167`; `crates/lichen-compiler/tests/pack_install.rs:104` pins a
   `"group_width": 64`, which the landed slice deliberately leaves alone.
 - **`Plan::staging[].group_width: u32`** (`kernel-ir/src/plan.rs:64`) is the pack schema's
@@ -250,7 +250,7 @@ it is the only one of the three that does not stand on the tile-equivalence clai
   produced on the device and never crosses the bus).
 - **The examples' declared outputs.** No `examples/*.lichen` would fail — `(n)` stays legal — but
   a new `.rows`/`.cols` spelling moves every row of the generated README tables, and
-  `cargo test -p lichen-compute --test examples` rewrites `README.md` as a side effect.
+  `cargo test -p lichen-compute --test lichen_compute examples` rewrites `README.md` as a side effect.
 
 **Documented contracts to grep before changing any of this** — none of them forbids a 2-D
 launch, and two of them constrain it:

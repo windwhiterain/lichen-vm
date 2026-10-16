@@ -6,7 +6,7 @@
 > `crates/lichen-compute/src/compute.rs` (`JitOp`/`LaunchOp`/`CallOp`/`ParallelOp`/
 > `ParLaunchOp`/`ReadOp`/`WriteOp`/`BufferCollectOp`, `kernel_id_of`, `native_ops`),
 > `crates/lichen-compute/src/lib.rs` (`compute_native_ops!`),
-> `crates/lichen-compute/src/language.rs`, `crates/lichen-compute/tests/compute.rs`.
+> `crates/lichen-compute/src/language.rs`, `crates/lichen-compute/tests/lichen_compute/compute.rs`.
 
 ## Problem
 
@@ -113,7 +113,7 @@ types over the whole body rather than block to block, such a body was refused wi
 "block 1 has parameters but no branch reaches it with a value".
 
 **A `plrun` result's element class stays undecided in the result type — a
-documented limit, not a defect** (pinned end to end by `tests/compute.rs`); what the
+documented limit, not a defect** (pinned end to end by `tests/lichen_compute/compute.rs`); what the
 undecided cell costs a host read is
 [compute-runtime-scalars](compute-runtime-scalars.md)'s.
 
@@ -130,7 +130,7 @@ undecided cell costs a host read is
 
 ## Consequences
 
-- `tests/compute.rs` renders a **generic** kernel struct as
+- `tests/lichen_compute/compute.rs` renders a **generic** kernel struct as
   `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}` — the frozen wrapper's
   fields are undecided cells, so each carries the raw mark — and `launch` results resolve
   their codomain lazily (`6 : Int`, `12 : Int`).
@@ -299,7 +299,7 @@ two-element `[shape, kind]` term instead of the fields, so `slot_type` answered 
 level from that type's own field list and name table. `scalar_leaf_classes` read a scalar's class from
 `path.first()`, assuming a direct field of the parameter; it now descends to the type at the leaf's own
 path. Both refusal sentences above are unreachable for these two shapes, which
-`crates/lichen-compute/tests/nested_role.rs` builds.
+`crates/lichen-compute/tests/lichen_compute/nested_role.rs` builds.
 
 **The mixed group is fixed too** (`d5993c84`). A group holding **both** a buffer and a scalar —
 `In = struct{.b (compute.Buf Float), .s Float}` — used to refuse with "a kernel body's index cannot be
@@ -318,8 +318,8 @@ only, so a multi-slot parameter's second slot is resolved by the fallback alone 
 outside every defect above. And a path the roles table does not record still falls back to positional
 shape flattening, which is **unsound for any future shape where a buffer field precedes a scalar one**:
 that is the very shape this fix exists for. Nothing else in the everywhere-else half is missing —
-buffers, scalars and mixed groups all nest to any depth, and `tests/nested_role.rs` plus
-`tests/mixed_group.rs` build them.
+buffers, scalars and mixed groups all nest to any depth, and `tests/lichen_compute/nested_role.rs` plus
+`tests/lichen_compute/mixed_group.rs` build them.
 
 **The repair is a temporary measure.** The name→position fold belongs after the apply clone, once for
 every reader, not in one reader at compile time — see `specialize-normalize.md`.

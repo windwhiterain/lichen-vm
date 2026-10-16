@@ -17,7 +17,7 @@
 > `Runner`, `Policy`, `GraphRefusal`), `crates/lichen-compute/src/compute/graph.rs`
 > (the recording, `intern`/`lookup`, `run`), `crates/lichen-compute/src/compute.rs`
 > (`ComputeOperator::Graph`/`GraphRun`, `record_launch`, `build_graph`, `run_graph`,
-> `assemble_parameter`), `crates/lichen-compute/tests/graph_jit.rs`,
+> `assemble_parameter`), `crates/lichen-compute/tests/lichen_compute/graph_jit.rs`,
 > `graph_structure.rs` and `crates/lichen-compute-gpu/tests/compute_gpu/graph_on_device.rs`.
 >
 > Companions: [lichen-compute-gpu](lichen-compute-gpu.md) (the backend and the
@@ -691,7 +691,7 @@ wrongly answers with *different* numbers rather than the same ones by luck.
 - **What a graph's argument may be — the rule is `.in`/`.out`, and the surface does
   not say so.** *Corrected by a bisect at `2661ab89`, which replaced this note's
   earlier claim that a two-buffer step "does not record":* **it does record, and runs
-  on the device** (`crates/lichen-compute/tests/graph_argument.rs`: two buffers, three
+  on the device** (`crates/lichen-compute/tests/lichen_compute/graph_argument.rs`: two buffers, three
   graph inputs, `2a + b + 1` answered over both). The rule is narrower than the buffer
   count: **every buffer a step's argument names must sit under a group named `in` or
   `out`** — the same rule a kernel parameter has, spelled `compute.lichen:5`'s

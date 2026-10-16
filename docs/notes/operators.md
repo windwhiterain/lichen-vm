@@ -265,7 +265,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 `a_jit_kernel_crosses_the_two_classes_both_ways`,
 `a_body_may_compute_in_one_class_and_cross` and
 `a_varying_float_element_is_seeded_from_the_index`
-(`crates/lichen-compute/tests/compute.rs`).
+(`crates/lichen-compute/tests/lichen_compute/compute.rs`).
 
 ## 8. What is deliberately not here
 
@@ -320,7 +320,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   `an_at_in_membership_test_parses_at_the_comparison_level`
   (`crates/lichen-language-parser/src/tests/parse_tests.rs`).
 - wasm JIT: `jit_lowers_the_arithmetic_comparison_and_bitwise_operators`
-  (`crates/lichen-compute/tests/compute.rs`) — one kernel per operator, so each
+  (`crates/lichen-compute/tests/lichen_compute/compute.rs`) — one kernel per operator, so each
   is on the lowering path.
 - The prefix scalar operators: `fusion_numbers`
   (`crates/lichen-compute/examples/fusion_numbers.rs`), whose kernel column writes a
@@ -340,7 +340,7 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   (`crates/lichen-compute-gpu/tests/compute_gpu/refusals.rs`) is the refusal that needs no
   validator at all.
 - The example programs `examples/operators.lichen` and `examples/gcd.lichen` are
-  the user-visible statement of the set, and `tests/examples.rs` runs them.
+  the user-visible statement of the set, and `tests/lichen_compute/examples.rs` runs them.
 - Editor grammar: `tree-sitter-lichen`'s own tests, which parse every
   example — `operators.lichen`, `gcd.lichen`, `type_access.lichen` and
   `table.lichen` included — and assert no ERROR node, plus the

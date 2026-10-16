@@ -180,7 +180,7 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   it is the body's own result, on a call's result, or inside an inlined helper —
   but an operator inside a cross-kernel call's argument (`k0 (x + 1)`) or inside
   `compute.launch`'s argument has no machine node behind it and is **refused by
-  name**, which `crates/lichen-compute/tests/compute.rs` pins. Widening the
+  name**, which `crates/lichen-compute/tests/lichen_compute/compute.rs` pins. Widening the
   boundary is the kernel workstream's specialize-before-JIT pass, which folds the
   apply back to a machine leaf.
 
