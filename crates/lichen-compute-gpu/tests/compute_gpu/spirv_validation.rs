@@ -450,7 +450,7 @@ fn conditional_backedge() -> KernelFragment {
 /// # Invariant
 /// The return says whether the module was actually checked: a machine without the validator must not
 /// look like one that validated.
-fn validate(what: &str, words: &[u32]) -> bool {
+pub(super) fn validate(what: &str, words: &[u32]) -> bool {
     let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     // `vulkan1.1` is the target environment the manual step names.
