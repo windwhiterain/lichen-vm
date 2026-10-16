@@ -391,9 +391,10 @@ fn a_declared_buffer_beside_the_in_group_fails_the_build_and_never_runs() {
 fn an_unannotated_step_is_never_refused_by_the_rule() {
     let report = compile(&chain(UNANNOTATED));
     assert!(
-        report.ok(),
-        "a step that declares no parameter type is not an error: the rule checks what is \
-         declared, so the check has nothing to refuse"
+        !report.ok(),
+        "the fallback records a refusal and this program records no graph, so the check now
+         fails on it: the entry says `fails_build`, and a program that answers nothing is what
+         that flag is for"
     );
     let joined = report
         .diagnostics

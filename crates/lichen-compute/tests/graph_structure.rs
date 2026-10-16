@@ -165,7 +165,7 @@ ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "Cpu"
+}) "cpu"
 InB  = struct{.b (compute.Buf _)}
 OutB = struct{.w (compute.Buf _)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
@@ -173,7 +173,7 @@ doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
   j = compute.read ((compute.Read _)(.from k.in.b, .at i))
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}) "Cpu"
+}) "cpu"
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 InS  = struct{.b (compute.Buf _)}
 OutS = struct{.unused (compute.Buf _)}
@@ -255,7 +255,7 @@ ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "Cpu"
+}) "cpu"
 InB  = struct{.b (compute.Buf _)}
 OutB = struct{.w (compute.Buf _)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)

@@ -145,41 +145,10 @@ built = compute.graph step
     .to_string()
 }
 
-/// Compile and evaluate `source`, without asserting that a runtime refusal did not happen.
-///
-/// # Invariant
-/// The same compile [`common::run`] performs, minus the refusal gate: a recording is read even
-/// when the run it describes also recorded a refusal, which the gate would turn into a panic.
-fn tolerant_run(source: &str) -> (Module<LangProgram>, Option<LangValue>) {
-    let mut store =
-        lichen_compute::language::new_store(None).expect("the embedded compute package registers");
-    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
-    assert!(diags.is_empty(), "expected imports to resolve: {diags:?}");
-    let line_starts = lichen_language::lex::line_starts(source);
-    let report = lichen_language::compile_with_imports_at::<LangProgram>(
-        preprocessed.code,
-        &preprocessed.imports,
-        Some(store.registry()),
-        preprocessed.code_base,
-        &line_starts,
-        lichen_highlevel::no_native_ops(),
-    );
-    assert!(
-        report.ok(),
-        "expected {source:?} to check: {:?}",
-        report.diagnostics
-    );
-    let build = report.build.expect("a checked program built a module");
-    let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
-    let _ = module.evaluate_node_deep(build.root_ty, None);
-    (module, value)
-}
-
 /// One program as the guard's test reads it.
 struct Run {
     module: Module<LangProgram>,
-    value: Option<LangValue>,
+    value: LangValue,
     kernels: Vec<Instance>,
 }
 
@@ -191,7 +160,7 @@ struct Run {
 /// because its id is. The registry is global and a process runs every test in it, so a program's
 /// kernels are read from **its own** module rather than from what the registry gained.
 fn run(source: &str) -> Run {
-    let (module, value) = tolerant_run(source);
+    let (module, value, _root) = common::run(source);
     let mut ids: Vec<usize> = module
         .nodes
         .iter()
@@ -392,10 +361,7 @@ fn a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds() {
     clear_graph_pass();
     let source = with_run(bare_consumer());
     let recorded = run(&source);
-    let base = common::float_array(
-        &recorded.module,
-        recorded.value.as_ref().expect("the bare program answered"),
-    );
+    let base = common::float_array(&recorded.module, &recorded.value);
     assert_eq!(
         recorded.kernels.len(),
         2,
