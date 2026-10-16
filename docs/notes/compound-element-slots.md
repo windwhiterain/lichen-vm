@@ -232,9 +232,17 @@ consequences of taking that seriously:
 
 - **The read goes through the container's own type cell**, not through the
   pattern an open container was pinned to. A cell's class carries the actual type
-  once it resolves, so the elements resolve with it: `lazy_infinite` reads
-  `(1, 2, 3): tuple{Int, Int, Int}` where a read through the pattern gave
-  `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`.
+  once it resolves, so the elements resolve with it: `lazy_infinite` is the program
+  that says so, and this note has claimed since this commit that it reads
+  `(1, 2, 3): tuple{Int, Int, Int}`. **It does not, on `dev` or on any tree this
+  note has been re-measured against**: it reads
+  `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`, which is what the per-example survey
+  in [examples-panic-diagnosis](examples-panic-diagnosis.md) measures. The claim was
+  written from the change this commit makes and never re-run against an example;
+  the read does go through the container's own type cell, but on this program that
+  cell does not resolve. The diagnosis, with what is traced and what is not, is
+  [undecided-type-cell](undecided-type-cell.md) §6.2 — so this note records the
+  intent, not a measurement.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
   (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
   container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an

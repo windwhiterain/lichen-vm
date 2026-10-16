@@ -163,8 +163,20 @@ masking**. They hold:
 
 34 examples matched their declaration and `compute_jit.lichen` is skipped by
 `examples.rs:10`. The four drifts share one shape: an integer printed `raw` and
-an element typed `?a` where `Int` is declared — one rendering/concreteness
-difference, not four unrelated ones.
+an element typed `?a` where `Int` is declared.
+
+**The shape is one; the cause is not.** The shape is one *read*: the type printer
+and the value printer ask the same empty cell the same question, and
+`raw 1: ?a` is that one answer printed twice
+([undecided-type-cell](undecided-type-cell.md) §2). Behind it are **three**
+mechanisms, one per pair — a routed comparison, a lazy read, a frozen-module read —
+measured with one program per discriminator and recorded with the CLI's output
+alongside the suite's in [undecided-type-cell](undecided-type-cell.md) §1, §3 and
+§4. The four are also **not** the `@loop` finding: the marker changes nothing for
+any of them. Each program was additionally run through
+`cargo run -q -p lichen-compiler -- run <file>` and the CLI agrees with this
+suite byte for byte, so the defect is in the language and not in this runner's
+rendering.
 
 ## When it started
 
