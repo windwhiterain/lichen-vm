@@ -29,16 +29,16 @@ identical program on `cpu`.
 | scoring row `score_raw` (`decode_loop.lichen:173`) | **refused by name**, `InputShorterThanCount` | *"input buffer 1 holds 2 element(s) but the run covers 4 index/indices"* |
 | one decode step, chained (`decode_loop.lichen`) | **refused by name** at its *first* kernel | the append's sentence, verbatim |
 | softmax's row maximum (`decode_loop.lichen:182`) | **runs, bit-exact** | `[3.0, 3.0, 3.0, 3.0]` |
-| greedy sampler (`sample.lichen`, `topk.lichen`, `generate.lichen`) | **emits, then the driver takes the process down** | `STATUS_ACCESS_VIOLATION` after a 444-word module |
-| top-k (`topk.lichen`) | **emits, then the driver takes the process down** — on fragment `#0`, the same sampler | as above |
-| generation loop (`generate.lichen`) | **emits, then the driver takes the process down** — on fragment `#2`, the same sampler | as above |
+| greedy sampler (`sample.lichen`, `topk.lichen`, `generate.lichen`) | **fixed — `sample` and `topk` now run, bit-exact**; `generate` stops at a named refusal | [dispatch-crash](dispatch-crash.md) §7 |
+| top-k (`topk.lichen`) | **runs, bit-exact** on two 15-arrays | as above |
+| generation loop (`generate.lichen`) | **refused by name**, `input buffer 3 holds 1 element(s) but the run covers 5` — the §1 upload rule, not a crash | as above |
 
 **Of the four questions, the short answers are:** the append and the row maximum **run** and
 agree **bit for bit**; the scoring row and the whole decode chain **refuse by name** on one rule;
-the sampler **is not reachable on this device** — it lowers, it emits, and the driver kills the
-process; and the **runtime stop condition is host-only**, because the only spelling that brings a
-sampled token to a guard is a host `compute.collect`, and the loop that would read it never got a
-device leg.
+**the sampler now runs and agrees bit for bit** — the crash it died on was the emitter's missing
+constant, and [dispatch-crash](dispatch-crash.md) §7 has the repair and the measurement; and the
+**runtime stop condition is host-only**, because the only spelling that brings a sampled token to a
+guard is a host `compute.collect`, and the loop that would read it never got a device leg.
 
 ## 1. Does it reach a device at all?
 
@@ -109,9 +109,10 @@ before the driver sees it, and the 444 words were never validated.~~ **Corrected
 references `%10`, an id no instruction defines. The cause is the emitter, in
 `crates/lichen-compute-gpu/src/spirv.rs`, and the crash is a driver's compile of a malformed
 module.** That note carries the reduction and the fix site; this note's bisect above is kept as
-the record that opened the question. **This is a production defect and it is not fixed here**:
-reaching the sampler on a device needs a source change in the emitter, which is a different
-slice and the user's decision.
+the record that opened the question. **The defect is fixed by that note's §7**, which adds the one
+missing `OpConstant` to the float arm of the emitter's constant pool, pins the shape with a
+regression test, and measures `sample.lichen` and `topk.lichen` running **bit-exact** on the
+device; `generate.lichen` now stops at this note's own upload rule instead of crashing.
 
 ## 2. Where it does run, does the device answer what `cpu` answers?
 

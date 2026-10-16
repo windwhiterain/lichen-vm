@@ -1,9 +1,9 @@
 # The sampler's crash, localised to one emitted id
 
-> Status: **current** — every verdict below is from an RTX 3060 Laptop GPU and an Intel Iris Xe
-> on this machine, off `dev@8e6095b5`, on branch `feature/crash`. The bisect that opened the
-> question is [device-leg-of-the-ladder](device-leg-of-the-ladder.md)'s §1 and is referenced
-> rather than restated. **Nothing in this note changed production code, and no test was added.**
+> Status: **the defect is fixed** — §7 records the repair, its branch (`feature/fcond`) and the
+> sampler's device result. Everything below §7 is the localisation, measured on an RTX 3060 Laptop
+> GPU and an Intel Iris Xe on this machine off `dev@8e6095b5`, on branch `feature/crash`, and is
+> kept as it was written: **that pass changed no production code and added no test.**
 
 [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1 left the greedy sampler as *"the
 emitter is not at fault, the crash is at dispatch"* and *"Unknown: why the driver dies"*, with
@@ -169,7 +169,8 @@ whether the minimum is smaller than 429.
 
 ## 6. What a fix would touch
 
-**Not touched here.** This slice localises; the fix is a separate slice and the user's decision.
+**Not touched by that slice.** It localises; the fix is a separate slice and the user's decision.
+**§7 records what the fix turned out to be.**
 
 **The emitter, one line, in `crates/lichen-compute-gpu/src/spirv.rs:3357-3367`** — the
 `ScalarClass::Float` arm of the constant pool omits `zero_integer` while naming
@@ -193,6 +194,84 @@ decide.
 boolean into the integer class**, which is the one shape that reaches the missing constant. That
 is the coverage gap, and closing it needs the user's permission like any other test.
 
+## 7. The fix, and the sampler's device result
+
+**Measured on `feature/fcond`, off `dev@b80c6cea`, on the RTX 3060 Laptop GPU.** The question §6
+left open — *emit it, share one pool, or assert at the end* — is answered by the first two
+together, because the cause was not one missing line but **an asymmetry between two arms of one
+match**, and a third copy of the same width rule.
+
+**The repair.** `spirv.rs`'s pool declared the two constants differently per module class:
+
+| `ids.class` | `one_integer` | `zero_integer` | `one_float` | `zero_float` |
+|---|---|---|---|---|
+| `Int` | emitted | emitted | emitted | emitted |
+| `Float` | emitted | **never emitted** | emitted | emitted |
+
+Both arms are now **one shape with no `match` at all**: the float pair is class-independent
+(`OpTypeFloat 32` is declared in every module, §4's M1–M3 change nothing about capabilities), and
+the integer pair is written at the width `Ids::integer` names through one new helper,
+`Ids::integer_constant`. `Literals::get` spelled that width a third time and now calls the same
+helper, so a pool constant and a literal cannot be written at different widths again. **The
+sampler was not special-cased**: the four constants are declared unconditionally, which §3's M5
+already showed is sufficient.
+
+**The sweep, arm by arm.** `ScalarClass` has two variants and two asks of the pool — `one_of` and
+`zero_of` — asked from `as_class`'s `Kind::Condition` arm (for whatever class that call carries),
+from `as_condition`'s `Kind::Scalar(Int)` arm, and from `as_condition`'s `Kind::Literal` arm:
+
+| arm of the pool | `as_class(_, Float)` | `as_class(_, Int)` | `as_condition(Scalar(Int))` | `as_condition(Literal)` |
+|---|---|---|---|---|
+| `Int` | declared | declared | declared | declared |
+| `Float` | declared | **`zero_integer` missing** | **`zero_integer` missing** | **`zero_integer` missing** |
+
+**One defect, three roads.** §5's note that `as_condition` "also names `ids.zero_of(Int)`" is a
+**second reachable route to the same id**, not a separate bug: it emits
+`OpINotEqual %bool %r %10` in a float module exactly as `as_class` emits its `OpSelect`. Both are
+reachable — `as_condition` is called from `I32WrapI64`, from a `Select`'s selector, and from a
+`CondBr`'s condition — and both are now covered by a test. `as_condition`'s `Kind::Scalar(Float)`
+arm uses `ids.zero`, which the pool has always declared in both modules.
+
+**The test, and what it saw before the fix.** `crates/lichen-compute-gpu/tests/compute_gpu/
+materialised_integer.rs` emits two float modules — the sampler's shape in miniature, and the
+`as_condition` route — and asserts `spirv-val`'s verdict through `spirv_validation.rs`'s own
+helper. Against **this note's arm, restored by hand**, both fail with the sentence §1 recorded:
+
+```
+`spirv-val` rejected a float loop materialising a boolean into the integer class:
+error: line 66: ID '10[%10]' has not been defined
+  %58 = OpSelect %uint %57 %uint_1 %10
+
+`spirv-val` rejected a float module whose condition is an integer:
+error: line 52: ID '10[%10]' has not been defined
+  %43 = OpINotEqual %bool %uint_1_0 %10
+```
+
+and the loop's own device test **kills the process with `0xC0000005`** — §2's crash, reproduced by
+the regression test itself. With the fix, both modules validate and both run: the loop answers
+`[3.0, 0.0, 3.0, 0.0]` (three trips of `in[i] > 0.0` over `[1.0, -1.0, 4.0, 0.0]`), and the
+`Select` answers `[1.5, -2.25, 0.0, 7.75, -0.5, 3.0]`, **bit-for-bit** what the suite's CPU
+reference answers.
+
+**The sampler itself, on the device.** `examples/sample.lichen` with its one backend literal
+switched `"cpu"` → `"gpu"`, installed backend, RTX 3060:
+
+| program | `cpu` | `gpu` before the fix | `gpu` after |
+|---|---|---|---|
+| `sample.lichen` | `[3.0, 2.0, 3.0, 0.0, 3.0]` | **`0xC0000005`** | `[3.0, 2.0, 3.0, 0.0, 3.0]` — **bit-exact** |
+| `topk.lichen` | two 15-arrays | **`0xC0000005`** | the same two arrays — **bit-exact** |
+| `generate.lichen` | `([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0])` | **`0xC0000005`** | **refused by name**: `input buffer 3 holds 1 element(s) but the run covers 5` |
+
+So **the sampler is reachable on this device**, which §5 of
+[device-leg-of-the-ladder](device-leg-of-the-ladder.md) could not say. The generation loop no
+longer crashes but is **not yet runnable either**: it stops at the *upload rule* §1 already
+recorded for the KV-cache append and the scoring row — a short input buffer beside a wider launch
+— which is a separate rule from this defect and is **not fixed here**.
+
+**Not fixed, and not attempted.** §5's three negatives stand (whether 429 words is the minimum);
+and `wontfix:D17`, the `code-audit.md` contract §6 declined to implicate, is untouched — no
+`Invariant` or `Safety` sentence was added or changed anywhere in this repair.
+
 ## What was measured, inferred and unknown
 
 **Measured.** The crash reproduces at `0xC0000005` on a 444-word module; `spirv-val` rejects it
@@ -206,10 +285,8 @@ reaching some later state — from the crash landing in `vkCreateComputePipeline
 isolating the operand, and from M5 removing it. **The drivers' own stack trace was not
 captured**, so the frame is inferred, not read.
 
-**Unknown.** Whether 429 words is the true minimum (§5's three negatives); whether any *other*
-body shape reaches the same dangling `zero_integer` by a different route, which would widen the
-blast radius beyond the sampler; whether the same defect reaches `as_condition` (`spirv.rs:3555`
-and `:3569` also name `ids.zero_of(Int)`), which this body did not exercise; and whether the
+**Unknown.** Whether 429 words is the true minimum (§5's three negatives); and whether the
 passing bodies in §5 are correct **answers**, which was not checked — `control_add` and `b4` ran,
 but against patched modules nothing ran to compare, so **no patched module in this note has been
-executed**, only compiled.
+executed**, only compiled. **§7 answers the two questions this section left open**: the other
+route to `zero_integer` is real and is covered, and patched modules now run.
