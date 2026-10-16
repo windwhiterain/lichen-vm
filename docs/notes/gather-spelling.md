@@ -7,6 +7,10 @@
 > wall found sits **beside** `keep` rather than in it (§2.4) and is a dominance rule about `@loop`,
 > not about gathering. §1 is read from the sources and commits nothing but citations.
 >
+> **§2.4's dominance rule was re-measured at `dev@eb3132ae`, because
+> `examples/topk.lichen` (`94cb6ad6`) contradicted it: the same refusal still reproduces, but the
+> condition this note gave for it was too strong, and §2.4 and §3 now state the measured one.**
+>
 > Points at: [`crates/lichen-compute`](../../crates/lichen-compute/) (`src/compute.rs`,
 > `src/compute/body.rs`). Referenced rather than restated:
 > [llm-operators](llm-operators.md) (the ladder; the greedy-sampling row),
@@ -123,7 +127,7 @@ Two facts follow for this note, and only the second is about the gather:
 | 1 | **One lane writing several slots** — a launch of `n · k` lanes, every lane computing which slot it fills | **expressible today** — §2.1 |
 | 2 | **A kernel reading another kernel's output at a per-lane computed offset** | **expressible today** — §2.2 |
 | 3 | **A transposing or scattering read** | **expressible today** — §2.3 |
-| 4 | **The `keep` shape itself** | **expressible today for a gather; one real wall sits beside it, not in it** — §2.4 |
+| 4 | **The `keep` shape itself** | **expressible today for a gather; the wall beside it is real but narrower than first recorded** — §2.4 |
 | 5 | *(not a shape of the brief)* **the same spelling at `k = 3`** | **expressible today, no new mechanism** — §2.5 |
 
 Every program below ran under `probe/` with the `lichen-compiler` binary built into a private
@@ -288,7 +292,7 @@ and `1`, which removes positions `3` **and** `1`, leaving `{3, 4}` at positions 
 rank two is `2`, which is what the program answers. Reading it as "the other `9` is still there"
 gives `3`, and `3` is wrong.
 
-#### The one real wall this slice found, and it is beside `keep` rather than in it
+#### The one real wall beside `keep`, and the condition it actually has
 
 `keep` needs its ranks **addressable**, and §2.2 says they can be. The tempting cheaper spelling is
 to compute rank zero's position **in the same lane** and use it to exclude, which would make the
@@ -308,11 +312,61 @@ second does **not** read the first's result runs, and answers:
 ```
 
 (two plain argmax folds over the same row, summed — `[1, 0, 0, 0, 3]` twice, the `>=` tie rule
-`examples/sample.lichen` measures). **So the rule is narrow and it is a dominance rule, not a
-limit on nesting: a nest's result may be combined outside any nest, but may not be read by a
-following nest.** The fix costs one launch: `first` becomes a `compute.read` of the previous
-kernel's buffer, which §2.1 does, and which is exactly the spelling `examples/sample.lichen` asks
-for anyway — *getting them there is the step I did not take*, and §2.2 measured that it is taken.
+`examples/sample.lichen` measures).
+
+**Both of those still reproduce**, re-typed at `dev@eb3132ae` — the control's row bit for bit, and
+the refusal with the same message and a different pair of identifiers, the value and the block
+number being what the program changes:
+
+```text
+error: compute.parallel: Bin(Int, Add) reads ValueId(22), which block 0 defines, and block 0 does not dominate block 6
+```
+
+**What changed is not the tree but the claim.** The sentence this subsection ended on — *a nest's
+result may be combined outside any nest, but may not be read by a following nest* — is **wrong on
+its second clause**, and `examples/topk.lichen` (`94cb6ad6`) is the program that says so: three
+nests in one body, `f1`'s step reading `first` and `f2`'s step reading `first` and `second`, and it
+runs and answers the three ranks. **A following nest may read an earlier nest's result.** What is
+refused is narrower and needs **two conditions at once**, neither of which carries it alone:
+
+1. **a cross-read** — a nest's result read inside a following nest's step — and
+2. **an arithmetic operator outside every nest** — a `Bin`, in the checker's vocabulary — **whose
+   operand is a nest's result and whose value a `compute.write` takes.**
+
+Each half alone runs, and the combinations are the whole table:
+
+| conditions | the program | outcome |
+|---|---|---|
+| (2) alone, on two nest results | the control above — two nests, **neither reading the other**, the **sum written** | **runs** — `[2.0, 0.0, 0.0, 0.0, 6.0]` |
+| (2) alone, on no nest result | two nests **with** a cross-read, and a third write of `lane + 1` | **runs** — `([1.0, 0.0, 0.0, 0.0, 3.0], [3.0, 2.0, 1.0, 1.0, 2.0], [1.0, 2.0, 3.0, 4.0, 5.0])` |
+| (1) alone | three nests, three writes each taking one rank **directly** | **runs** — `([3.0, 2.0, 3.0, 0.0, 3.0], [1.0, 0.0, 0.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0, 1.0])`, `examples/topk.lichen`'s own row |
+| (1) and (2) | two nests with a cross-read, and a write of `first + 1` | **refused** — `error: compute.parallel: Bin(Int, Neq) reads ValueId(75), which block 11 receives as a parameter, and block 11 does not dominate block 6` |
+
+**Four readings the bisection rules out, each measured rather than argued, and none of them is the
+condition.** The **number of nests**: a three-nest body refuses when it combines its results, and a
+two-nest body runs when it writes them directly. The first nest's fold being **`Float`-carrying**:
+an all-`Int` first nest with two direct writes runs, and a `Float`-carrying one with a combined
+write refuses. The **order** the writes demand the values in: moving the arithmetic write **first**
+still refuses, so it is not an ordering artefact of the writes. And the **`~ "element"` mark**:
+the refusal stands with the mark removed. Two readings that are the condition are also worth
+saying — the operator need not be over **two** nest results (a write of `first + 1` refuses), and
+it need not be over the **crossed** one (a write of `second + 1` refuses).
+
+**So the boundary, in the vocabulary the checker emits:** a nest's result that a following nest's
+step reads is in scope there and the body lowers; what is refused is that same body also placing a
+nest's result as an **operand of a `Bin` outside every nest** whose value a `compute.write` takes —
+and the message then reports exactly that shape, a read whose defining block the reading block is
+not dominated by. **A `Select` is not it**: §2.1's `mine = if rank == 0 then first else (next …)`
+is a selection between two nest results reaching a write, and it runs.
+`crates/lichen-compute/src/compute/body.rs:287-296` is where the placement happens: a value first
+demanded inside a nest is emitted at that nest's **entry** block. **Why the operator is what turns
+the cross-read fatal is not established here** (§4), and no fix is proposed.
+
+**What this costs the ladder, and what it does not.** The escape this subsection used to price —
+one launch per rank, so `first` becomes a `compute.read` of the previous kernel's buffer (§2.1,
+§2.2) — is **no longer needed for the exclusion itself**, and §3 is corrected below. It is still
+what the **gather** wants, for the addressability §2.2 measures, which is a different reason and
+survives.
 
 ## §3 What top-`k` would cost, given the verdicts
 
@@ -323,7 +377,7 @@ how the ranks leave the kernel:
 
 | spelling | launches for `k = 2` | buffers | address arithmetic |
 |---|---|---|---|
-| `examples/sample.lichen`'s `k`-tuple (§ its top-2 paragraph) | **1** | `k`, one per rank | none |
+| the `k`-tuple, **measured at `k = 3` in `examples/topk.lichen`** | **1** | `k`, one per rank | none |
 | the one-buffer gather (§2.1) | **`k`** | **1**, of length `n · k` | `rank = lane / rows`, `row = lane % rows` |
 
 So **the one-buffer answer is not free in launches — it costs `k` where the `k`-tuple costs 1** —
@@ -352,11 +406,13 @@ places to put the same folds.**
 - **`float2int` on the data stays.** Rank one is right only for scores in the exactly
   representable integer range, which is `examples/sample.lichen`'s own named cost and is not moved
   by anything measured here.
-- **One new requirement the gather imposes: the ranks must be addressable, so they must already be
-  in a buffer.** That is §2.2, and it is why the one-launch spelling of §2.4 is refused: a rank
-  that exists only as a `@loop` result inside a lane cannot exclude anything in a following nest.
-  **So the price of the one-buffer answer is one launch per rank** — `k` launches widening one
-  buffer, where the `k`-tuple needs `1` — and **not a new operator**.
+- **One requirement the gather imposes: the ranks must be addressable, so they must already be
+  in a buffer.** That is §2.2, and §2.4's re-measurement at `dev@eb3132ae` is what withdrew the
+  second one this list used to carry: a rank that exists only as a `@loop` result inside a lane
+  **can** exclude a position in a following nest, and `examples/topk.lichen` builds all three ranks
+  in **one** launch and one body. **So the price of the one-buffer answer is still one launch per
+  rank** — `k` launches widening one buffer, where the `k`-tuple needs `1` — but the reason is
+  **addressability and not a dominance rule**, and there is still **not a new operator**.
 
 ## §4 Measured, inferred, unknown
 
@@ -375,8 +431,16 @@ places to put the same folds.**
 - **Inferred.** That the `keep` widening of §2.4 generalises to `k` sources by the same argument.
   Run at `k = 2`; the `Select`'s arms are reads either way, which is what the argument rests on.
 - **Unknown.** The **device** leg of every verdict, for the reason above.
-- **Unknown.** Whether the §2.4 dominance refusal is a lowering-ordering artefact or a contract.
-  The refusal and its control are measured; **no fix was tried**, so the claim that the one-launch
-  spelling could be made to work by hoisting `first` out of the first nest is **not** made here.
-  It is not needed — §2.1 reaches the same answer in one more launch — but it is open.
+- **Measured, at `dev@eb3132ae`.** That §2.4's dominance refusal **still reproduces** — the error
+  quoted above, re-typed, and the control's row bit for bit — and that the **condition** §2.4 gave
+  for it was too strong: a cross-read alone runs, an out-of-nest operator alone runs, and it is
+  the two together that are refused. The table is §2.4's; the programs are re-typed there.
+- **Inferred, from the sources rather than from a run.** That the refusal is a lowering-ordering
+  artefact and not a statement about what the language may express:
+  `crates/lichen-compute/src/compute/body.rs:287-296` places a value first demanded inside a nest
+  at that nest's **entry** block, which is why the message names a defining block the reading block
+  is not dominated by. **Why the out-of-nest operator is what turns the cross-read fatal is not
+  established**, and **no `wontfix:D<n>` in [code-audit](code-audit.md) covers it**, so this is not
+  a route to a decision record and **no fix was tried** — the claim that the refusal could be made
+  to work by lifting the out-of-nest operator is **not** made here.
 
