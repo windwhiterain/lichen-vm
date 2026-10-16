@@ -1,5 +1,6 @@
 mod artifact_transitivity;
 mod common;
+mod cyclic_type_cut;
 mod defer_pending;
 mod doc;
 mod field_read_kinds;
