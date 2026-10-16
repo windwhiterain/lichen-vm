@@ -70,17 +70,24 @@ fn a_printed_float_re_lexes_and_re_checks_as_the_same_float() {
 
     // The deliberate refusal: the whole non-finite family prints under a name, and a name is not a literal.
 
-    // The literal syntax has no `NaN`, so the value is handed to the printer.
+    // The literal syntax has neither an infinity nor a `NaN`, so each value is
+    // handed to the printer.
     let report = compile("1.5");
     let build = report.build.expect("a build");
-    let nan = print_value(
-        &build.module,
-        LangValue::from(LowValue::Float(f32::NAN)),
-        build.float_type,
-    );
-    assert_eq!(nan, "NaN");
-    assert!(
-        !compile(&nan).ok(),
-        "'NaN' is a name, not a literal, so the reader must refuse it"
-    );
+    for (value, name) in [
+        (f32::INFINITY, "inf"),
+        (f32::NEG_INFINITY, "-inf"),
+        (f32::NAN, "NaN"),
+    ] {
+        let text = print_value(
+            &build.module,
+            LangValue::from(LowValue::Float(value)),
+            build.float_type,
+        );
+        assert_eq!(text, name, "{value} must print under its own name");
+        assert!(
+            !compile(&text).ok(),
+            "{text} is a name, not a literal, so the reader must refuse it"
+        );
+    }
 }
