@@ -34,8 +34,7 @@ fn float_over_a_float_buffer(body: KernelBody) -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        // The ABI's own result is an integer however the buffers are classed, which is
-        // what `index_to_float` reads a float module the same way.
+        // The ABI's own result is an integer however the buffers are classed.
         result_classes: vec![ScalarClass::Int; 1],
         target: TargetFacts {
             int_width: IntWidth::I64,
@@ -50,12 +49,10 @@ fn float_over_a_float_buffer(body: KernelBody) -> KernelFragment {
 /// `out[i] = float (the times in[i] > 0.0)` — the sampler's shape, in miniature.
 ///
 /// # Invariant
-/// The loop is the sampler's fold: an integer counter carried beside an integer running total and a
-/// carried float element, compared with **float** order the way the sampler's `>` is. What the
-/// sampler's `1 *` does and this does is the same thing — the comparison is multiplied by an
-/// integer `1`, so `bin_class` reads the declared `Int` and `as_class` materialises the boolean
-/// into the integer class, naming `one_integer`/`zero_integer`. No other body in this directory
-/// reaches that shape.
+/// The loop is the sampler's fold: an integer counter carried beside an integer running total and
+/// a carried float element, compared with **float** order the way the sampler's `>` is. The
+/// sampler's `1 *` is what this does: multiplied by an integer `1`, `bin_class` reads the declared
+/// `Int` and `as_class` materialises the boolean into the integer class.
 fn masked_loop() -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -188,8 +185,8 @@ fn integer_selector() -> KernelFragment {
             ScalarClass::Float,
         )));
     };
-    // A write's `[position, index]`, then the three values in push order: the `then`
-    // arm, the `otherwise` arm and the selector.
+    // A write's `[position, index]`, then its three operands in push order:
+    // `then` arm, `otherwise` arm, selector.
     let mut body = vec![
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
@@ -299,8 +296,8 @@ fn the_masked_loop_on_the_device_answers_what_its_trips_compute() {
         return;
     };
     let fragment = masked_loop();
-    // Two positives and two not: the mask is the integer class's `1`/`0`, so the
-    // total is how many of the three trips the condition held.
+    // Two positives and two not: the mask is the integer class's `1`/`0`, and
+    // the total is how many of the three trips held.
     let input = [1.0f32, -1.0, 4.0, 0.0];
     let expected: Vec<f32> = input
         .iter()

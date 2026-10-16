@@ -678,6 +678,12 @@ struct Ids {
     /// The 32-bit `0` an access chain's indices are built from.
     zero: u32,
     /// The scalar `1` and `0` a comparison is materialised into, in the integer class.
+    ///
+    /// # Invariant
+    /// **Both are declared in every module, whatever `class` is.** A float module's `Int` is its
+    /// 32-bit index and it materialises a boolean into that class as readily as an integer module
+    /// materialises one into `Float`, so a pool that declared either pair only for its own class
+    /// emits an operand no instruction defines.
     one_integer: u32,
     zero_integer: u32,
     /// The same materialisation where the position wants the float class.
@@ -3337,11 +3343,8 @@ fn assemble(
             .map(|(member, &id)| Inst::new(op::CONSTANT, vec![ids.uint, id, member as u32])),
     );
     // The scalar `1` and `0` a comparison is materialised into, over both classes.
-    //
-    // Declared unconditionally and in one shape: `OpConstant` is module-scope, an unused
-    // constant is legal, and `one_of`/`zero_of` are asked for either class from either
-    // module class — a float module that materialises a boolean into the integer class
-    // names `zero_integer` too.
+
+    // Both pairs, unconditionally: either module class asks for either pair.
     constants.extend([
         Inst::new(
             op::CONSTANT,
