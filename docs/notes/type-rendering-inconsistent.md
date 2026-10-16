@@ -22,9 +22,21 @@ f = (x : Int) => x
 |---|---|
 | `struct{.a Int}` | `TypeStruct` |
 | `array{Int, 3}` | `TypeArray` |
-| `Int -> Int` | `TypeFunction` |
+| `Int -> Int` | `Int -> Int` — **fixed since this table was written** |
 | `(Int, Int)` | `tuple{Type, Type}` |
 
+Re-measured on `dev@16e50e6b`, with `f = (x : Int) => x` and one call per row:
+
+```text
+f (struct{.a Int})   =>  error: expected Int, found TypeStruct
+f (array{Int, 3})    =>  error: expected Int, found TypeArray
+f (Int -> Int)       =>  error: expected Int, found Int -> Int
+f ((Int, Int))       =>  error: expected Int, found tuple{Type, Type}
+```
+
+So the function case now prints what was written (it was `TypeFunction` in the table below), and the other
+three still do not: two print their marker tag and the tuple prints its elements' kinds. The standard the
+section states — *none prints the value that was written* — is now the whole of the open defect.
 Three print their **kind's marker tag**; the tuple prints a **structured form of
 its element types**. None prints the value that was written, and two values of
 the same standing — two compound type expressions — print in two different
