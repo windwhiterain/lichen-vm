@@ -95,7 +95,7 @@ f [10, 20, 30]                                   f [10, 20, 30]
 
 | order | output |
 |---|---|
-| read, then annotate | **refused**: `error: expected tuple{?a, …}, found array{Int, 3}` — the read's pin meets the array at the annotation that binds it (before: `20: ?a`, **accepted**) |
+| read, then annotate | **refused**: `error: expected a tuple type, found array{Int, 3}` — the read's pin meets the array at the annotation that binds it (before: `20: ?a`, **accepted**) |
 | annotate, then read | refused: the decided container is judged where it stands |
 
 The paren read `a(k)` **is** the tuple read, and arrays read with `a[i]`. The old
@@ -110,6 +110,21 @@ an undecided container is pinned to a fresh tuple type `[?shape, [TypeTuple, K]]
 (the `check_index` mirror), and a decided container is refused where it stands
 with the same stated requirement. Both orders refuse now, and what differs is
 *whether* the program is accepted rather than which diagnostic fires.
+
+**The wording moved on (measured).** The tables of §2.2 and §2.4 quote what the
+requirement reads now, re-measured through the front end on `dev`: `f = x => x(0)`
+; `f [10, 20]` refuses with `error: expected a tuple type, found array{Int, 2}`, the
+§2.2 pair refuses twice with `error: expected a tuple type, found array{Int, 3}`,
+and `f = x => x[0]` ; `f (10, 20)` with `error: expected an array type, found
+tuple{Int, Int}`. What these tables used to quote is the requirement **as a
+pattern**: `f4c2b93a` ("checker: a positional read requires the tuple *kind*, never
+binds the type") and `f660da9d` ("checker: an index read requires the array *kind*,
+like the positional read") both moved the reads off the fresh `[?shape, [Type, K]]`
+unify and onto a **kind** requirement — a kind-node unify when the container is
+decided, a registered `IsTupleType` / `IsArrayType` condition when it is open — and
+the prose message went with them. Neither commit carried this note with it, which is
+why the pattern's own spelling (`expected tuple{?a, …}, found …`) outlived the code
+that printed it.
 
 ### 2.3 The contrast case: apply **is** caught in both orders
 
@@ -144,7 +159,7 @@ f [10, 20]         f (10, 20)
 
 | read | before | now |
 |---|---|---|
-| paren `x(0)`, array argument | `10: Int` — **accepted**; nothing ever asked whether an array may be paren-read | `error: expected tuple{?a, …}, found array{Int, 2}` — refused at the apply, the pin route |
+| paren `x(0)`, array argument | `10: Int` — **accepted**; nothing ever asked whether an array may be paren-read | `error: expected a tuple type, found array{Int, 2}` — refused at the apply, the pin route |
 | bracket `x[0]`, tuple argument | refused at the apply, statically, with a span | unchanged |
 
 So §2.2's order flip was one face of a wider gap: the paren read's deferral had

@@ -650,11 +650,15 @@ maps every span back to the original file.
   state it as a **pin** — the container's type is unified with a fresh array /
   tuple type — so a container that is not decided yet is refused by the
   *application* that supplies it, per call, rather than skipped: `x(0)` over an array is
-  `expected tuple{?a, …}, found array{Int, 2}`, and `x[0]` over a tuple is
-  `expected array{…}, found tuple{Int, Int}`.  The named reads state the same
-  requirement as a unify on the corresponding slot: `.a` needs the container's
-  *kind* to be a struct kind, `X::a` needs its *type* to be one (§3, *the named
-  type access*).  A
+  `expected a tuple type, found array{Int, 2}`, and `x[0]` over a tuple is
+  `expected an array type, found tuple{Int, Int}`.  Both name the **kind**
+  they require in prose; the older wording spelled the read's own pattern
+  instead (`expected tuple{?a, …}, found array{Int, 2}`), which is what a fresh
+  tuple-type pattern prints, and the requirement stopped being one when it
+  moved to the kind ([eval-before-unify](notes/eval-before-unify.md) §2.2).  The
+  named reads state the same requirement as a unify on the corresponding slot:
+  `.a` needs the container's *kind* to be a struct kind, `X::a` needs its
+  *type* to be one (§3, *the named type access*).  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
