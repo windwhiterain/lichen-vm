@@ -262,3 +262,16 @@ a line.
   attributes around it; the four drifts are reachable with the panic out of the way,
   which is how [examples-panic-diagnosis](examples-panic-diagnosis.md) measured
   them.
+
+## Coordination
+
+Two commits landed on `dev` while this note was being written, both in the same neighbourhood as
+the missing join: `86ce6b6f` (*highlevel: an engine-side unify is located through the descent it
+recorded*) and `973d7132` (*highlevel: a conflict keeps the values its error already carries*).
+**If that work is this join, it should finish it, and this note should point at that work rather
+than duplicate it** — say so here, or in that commit, and this section can shrink to a reference.
+If it is something else, the fix has two candidate routes and the choice is the user's: a
+**checker-side decide at `check_app`**, where `add [1, 2]` already joins the callee's decided
+return type and `less_or_equal [1, 2]` does not, or a **runtime bind** in
+`crates/lichen-lowlevel/src/evaluation.rs`, which another session owns and which this diagnosis
+leaves untouched. Families B (lazy read) and C (frozen module) are **not traced** on either route.
