@@ -73,7 +73,9 @@ Measured in this worktree, private target, `-j 1`:
 |---|---|---|---|
 | `cargo test -p lichen-lowlevel --no-fail-fast` | 147 / 13 | **147 / 13** | exact |
 | `cargo test -p lichen-highlevel` | 140 / 0 | **140 / 0** | exact |
-| `cargo test -p lichen-compute --no-fail-fast` | 204 / 14 / 2 | *(see §6)* | |
+| `cargo test -p lichen-compute --no-fail-fast` | 204 / 14 / 2 | **204 / 14 / 2** | exact |
+
+The compute baseline's 14 failures, by name (for the `Compare-Object` below):
 
 The 13 `lichen-lowlevel` baseline failures are **all GC/compaction**, and none of
 them is one of the three epoch tests:
@@ -97,6 +99,25 @@ table::gc_compaction_moves_table_payloads_and_entries
 (That set is the GC trigger disabled — see
 [gc-trigger-disabled](docs/notes/gc-trigger-disabled.md) — and is the same set on
 every later run in this slice, so every delta below is measured against it.)
+
+The compute baseline's 14 failures, by name:
+
+```
+lichen_compute::automatic_tiling::a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands
+lichen_compute::automatic_tiling::the_floor_tiles_a_declared_reduction_the_merge_stage_declines
+lichen_compute::automatic_tiling::the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers
+lichen_compute::combine_fold::a_sum_of_squares_tiles_with_the_datum_its_claim_names_and_answers_the_squares
+lichen_compute::fold_datum::a_datum_no_body_computes_is_refused_by_name_and_the_body_answers
+lichen_compute::fold_datum::a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body
+lichen_compute::graph_structure::a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order
+lichen_compute::identity_from_body::a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers
+lichen_compute::identity_from_body::a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers
+lichen_compute::identity_from_body::a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name
+lichen_compute::pack_placement::a_matching_pack_fires_and_the_plan_it_states_is_what_lands
+lichen_compute::pack_placement::a_pack_asking_for_a_width_the_target_lacks_is_refused
+lichen_compute::pack_placement::a_pack_whose_constraints_do_not_hold_is_inert
+lichen_compute::pack_placement::an_unmatched_pack_is_inert
+```
 
 ## 4. Results
 
@@ -135,4 +156,24 @@ an artefact of the probe, not a finding. The 52-name list included plausible-loo
 victims (`table::*`, `host_loop::*`, `recursion::*`) that pass once the decrement is
 gone. **A probe that panics in the crate under test manufactures failures that look
 exactly like deep design problems.**
+
+### 4.3 `lichen-highlevel` — unaffected
+
+`LICHEN_PLAIN_DEEP_GATE=some` → **140 passed / 0 failed**, byte-identical to the
+baseline. No highlevel test pins the deep verdict's revisability.
+
+### 4.4 `lichen-compute` — four late writes, by name
+
+`LICHEN_PLAIN_DEEP_GATE=some` → **200 passed / 18 failed / 2 ignored**. Against the
+14 baseline failures, `Compare-Object` on the names gives exactly four new:
+
+```
+lichen_compute::graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture
+lichen_compute::graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one
+lichen_compute::graph_structure::a_body_dispatches_through_an_apply_whose_callee_holds_the_operator
+lichen_compute::graph_structure::the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct
+```
+
+All three suites reproduce the recorded gate numbers **exactly** (144/16, 140/0,
+200/18/2), and the delta sets are exactly the ones named in the brief.
 
