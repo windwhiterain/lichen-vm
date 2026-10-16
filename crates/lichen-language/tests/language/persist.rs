@@ -6,12 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::common;
 use lichen_language::diag::Stage;
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{
     DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex, sha256,
 };
-mod common;
 
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_lowlevel::LowValue;

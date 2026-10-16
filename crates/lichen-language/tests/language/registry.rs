@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod common;
+use super::common;
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_language::package::PackageStore;

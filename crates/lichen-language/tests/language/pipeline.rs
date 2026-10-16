@@ -9,7 +9,7 @@ use lichen_language::diag::Stage;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::{compile, frontend};
 
-mod common;
+use super::common;
 
 /// The dynamic node behind an item ref — the checker builds only dynamic graphs.
 fn dyn_node(id: AnyNodeId) -> NodeId {

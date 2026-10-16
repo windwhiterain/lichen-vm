@@ -1,7 +1,7 @@
 //! The `Doc` attribute (`? expr`): user-made metadata, never a constraint.
 //! See attributes.md.
 
-mod common;
+use super::common;
 
 use lichen_language::compile;
 use lichen_language::run::evaluate;

@@ -1,7 +1,7 @@
 //! A class's decided value reaches a *merge*'s members, not only a *write*'s.
 //! See docs/notes/eval-before-unify.md §3.3.
 
-mod common;
+use super::common;
 
 use lichen_language::program::LangValue;
 use lichen_lowlevel::LowValue;
