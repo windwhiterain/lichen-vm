@@ -47,3 +47,5 @@ member cannot be given the member's fact by merging.
 The two measurements above are the boundary: the fact is real (the member's class holds a value), and
 copying it is not enough either (the call's own value differs), so the missing piece is not a wider or
 narrower criterion but a place to keep the fact apart from the class.
+
+The collision this note describes has a ruling of its own, with the chain measured behind thirteen compute failures: [a colliding answer is a unify error](answer-collision.md).
