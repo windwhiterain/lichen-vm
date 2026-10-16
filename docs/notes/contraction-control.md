@@ -182,9 +182,9 @@ below SPIR-V and the only handle is a module-level constraint. Three were found,
 grammar shipped with the SDK (`$VULKAN_SDK\Include\spirv-headers\spirv.core.grammar.json`) and
 from the emitter's own decoration list:
 
-| candidate | where it comes from | `spirv-val --target-env vulkan1.1` | on the device | buys |
+| candidate | where it comes from | `spirv-val --target-env vulkan1.1` | on the RTX 3060 | buys |
 |---|---|---|---|---|
-| **`NoContraction`** | decoration `42`, **version 1.0, capability `Shader`** | **ACCEPT** | honoured | **everything — §3.2** |
+| **`NoContraction`** | decoration `42`, **version 1.0, capability `Shader`** | **ACCEPT** | honoured (and on the Iris Xe too) | **everything — §3.2** |
 | `NoReassociation` | decoration `4268`, **absent from the SDK's bundled grammar** | ACCEPT | accepted, inert | nothing |
 | `FPFastMathMode None` | decoration `40`, version 1.0, but needs capability `FloatControls2` | **9 of 9 REJECT** | ran anyway, inert | nothing |
 
@@ -192,6 +192,8 @@ Three measured verdicts, and the middle one is worth its own paragraph because t
 disagree about it. `NoReassociation` is accepted by `spirv-val` 2024.4 on a SPIR-V 1.3 module and
 by the NVIDIA driver (the dispatches succeed) and **changes nothing**: `a·b + c` is still
 **4096/4096 fused**, `sin` is still 91/256 against the definition and `both` is still 256/256.
+**Both inert candidates were run on one device only** — they are the cheap half of the search,
+and neither was a candidate to ship, so a second vendor's opinion on them was not bought.
 `spirv-dis` from the same SDK refuses to print it at all — `error: 16: Invalid decoration
 operand: 4268` — while `spirv-val` accepts it, so the two tools disagree about whether the
 decoration exists. **The control that names reassociation explicitly is the one that does not
@@ -201,7 +203,7 @@ finding in one sentence, and it is why the fix has to be the other one.
 `FPFastMathMode` is the clearest rejection of the three: **all nine modules `REJECT`** under the
 target env with `Operand 2 of Decorate requires one of these capabilities: Kernel
 FloatControls2`. The capability is a Vulkan 1.4-era one, this target emits SPIR-V 1.3, and the
-driver nonetheless ran all nine and returned the same bits as an undecorated module.
+NVIDIA driver nonetheless ran all nine and returned the same bits as an undecorated module.
 
 **What is not here is a driver or toolchain switch.** No environment variable, capability,
 execution mode or builtin in the grammar states "do not fuse or reassociate this": the precision
