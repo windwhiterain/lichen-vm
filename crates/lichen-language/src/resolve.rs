@@ -364,7 +364,14 @@ impl Resolver {
                 self.resolve_expr(key);
                 self.resolve_expr(value);
             }
-            Expr::Shallow(inner, _, _) => self.resolve_expr(inner),
+            Expr::Shallow(inner, depth, span) => {
+                // A written 0 is the unmarked sentinel compile.rs reads, so this is the last stage that sees it.
+                if *depth == 0 {
+                    self.diagnostics
+                        .push(Diag::new(Stage::Resolve, *span, SHALLOW_ZERO_DEPTH));
+                }
+                self.resolve_expr(inner);
+            }
             Expr::TypeArray {
                 element_type,
                 length,
@@ -403,3 +410,6 @@ impl Resolver {
 /// The sentinel used to mark an unresolved name (as distinct from any
 /// `BinderId`, which is always a dense `0..n` index).
 const UNRESOLVED: u64 = u64::MAX;
+
+/// The `@shallow(0)` refusal; docs/language-spec.md §"Shallow markers" states the bound.
+const SHALLOW_ZERO_DEPTH: &str = "a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely";
