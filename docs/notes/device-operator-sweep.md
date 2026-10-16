@@ -27,21 +27,30 @@ different per operator.
 - ~~"[device-leg-of-the-ladder](device-leg-of-the-ladder.md) §2's closing **Unknown**: *whether any
   operator of the ladder **not** reached here … diverges — none of them reached the device, and §8's
   five-ulp `sin`/`cos` result is a standalone measurement, not one of these programs.*"~~ **Answered,
-  and the measurement is the one this note exists to take**: `sin`/`cos` **do** reach a device inside
-  `rope.lichen`, and the operator's answer moves by the amount the standalone measurement found — not
-  more. [floating-point](floating-point.md) §8's five-ulp `sin` is **not** a curiosity about a
-  printed value; it survives a composition that multiplies it by two and subtracts. §8's own
-  "sampled, not swept" caveat is unchanged and still applies to everything it bounds.
+  and the answer is split by body rather than uniform.** `sin`/`cos` **do** reach a device inside
+  `rope.lichen` and the operator's answer moves — by **exactly** the amount
+  [floating-point](floating-point.md) §8's standalone measurement found, and no more (§2 below). But
+  `softmax`'s 111-instruction `exp` body **also** reaches a device, inside `softmax.lichen`, and **it
+  does not move** — all four lanes bit for bit, beside a float division (§4 below). **So §8's
+  five-ulp `sin` is not a curiosity about a printed value**: it survives a composition that multiplies
+  it by two and subtracts, and reaches an operator's own answer. §8's "sampled, not swept" caveat is
+  unchanged and still applies to everything it bounds, and §4's zero is a sample of four lanes rather
+  than a bound — the two rows together are the reason a per-operator example cannot rank them.
 
 ## 1. Verdict per operator
 
 | operator | example | device verdict | worst ulp | `spirv-val` |
 |---|---|---|---|---|
 | `rope` — the rotation, built on `sin`/`cos` | `rope.lichen` | **runs, diverges** | **3** (of 8 elements, 5 differ) | 3 modules, **3 ACCEPT** |
+| `silu` — SwiGLU's gate, an `exp` body | `silu.lichen` | **runs, diverges** | **1** (of 4 elements, 1 differs) | 2 modules, **2 ACCEPT** |
+| `softmax` — the row softmax | `softmax.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 2 modules, **2 ACCEPT** |
 
-The evidence, quoted whole, is [§2](#2-rope--the-transcendental-in-an-operators-own-answer). The
+The evidence, quoted whole, is [§2](#2-rope--the-transcendental-in-an-operators-own-answer),
+[§3](#3-silu--one-ulp-and-it-is-already-there) and [§4](#4-softmax--the-exponential-and-the-division-agree-here). The
 rows are added here as each operator is measured; the standing question each row answers is named in
-its own section.
+its own section. **No refusal has appeared yet**: every operator measured so far reaches a device on
+the backend literal alone, so [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1's upload
+rule is satisfied by every input of every one of them.
 
 ## 2. `rope` — the transcendental in an operator's own answer
 
@@ -142,6 +151,103 @@ not a malformed one.
   long as the launch covers, so [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1's upload
   rule is satisfied and never fires — **this operator is not a candidate for that spelling.**
 
+## 3. `silu` — one ulp, and it is already there
+
+**Measured: it runs, and it diverges by one ulp on one element of four.** The example declares
+
+```
+[0.0, 0.73105794, -0.13447031, 7.0463777]: array{Float, 4}
+```
+
+`cpu` answers exactly that, and `gpu` answers
+
+```
+[0.0, 0.73105794, -0.13447031, 7.046378]: array{Float, 4}
+```
+
+**Measured: the distance per element, from the two backends' own bits:**
+
+| element | `cpu` bits | `gpu` bits | ulp | `cpu` | `gpu` |
+|---|---|---|---|---|---|
+| 0 | `00000000` | `00000000` | 0 | `0.0` | `0.0` |
+| 1 | `3f3b269d` | `3f3b269d` | 0 | `0.73105794` | `0.73105794` |
+| 2 | `be09b296` | `be09b296` | 0 | `-0.13447031` | `-0.13447031` |
+| 3 | `40e17bed` | `40e17bee` | **1** | `7.0463777` | `7.046378` |
+
+**Measured: the whole divergence is in the first kernel; the second carries it, it does not make
+it.** The operator is two kernels — `silu_raw`, then a plain `a * u` — and re-rooted on the first
+one's output buffer:
+
+| | element 0 | element 1 | element 2 | element 3 |
+|---|---|---|---|---|
+| `cpu` `act.a` | `00000000` | `3f3b269d` | `be89b296` | `3fe17bed` |
+| `gpu` `act.a` | `00000000` | `3f3b269d` | `be89b296` | `3fe17bee` |
+
+The one-ulp difference is already in `act.a`. The second kernel multiplies it by `u[3] = 4.0`, an
+exact power of two, and the exponent `23` and the ulp both survive — **so the split is `exp (0.0 - g)`
+and the division by `1 + exp (0.0 - g)`, and not the product.** Element 0 is `0 / (1 + exp 0) = 0`
+exactly, which is why it is the one element whose body is short enough to be exact, and the example's
+own `doc` says so.
+
+**Measured: `spirv-val` accepts both modules** — `silu_raw` (1 input, 1 output, **442** words) and
+the product (2 inputs, 1 output, **245** words). **ACCEPT, both.**
+
+**The kernel work this outcome implies.**
+
+- **The same precision decision `rope` needs, and this measurement does not make it smaller.**
+  One ulp is the smallest distance the class has; an operator whose gate feeds a `gemm` is not
+  perturbed by it, and an operator that **thresholds** on a gate would be.
+- **A decomposition probe nobody has run: which of the two candidates moved it.** `silu_raw` holds
+  one `exp` (the 111-instruction Taylor sum of [floating-point](floating-point.md) §6) **and** one
+  float `Div`, and [floating-point](floating-point.md) §7 measures this device's division as
+  genuinely not correctly rounded. **This note cannot separate them** — the two are fused in one
+  kernel and only one buffer is observable — so naming either is an argument, not a measurement.
+  A per-instruction probe would, and is the next thing to write.
+
+## 4. `softmax` — the exponential and the division agree here
+
+**Measured: it runs, and it is bit-exact.** The example declares
+
+```
+[0.03205853, 0.08714417, 0.23688345, 0.6439139]: array{Float, 4}
+```
+
+`cpu` answers exactly that and `gpu` answers **the same string**, so the four answers are the same
+four values:
+
+| element | `cpu` bits | `gpu` bits | ulp |
+|---|---|---|---|
+| 0 | `3d034fce` | `3d034fce` | 0 |
+| 1 | `3db278a5` | `3db278a5` | 0 |
+| 2 | `3e729193` | `3e729193` | 0 |
+| 3 | `3f24d78b` | `3f24d78b` | 0 |
+
+**Measured: `spirv-val` accepts both modules** — `rowmax_raw` (1 input, 1 output, **336** words) and
+`softmax_raw` (2 inputs, 1 output, **726** words). **ACCEPT, both.**
+
+**This is the operator [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §2's closing
+**Unknown** named by name**, and it answers the other way from `rope`: the 111-instruction `exp`
+expansion **does** reach a device here, inside a real operator, and it **does not move**.
+
+**Measured, and this is the reading to keep: four elements are a sample, not a sweep.**
+`softmax_raw` holds **both** of the hazards this device is known for — the `exp` expansion and one
+float `Div` (`here / total`) whose divisor is neither a power of two nor one — and it answered all
+four lanes bit for bit. That is the same shape of statement [floating-point](floating-point.md) §7
+made about `ln`: *"six arguments are a sample, not a sweep"*. **So this row is not an exemption of
+either hazard**; it is four lanes of one row `[1, 2, 3, 4]`, and `silu`'s row above moved by one
+ulp on the same device, on the same arithmetic family.
+
+**The kernel work this outcome implies.**
+
+- **Nothing to repair.** No spelling is missing, no capability is absent, and no precision decision
+  is forced by *this* row. What it does is **weaken a claim**, not make one.
+- **A sweep is the work, and it is not this slice's.** The honest reading of `rope` (up to 3 ulp, from
+  a 5-ulp `sin`) beside this one (0 ulp, from an `exp` and a `Div`) is that **per-operator examples
+  cannot rank the operators' accuracy** — each measures the four lanes it happens to spell. A
+  measurement that *could* rank them sweeps arguments through one body, which is the shape
+  [floating-point](floating-point.md) §7's and §8's tables already have for the standalone
+  definitions.
+
 ## How each run was driven
 
 **Measured, so the next reader can repeat it.** The CLI installs no backend
@@ -175,14 +281,23 @@ switch is made in memory, in the probe, and never written back.
 **Measured.** `rope.lichen`'s declared, `cpu` and `gpu` outputs, quoted whole; the eight per-element
 ulp distances and both bit patterns; the eight per-element ulp distances for `cosines.c` and
 `sines.s`; the three fragments' word counts and input/output counts; the three `spirv-val` verdicts;
-and that all three kernels of the operator reached a device at all.
+and that all three kernels of the operator reached a device at all. `silu.lichen`'s declared, `cpu`
+and `gpu` outputs; its four per-element ulp distances and both bit patterns; the same for `act.a`;
+two word counts and two verdicts. `softmax.lichen`'s declared, `cpu` and `gpu` outputs — byte-equal,
+so bit-exact by the injectivity of the printer — its four bit patterns, two word counts and two
+verdicts.
 
 **Inferred.** That the split is inside the emitted `sin`/`cos` body rather than in the inputs, from
 the inputs being bit-identical across the two runs and the kernels being pure — not re-derived here.
+For `silu`, that the whole divergence sits in `silu_raw` rather than the product, from the product
+being exact and the `act.a` bits already differing — a measurement, not an inference, and stated as
+one.
 
-**Unknown.** *What the operation is* inside the body: [floating-point](floating-point.md) §8 already
-records that it is not FMA contraction, not a division (these two definitions contain none), not a
-race, and not the emitter. **Still unknown, and this note did not close it**: whether the
-transcendental gap changes a *decision* anywhere in the ladder (no operator in it compares against a
-`sin`/`cos` result near a boundary), and whether the operators below behave like `rope` — measured
-per row as they land.
+**Unknown.** *What the operation is* inside the body:
+[floating-point](floating-point.md) §8 already records that it is not FMA contraction, not a
+division (these two definitions contain none), not a race, and not the emitter. **Still unknown, and
+this note did not close it**: whether the transcendental gap changes a *decision* anywhere in the
+ladder (no operator in it compares against a `sin`/`cos` result near a boundary); **which of the two
+candidates inside `silu_raw` moved its one ulp — the `exp` or the `Div`**, which a fused kernel does
+not expose; and whether the operators below behave like `rope`, like `silu`, or like `softmax` —
+measured per row as they land.
