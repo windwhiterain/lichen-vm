@@ -157,9 +157,19 @@ program renders as
 ```
 
 on **both** backends, while reading the value past the renderer gives `-inf`, bits `0xff800000`.
-So the number is right and the **printed** form is wrong. It is not a device finding and it is
+So the number is right and the **printed** form is wrong. It is not a device finding. ~~It is
 **not fixed here**; it is reported because a note that quotes rendered output cannot be trusted at
-an infinity.
+an infinity.~~ **It is fixed**, and this note's own quoted line is the measurement of it: the same
+program now prints
+
+```
+[-inf, inf, NaN, -0.0]: array{Float, 4}
+```
+
+on `cpu` and on the device alike. The bits behind it are this section's own earlier reading and
+are unchanged by it — `0xff800000` for the seed — and what moved is the **text**, not the value:
+the rule is [floating-point](floating-point.md) §3.5's, a float family split on `is_finite` with
+every non-finite value named by its class, replacing a decimal that named no bit pattern.
 
 ## 3. The randomness disguised as arithmetic
 
@@ -308,7 +318,7 @@ launch. **No test was added**; the runs above were driven by probes that were de
 ## What was measured, inferred and unknown
 
 **Measured.** Every verdict, value and refusal above; the fragment census; the bisect table; the
-`0xc0000005` exit codes; the `-inf` bits; the renderer's decimal; and, in §5, the `nv` widths `1`
+`0xc0000005` exit codes; the `-inf` bits; the renderer's decimal and its repair; and, in §5, the `nv` widths `1`
 and `4` and `5` and `6`, the `[0, 9, 9, 9, 9]` row, the host-`nk` row, the two rejected spellings,
 the bit-exact device answer, the three word counts, and the three `spirv-val` verdicts.
 

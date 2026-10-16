@@ -10,7 +10,7 @@
 > `crates/lichen-highlevel/src/shape.rs` (`for_each_kind_marker!`) and
 > `program.rs` (`TypeValue`, `TypeOperator::Int2Float` / `Float2Int`),
 > `crates/lichen-language-lex` / `-parser` (the literal and the two keywords),
-> `crates/lichen-render` (the round-tripping spelling),
+> `crates/lichen-render` (the finite spelling and the named non-finite family),
 > `crates/lichen-kernel-ir/src/lib.rs` (`ScalarClass`, `BufferSlot`,
 > `KernelInstr::Conv`), `crates/lichen-compute` and `crates/lichen-compute-gpu`
 > (the two backends). The demand is
@@ -153,12 +153,35 @@ float.
 
 The spelling is **positional**: `{:?}` switches to an exponent (`1e38`), which the
 lexer's `[0-9]+\.[0-9]+` literal has no syntax for, so the digits are always written
-with a `.` — the `1.0`-versus-`1` case above is why the dot cannot be dropped. An
-infinity is spelled as a magnitude past the round-to-infinity threshold
-`(2 - 2^-24) * 2^127` — the only form the lexer reads back as an infinity, since
-`inf` is a name rather than a literal — and `NaN` has no spelling in the literal
-syntax at all, so it keeps Rust's own and a reader refuses it rather than acquiring
-a different float.
+with a `.` — the `1.0`-versus-`1` case above is why the dot cannot be dropped.
+
+**The non-finite family is named rather than written out.** An infinity used to be
+spelled as a magnitude past the round-to-infinity threshold `(2 - 2^-24) * 2^127`,
+chosen as "the only form the lexer reads back as an infinity, since `inf` is a name
+rather than a literal"; `2 * f32::MAX` was that magnitude, so an `f32` whose bits
+are `0xff800000` read as `-680564693277057700000000000000000000000.0`, measured on
+**both** backends by [the ladder's device leg](device-leg-of-the-ladder.md) §2.
+**That rule is withdrawn**, and the reason is that a printed form has to be one a
+reader can map back to the bits. A 39-digit decimal does not: it reads as a finite
+value a reader could paste back, and it names no bit pattern at all. So the split is
+on `is_finite` and not on `NaN` alone — a finite value keeps its digits, and every
+non-finite value takes `Debug`'s own class name, `NaN`, `inf` and `-inf`. That is
+the spelling this repository's prose already uses wherever it names one
+(`examples/topk.lichen`'s `9 > -inf`, `examples/sample.lichen`'s "beats `-inf` at
+position `3`"), and `crates/lichen-runtime/src/automatic_tiling.rs` already prints a
+reduction's identity as a `Debug` literal precisely so "a sum's `0.0` and an order's
+`inf` are told apart" — so the printer joins a vocabulary the repo already had
+rather than inventing one. `Debug` switches to an exponent only for a finite value,
+which is the case the digits above avoid it for, and `-0.0` is finite: it prints
+`-0.0` and reads back as the sign it is.
+
+The price is stated rather than assumed: **a non-finite float no longer round-trips.**
+`inf` is a name, not a literal, so a reader refuses it — which is what `NaN` already
+did, deliberately and pinned, for the same reason. The round trip therefore holds of
+the **finite** family alone, and `crates/lichen-language/tests/language/float_printer.rs`
+now says so in its own two arms: a table of finite values that must re-lex, and one
+deliberate refusal. `NaN`'s refusal was never an oddity to be tidied away; it was
+this rule with the rest of the family missing.
 
 ### 3.6 The artifact codec — three tag spaces
 
