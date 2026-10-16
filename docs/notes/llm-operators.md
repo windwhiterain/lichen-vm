@@ -348,7 +348,19 @@ need a node-local producer for `r`.
   the count so the write lands inside it works, which is why the committed operator rewrites the whole
   buffer rather than one row — and **a third silent no-op sits beside it**: aiming the write at the
   **input** buffer, the only in-place spelling, **runs and does nothing**, collecting the cache unchanged
-  with no error and no report line. That third one is **not** filed as a defect, because
+  with no error and no report line. **Corrected later by measurement (`4891068f`): that sentence is true of
+  what a reader sees and false of the mechanism.** The refusal for that spelling **already exists** —
+  `compute.rs:2465`, the `None` arm beside the per-output `write_value_node` gate, pinned by
+  `crates/lichen-compute/tests/compute.rs:2191` — and it **fires** as soon as the same program collects the
+  kernel's *output* instead of its input. What hides it is a second, unrelated rule: `render_build`
+  (`crates/lichen-language/src/run.rs:152`) gates the report on `produced_nothing &&`, by an `# Invariant`
+  saying *"a runtime refusal explains a value that never arrived, so it is reported only when evaluation
+  produced nothing"*. Here the root collects the **input** cache — a value that arrives whatever the kernel
+  did — so the refusal is computed and **withheld**. The other two shapes are not gaps: an in-place write
+  bound but unused never reaches the graph, and one read back is refused by the read gate. So the finding is
+  not a missing refusal but **a refusal a language-wide gate withholds** — and that gate, not this
+  spelling, is what the user decided to delete. The reproduction is committed as
+  `crates/lichen-compute/tests/inplace_write_refusal.lichen`.
   `code-audit.md`'s `wontfix:D17` is a contract about what a write **is** — *the value of an output
   position and not an effect* — and a write to an input is exactly the spelling that sentence declines.
 - **The graph path refuses this operator's run, and the arithmetic looks like eight-byte elements**

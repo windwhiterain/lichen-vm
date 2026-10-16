@@ -253,8 +253,13 @@ and does nothing:
 compute.write ((compute.Write _)(.to k.in.k, .at (k.t * k.dim + d), .value (compute.read ((compute.Read _)(.from k.in.nk, .at d)) ~ "element")))
 ```
 
-collects `[1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]`, **the cache unchanged, with no error and no
-report line**. So the surface has three answers for "write one row of the cache", and only the
+collects `[1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]`, **the cache unchanged, with no error and no report
+line**. **Corrected later by measurement**: the refusal for that spelling already exists (`compute.rs:2465`,
+pinned by `crates/lichen-compute/tests/compute.rs:2191`) and is **withheld** by the answer gate in
+`render_build` (`crates/lichen-language/src/run.rs:152`), whose `# Invariant` reports a runtime refusal only
+when evaluation produced nothing. The reproduction is committed (`4891068f`). **See
+`docs/notes/llm-operators.md` for the measurement**; the user has decided to delete that gate, in its own
+slice.
 second writes anything. That one is a candidate for the decision record; it is **not** filed as a
 defect here, because [code-audit](code-audit.md)'s `wontfix:D17` is a contract about what a
 write **is** — *the value of an output position and not an effect* — and a write to an input is
