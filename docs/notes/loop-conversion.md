@@ -146,16 +146,20 @@ A `loop` keyword does not turn expansion off in general. It says **this recursio
 may become a loop**, and the evaluator takes that option at the same place it
 would otherwise have expanded:
 
+> **Superseded by §8.1.** The four rows that stood here were this note's first reading,
+> and §8.1 corrects it: with the marker the recursion is a **loop** whether the count is
+> decidable or not, and the marker is **not** permission to refuse. Measured again since:
+> `500` and `600` trip counts run marked where an unmarked recursion stops at `501`, and
+> `2000` is where the checker's own total-application budget ends it.
+
 | the function | the trip count | what evaluation produces |
 |---|---|---|
-| no `loop` | decidable | **expanded**, as today |
-| no `loop` | not decidable | refused, as today |
-| `loop` | decidable | **expanded** — the default still wins when it works |
-| `loop` | not decidable | **a recorded loop**, which the JIT then emits natively |
+| no `@loop` | decidable | **unrolled**, as today |
+| no `@loop` | not decidable | refused, as today |
+| `@loop` | either | **a recorded loop**, which the JIT then emits natively |
 
-So the keyword is not "compile this to a loop"; it is "this recursion is allowed
-to need one". The last row is the only new capability, and it is the row the two
-ceilings above live in.
+So the keyword does not mean "unroll this rather than loop it"; it means this recursion
+is a loop, and the only choice left is unroll-or-loop. See §8.1.
 
 **And this is why the conversion belongs in evaluation, not in the emitter.** An
 earlier draft put it in `lichen-compute`, at the `Style 1` seam, as a separate
