@@ -197,7 +197,7 @@ greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cp
 weights = (compute.buffer ([2.0, 2.0, (0.0 - 3.0), 3.0, 1.0, 4.0, 2.0, (0.0 - 5.0), 3.0, 2.0, 0.0, 4.0, (0.0 - 6.0), 3.0, 3.0, 5.0, 4.0, (0.0 - 3.0), 8.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
 kbuf = (compute.buffer ([1.0, 2.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0)] : array{Float, 5}) : (compute.Buf Float))
 vbuf = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
-nv = (compute.buffer ([0.0] : array{Float, 1}) : (compute.Buf Float))
+nv = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
 blank = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
 sentinel = 3.0
 @loop generate = s => {
