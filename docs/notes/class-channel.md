@@ -64,7 +64,7 @@ The highlevel reads the **node's own slot** for the same questions:
 | Site | Reads |
 |---|---|
 | `shape::low_type_of_slot` (`shape.rs`, `pub fn low_type_of_slot`) | the node's own value and structure; never `class_low_type`/`low_type_of_node` |
-| `compute::node_class` (`compute.rs:4302`) | the node's own value, then `low_type_of_node` |
+| `compute::node_class` (`compute.rs`, `fn node_class`) | the node's own value, then `low_type_of` |
 | `checker::names_float_class` (`operators.rs:137`) | rides on `low_type_of_slot` |
 
 That split is what makes today's behaviour accidental rather than stated:

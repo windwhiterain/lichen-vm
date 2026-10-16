@@ -111,7 +111,7 @@ Four kinds of state live in a `Module` (`lib.rs:939-1029`):
 3. **Structure** — `blocks` (the GC unit and the arena owner), `functions`
    (templates), the union-find `equality` classes, the per-class `low_shape`.
 4. **Diagnostic and budget state** — the append-only error vecs
-   (`lib.rs:984-1013`) and the sticky `budget_exhausted` (`lib.rs:978-983`).
+   (`lib.rs:984-1013`) and the sticky `budget_exhausted` (`lib.rs:876`).
 
 Two facts make the in-memory scope the cheap one:
 
@@ -127,7 +127,7 @@ Two facts make the in-memory scope the cheap one:
   scope gets for free.
 
 And one fact is a semantic input rather than a hint: the apply clone walk decides
-bake-vs-clone from `proven_concrete` (`function.rs:318-338`), and baking a node
+bake-vs-clone from `proven_concrete` (`function.rs:400-406`), and baking a node
 that should have been cloned per call breaks recursion (`checker.rs:649-656`
 records that as an observed failure). A reused verdict must be true of the
 current graph — §4 is about when it provably is.
@@ -273,9 +273,10 @@ What remains is one bit to compute and one early return to add.
   what keeps it coherent. A cut only removes redundant descents; it must not
   reorder those proofs, and the differential harness (§5 step 3) is what checks
   that it has not.
-- **Recomputation is observable.** `budget_exhausted` is sticky per run
-  (`lib.rs:978-983`), `apply_total` is cumulative (`apply.rs:31-32`), and a
-  refusal becomes a `NonTerminating` diagnostic (`checker.rs:718-751`). Skipping a
+- **Recomputation is observable.** 
+
+  (`lib.rs:876`), `apply_total` is cumulative (`apply.rs:31-32`), and a
+  refusal becomes a `NonTerminating` diagnostic (`checker.rs:596-620`). Skipping a
   descent a full pass would have made changes *whether the budget is exhausted*,
   so the harness must compare diagnostics, not only values. This is also the one
   place where the cut could change behaviour for the worse: a cut node is not
