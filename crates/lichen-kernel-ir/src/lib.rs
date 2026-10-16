@@ -30,8 +30,9 @@ pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
 pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{
     TRANSCENDENTALS, cos_body, cos_value, exp_body, exp_value, floor_body, floor_value,
-    inlined_cos_operand, inlined_exp_operand, inlined_sin_operand, inlined_sqrt_operand, ln_body,
-    ln_value, sin_body, sin_cos_value, sin_value, sqrt_body, sqrt_value,
+    inlined_cos_operand, inlined_exp_operand, inlined_ln_operand, inlined_sin_operand,
+    inlined_sqrt_operand, ln_body, ln_value, sin_body, sin_cos_value, sin_value, sqrt_body,
+    sqrt_value,
 };
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`

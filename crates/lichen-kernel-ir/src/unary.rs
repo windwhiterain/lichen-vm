@@ -1088,6 +1088,16 @@ pub fn inlined_sqrt_operand(body: &KernelBody, value: ValueId) -> Option<ValueId
     inlined_operand(body, value, &sqrt_body())
 }
 
+/// The operand of the logarithm a body value holds as an inlined definition, or `None`.
+///
+/// # Invariant
+/// **The reader's half of [`ln_body`]**, matched on the same terms as
+/// [`inlined_sqrt_operand`]: the whole of that body's instructions and constants, and `None`
+/// for anything that is not an instance of it.
+pub fn inlined_ln_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
+    inlined_operand(body, value, &ln_body())
+}
+
 /// The operand `value` holds as an inlined copy of `definition`, or `None`.
 ///
 /// # Invariant

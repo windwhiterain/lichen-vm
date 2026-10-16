@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use lichen_fusion::{Expr, UnaryOp, Variable};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, inlined_cos_operand,
-    inlined_exp_operand, inlined_sin_operand, inlined_sqrt_operand,
+    inlined_exp_operand, inlined_ln_operand, inlined_sin_operand, inlined_sqrt_operand,
 };
 
 use crate::operators::binary;
@@ -348,7 +348,7 @@ fn float_of_bits(bits: i64) -> f64 {
 /// # Invariant
 /// **Each reader answers only a subtree that is its own definition**, so a value one of them
 /// holds is read as the operator that definition computes and any other falls through to the
-/// walk's own refusal. **The four are disjoint** — a match is the definition's whole
+/// walk's own refusal. **The five are disjoint** — a match is the definition's whole
 /// instruction set — and `floor`, which has no reader here, is refused by the `Select` its
 /// expansion holds.
 fn inlined_transcendental(body: &KernelBody, value: ValueId) -> Option<(UnaryOp, ValueId)> {
@@ -360,6 +360,9 @@ fn inlined_transcendental(body: &KernelBody, value: ValueId) -> Option<(UnaryOp,
     }
     if let Some(operand) = inlined_sin_operand(body, value) {
         return Some((UnaryOp::Sin, operand));
+    }
+    if let Some(operand) = inlined_ln_operand(body, value) {
+        return Some((UnaryOp::Ln, operand));
     }
     let operand = inlined_cos_operand(body, value)?;
     Some((UnaryOp::Cos, operand))
