@@ -549,6 +549,14 @@ impl<P: Program> Module<P> {
             Dyn(node) => node,
             AnyNodeId::Static(_) => unreachable!(),
         };
+        // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
+        // again (late-writes-map.md §8).
+        if let Some(deep) = self.nodes[node].evaluated_deep
+            && !deep.undecided
+            && let Some(value) = self.nodes[node].value
+        {
+            return Some(value);
+        }
         // A structural cycle is cut here: the node is being deep-evaluated by an outer frame and
         // already holds its cached value.
         if self.nodes[node].visiting
