@@ -280,18 +280,76 @@ compared against.
 
 ### 4.3 `@shallow(0)` is the unmarked arm (measured, adjacent)
 
-`f = x => [x, @shallow(0) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0))` does not
-terminate: it emits an unbounded cascade of
-`error: expected Int, found raw[raw[?a, Int, ?b, ?c, ?d], 2]` with a fresh cell name each
-time. The reason is in the match of §1.1: `depths` uses **`0` as the unmarked sentinel**, so a
-written depth of `0` takes the `0 =>` arm — value walked, no registration, no type
-application — which is exactly an unmarked recursive tail. `shallow_depth`
-(`crates/lichen-language-parser/src/parse.rs:1447`) accepts any `Int`, and `0` is an `Int`.
+**Re-measured on `dev` at `d2f280c4`, and the earlier reading of this section was wrong:
+this spelling does not fail to terminate.** `lichen-compiler run`, private `CARGO_TARGET_DIR`
+under this worktree, `-j 3`, `CARGO_INCREMENTAL=0`, every run bounded at 25 s and killed at
+the bound had it reached it:
 
-**Measured consequence:** `@shallow(0)` is spelled, lexes, and parses, and then does nothing
-that an absent marker does not. It is the one spelling in §2 whose runtime behaviour is
-starkly different from what its surface suggests, and it is recorded here because §5 must not
-be read as covering it.
+| program | wall | exit | stdout | peak RSS |
+|---|---|---|---|---|
+| `f = x => [x, @shallow(0) f (x + 1)]; inf = f 0; inf` | 1.10 s | 1 | 2505 lines = 501 errors | 23.5 MB |
+| the same with the marker **deleted** | 0.88 s | 1 | 2505 lines = 501 errors, identical but for the echoed source line | 22.8 MB |
+| `g = x => [x, @shallow(0) g (x * x)]; a = g 1; a` | 1.69 s | 1 | one `NonTerminating` refusal | 25.6 MB |
+| the same with the marker **deleted** | 2.17 s | 1 | the same refusal, byte-identical | 25.6 MB |
+
+No run reached the bound, none grew in memory, and none printed nothing: **every one
+terminated on its own**, non-zero. The cascade is `error: expected Int, found
+raw[raw[?a, Int, ?b, ?c, ?d], 2]`, a fresh cell name each time, exactly as described below —
+but it is **501 of them, not an unbounded number**.
+
+**Why it cannot hang: the checker's own budget already refuses it.** `WorkBudget::default`
+(`crates/lichen-highlevel/src/checker.rs:388`) pairs `apply_depth_limit: 500` with
+`apply_total_limit: 2_000`, and the refusal the runner prints is `DiagKind::NonTerminating` —
+*"the checker stopped on its apply-depth budget: nested applications exceeded 500 levels. The
+program may still terminate when run."* The 501-error cascade is that same guard seen from
+the other side: the recursion stops being checkable at the budget, so the run ends.
+
+**Why the marker changes nothing at all — measured, not inferred.** `depths` uses `0` as the
+unmarked sentinel, and `crates/lichen-language/src/compile.rs:866` reads that sentinel one
+stage **earlier** than §1.1 does:
+
+```rust
+if depths.iter().any(|&d| d != 0) {
+    let elements: Vec<(ExprId, usize)> = ids.into_iter().zip(depths).collect();
+    self.alloc_shallow_array(&elements, span)
+} else {
+    self.alloc_array(&ids, span)
+}
+```
+
+A written depth of `0` leaves `depths` all-zero, so the `else` arm runs and the array is
+allocated **plain**: no `ExprKind::ShallowArray`, no `range_depths`, no
+`check_shallow_array_term`, and no `0 =>` arm of §1.1 ever reached. **The mark is erased
+before the IR exists**, which is why each pair of rows above is the same run twice.
+
+**What follows, and it is the load-bearing consequence:** no program spelled with
+`@shallow(0)` can differ from the same program with the marker deleted, so **the spelling
+cannot be a non-termination the language accepts.** It is a **silent no-op** — a real defect,
+and a different one:
+
+| spelling of the same program | exit | output |
+|---|---|---|
+| `@shallow f (x + 1)` (bare) | 0 | `(0, raw none): tuple{Int, tuple{Int, tuple{Int, …}}}` |
+| `@shallow(1) f (x + 1)` | 0 | `(0, raw[raw none, raw none]): tuple{Int, ?a}` |
+| `@shallow(0) f (x + 1)` | 1 | 501 cascading type errors |
+| no marker at all | 1 | 501 cascading type errors, identical |
+
+The reader asked for a marker and silently got the one shape that does not work.
+
+**`@shallow(missing)` is not a depth.** `shallow_depth`
+(`crates/lichen-language-parser/src/parse.rs:1447`) accepts a `TokenKind::Int` and nothing
+else; `missing` lexes as a `Name`, so the depth parser fails, `.or_not()` yields `None`, and
+`@shallow(missing) f (x + 1)` is the **bare** mark on the element `(missing) f (x + 1)` — the
+same reading `@shallow (2)` gets, answering `error: unresolved name 'missing'` at `1:23`.
+
+**Consequence for any fix, and it is not a check-time one.** The name does not survive to
+check time, so **no refusal can be recorded in `lichen-highlevel`**: `ExprKind::ShallowArray`
+is the only node that reaches `check_shallow_array_term` (`checker.rs:1236`), and it is never
+built for this spelling. Refusing `@shallow(0)` by name means choosing a stage the front end
+owns — the parser (a grammar change), the resolver (a diagnostic where today only names are
+refused), or `compile.rs` (which has no diagnostics channel) — and writing *"the depth is at
+least 1"* into `docs/language-spec.md` §"Shallow markers", which is today silent on `n = 0`.
+That is the user's decision, and this note does not make it.
 
 ### 4.4 Test status on `dev`
 
@@ -507,10 +565,18 @@ is proposed**; the pre-existing depth-one test is the one that would change verd
 ### 6.2 Adjacent, found while measuring, not acted on
 
 `@shallow(0)` (§4.3) is spelled, lexed and parsed, and then does **nothing that an absent
-marker does not** — `depths` uses `0` as the unmarked sentinel, so the written depth takes
-the `0 =>` arm. On a recursive tail it does not terminate. This is a **separate question from
-§7.5** and is recorded here so it is not lost; it is **not** fixed by the §6 verdict and is
-**not** fixed by this note.
+marker does not** — now measured rather than inferred: the same program with the marker
+deleted prints the same 501 errors in the same shape. **It does not fail to terminate**;
+`WorkBudget`'s `apply_depth_limit` already refuses the runaway, and §4.3 carries the runs. The
+defect is therefore a **silent no-op marker**, not a hang — still the one spelling in §2 whose
+behaviour is starkly different from what its surface suggests.
+
+Two facts make a fix a **front-end** question rather than a checker one. The mark is **erased
+at `compile.rs:866`**, before the IR exists, so no check-time refusal can name it; and **no
+test in this tree parses it** — §2's seven spellings are its whole footprint, and the only one
+that writes a `0` is a lexer token-kind assertion. This is a **separate question from §7.5**
+and is recorded here so it is not lost; it is **not** fixed by the §6 verdict and is **not**
+fixed by this note.
 
 ### 6.3 For a reader of the language spec
 
