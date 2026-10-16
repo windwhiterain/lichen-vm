@@ -592,33 +592,24 @@ zero here is a measurement rather than an exemption. Nothing has changed about �
 kernel's float division is still unspecified — but the hazard is now pinned by a test
 rather than only by a probe.
 
-**`ln` is deferred, and the blocker is the inliner's shape rather than the
-arithmetic.** The shape that works is `x = m · 2^k` with `k` counted in a loop, then
-`ln(m) = 2·atanh((m − 1)/(m + 1))` on the reduced range, added to `k · ln 2`. The
-first half is a **loop**, because `k` spans about 150 values and a fixed number of
-conditional scalings is not the same thing as a loop:
+**`ln` landed, and the blocker this note predicted was not on the path.** The old text here
+said `ln` was deferred behind *"a multi-block definition the inliner can splice — a loop with a
+backedge and carried state"*, and that the reduction needed a counted loop over the exponent. It
+does not. The definition that shipped is **straight-line**: `x = m · 2^k` with `k` taken from a
+chain of **42 conditional scalings** (not the ~250-unrolling the note feared), then
+`ln(m) = 2·atanh((m − 1)/(m + 1))` on the reduced band `[1/√2, √2)`, and `k · ln 2` added back.
+What the old text got right stands: there is still no bitcast, no shift, and no `floor`-driven
+exponent recovery cheaper than the chain.
 
-- **`KernelBody::expand_transcendentals` inlines a one-block, straight-line
-  definition.** `inline_definition` takes the definition's single block, renames its
-  values and splices them at the call site; a definition with a backedge has no such
-  splice, and teaching it one is a change to the inliner rather than a new
-  definition.
-- **The primitives cannot reduce the range without a loop.** The alternatives the
-  spike considered are still unavailable: there is no bitcast (so no exponent
-  extraction), no shift (so no `k` from a word), and no `floor`-driven exponent
-  recovery that is cheaper than the conditional chain itself. One *could* unroll the
-  reduction — about 250 conditional scalings, since the exponent range is 254 wide —
-  and the result would be a definition of roughly 1,500 instructions inlined at every
-  call site. That is a cost decision for a later step, not a definition this note can
-  claim, and the honest record is that `ln` is **not** in the kernel vocabulary yet.
-- **`ln` stays where it already was**: `lichen_fusion::UnaryOp::Ln`'s symbolic
-  vocabulary, with `Exp` as its named inverse in `invert.rs`'s table, where
-  [graph-fusion](graph-fusion.md) §6 uses it to derive `h(x, m_old, m_new) =
-  x · exp(m_old − m_new)`. Nothing about the symbolic engine changes.
-
-What unblocks it, in one sentence: **a multi-block definition the inliner can splice
-— a loop with a backedge and carried state — after which `ln` is the same kind of
-object `exp`, `sqrt` and `floor` are.**
+**Measured, not claimed.** `ln` is `KernelInstr::Ln`, named in `TRANSCENDENTALS` beside `Exp`,
+with `KwLn` / `PrefixOp::Ln` / `TypeOperator::Ln` (codec tag 28) and an arm in every emitter, so
+it is the same kind of object `exp`, `sqrt` and `floor` are. Its body is exact at the band edges
+and within **2 ulp** everywhere else, checked exhaustively over every positive `f32`
+(2,130,706,431 values); and on a device it is **bit-identical to `cpu` on all six arguments
+measured**, including denominators that are not powers of two — so the division hazard in §7 did
+not appear in it. The coverage lives in the folded `lichen-compute` binary
+(`cargo test -p lichen-compute --test lichen_compute ln_domain`) and in the GPU suite's
+`spliced_transcendentals` module.
 
 ## 8. `sin` and `cos`
 
