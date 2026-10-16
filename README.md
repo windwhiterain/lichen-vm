@@ -1670,11 +1670,11 @@ compute.collect out.o : array{Float, 2}
     recorded it is the leg that would refuse it first, `InputShorterThanCount` on the \
     two-element step buffer: **that is reasoned from those measurements and not measured \
     here.**\n\n\
-    **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — a \
-    wall.** Turning a step's output row into a token needs `ln` over the logits, and **`ln` \
-    does not exist**: its range reduction wants `floor`, a shift or a bitcast, the primitive \
-    set has none of the three, and no kernel computes it \
-    (`docs/notes/floating-point.md` §6). `max`, `floor` and `exp` are all here; the one \
+    **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — no \
+    longer `ln`.** Turning a step's output row into a token needs `ln` over the logits, and it \
+    is a **named operator** now (`82640443`, `examples/ln.lichen`): two of the three blockers \
+    once recorded here are gone — `floor` is a `KernelInstr`, and the reduction needs neither a \
+    shift nor a bitcast, being the power-of-two fold `sqrt` already uses. So the wall a sampler \
     operator a sampler needs is not. (b) **A stop condition — a wall**, measured in the \
     trip-count paragraph above: the guard must be a literal, so a loop that cannot be told \
     when to stop can unroll but cannot generate. (c) **A growing cache — mostly work, with \
@@ -1866,6 +1866,161 @@ kernel = compute.parallel (logged ~ "claim:Elementwise(element)") "cpu"
 args = (compute.buffer ([1.0, 2.0, 0.5, 4.0, 0.25, 8.0, 0.99999994, 0.70710678, 1.4142135, 1099511627776.0] : array{Float, 10}) : (compute.Buf Float))
 out = (compute.plrun kernel ((compute.A Args)(.n 10, .I Args(.x args))) : Outs)
 compute.collect out.v : array{Float, 10}
+```
+
+### `sample.lichen`
+
+```text
+---
+  order = "27"
+  compute = import "compute.lichen"
+  doc = "Greedy sampling: `pick[r]` is the position of the largest score in row `r` — the rung that \
+    turns a decode step's output row into a token. It is **one kernel over one lane per row**, and \
+    **nothing in it is modelled**: every score is an integer below `2^24`, the arithmetic is \
+    comparisons, additions and multiplications of integers under `4`, and there is no `exp`, no \
+    `sqrt`, no `ln` and no division anywhere in the fold. The scores are `3 9 4 9 / 5 1 5 2 / 7 7 7 \
+    7 / 8 6 4 2 / 1 2 3 4` and the answer is `[3, 2, 3, 0, 3]`, derived by hand at the end.\n\n\
+    **The fold carries a pair, and the pair is not the answer.** The state is three slots — the \
+    counter, the best value seen, the position of that value — so the pair travels through the \
+    recursion exactly as `examples/attention.lichen`'s `acc` carries its row maximum in `s(2)`. \
+    **What this ladder had not had is a fold whose result is a selection**, and here is what the \
+    surface allows about it: **the base arm may return one slot of the state, and one only.** A base \
+    arm returning the whole state, or a two-slot tuple, is refused — verbatim, *`a kernel body's \
+    index cannot be placed: its target is a computation and its index is the constant 1 … the \
+    domain is NodeId(135v1) (class NodeId(166v1)) with leaves [NodeId(135v1)]`*. The clause that \
+    carries the rule is the last one: **the `@loop`'s domain has one leaf**. That is the \
+    conversion's own fact — `crates/lichen-lowlevel/src/loop_conversion.rs:131` builds it from the \
+    base arm's value, and `lower_loop_exit` (`crates/lichen-compute/src/compute/body.rs:1195`) \
+    emits that one value. So this fold returns the position and **the maximum is unobservable \
+    afterwards**; a body that needs both wants two kernels, not a wider tuple.\n\n\
+    **A comparison cannot select inside a fold's step, and that is a rule.** The natural spelling — \
+    `if (read > s(1)) then (s(0) - 1) else s(2)` — is refused whatever the arms are: a literal \
+    arm, a state-read arm, an `Int` arm and a `Float` arm all answer the same way, *`compute.parallel: \
+    a kernel body reached a node with neither a value nor an operation, so there is nothing to emit \
+    for it (node=NodeId(1707v1))`*, and **that sentence names a cause this is not** — it talks \
+    about a `let` alias and a binding the body would fill in at run time. **It is not the mark**: \
+    the same body with the `~` mark moved off the selection onto a `max` and a pass-through slot \
+    compiles and runs. So the refusal is the language's `Select` in a `@loop` \
+    step, and `examples/attention.lichen`'s `if` is therefore **not** a precedent for this: its \
+    `attend` folds `max`, `+` and `*`, and its only `if` is the base test that ends the fold.\n\n\
+    **So the selection is written as arithmetic on the comparison's `0`/`1`.** A comparison is the \
+    language's only boolean and leaves `0` or `1` (`examples/operators.lichen`), so \
+    `s(2) + (1 * flag) * ((s(0) - 1) - s(2))` is a lerp: a `flag` of `1` moves the position to \
+    `s(0) - 1`, a `flag` of `0` leaves it where it was. **The `1 *` is not decoration — it is what \
+    makes the fragment lower.** The same expression without it, `s(2) + (flag * ((s(0) - 1) - \
+    s(2)))`, is refused: *`instruction 15 mixed an integer and a float in one operation. Int and \
+    Float do not convert in either direction, so nothing here can make the two operands meet: \
+    this is a malformed fragment rather than an unsupported shape`*. The two-term blend also runs, \
+    `s(2) * (1 - flag) + (s(0) - 1) * flag`, and answers the same row; it is the shape where \
+    `1 - flag` happens to put an `Int` operand beside the comparison. **Which operand decides the \
+    class is not written down anywhere this file could point at**, so the rule as measured is only \
+    the negative one — *a product with the comparison on its left is refused, and the same product \
+    with an integer literal on its left is not* — and the honest spelling of it is the `1 *`.\n\n\
+    **Ties: the higher position wins, and one character chooses it.** The comparison is `>` and an \
+    `@loop` fold counts **down** (`examples/matmul.lichen` and `examples/layernorm.lichen` say so \
+    too), so a later visit never displaces an equal value and the **highest** position wins. Write \
+    `>=` in both places instead — `>=` is in the grammar (`parse.rs:711`, `KernelBin::Geq`) — and \
+    the same program on the same data answers `[1, 0, 0, 0, 3]`, the **lowest** position. Both are \
+    measured here. **So it is a choice and not a rule, and it is deterministic for this program \
+    while incidental as a property of the operator**: nothing in the language says an argmax prefers \
+    the last equal element. What decides it is the conjunction of two independently motivated \
+    choices — the countdown order of `@loop` and a strict comparison — and a sampler wanting the \
+    lowest position writes `>=` and means something else. **Rows 0, 1 and 2 are tie rows on \
+    purpose** — a pair at `1` and `3`, a pair at `0` and `2`, four equal values — and row 3 \
+    (`8 6 4 2`) is the control: its maximum is at position `0`, which the fold visits **last**, \
+    and it still stands.\n\n\
+    **One kernel, one launch, and the extent rule fixes both shapes.** The launch is over the \
+    **rows** (`n = 5`), not over the row's width, so every lane writes exactly one position and \
+    the output buffer is as long as the launch's extent — `compute.write`'s own rule \
+    (`crates/lichen-compute/src/compute.rs:5903-5910`: *the output count is the fragment's \
+    `outputs` — a static fact, not a discovery of which slots were written*). **Nothing here needs \
+    `examples/decode_loop.lichen`'s `keep`**, because the choice already has one slot per lane. \
+    The other spelling — one lane per **element** of the row, the same fold over the whole row, \
+    the write aimed at slot `0` — also **runs** and puts the answer in slot `0` (measured: \
+    `[3.0, 0.0, 0.0, … ]` over twenty lanes), so the extent rule does not refuse it; it is twenty \
+    lanes of the same fold for one number. What the extent rule does forbid is a launch writing \
+    **more** slots than its extent, and that is the top-k question below.\n\n\
+    **Chaining, measured both ways.** This kernel takes `examples/decode.lichen`'s row verbatim — \
+    `.n 1, .w 2` over `[8.888384, 10.773098]` — and answers `[1.0]`, so a decode step's output feeds \
+    it with nothing changed, and nothing about the operator is tied to the integer data above. The \
+    pair answer also agrees with the **two-`plrun`** spelling — `examples/softmax.lichen`'s \
+    `rowmax` kernel, per row, then a position kernel reading the maximum — **but not by itself**. \
+    `>=` alone makes every maximum overwrite the last one and answers `[1.0, 0.0, 0.0, 0.0, 3.0]`, \
+    the lowest position. Add the guard `(read >= max) * (p == 0)` — `first writer wins`, written \
+    without `&` — and it answers `[3.0, 2.0, 3.0, 0.0, 3.0]`, this file's row. **So the tie rule \
+    is a property of the body, not of the operator**: two honest spellings of greedy sampling \
+    disagree on every tie row until one of them is given an explicit conjunct.\n\n\
+    **What top-2 would additionally need, and it is work rather than a wall.** A second rank needs \
+    a second fold in the same lane, and that fold must **exclude** the first rank's position — \
+    which is where the arithmetic above stops being free. The guard \
+    `(read >= s(1)) & ((s(0) - 1) != first)` is refused twice over: `&` answers *`BitAnd has no \
+    float form: a kernel's float operators are + - * / and the four order comparisons, not % or \
+    the bitwise operators`*, and writing the `and` in `Float` answers the **type checker**, not \
+    the kernel, with *`expected Float, found Int`*. **What does run** is the second fold wholly in \
+    `Int`: `float2int` on the read, the guard \
+    `(1 * (ri >= s(1))) * (1 * ((s(0) - 1) != first))`, and the same lerp for the best. On \
+    `[3, 9, 4, 6]` it answers `([1.0], [3.0])` — rank one at `1`, the `9`, rank two at `3`, the `6` \
+    — and the two writes must be returned as a **tuple in output-struct order**, or it refuses by \
+    name: *`output 0 of the parallel index function is a compute.write to output 1: a write fills \
+    the output its .to names, and the codomain's order is not that name`* (`examples/kvcache.lichen` \
+    is that spelling). **Three costs are named rather than paid.** The second fold's seed is a \
+    finite `0` where the first fold's is `((0.0 - 1.0) / 0.0)`, which is exactly the finite \
+    stand-in `examples/softmax.lichen` warns a `max` seed is. The second fold is a **whole extra \
+    pass** over the row, so `k` ranks is `k` passes and `k` output buffers rather than one. And \
+    `float2int` on the data makes the second rank right only for scores inside the exactly \
+    representable integer range. **What was not reached is the one-buffer answer**: a launch of `n` \
+    lanes cannot write `k` slots per lane, and nothing concatenates `k` `n`-long buffers. \
+    `examples/decode_loop.lichen`'s `keep` is the gather — it launches over the wider extent and \
+    reads the step's buffer at `lane % k` — but it needs the ranks already addressable, and \
+    getting them there is the step not taken. **Wall or work: work**, with a measured spelling for \
+    `k = 2` and an open spelling for the gather.\n\n\
+    **What is exact and what is modelled.** **Everything here is exact; nothing is modelled.** The \
+    scores are integers below `2^24`, the comparisons are `f32` order comparisons of exactly \
+    represented integers, `s(0) - 1`, `(s(0) - 1) - s(2)` and the `0`/`1` products are exact \
+    because every value involved is an integer under `4`, `((0.0 - 1.0) / 0.0)` is the signed \
+    infinity `BinaryOp`'s invariant gives it rather than a large number, and `int2float` of a \
+    position under `4` is exact. The declared row was derived **by hand** before the program was \
+    run: row 0 is `3 9 4 9`, the fold visits `3, 2, 1, 0`, `9` beats `-inf` at position `3` and \
+    nothing displaces it, so `3`; row 1 is `5 1 5 2`, the `5` at `2` stands and position `0` only \
+    ties it, so `2`; row 2 is `7 7 7 7`, position `3` stands, so `3`; row 3 is `8 6 4 2`, position \
+    `0` is visited last and still holds `8`, so `0`; row 4 is `1 2 3 4`, every element beats the \
+    one before it, so `3`. Two spellings of the tie rule and two of the two-`plrun` chain were run \
+    over the same data as the cross-check, and the numbers above are the ones they printed.\n\n\
+    **Two leaves, and the second one is free here.** `.n` is the launch extent whatever it is \
+    called (`scalar_leaf_classes`, `crates/lichen-compute/src/compute.rs:1850`, and \
+    `run_parallel_kernel`'s own *the ABI's first leaf is the launch extent* at `:5917`). `.w` is \
+    the **second** leaf, which `compute.row` and `compute.col` divide by \
+    (`crates/lichen-compute/src/compute/body.rs:771-795`) and which is reached **only** from a \
+    coordinate; this body takes no coordinate, so `.w` is an ordinary runtime scalar wherever it \
+    sits — `examples/gemv.lichen` measures that, and it is cited rather than re-measured here. \
+    **The rows are row-major flattened, as `examples/decode.lichen` records**: nothing here is a \
+    two-dimensional array, `row[0]` starts at `0 · 4 + 0` and `row[4]` at `4 · 4 + 0`, and \
+    transposing the input would change every answer.\n\n\
+    **Three workarounds, and which of them is a rule.** (1) **The selection is arithmetic rather \
+    than a `Select`, and the `1 *` anchor is part of the same refusal** — a **rule**. (2) **The \
+    fold's result is the position and the maximum is dropped** — a **rule**, the one-leaf domain. \
+    (3) **The launch is over rows rather than over the row** — a **preference**: the wide spelling \
+    runs and answers the same number, so nothing forbids it, and one lane per row is chosen \
+    because it is one slot per lane with no redundancy. **The rule underneath all three** is \
+    `code-audit.md` P1-42's `wontfix:D17`, that a `compute.write` is **the value of an output \
+    position and not an effect** — which is why this body is one lane per output with exactly one \
+    write, and why the top-2 spelling returns its two writes as a tuple in field order."
+  output = "[3.0, 2.0, 3.0, 0.0, 3.0]: array{Float, 5}"
+---
+Row  = struct{.x (compute.Buf Float)}
+Pick = struct{.p (compute.Buf Float)}
+Par  = struct{.n Int, .w Int, .in Row, .out Pick}
+Arg  = struct{.n Int, .w Int, .I Row}
+greedy_raw = (k : Par) => {
+  lane = compute.range k.n
+  base = lane * k.w
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+}
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu"
+scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
+out = (compute.plrun greedy ((Arg)(.n 5, .w 4, .I Row(.x scores))) : Pick)
+compute.collect out.p : array{Float, 5}
 ```
 
 <!-- end: examples -->
