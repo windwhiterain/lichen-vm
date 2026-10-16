@@ -314,10 +314,21 @@ need a node-local producer for `r`.
   **loop-carried** value cannot advance a launch, and the failure is **silent for a recursion state** and
   loud for a parameter. `dim` is still carried as three unrelated literals (`.dim`, `.kdim`, `.dim`) and
   `.kdim` is the **stride**, so a mismatch reads the cache at the wrong pitch, silently.
-- **A hypothesis worth testing**: the weighting stage is **not** the GEMV refusal — its reduction is
-  *longer* than its output — so **a chained step may reach a device before a lone GEMV does**. Unverified:
-  the chain's device and graph legs are inferred from the KV-cache and GEMV measurements, because the CLI
-  installs no compute backend.
+- **A hypothesis worth testing, and it is now measured and it is false** (`device-leg-of-the-ladder.md`,
+  RTX 3060 Laptop, `feature/dleg` off `dev@0ec49dbf`). The original text: *the weighting stage is **not**
+  the GEMV refusal — its reduction is *longer* than its output — so **a chained step may reach a device
+  before a lone GEMV does**. Unverified: the chain's device and graph legs are inferred from the KV-cache
+  and GEMV measurements, because the CLI installs no compute backend.* **Measured, it does not.** The rule is
+  one — `InputShorterThanCount`, which compares an input's **length** against the **launch count** rather
+  than against the addresses the body reads — and the chain's **first** kernel is the append, so
+  `decode_loop.lichen` refuses on the append's own sentence (*"input buffer 2 holds 2 element(s) but the
+  run covers 8 index/indices"*) and never reaches the score stage. A lone `score_raw` refuses on the same
+  rule with the same two-over-four numbers. **The weighting stage is still not the refusal — it is simply
+  never asked.** The half of the hypothesis that survives is the reason the whole thing reads as a
+  *spelling* gap: padding the append's incoming row to the count makes it dispatch and agree with `cpu`
+  element for element, so the two-input shape is not the wall. What the ladder meets instead, on the
+  operator this file's ladder ends with, is a **driver that takes the process down** (`0xc0000005`) on a
+  module the emitter produced without complaint — see that note's §1 for the bisect.
 - **Not a trap, and the parenthesised form is what the example already uses** (`025d2e17`). The report that
   `.at (s(0) - 1)` fails to parse **was wrong**: the grammar of record
   (`docs/language-spec.md:96-97`, `farg := '.' name expr | expr`, implemented at `parse.rs:1153-1168` with
