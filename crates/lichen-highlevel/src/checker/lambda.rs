@@ -318,17 +318,18 @@ where
             P::Operator::from(LowOperator::Apply),
             Some(value_operands),
         );
+        // The same four elements over an undecided callee: the type applies, the body does not.
+        let undecided_callee = self.fresh_cell();
         let type_operands = self.array_node(
             self.current_block,
-            &[function_ty, argument_pair, c, function_ty],
+            &[undecided_callee, argument_pair, c, function_ty],
         );
         let type_apply = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Apply),
             Some(type_operands),
         );
-        // The two applications stay separate: neither carries the other's attribute.
-        let _ = type_apply;
+        self.type_applies.insert(e, type_apply);
         let node = value_apply;
         // The checker alone knows this application's argument span; the
         // edge is per-application even when the node is shared.

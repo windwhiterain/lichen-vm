@@ -275,12 +275,17 @@ farg     := '.' name expr                         -- named instantiation argumen
   `Num = set(Int, Float)` ([operator-polymorphism](notes/operator-polymorphism.md)
   §3).
 - **Shallow markers.**  Inside an array literal, an element may be prefixed
-  with `@shallow` (`@shallow e`, `@shallow(2) e`): a *shallow* marker that keeps
-  the value slot at each of the first `n` levels of the element's type spine
-  shallow (a bare `@shallow` marks the whole subtree).  The depth's parens are a
-  **glued** postfix, like every other postfix form in the language, so
-  `@shallow (2)` is the element `(2)` and not a depth; `@shallow` is accepted
-  nowhere else.
+  with `@shallow` (`@shallow e`, `@shallow(2) e`): a *shallow* marker on the
+  element's **value**, which stays lazy in the deep pass.  A bare `@shallow`
+  keeps the whole value subtree lazy, and `@shallow(n)` keeps the value slot at
+  each of the first `n` levels of the element's type spine shallow.  The mark is
+  a **value** mark: it does not make the element's *type* lazy.  A marked
+  element that is a call has its type applied at compile time as any other call
+  does, and a tail whose own type is still open takes the type that call states
+  — the coinductive reading, so an infinite structure has the type its first
+  level already gave.  The depth's parens are a **glued** postfix, like every
+  other postfix form in the language, so `@shallow (2)` is the element `(2)` and
+  not a depth; `@shallow` is accepted nowhere else.
 - **Marks (`~`).**  `expr ~ "text"` is a **mark**: compile-time metadata pinned to
   the expression it is written on.  It is not an attribute and never becomes a
   value — no pair slot, no unification, no propagation, no evaluation — and the

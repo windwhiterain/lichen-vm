@@ -165,6 +165,10 @@ where
     arrows: HashSet<NodeId>,
     /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,
+    /// Each apply's **type-only** application, keyed by the apply's expression.
+    type_applies: HashMap<ExprId, NodeId>,
+    /// Each bare `@shallow` position's `(type application, result type cell)`.
+    shallow_types: Vec<(NodeId, NodeId)>,
     /// A node a runtime failure references, mapped to its location.
     ///
     /// # Invariant
@@ -492,6 +496,8 @@ where
             check_seq: 0,
             arrows: HashSet::new(),
             apply_edges: HashMap::new(),
+            type_applies: HashMap::new(),
+            shallow_types: Vec::new(),
             node_edges: HashMap::new(),
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
@@ -547,6 +553,12 @@ where
             if is_type && let Some(term) = checker.state[expression].term {
                 checker.module.evaluate_node_deep(term, None);
             }
+        }
+        // A `@shallow` mark is on the value; its element's type is applied here, and an open tail then closes.
+        let shallow_types = std::mem::take(&mut checker.shallow_types);
+        for (type_apply, tail) in shallow_types {
+            checker.module.evaluate_node_deep(type_apply, None);
+            checker.close_shallow_tail(tail);
         }
         // The definition pass: run the program so the apply-time checks fire.
         if !checker.check_failed() {

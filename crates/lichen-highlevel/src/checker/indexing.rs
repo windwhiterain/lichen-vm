@@ -377,9 +377,10 @@ where
     ///
     /// # Invariant
     /// The value array carries a per-position mask: a bare `@shallow` position's
-    /// whole subtree stays lazy in the deep pass, and a `@shallow(n)` position is
-    /// wrapped so the value slot at each of the first `n` levels of its type spine
-    /// stays shallow.
+    /// **value** subtree stays lazy in the deep pass, and a `@shallow(n)` position
+    /// is wrapped so the value slot at each of the first `n` levels of its type
+    /// spine stays shallow. A bare mark says nothing of the type, so a marked
+    /// call registers its type application and cell for [`Self::close_shallow_tail`].
     pub(super) fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let depths = self.range_depths(e);
@@ -395,7 +396,11 @@ where
                 }
                 usize::MAX => {
                     vals.push(self.value_of(el));
-                    tys.push(self.state[el].ty.unwrap());
+                    let ty = self.state[el].ty.unwrap();
+                    if let Some(&type_apply) = self.type_applies.get(&el) {
+                        self.shallow_types.push((type_apply, ty));
+                    }
+                    tys.push(ty);
                 }
                 n => {
                     // The wrapped term is a lazy region: its pair chain does not match
@@ -421,6 +426,30 @@ where
         self.state[e].val = Some(value);
         self.state[e].ty = Some(ty_node);
         pair
+    }
+
+    /// Close an open `@shallow` tail on the type its application decided.
+    /// See `docs/notes/index-read-unify.md` §7.
+    ///
+    /// # Invariant
+    /// Only an **undecided** tail position is closed, and only when the type
+    /// application decided the head: a tail that already names a type states it,
+    /// and an undecided head has nothing to close. One level suffices — the closed
+    /// cell is the head's own tail, so every further read follows the same cell.
+    pub(super) fn close_shallow_tail(&mut self, tail: NodeId) {
+        let Some(inner) = shape::field_type(
+            &self.module,
+            shape::TypeRef::Term(AnyNodeId::Dynamic(tail)),
+            1,
+        ) else {
+            return;
+        };
+        let AnyNodeId::Dynamic(inner) = inner else {
+            return;
+        };
+        if self.module.node_value(AnyNodeId::Dynamic(inner)).is_none() {
+            self.module.unify(tail, inner);
+        }
     }
 
     /// Wrap `e`'s checked term so the value slot at each of the first `depth`
