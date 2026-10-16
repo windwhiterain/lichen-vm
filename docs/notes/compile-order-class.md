@@ -180,17 +180,136 @@ its `apply_parameter_check`**. Both need a decision that this note does not make
 ## 4. One half of that did land: an undecided class is refused, not guessed
 
 `compile_parallel_fragment` now returns `RoleUnread::Refusal` naming what it could not read
-(`crates/lichen-compute/src/compute.rs:2414-2432`) instead of falling through to
+(`crates/lichen-compute/src/compute.rs:2428-2441`) instead of falling through to
 `unwrap_or(ScalarClass::Int)`. **Its blast radius was measured as zero**: A/B against the commit reverted,
 over the whole `lichen-compute` suite, the runs are identical, failing exactly the six pre-existing
 `lowlevel` binaries with the same counts. No legitimate program hit the refusal, so it was neither
 narrowed nor widened. One sentence changed to say what the refusal now covers —
 *"A named refusal: the parameter is not a kernel ABI, **or a class it declares is not decidable**, and
-this is why."* (`compute.rs:1899-1900`); the `RoleUnread` invariant block itself needed no change.
+this is why."* (`compute.rs:1907-1908`); the `RoleUnread` invariant block itself needed no change.
+
+**Its blast radius was zero, and that measurement no longer holds.** It was taken while the refusal
+was only *returned*. Once a caller records it as a build failure (§4.6), the same entry reaches
+`Module::has_extension_failures`, and one working program — `BACK_TO_FRONT`, §4.1 — fails its check
+because of it. The blast radius did not grow because more programs hit the refusal; it grew because
+**the refusal now reaches a verdict it did not reach before.**
 
 **It does not flip the pin above, and that is the interesting part**: at the failing read a write *is*
 found, so the default was never what produced the `Int` here. The refusal is a net for the *other* sites
 where an undecided class used to become `Int` silently — not a fix for this defect.
+
+### 4.1 What is literally undecided when this refusal fires — measured, and it is not a class
+
+The refusal's sentence names a scalar class. The measurement says the class was never consulted.
+`crates/lichen-compute/tests/graph_structure.rs`'s `BACK_TO_FRONT` is the program that trips it (it
+answers `[6, 8, 10, 12]` on `dev`, so the program works), and instrumenting the read at
+`crates/lichen-compute/src/compute.rs:2428-2432` with `write_node`/`node_value` probes before the
+`find_map` gives **three attempts and one refusal**:
+
+```
+PROBE output 0 -> write_node None
+PROBE outputs named 1
+PROBE output 0 -> write_node Some(NodeId(1958v1))
+PROBE   operand node Some(NodeId(1959v1))
+PROBE   operand value is Some = true
+PROBE outputs named 1
+PROBE output 0 -> write_node Some(NodeId(2056v1))
+PROBE   operand node Some(NodeId(2057v1))
+PROBE   operand value is Some = true
+PROBE outputs named 1
+```
+
+**Attempt 1 refuses, and it refuses because `write_node` returned `None`**: the codomain position
+reaches no `compute.write` at all. Attempts 2 and 3 find one and its operand array already holds a
+value, so the class read is not what stopped either of them.
+
+So the thing that is undecided is **the shape of the codomain position's node**, not a scalar class:
+`write_node` (`compute.rs:2580-2604`) peels at most eight `concrete_element` steps looking for a
+`ComputeOperator::Write`, and at attempt 1 none is reachable. The refusal's sentence — *"none of them
+is a `compute.write` of a decided scalar"* — packs two different causes into one clause, and the
+second is not the one that fired: `node_class_in` (`compute.rs:3396-3401`) returns a `ScalarClass`
+and has no spelling for "undecided" at all; it is reached only inside
+`write_value_node(..).map(..)`, and `write_value_node` was `None`.
+
+### 4.2 Who decides it, and in which phase
+
+**All three attempts are inside the check.** The test's own helper panics at
+`crates/lichen-compute/tests/graph_structure.rs:32` — the `assert!(report.ok(), …)` — which is
+before it calls `evaluate_node_deep` at all, so nothing that follows is the run. Attempt 1 is the
+checker evaluating `compute.parallel doubler` while the rest of the program is still unevaluated;
+attempts 2 and 3 are the **same checker**, re-evaluating as more of the program is demanded, and by
+then the write is there.
+
+That is the same order §3 measured, one level down: the deciding work is an evaluation the checker
+performs speculatively and repeats, not a run-time normalize. It is also why the entry is stale. The
+channel is append-only (`crates/lichen-lowlevel/src/lib.rs:903-906`: *"Append-only and never cleared,
+so a second pass sees the first pass's records"*), so **attempt 1's refusal is still in
+`extension_diagnostics` after attempts 2 and 3 have got past it** — the list cannot forget, and the
+attempt that supersedes it leaves no trace that it did.
+
+### 4.3 The vocabulary has no word for this, and its own invariant forbids borrowing one
+
+Both sentences of the `RoleUnread` invariant (`compute.rs:1897-1902`), verbatim:
+
+> `[Self::Undecided]` is produced only where the annotation is still a cell with no
+> value: there is nothing to read and nothing to report. `[Self::Refusal]`
+> always carries the sentence its subject was named in. A caller tells them apart
+> by the variant, never by comparing text, so no later edit to a message can turn
+> a refusal into a "not yet".
+
+In that vocabulary `BACK_TO_FRONT` is **`Refusal`**: the annotation is not a cell with no value, and
+§8's ruling 2 says the deciding normalize is the *run-time* one. The second sentence is the sharp
+part — a caller must not promote this to `Undecided` by matching on its text, which rules out the
+cheap fix by construction.
+
+But `Undecided` records **nothing** (`compute.rs:1196-1197`, `RoleUnread::Undecided => return None`
+before any `record_extension_diagnostic`), and §4's own note about `compute.jit` is that this channel
+is what "says why a kernel stayed lazy instead of discarding the reason". So the case is **a third
+thing the vocabulary does not have: a named fact that a later attempt in the same check has already
+superseded.** The list has no slot for it, and no variant spells it.
+
+### 4.4 Transient or permanent — and what not recording would cost
+
+Transient, here: attempts 2 and 3 get past it, and on `dev` the same program answers `[6, 8, 10, 12]`,
+so a fragment does compile and run.
+
+Permanent, for any program whose codomain position never becomes a `compute.write` — an author who
+wrote `step` with no write at all is the smallest. That program produces no value, and today the
+refusal is what says so. **So not recording it would lose a real refusal**: `RoleUnread::Undecided`
+would return `None`, the operator would answer `parameterized`/`none`, and `render_build` would have
+nothing to refuse on — the exact loss §8's ruling 3 forbids (*"must report it — '报错' — never
+silently keep the flat tuple"*).
+
+### 4.5 The JIT's own gate for an undecided type already exists
+
+The ruling asked where a JIT meeting an undecided type reports it. **It does, and in both compile
+paths, by name** — `UNDECIDED_DOMAIN` (`compute.rs:2738-2740`):
+
+```rust
+// compute.rs:2409-2411, compile_parallel_fragment — the compute.parallel path
+let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
+    return Err(UNDECIDED_DOMAIN.into());
+};
+```
+
+`compile_fragment` has the same gate for `compute.jit` at `compute.rs:2221-2223`, and its seed reads
+*"without one, `Unknown`, which the read refuses by name"* at `compute.rs:2209-2210`. So there is no
+missing gate to add: the rule "a JIT must report an undecided type" is already met, and what these
+paths return is a refusal the caller records.
+
+What is missing is narrower, and it is the thing this note now names: **the recording does not know
+whether the refusal it is about to record has already been superseded inside the same check** (§4.2),
+and the channel it records into cannot say.
+
+### 4.6 What the evidence supports
+
+Not a reclassification, on this evidence. Moving this case to `Undecided` costs a real refusal
+(§4.4) and contradicts §8's ruling 3; leaving it as `Refusal` keeps the reason but makes a working
+program's check fail, because the check's verdict reads an append-only list (§4.2). **The honest
+third option is a shape change** — the entry carries "superseded" beside `fails_build`, and the
+build verdict reads only the standing ones — which is a change to
+`ExtensionDiagnostic::fails_build`'s own invariant (`crates/lichen-lowlevel/src/lib.rs:950-955`:
+*"It is set by the recording layer, never inferred"*), and therefore not a decision this note makes.
 
 ## 5. Re-deriving the measurement
 
