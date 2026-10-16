@@ -21,6 +21,8 @@ use crate::{
 
 /// The check a unification failure implements, fixing the expected/found
 /// direction of a mismatch's `a`/`b`.
+/// How far `node_loc` follows an origin chain before it gives up on a location.
+const ORIGIN_CHAIN_STEPS: usize = 8;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.
@@ -622,33 +624,43 @@ where
         let AnyNodeId::Dynamic(node) = node else {
             return None;
         };
-        if !self.module.nodes.contains_key(node) {
-            return None;
+        // A chain walk: every step can only fill a miss, so a located failure keeps its
+        // span, and a write-time unify error is attributed to the expression its cells
+        // came from. `Module::node_origin` is a forest, so the walk terminates.
+        let mut current = node;
+        for _ in 0..ORIGIN_CHAIN_STEPS {
+            if !self.module.nodes.contains_key(current) {
+                return None;
+            }
+            // `lowerings` holds `node_edges` first: the edge registered for
+            // this node, else the slot it is.
+            if let Some(loc) = self.lowerings().get(&current) {
+                return Some(loc.clone());
+            }
+            // One step suffices: the origin reaches a node this build attributed
+            // (see `Module::node_origin`).
+            let origin = self.module.node_origin(current)?;
+            if !self.module.nodes.contains_key(origin) {
+                return None;
+            }
+            if let Some(loc) = self.node_edges.get(&origin) {
+                return Some(loc.clone());
+            }
+            // The origin is the apply that materialized a clone of a frozen
+            // template: the caller's argument is the location.
+            if let Some(edge) = self.apply_edges.get(&origin) {
+                return Some(Loc {
+                    expr: edge.argument_expr,
+                    path: Vec::new(),
+                });
+            }
+            // A dynamic template: the slot it lowered from.
+            if let Some(loc) = self.lowerings().get(&origin) {
+                return Some(loc.clone());
+            }
+            current = origin;
         }
-        // `lowerings` holds `node_edges` first: the edge registered for
-        // this node, else the slot it is.
-        if let Some(loc) = self.lowerings().get(&node) {
-            return Some(loc.clone());
-        }
-        // One step suffices: the origin reaches a node this build attributed
-        // (see `Module::node_origin`).
-        let origin = self.module.node_origin(node)?;
-        if !self.module.nodes.contains_key(origin) {
-            return None;
-        }
-        if let Some(loc) = self.node_edges.get(&origin) {
-            return Some(loc.clone());
-        }
-        // The origin is the apply that materialized a clone of a frozen
-        // template: the caller's argument is the location.
-        if let Some(edge) = self.apply_edges.get(&origin) {
-            return Some(Loc {
-                expr: edge.argument_expr,
-                path: Vec::new(),
-            });
-        }
-        // A dynamic template: the slot it lowered from.
-        self.lowerings().get(&origin).cloned()
+        None
     }
 
     /// Whether `loc` was registered by one of the type accesses for its
