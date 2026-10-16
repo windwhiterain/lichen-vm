@@ -722,8 +722,10 @@ where
             Some(entry) => (entry.a, entry.b),
             None => (err.a, err.b),
         };
-        let value_a = entry.map(|e| (e.a, e.b)).and(err.value_a);
-        let value_b = entry.map(|e| (e.a, e.b)).and(err.value_b);
+        // The error's own pair and values are what the engine compared; a diary entry refines the
+        // location, never the values.
+        let value_a = err.value_a;
+        let value_b = err.value_b;
         // An engine-side unify has no diary entry: locate it through the descent it recorded.
         let loc = match entry {
             Some(entry) => Some(entry.loc.clone()),
