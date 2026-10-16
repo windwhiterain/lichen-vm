@@ -372,16 +372,16 @@ compute.collect (compute.graphrun built 3)
     );
 
     // A scalar kernel has no node to be, so no shape of it can go in.
+
+    // An unread call is not performed. The old shape needed a leak; see
+    // recorded-extent-count.md for the whole account.
     let scalar = fail(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
 {KERNELS}
 one = compute.jit (cfg : Int => cfg + 1)
-step = ins => {{
-  scalar = compute.call one 3
-  compute.plrun k2 (ins(0), (scalar,))
-}}
+step = ins => compute.call one (ins(0))
 built = compute.graph step
 compute.collect (compute.graphrun built (3,))
 "#

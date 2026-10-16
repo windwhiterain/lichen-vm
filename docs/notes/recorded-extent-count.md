@@ -215,16 +215,34 @@ the leak; reaching D/E/F/L/M needs a *second* reading of the count outside the V
 `module.blocks[block]` finds nine launch nodes for a two-dispatch program (clones), so it would report
 counts from dispatches outside the recorded body.
 
-### One existing test now fails, and why
+### One existing test changed with it — by the user's decision
 
-`graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name` asserts the *"a graph has no node
-for one"* sentence for a scalar-kernel call inside a recorded body. With the recording closed, that
-program's body instead refuses with the buffer sentence (`argument 0 of this dispatch is not a buffer`),
-because the deep pass no longer forces the `compute.call` node the way it did with a stale recording
-underneath. **The three programs that test runs share one thread**, so before this slice the sentence
-was produced with the **leaked** recording of an earlier program still on the stack — the assertion was
-passing on a defect. Fixing the test is a test change and needs the user's permission; it is not done
-here.
+`graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name` asserted the *"a graph has no node
+for one"* sentence for a scalar-kernel call bound to a name and read only from a later dispatch's
+config. That shape left the `compute.call` statement **nobody reads**, and an unread statement is not
+performed, so the operator was never demanded and the body refused with the buffer sentence
+(`argument 0 of this dispatch is not a buffer`) instead.
+
+The sentence used to appear only because of the leak above: `build_graph` returned **without popping
+`RECORDINGS`**, the thread-local stack, so a stale recording stayed underneath the next recording in the
+same thread — and **the three programs that test runs share one thread**, the first two having each
+left one behind. The call was demanded against that stale recording. So the assertion was **passing on
+the defect this slice fixed**, which is why closing the recording removed the sentence from it.
+
+**Measured before the test change**: with the call as the **body's own value** — the shape the test's
+own comment at the top describes, *"a statement nobody reads is never demanded"* — the sentence is
+still produced, unchanged, by both spellings:
+
+```text
+error: compute.graph: a scalar kernel is called here, and a graph has no node for one. … so there is nowhere for what it computes to travel. Run this body un-graphed, or write the work as a parallel kernel.
+error: compute.graph: this function's return is not a value a graph can hand back, … and this body's own value is not one of those
+```
+
+So the expectation was **not deleted**: the case is now pinned on the shape the rule describes, and the
+comment beside it names the leak and points here. This is **the user's authorised test change**,
+recorded so the next reader does not read it as an agent loosening a suite to go green. Measured after
+it: `graph_jit` **9/9**, and the `lichen_compute` binary back to **203 passed / 15 failed** — the same
+fifteen `dev` already had, `graph_jit` no longer among them.
 
 ## What a fix would touch — the three sizes, and which one was taken
 
@@ -313,7 +331,9 @@ thirteen `.lichen` shapes, the shared kernel header, and the two device probes (
 The fix slice added its own probes under the same directory, all deleted before its commit: the
 thirteen shapes re-measured before and after, **T1** and **T3** (a refused `compute.graph` followed by
 a plain launch), and a dozen intermediates used to find a spelling that records (C1–C8, P1–P5, Q1–Q3,
-R1–R8, S1–S3, U1–U2). It also added temporary `eprintln!` probes to `OperatorExt::run` and
+R1–R8, S1–S3, U1–U2), plus **V1–V3** used to find the shape that still reaches the scalar sentence.
+It also added temporary `eprintln!` probes to `OperatorExt::run` and
 `record_launch` to measure which shapes enter `record_launch` at all; **those were reverted, not
 committed** — `git diff` for this slice names only `crates/lichen-compute/src/compute.rs`,
-`crates/lichen-compute/src/compute/graph.rs` and this note plus [llm-operators](llm-operators.md).
+`crates/lichen-compute/src/compute/graph.rs`, `crates/lichen-compute/tests/lichen_compute/graph_jit.rs`
+(the user's authorised test change) and this note plus [llm-operators](llm-operators.md).
