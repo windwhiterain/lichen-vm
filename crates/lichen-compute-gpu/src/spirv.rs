@@ -587,20 +587,11 @@ impl Literals {
         }
         let id = *next;
         *next += 1;
-        let mut operands = vec![ids.type_of(class), id];
-        // The literal words are the type's width: 64 bits in an integer module, 32 in
-        // a float one.
-        let wide = class == ScalarClass::Int && ids.class == ScalarClass::Int;
-        if wide {
-            // Low word, then high word.
-            operands.push(value as u32);
-            operands.push((value >> 32) as u32);
-        } else {
-            // A 32-bit type's literal is one word: the integer's low half, or the
-            // float's bits.
-            operands.push(value as u32);
-        }
-        self.declarations.push(Inst::new(op::CONSTANT, operands));
+        self.declarations.push(match class {
+            ScalarClass::Int => ids.integer_constant(id, value),
+            // A float's literal is its 32 bits in one word.
+            ScalarClass::Float => Inst::new(op::CONSTANT, vec![ids.float, id, value as u32]),
+        });
         self.emitted.insert((class, value), id);
         id
     }
@@ -765,6 +756,23 @@ impl Ids {
             ScalarClass::Int => self.ulong,
             ScalarClass::Float => self.uint,
         }
+    }
+
+    /// The `OpConstant` declaring `id` as the integer `value`, at this module's integer
+    /// width.
+    ///
+    /// # Invariant
+    /// The literal words are the type's width: two after the low word in an integer module,
+    /// one in a float one, because a float module's `Int` is the 32-bit unsigned its indices
+    /// are. One spelling, so the width a pool constant is written at and the width
+    /// [`Literals::get`] writes a literal at cannot part company.
+    fn integer_constant(&self, id: u32, value: i64) -> Inst {
+        let mut operands = vec![self.integer(), id, value as u32];
+        // Low word, then high word; a 32-bit type's literal is one word.
+        if self.class == ScalarClass::Int {
+            operands.push((value >> 32) as u32);
+        }
+        Inst::new(op::CONSTANT, operands)
     }
 
     /// The type a value of `class` has.
@@ -3328,44 +3336,24 @@ fn assemble(
             .enumerate()
             .map(|(member, &id)| Inst::new(op::CONSTANT, vec![ids.uint, id, member as u32])),
     );
-    // The scalar `1` and `0` a comparison is materialised into, over two floats and
-    // over the module's integer.
-
-    // Declared unconditionally: `OpConstant` is module-scope and an unused constant
-    // is legal.
-
-    // Both pairs, because both element types are declared in every module.
-    match ids.class {
-        ScalarClass::Int => {
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.ulong, ids.one_integer, 1, 0],
-            ));
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.ulong, ids.zero_integer, 0, 0],
-            ));
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.float, ids.one_float, 1.0f32.to_bits()],
-            ));
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.float, ids.zero_float, 0.0f32.to_bits()],
-            ));
-        }
-        ScalarClass::Float => {
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.float, ids.one_float, 1.0f32.to_bits()],
-            ));
-            constants.push(Inst::new(
-                op::CONSTANT,
-                vec![ids.float, ids.zero_float, 0.0f32.to_bits()],
-            ));
-            constants.push(Inst::new(op::CONSTANT, vec![ids.uint, ids.one_integer, 1]));
-        }
-    }
+    // The scalar `1` and `0` a comparison is materialised into, over both classes.
+    //
+    // Declared unconditionally and in one shape: `OpConstant` is module-scope, an unused
+    // constant is legal, and `one_of`/`zero_of` are asked for either class from either
+    // module class — a float module that materialises a boolean into the integer class
+    // names `zero_integer` too.
+    constants.extend([
+        Inst::new(
+            op::CONSTANT,
+            vec![ids.float, ids.one_float, 1.0f32.to_bits()],
+        ),
+        Inst::new(
+            op::CONSTANT,
+            vec![ids.float, ids.zero_float, 0.0f32.to_bits()],
+        ),
+        ids.integer_constant(ids.one_integer, 1),
+        ids.integer_constant(ids.zero_integer, 0),
+    ]);
     constants.extend(literals.iter().map(|literal| Inst {
         opcode: literal.opcode,
         operands: literal.operands.clone(),
