@@ -655,6 +655,8 @@ impl<P: Program> Module<P> {
             self.blocks[block].scope_root = Some(root);
             return value;
         }
-        self.garbage_collect(root).or(value)
+        // Off while its trigger is under repair. See docs/notes/gc-trigger-disabled.md.
+        let _ = root;
+        value
     }
 }

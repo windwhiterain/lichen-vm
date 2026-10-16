@@ -50,6 +50,7 @@ authority, and this table only names the state.
 | [A call's clones belong to the enclosing template](notes/apply-clone-ownership.md) | `lichen-lowlevel` (`function`/`static_module`) | current |
 | [A class carries the call, not only the fact](notes/class-carries-the-call.md) | `lichen-lowlevel` (`equality`), `lichen-compute` | current — measured: a declared type's class holds this call's cells too, so sharing a fact by merging classes shares them as well |
 | [Non-termination is the program's own](notes/nontermination-is-the-programs.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`) | current — the ruling, and what was measured before it |
+| [The read-path collection is disabled](notes/gc-trigger-disabled.md) | `lichen-lowlevel` (`evaluation`, `gc`) | current — off until its trigger is repaired; the trace and the acceptance test are in the note |
 | [Floating point](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-render`, `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current — both classes run kernels on both backends |
 | ["Contains the universe" is not "is the universe"](notes/universe-containment.md) | `lichen-render`, `lichen-lowlevel` (`equality`) | current — the lowlevel frozen-kind half is open |
 | [Evaluation runs before unification, and nothing wakes what it read](notes/eval-before-unify.md) | `lichen-lowlevel` (`evaluation`/`equality`), `lichen-highlevel` (`checker`) | current — the named reads' wakeup is open |
