@@ -37,6 +37,15 @@ f ((Int, Int))       =>  error: expected Int, found tuple{Type, Type}
 So the function case now prints what was written (it was `TypeFunction` in the table below), and the other
 three still do not: two print their marker tag and the tuple prints its elements' kinds. The standard the
 section states — *none prints the value that was written* — is now the whole of the open defect.
+
+**And the tuple's spelling is pinned by examples, not accidental.** Two programs declare it as their output:
+`examples/struct_generic.lichen` states `(struct{.f Int}, struct{.f Type}, struct{.f Int}): tuple{TypeStruct,
+TypeStruct, TypeStruct}` and `examples/type_of.lichen` states `(Int, Type, Int, array{Int, 2}, Type, 5):
+tuple{Type, Type, Type, TypeArray, Type, Int}`. So of the two vocabularies the section contrasts, the
+structured one is what the tuple already uses and what those programs expect, and the remaining question is
+whether a *type value* on a diagnostic's found side should print as the type that was written (`struct{.a
+Int}`, `array{Int, 3}`) -- which the function case now does -- rather than as its kind's marker. That choice
+changes those two declared outputs, so it is a ruling rather than a repair.
 Three print their **kind's marker tag**; the tuple prints a **structured form of
 its element types**. None prints the value that was written, and two values of
 the same standing — two compound type expressions — print in two different
