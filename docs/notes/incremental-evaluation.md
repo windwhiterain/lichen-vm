@@ -266,7 +266,7 @@ What remains is one bit to compute and one early return to add.
   still holds as a description of where the cheap and expensive descents sit: a core
   operator's own value is usually a scalar, while operation-free array and table
   values are the ones with a subtree behind them.
-- **It cannot cut across the apply clone walk's decisions.** `function.rs:318-338`
+- **It cannot cut across the apply clone walk's decisions.** `function.rs:400-406`
   materializes bake-vs-clone into new topology; that is a consumer that freezes
   its inputs, and today's ordering (lambda value nodes proven at
   `checker.rs:657-659` before the definition pass runs applies at `:691-712`) is

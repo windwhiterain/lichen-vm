@@ -595,7 +595,7 @@ slot's type either: in the trace the class was describing the *template's* value
 So the "second reading" in §1 is not a reading of the same fact, and deleting it
 would delete a correct answer rather than a duplicate one.  `low_type_of_slot`
 stays the type decode; `compute::node_class` was already class-routed
-(`low_type_of_node`, `compute.rs:4320`) and is the one site that reads a *value's*
+(`compute.rs`, `fn node_class`) and is the one site that reads a *value's*
 class — the right subject for it.
 
 **What survives from the half**: the class channel is the only reading that sees
