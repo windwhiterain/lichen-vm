@@ -366,11 +366,7 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
     );
 }
 
-/// A graph function that reads its parameter **back to front**, then runs —
-/// the only way to tell position from order.
-///
-/// The element classes are declared, not left to be discovered: an undecided
-/// one is a real error at the compiler's first read, not a "not yet".
+/// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
