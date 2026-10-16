@@ -387,12 +387,19 @@ so its effect on the programs is measured but never against the suites.
     the call's own instance matters — without touching unification.
   - Cons: it contradicts the class model ("a class answers its committed value"), so it
     needs its own decision record and permission before it is even tried.
-- **D. Narrow `regroup_clones`' key to the template node instead of its class.** Unmeasured.
+- **D. Narrow `regroup_clones`' key to the template node instead of its class.** **Measured and
+  rejected**: it trades the pairing for unreconciled images, exactly as the cons predicted.
   - Pros: it stops exactly the pairing measured in §5 — the two clones whose templates are
     one class would land in separate groups.
   - Cons: reconciling a class's images in one call is what the regroup is for; narrowing the
     key would leave images unreconciled and plausibly break the `f : f` repairs, so it may
     trade one loss for another.
+  - Measured: both call sites (`function.rs`'s walk and the static walk) keyed on the
+    template node itself. `lichen-lowlevel` goes from **160 passed / 0 failed** to **145
+    passed / 15 failed**; thirteen of those are the collection-disable reds recorded in
+    [`gc-trigger-disabled.md`](gc-trigger-disabled.md), and the **two new ones name this
+    option's cost**: `equality::apply_reestablishes_the_parameter_patterns_internal_classes`
+    and `static_module::static_parameter_topology_is_reestablished_among_clones`. Reverted.
 - **E. Compare captures in the function arm.** Unmeasured, and a design change.
   - Pros: it addresses the criterion itself rather than its consequence.
   - Cons: a capture environment is not part of the `[parameter, return]` pair, so it needs a
