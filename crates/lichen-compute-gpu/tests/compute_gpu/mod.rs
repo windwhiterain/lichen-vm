@@ -12,3 +12,4 @@ mod refusals;
 mod spirv_validation;
 mod upload_width;
 mod warp_exchange;
+mod workgroup_height;
