@@ -1,20 +1,6 @@
 # A block and an applied lambda disagree on a struct field's inferred type
 
-> Status: **current — the named disagreement is closed; the hole-field half is
-> open.** Re-measured on `dev@83c817ca`, the block and the lambda agree (both print
-> `(Int,): struct{.x Type}`), so what this note is named for no longer reproduces.
-> What remains is the smaller pair below: `h Int` still prints `struct{.x raw[?a,
-> ?b]}` where `struct{.x Int}` is wanted. The root cause is known (§7) and a fix
-> direction is chosen (§8); the second generation of field cells that the
-> clone-ownership rules used to mint is gone
-> ([apply-clone-ownership](apply-clone-ownership.md) owns those rules), but the
-> field-list constraint is still part of the *check* rather than of the per-call
-> *expansion*, which is the open half.
->
-> **The two programs below are both correct and must print the same type.** Under
-> the intended semantics a struct instantiation is a macro expansion, so a full
-> clone of the template cannot differ from the template's own evaluation — and
-> `(K _)(.x T)`'s field type must be inferred from the argument, not annotated.
+> Status: **closed.** The named disagreement no longer reproduces, and the hole-field examples below are expected behaviour by the maintainer's ruling (see the closing section).
 
 ## 1. The disagreement
 
@@ -284,3 +270,23 @@ printer's mark is the honest answer.
   references a discarded statement's value node, so it is not evaluated either: the
   same laziness a statement nothing reads has anywhere else. A block's fields are
   therefore always named, like a `struct{…}` declaration's.
+
+
+## Why this closes
+
+Two measurements close this item, and one ruling settles what is left.
+
+The disagreement the note is named for no longer reproduces. Re-measured on `dev@83c817ca`, both programs
+print `(Int,): struct{.x Type}` — the block and the applied lambda agree — so the wrong batch is no longer
+what the printer reads.
+
+The two smaller programs stay as they are, and the maintainer ruled that this is expected: in
+`h = X => struct{.x _}` the field's type is a **hole**, which is never unified with the parameter `X`, so
+`h Int` has no effect on it and the field stays undecided. The note's own reading of those two programs as a
+second symptom was wrong, and this paragraph replaces it.
+
+The chosen direction was carried as far as the lowlevel half — an `Instantiate` operator with its codec tag
+and its evaluation — and then withdrawn: with the named disagreement already gone and the hole-field half
+expected, nothing constructs it. Its removal is the commit that deletes the operator, and the suites were
+re-measured at their baselines with the operator gone (`lichen-lowlevel` 147/13, `lichen-highlevel` 140/0,
+`lichen-compute` 203/15/2).

@@ -66,7 +66,7 @@ authority, and this table only names the state.
 | [`core`: the built-in prelude](notes/core-prelude.md) | `lichen-language` (`core.lichen`), `lichen-registry` | current — a failure inside the prelude is unattributed (open) |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`), `lichen-language`, `lichen-doc` | current — includes the `?` doc attribute |
 | [Checker encoding: unstable at the `lichen-compute` boundary](notes/checker-encoding-instability.md) | `lichen-highlevel` (`shape`), `lichen-compute` | current — defect narrowed to the body walk |
-| [Block vs lambda struct-field inference](notes/block-vs-lambda-struct-field-inference.md) | `lichen-highlevel` (`checker`) | current — the named disagreement is closed; the hole-field half is open (§7–§8) |
+| [Block vs lambda struct-field inference](notes/block-vs-lambda-struct-field-inference.md) | `lichen-highlevel` (`checker`) | closed — the named disagreement no longer reproduces; the hole-field examples are expected behaviour |
 | [A type value's rendering depends on its form](notes/type-rendering-inconsistent.md) | `lichen-render`, `lichen-language` (`render`) | closed — the written type is unreachable where the diagnostic renders |
 | [The raw mark in the printer](notes/raw-rendering-mark.md) | `lichen-render` | current |
 | [Tests do not assert what the printer prints](notes/tests-do-not-render.md) | every test that renders a printer result | current — a rule from the maintainer |
