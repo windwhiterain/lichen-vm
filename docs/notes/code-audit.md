@@ -35,7 +35,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-17 | high | language-server | Every request runs the whole frontend | blocked:D6 |
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
-| P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
+| P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | fixed — the type-conflict refusal no longer reproduces; the residual stop is the budget (P1-40) |
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
@@ -119,7 +119,7 @@ question as `P1-23`.
 stated where it bites: the abort lands *after* a successful parse and check, so
 the only symptom is a process that dies having printed nothing wrong.
 
-### P1-33 — A self-recursive call in a conditional's branch is refused `reported`
+### P1-33 — A self-recursive call in a conditional's branch is refused `fixed`
 
 `reported` for the *site*, not for the symptom: the refusal reproduces first-hand,
 the cause is **not located**.
@@ -149,6 +149,15 @@ Narrowing, each run first-hand against the same binary (`dev@a972a79`):
 | `g = a => b => a - b; f = a => b => if b == 0 then a else g b (a - b)` | runs (`Int`) — a non-recursive two-argument callee in the branch is fine |
 | `f = a => b => [f b (a - b), a][b == 0]` | refused identically — so it is not the `if` desugaring, which is exactly this array index |
 | `f = a => b => f b (a - b)` | runs (and exhausts the apply budget, as it must) — a self-reference alone is fine |
+**Re-measured while fixing P1-40 — the reported symptom is gone.** On `sum_to`'s sibling program,
+`f = a => b => if b == 0 then a else f b (a - b)` with `f 48 18`, and on the array-index spelling
+`[f b (a - b), a][b == 0]`, the checker no longer refuses either with a type conflict: both now stop on the
+apply-depth budget and say so (*"the checker stopped on its apply-depth budget: nested applications exceeded
+500 levels. The program may still terminate when run."*), which is the behaviour P1-40 documents. The
+non-recursive sibling still runs (`18446744073709551604: Int`, the wrapping arithmetic), and the escape hatch
+still works in the spelling this repository actually uses: `examples/gcd.lichen` states the function's type
+in the tuple-domain form, checks, and answers `6: Int`. What remains for these recursive bodies is the
+budget stop, not a message about two identical `Int`s.
 | `f = x => if x == 0 then x else f (x - 1)` | runs — single-argument self-recursion in a branch is fine |
 | `f = (a => b => if b == 0 then a else f b (a - b)) : Int -> Int -> Int` | **checks and runs** — the function's type written out is the whole difference |
 | `f = a => b => { a : Int; b : Int; if b == 0 then a else f b (a - b) }` | still refused — pinning the parameters is not enough |
