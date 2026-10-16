@@ -1,0 +1,415 @@
+# What a depth-marked element holds, and where the arithmetic went
+
+> **Status:** measurement. It answers the question
+> [shallow-depth-mechanism](shallow-depth-mechanism.md) §4.1 left open — *"the reads
+> still answer with the marked structure rather than 1, 2 and 3; the test asserts
+> only a value per element"* — and it answers it **by re-measuring, not by reading
+> forward**. That note established *which registration* makes the depth form's cells
+> hold anything; this one asks *what they hold*, element by element, and whether the
+> numbers are reachable at all.
+>
+> Measured in the worktree `.worktrees/dmev` on `feature/dmev`, branched from
+> `feature/shx` at `b96cd332` (which is three commits ahead of `dev` at `7323cf6b`),
+> through `lichen-language`'s own `testing::evaluate` and `testing::array_values` —
+> the faithful runner and the helper the held test itself uses, per
+> [test-harness](test-harness.md) §"Verify" — plus six `lichen-compiler` runs of the
+> two programs and three variants. **Every probe was reverted before this commit**
+> and **no test was added**: one `crates/lichen-language/tests/dmev_probe.rs`, two
+> temporary `if false &&` / `let _ = &tail;` edits in
+> `crates/lichen-highlevel/src/checker/indexing.rs` and
+> `crates/lichen-highlevel/src/checker.rs`, and a `.probe/` directory of six
+> `.lichen` files. Nothing is left behind; `git diff` on both production files is
+> empty.
+>
+> **The rebase, and one thing it is not mine.** The branch was rebased onto `dev`
+> after the measurements, which had moved to `077a28fd`. Replaying `feature/shx`'s
+> `990094e1` onto it conflicted in `docs/language-spec.md`, **between two other
+> sessions' prose**: `dev`'s `@shallow(0)` bound sentence against `990094e1`'s
+> bare/depth sentence. The two are compatible, so the resolution keeps **both,
+> verbatim** — the shared lead-in, then `990094e1`'s sentence, then `dev`'s bound
+> sentence. **That resolution is a rebase artefact and is the user's to review**; no
+> word of either session's sentence was changed, and no `# Invariant` or `# Safety`
+> sentence was touched by this slice.
+>
+> Companions, referenced rather than restated:
+> [shallow-depth-mechanism](shallow-depth-mechanism.md) §§1–3 (which cell is pointed
+> at, which half of the closure does the work, what the three elements held);
+> [index-read-unify](index-read-unify.md) §7 (the bare-form change this extends, and
+> §7.5's depth-form paragraph); [shallow-depth-closure](shallow-depth-closure.md) §6.3
+> (the spec sentence this bears on).
+>
+> **The answer, stated first:** the arithmetic is reachable under a depth mark
+> **today, with no production change**, one level deeper on every read — measured as
+> `usize_array == [1, 2, 3]`. What the held program reads is one level too few for
+> the depth spelling, and the depth spelling is the only thing that changed.
+
+## 1 The two programs, side by side
+
+The **depth-marked** program is the one under review,
+`crates/lichen-language/tests/language/pipeline.rs:2426`, in
+`pipeline::an_at_shallow_depth_one_on_a_recursive_tail_terminates`:
+
+```rust
+"f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
+```
+
+The **bare-mark control** is the neighbouring test that answers the arithmetic,
+`pipeline.rs:2391`, in `pipeline::a_shallow_marked_recursive_tail_stays_lazy`:
+
+```rust
+"f = x => [x, @shallow f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))"
+```
+
+The definitions are the same recursive function over the same tail, the same `inf`,
+and the same three read suffixes; the difference is the mark's spelling and nothing
+else.
+
+**The difference, in one sentence:** the depth form replaces the marked element with
+the call's `[value, type]` **pair**, while the bare form leaves the element as the
+call's value alone — so the same read suffix walks one level deeper into a structure
+that is now a type spine.
+
+Through the CLI, on the same base:
+
+| program | printed |
+|---|---|
+| bare control | `(1, 2, 3): tuple{Int, Int, Int}` |
+| depth-marked | `(raw[raw 1, raw[…]], raw[…slot list…], raw TypeTuple): tuple{?a, ?b, ?c}` |
+
+## 2 What each element holds, re-measured
+
+Read through `testing::array_values`, the helper `pipeline.rs:2431` itself uses: for
+each root-tuple item node, `module.node_value(node)`, printed recursively to four
+levels. `…` below is the depth cut in the printout, not a value.
+
+### The depth-marked program, `@shallow(1)`
+
+| # | read | holds | class | kind |
+|---|---|---|---|---|
+| `[0]` | `inf(1)(0)` | `Array[USize(1), Array[NO VALUE, Array[…, …]]]` | a **2-element array** — a pair | the marked call's **value**: the pair `f 1 = [1, <lazy pair>]` |
+| `[1]` | `inf(1)(1)(0)` | `Array[Array[NO VALUE, Array[TypeValue(TypeInt), Array[…]], NO VALUE, NO VALUE, NO VALUE], Array[NO VALUE, Array[…], NO VALUE, NO VALUE, NO VALUE]]` | a **2-element array of two 5-item element slots** | the **shape list** of the marked call's tuple type: `shape` of `[shape, kind]`, slot 0 typed `Int`, slot 1 open |
+| `[2]` | `inf(1)(1)(1)(0)` | `TypeValue(TypeTuple)` | **not** a `LowValue` at all | the **kind marker** `TypeTuple`, read off the `kind` half `[TypeTuple, Type]` |
+
+The chain that produces them, from the same printout: `inf(1)` is the marked element
+pair `[value, type]`; `(0)` reaches its value half — which is `f 1` **itself**, a
+pair, not a scalar; `(1)` reaches its type half, whose value the registration decided
+to `[shape, kind]`; `(0)` on that is `shape`, a list of two element slots; `(1)` is
+`kind = Array[TypeValue(TypeTuple), Array[TypeValue(TypeType), …]]`; `(0)` on the kind
+is `TypeValue(TypeTuple)`.
+
+### The bare-mark control, `@shallow`
+
+| # | read | holds | class | kind |
+|---|---|---|---|---|
+| `[0]` | `inf(1)(0)` | `USize(1)` | scalar | the arithmetic |
+| `[1]` | `inf(1)(1)(0)` | `USize(2)` | scalar | the arithmetic |
+| `[2]` | `inf(1)(1)(1)(0)` | `USize(3)` | scalar | the arithmetic |
+
+`inf` itself reads `Array[USize(0), Array[USize(1), Array[USize(2), Array[USize(3), NO VALUE]]]]`
+in the control — the lazy list, each element the bare mark left unforced — against
+`Array[USize(0), Array[Array[USize(1), Array[NO VALUE, …]], Array[Array[…], Array[…]]]]`
+under the depth mark, where the tail element is the two-slot pair.
+
+### The author's three-element description, checked
+
+`990094e1`'s message — *"[1, <lazy pair>], a two-slot type structure, and the
+`TypeTuple` kind marker"* — is **right on all three counts**, and the middle one can
+be sharpened. Element `[0]` is exactly `[USize(1), <a pair whose head holds no
+value>]`. Element `[2]` is exactly `TypeValue(TypeTuple)`. Element `[1]` is a
+two-element array, so "two-slot" is right; what it holds is **not** a `[shape, kind]`
+type pair but the **shape half alone** — the list of two element slots — which is why
+its slot 0 is typed `TypeValue(TypeInt)` and its slot 1 holds an undecided cell.
+
+One further measured fact, because it removes the obvious suspect: **the two
+programs' read chains are identical.** Walking each root item down through its
+`LowOperator::Index` operands, both programs emit the same subscript sequence from
+the same apply node — `0, 1, 0` for `[0]`, `0, 1, 1, 0` for `[1]`, `0, 1, 1, 1, 0`
+for `[2]`. The reads are not where the two programs differ; the two programs differ
+only in **what the tuple's element position holds**.
+
+## 3 The mechanism: the slot, the write, the read
+
+The brief's hypothesis was a **value/type confusion** — *the registration writes a
+type cell and the element reads it as a value*. It was tested directly. **It is
+rejected: no cell is mistyped.** What follows is the slot, the write and the read,
+each quoted, and then where the confusion actually is.
+
+### The slot — the tuple's element position
+
+`crates/lichen-highlevel/src/checker/indexing.rs:405-418`, `check_shallow_array_term`:
+
+```rust
+n => {
+    // The wrapped term is a lazy region: its pair chain does not match
+    // the element's type, so its reads get a fresh cell.
+    vals.push(self.wrap_shallow(el, n));
+    // A marked call is applied as the bare arm's is, so the mark's
+    // tail cell is decided before a read goes through it.
+    if let Some(&type_apply) = self.type_applies.get(&el) {
+        self.shallow_types
+            .push((type_apply, self.state[el].ty.unwrap()));
+    }
+    tys.push(self.fresh_cell());
+}
+…
+mask.push(depths[i] == usize::MAX);
+```
+
+Line 398 is the bare arm's write of the same position, and the contrast is the whole
+of §1's difference:
+
+```rust
+usize::MAX => {
+    vals.push(self.value_of(el));
+```
+
+**The bare arm puts `self.value_of(el)` in the position. The depth arm puts
+`self.wrap_shallow(el, n)` there**, and `wrap_shallow` is what adds the level —
+`indexing.rs:501-507`:
+
+```rust
+for &(slot0, slot1) in levels.iter().rev() {
+    let next = wrapped.unwrap_or(slot1);
+    wrapped =
+        Some(self.array_node_masked(self.current_block, &[slot0, next], &[true, false]));
+}
+```
+
+with level 1 seeded at `indexing.rs:476-477` as `(self.value_of(e),
+self.state[e].ty.unwrap())`. So the marked element is a **fresh masked pair
+`[value_of(el), state[el].ty]`** — slot 0 the call's value, slot 1 the call's type
+node, slot 0 marked shallow — and `mask.push(depths[i] == usize::MAX)` marks the
+**array position** for the bare form only.
+
+### The write — into the type cell, with a type
+
+`crates/lichen-highlevel/src/checker.rs:557-562`:
+
+```rust
+// A `@shallow` mark is on the value; its element's type is applied here, and an open tail then closes.
+let shallow_types = std::mem::take(&mut checker.shallow_types);
+for (type_apply, tail) in shallow_types {
+    checker.module.evaluate_node_deep(type_apply, None);
+    checker.close_shallow_tail(tail);
+}
+```
+
+The second component is `self.state[el].ty` — the marked call's **own type node**,
+which is by construction the element pair's slot 1. `evaluate_node_deep(type_apply)`
+decides that node to hold the **type value** `[shape, kind]`. **A type cell, written
+with a type: correct.**
+
+### The read — a pure value-array read
+
+`crates/lichen-lowlevel/src/evaluation.rs:146` and `:190-215`:
+
+```rust
+Some(LowOperator::Index) => {
+…
+let element = array[index].node;
+match element {
+    Dyn(element) => {
+        self.alias_read(node, element);
+…
+        self.evaluate_node(Dyn(element), Some(block))
+```
+
+**The read takes the target's item at `index` and evaluates it. It never consults a
+type to choose a slot**, so it cannot read a type cell *as* a value: `inf(1)(1)`
+selected item 1 of an array whose item 1 genuinely holds a type, and every read below
+it is that type's own data. The confusion hypothesis is **not** the mechanism.
+
+### Where the confusion actually is
+
+It is between the **element's shape** and the **program's read arity**, and it is
+two facts:
+
+1. `@shallow(n)` puts a **pair** in the element position and `@shallow` puts a
+   **value** (`indexing.rs:408` against `:398`). A pair's slot 1 is its type half,
+   so `(1)` enters the type — by the project's own core idea
+   ([overview](overview.md) §"The core idea"), not by any mistake.
+2. The program was **written with the bare spelling's arity**. `inf(1)(0)` asks for
+   the marked element's slot 0, which is `f 1`, and `f 1` *is* a pair whose slot 0
+   is `1`.
+
+Element `[0]` is the direct evidence that the registration is not implicated: with
+the `n` arm's registration disabled by `if false &&`, the probe printed element `[0]`
+as `Array[USize(1), Array[NO VALUE, NO VALUE]]` — **the same pair**, only the deeper
+type side undecided — while `[1]` and `[2]` both became `NO VALUE`. **The
+registration wrote exactly the two type-side elements; the pair in `[0]` predates it
+and is `wrap_shallow`'s.**
+
+## 4 Is there a correct fix, and what would it touch?
+
+**For the arithmetic, a correct fix exists and needs no production change at all.**
+Measured, through the suite's own `testing::usize_array` on the depth-marked program
+with one extra `(0)` per read:
+
+```rust
+"f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; \
+ (inf(1)(0)(0), inf(1)(0)(1)(0)(0), inf(1)(0)(1)(0)(1)(0)(0))"
+```
+
+gives **`[1, 2, 3]`**, and through the CLI, `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`.
+One `(0)` per level undoes the level `wrap_shallow` adds, and the depth form's
+contract is intact: the declared slots stay open (`?a, ?b, ?c`), exactly as
+[index-read-unify](index-read-unify.md) §7.5 says they must.
+
+**The change is therefore in the held test, not in the checker** — and this slice
+does not make it: a test is the user's to author. What it would touch:
+
+| what | where |
+|---|---|
+| the held test's program, one `(0)` deeper per read | `crates/lichen-language/tests/language/pipeline.rs:2426` |
+| the held test's assertion, `.len() == 3` → the three numbers | `pipeline.rs:2430-2434` |
+| the held test's comment, which currently describes the pair and not the arity | `pipeline.rs:2428-2429` |
+| `docs/language-spec.md` §"Shallow markers", **only** if the depth form's declared slot is meant to become `Int` — it is not, so probably not at all | `docs/language-spec.md:277-292` |
+
+**If the user instead wants the same spelling to answer the arithmetic**, that is a
+semantics change in the checker, and it would touch **`wrap_shallow` and the `n`
+arm's `vals.push` at `indexing.rs:408`** — dropping the extra pair so the position
+holds `self.value_of(el)` and marking the position in `mask` instead, the way the bare
+arm does at `:418`. **That would break a passing test**, and this is why it is not
+recommended: `pipeline::an_at_shallow_depth_marks_value_slots_shallow` asserts
+`([1, @shallow(2) [2, 3]])(1)(0)` is `[2, 3]` (`pipeline.rs:2406-2411`), which pins
+the extra level for the **array-literal** case as firmly as for the call case. The
+depth form's wrapping is load-bearing, and the program, not the checker, is what is
+one level short.
+
+**And the closure.** [shallow-depth-mechanism](shallow-depth-mechanism.md) §2
+measured that `close_shallow_tail` contributes nothing here; re-measured here by
+replacing the `checker.rs:561` call with `let _ = &tail;`, all three elements came
+back **byte-identical** to the full run — same pair, same shape list, same
+`TypeValue(TypeTuple)`. So the contradiction resolves cleanly rather than sharply:
+**a correct fix for the arithmetic does not need the closure, and could not be said
+to need it.** Had a fix required it, that would have contradicted §2; it does not,
+because the numbers live entirely on the **value** side — `inf(1)(0)` — which both
+the registration and the closure leave untouched. `close_shallow_tail` is still dead
+code for `@shallow(n)`; §2 stands.
+
+## 5 What the held test can and cannot tell
+
+`pipeline.rs:2430-2434` asserts, in full:
+
+```rust
+assert_eq!(
+    common::array_values(&module, &value).len(),
+    3,
+    "a tuple value"
+);
+```
+
+**It can tell** that every root-tuple item resolves to *some* value. On `dev` it was
+red for a real reason — `array_values` maps each item through
+`module.node_value(...).expect("an array element has a value")`
+(`crates/lichen-language/src/testing.rs:129-132`), and the depth mark's cells held
+nothing, so it panicked rather than failed. The registration fixed exactly that, and
+`an_at_shallow_depth_one_on_a_recursive_tail_terminates` is now `ok` (measured).
+
+**It cannot tell** that the three values are `1`, `2` and `3`. Measured: it is green
+on `[1, <lazy pair>]`, a shape list, and `TypeTuple`. The author's charge — *"it is
+now green on values that are not the arithmetic"* — is **confirmed**, and this note
+sharpens it: it is green on values that are not the arithmetic **because the program
+reads one level too few for its own mark**, not because the mark answers a type
+where a number belongs.
+
+**A stronger assertion** is available today and needs no production change:
+`common::usize_array(&module, &value) == vec![1, 2, 3]` on the one-level-deeper
+program of §4. It would demand that the depth-marked reads reach the arithmetic —
+and it would pass, measured.
+
+**Can the program answer the arithmetic at all under a depth mark?** Yes — measured,
+`[1, 2, 3]` and `(raw 1, raw 2, raw 3)`. **Is a type-shaped element the mark's
+correct answer?** For the program **as spelled**, yes, and the spec says so:
+`docs/language-spec.md:286-289`, added by `990094e1`, says the depth form's declared
+slot "keeps open, **so a read under the depth's mark is answered by the marked levels
+themselves**". That sentence is **confirmed by this measurement** — but it is a
+statement about the *marked levels*, not a licence for the *test's arity*. **So the
+green is not wrong; the test is.** It pins a mis-spelled program with a
+length-only assertion, and its comment — *"an element holds a value the deep pass
+never forced: a pair is one"* — describes the pair correctly while leaving the
+missing `(0)` unnamed. The two readings that note's comment leaves open are both
+right for different elements, and only one of them is the reason the numbers are
+missing.
+
+## 6 Corrections to the companions
+
+Kept here, in this note's voice, with the history intact — **neither companion is
+edited by this slice**, and both remain as they were.
+
+- **[shallow-depth-mechanism](shallow-depth-mechanism.md) §3**, whose table gives
+  `[1]` as *"a two-slot type structure"*: **imprecise, corrected here.** It is the
+  **shape list** of the marked call's tuple type — two element slots, slot 0 typed
+  `TypeValue(TypeInt)`, slot 1 open — i.e. the `shape` half of the `[shape, kind]`
+  value the registration wrote, not a `[shape, kind]` pair. Its `[0]` and `[2]` rows
+  (`[USize(1), <lazy pair>]` and `TypeValue(TypeTuple)`) are **confirmed exactly**.
+- **[shallow-depth-mechanism](shallow-depth-mechanism.md) §4.2**, which says the
+  bare mark's *"element slot is the call's own pair and the depth mark's is a rebuilt
+  one, whose resolved reads come off the type side"*: **confirmed and now exact.**
+  "Off the type side" is not a side effect of the reads — the read chains are
+  **identical** in the two programs (§2); the difference is the rebuilt element, whose
+  slot 1 is a type by `wrap_shallow`'s construction.
+- **[shallow-depth-mechanism](shallow-depth-mechanism.md) §4.1**, which leaves open
+  whether the depth mark *should* answer `2` and `3`: **answered — yes, and today.**
+  §4 above carries the measurement. §3's `dev`-side column (elements `[1]` and `[2]`
+  having no value) is re-confirmed by this slice's `if false &&` probe.
+- **[index-read-unify](index-read-unify.md) §7.5**, which says the depth form's
+  element type is a fresh cell and *"§7 changes only the bare form"*: **confirmed on
+  every point it makes, and its one open question is now answered** — §7.5's own
+  later paragraph already flagged it, and §4 of this note answers it: nothing escapes
+  the fresh cell, and the arithmetic is one `(0)` deeper.
+- **[shallow-depth-closure](shallow-depth-closure.md) §6.3** and
+  **`docs/language-spec.md:286-289`**, the sentence *"a read under the depth's mark is
+  answered by the marked levels themselves"*: **confirmed by measurement.** It is the
+  accurate description of what §2's table shows.
+- **[code-audit](code-audit.md) `D8`** was read before assuming anything of it: it is
+  about whether a **budget refusal** is sticky or scoped (`deep_depth` versus
+  `apply_depth`), and the "shallow siblings" in its text are sibling *nodes* of a
+  depth-limited walk. It constrains nothing in this slice, and no `wontfix:D<n>` over
+  `@shallow`, the class channel or the read path was found.
+
+## 7 Measured, inferred, unknown
+
+**Measured on `feature/dmev` at `b96cd332` (base `feature/shx`, three commits ahead
+of `dev` at `7323cf6b`).** Every number in §1, §2, §3 and §4 came from one of these
+runs:
+
+1. `testing::evaluate` + `testing::array_values` on both programs, printing each
+   root item's node value recursively — §2's two tables, §2's `inf` values, §3's
+   chain.
+2. The same walk with the `n` arm's registration gated off by `if false &&` —
+   element `[0]` unchanged, `[1]` and `[2]` `NO VALUE` — §3's "where the confusion
+   actually is".
+3. The same walk with `checker.rs:561`'s `close_shallow_tail` call replaced by
+   `let _ = &tail;` — all three elements byte-identical — §4's closure paragraph.
+4. `testing::usize_array` on the one-level-deeper depth program — `[1, 2, 3]` — §4.
+5. Six `lichen-compiler run` invocations: the two programs, `inf(1)` under each
+   spelling, `inf(1)(0)(0)` under the depth mark, and the one-level-deeper program —
+   `(1, 2, 3)`,
+   `(raw[raw 1, …], …, raw TypeTuple): tuple{?a, ?b, ?c}`,
+   `(1, raw none): tuple{Int, tuple{Int, …}}`,
+   `raw 1: ?a`, and `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`.
+6. `cargo test -p lichen-language --test language -j 3 -- --test-threads 2` —
+   **260 passed / 5 failed** on the measured base, and neither shallow test is among
+   the five. Re-run on the rebased tip (onto `dev` at `077a28fd`, which carries the
+   sibling's four `@shallow(0)` tests): **264 passed / 5 failed**, the **same five**,
+   and `a_shallow_marked_recursive_tail_stays_lazy`,
+   `an_at_shallow_depth_marks_value_slots_shallow` and
+   `an_at_shallow_depth_one_on_a_recursive_tail_terminates` all `ok`.
+7. `cargo test -p lichen-compute --test lichen_compute -j 3 zz_examples_panic_probe
+   -- --nocapture --test-threads 2` on the measured base —
+   **`clean=43 panicked=[] drifted=[]`**.
+
+**Inferred from the code, not separately measured:** that `wrap_shallow`'s rebuilt
+element is what makes the read enter the type half, and that marking the position
+instead of wrapping would break `an_at_shallow_depth_marks_value_slots_shallow`. The
+first is the code at `indexing.rs:501-507` plus §2's identical read chains; the
+second follows from that test's own assertion at `pipeline.rs:2406-2411` and was not
+tried, because it is a production change this slice does not make.
+
+**Unknown here:** whether the user wants the held test strengthened, or the depth
+form's element shape changed — both are stated in §4 as decisions with their costs
+and neither is taken. And, unchanged by this slice: what `@shallow(n)` should print
+for a marked call end-to-end
+([shallow-depth-closure](shallow-depth-closure.md) §6.1 item 3), which no test in
+the tree pins.
