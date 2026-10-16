@@ -109,21 +109,15 @@ impl Pending for StubPending {
     }
 }
 
-/// Taken for the length of a test, so no two of them are inside the slot at once.
-static BACKEND: Mutex<()> = Mutex::new(());
-
-/// Install the stub once and lock it for the caller's test: a shared log
-/// reports the scheduler's order, not the test's.
+/// The process's backend slot, the one the device tests hold: the stub is
+/// installed under it, held for the whole test.
 fn stub() -> (MutexGuard<'static, ()>, Stub) {
     static STUB: OnceLock<Stub> = OnceLock::new();
-    let stub = STUB.get_or_init(|| {
-        let stub = Stub::default();
-        install_parallel_backend(Arc::new(stub.clone()));
-        stub
-    });
-    let guard = BACKEND
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = common::device_slot();
+    let stub = STUB.get_or_init(Stub::default);
+    // A device test that ran earlier replaced the installed backend, so this
+    // installs every call rather than once.
+    install_parallel_backend(Arc::new(stub.clone()));
     stub.forget();
     (guard, stub.clone())
 }
