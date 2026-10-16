@@ -84,7 +84,7 @@ authority, and this table only names the state.
 | [Isolating the preprocessor](notes/preprocessor-isolation.md) | `lichen-preprocess`, `lichen-span`, `lichen-language`, `lichen-package` | current |
 | [Cross-process artifact store](notes/artifact-cache.md) | `lichen-registry`, `lichen-language` (`persist`), `lichen-lowlevel` | current |
 | [Testing the package manager offline](notes/venv-test.md) | `lichen-package`, `scripts/venv-test.sh` | current |
-| [README example sync](notes/readme-sync.md) | `lichen-tools`, `lichen-language` (`tests/readme.rs`) | current |
+| [README example sync](notes/readme-sync.md) | `lichen-tools`, `lichen-compute` (`tests/lichen_compute/readme.rs`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current |
 | [The plugin taxonomy](notes/plugin-taxonomy.md) | `lichen-highlevel` (`plugin`), `lichen-compute`, `lichen-std-native`, `lichen-perspective`, `lichen-language` | current |
 | [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-highlevel` (`native`) | current |
