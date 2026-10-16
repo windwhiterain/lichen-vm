@@ -1,6 +1,6 @@
 # A type value's rendering depends on its form
 
-> Status: **current — defect open.** §1–§2 are measured; §3 names what is not
+> Status: **closed — the written type is unreachable where the diagnostic renders** (§6). §1–§2 are measured; §3 names what is not
 > traced, and nothing in this note should be read as a cause for the rows it
 > cannot explain.
 >
@@ -106,3 +106,30 @@ deferred, is decided in `lichen-lowlevel` and is
 [eval-before-unify](eval-before-unify.md)'s subject. This note is about
 *spelling*: the same underlying structure rendering in more than one vocabulary.
 A fix for one is not a fix for the other.
+
+
+## 6. Why this closes without a code change
+
+The maintainer's answer to §1 was to unify the spelling on *the type that was written*, and to update the two
+examples that pin the tuple's vocabulary. Measuring where that would be implemented shows it is out of reach
+at the point the diagnostic renders, so the item closes as recorded rather than as repaired.
+
+The found side is the apply's `argument_type` (`apply.rs`'s `apply_parameter_check` records it in
+`ApplyError`, and the `Runtime` arm of `render.rs` prints it), which is the **type slot** of the argument's
+pair. Re-measured on `dev@dd13f417`, one call per row:
+
+| argument | argument pair | type slot | printed |
+|---|---|---|---|
+| `struct{.a Int}` | `[n29, n36]` | `n36` = `[[payload, TypeStruct], ↺]` | `TypeStruct` |
+| `array{Int, 3}` | `[n30, n31]` | `n31`, kind-shaped | `TypeArray` |
+| `(Int, Int)` | `[n29, n32]` | `n32`, kind-shaped | `tuple{Type, Type}` |
+| `Int -> Int` | `[n32, n34]` | `n34` = the written arrow term | `Int -> Int` |
+
+Only the function keeps the written term in its type slot, which is why it is already right. The struct's slot
+is the bare struct kind: its payload carries the nominal id, a `Table` slot and the field *names*, not the
+fields' written types. Feeding that payload through the printer's own struct path yields
+`struct{TypeId(16), Table, raw["a"]}` instead of `struct{.a Int}`, and the array's and tuple's slots hold kind
+markers rather than shapes.
+
+So printing the written type would mean changing what a compound type value's type slot holds — a change to
+the value representation, not to the renderer — and that is not what this note owns.
