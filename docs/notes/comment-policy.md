@@ -63,6 +63,13 @@ The workspace's `examples/` and `helix/` trees hold no Rust, so they contribute
 nothing today; a `.lichen` example is not a comment and is out of scope for a
 Rust comment checker.
 
+A **directory walk** does not check a Markdown file at all. `comments-check
+--config comments-test.toml . --max-violations 0` reports nothing for a note
+whose prose is over budget, while naming that file directly does check it. This
+was proved with a fixture, and it is why a slice that edits a note passes the
+file's own path as well as the repository root: the root run is the gate, and
+the per-file run is what actually reads the note.
+
 ## The state of the tree
 
 The gate covers the whole tree, which is the honest scope, and it passes: run at

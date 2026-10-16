@@ -1,8 +1,6 @@
 //! A written arrow in a frozen module stays the function type it names.
 //! See function-type-merge.md.
 
-use super::common;
-
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
 
