@@ -27,6 +27,7 @@ test file.
 | **one decode step, chained** | **landed** (`98ddba9b`): five `compute.parallel` kernels on `cpu` — the KV-cache append, a GEMV scoring one query against the **appended** keys, softmax's row max and denominator, and attention's `acc` nest over the appended values — declaring `[8.888384, 10.773098]`, and **four of the five are a landed kernel's body with nothing but the binder and parameter renamed**. Exact: the append, the four dots `1, 3, 1, 0`, the maximum `3.0`, the offsets `−2, 0, −2, −3`, `exp(0) = 1.0` (the polynomial at zero is `1.0` and seven squarings of `1.0` are `1.0`), and the weighted sum *given* the weights. Modelled: `exp(−2)`, `exp(−3)` and everything downstream, from the language's own sequence re-implemented in `f32` outside the workspace — a reference `eˣ` in `f64` puts the same chain at `[8.8883843, 10.7731007]`, so the degree-10 Taylor costs about half an ulp and three. **Only the last stage had to change, and the change is visible in the answer** — see the finding below |
 | **a decode loop** | **landed** (`cbe4feb1`): two decode steps through a **recursive lichen function**, the six-kernel chain appearing **once** (the guard is `s(0) == 2`, the base arm returns the state), and the position **computed inside the recursion** as `s(0) + 2` rather than handed in. It declares a three-part answer — both steps' outputs end to end, the **last step's output alone** (the only one anything outside the recursion can name), and the **trip count** — and the CLI prints all three, `([8.888384, 10.773098, 11.235222, 13.9678135], [11.235222, 13.9678135], 2)`. Exact where the arithmetic is (the appends, the dots, the maxima, the offsets, `exp(0) = 1.0`, the weighted sums given the weights), `exp` modelled from the language's own sequence; **step zero reproduces `decode.lichen`'s declared row and its documented weights exactly**, which is what makes the model trustworthy for step one |
 | **greedy sampling (the sampler)** | **landed** (`3af80221`): one lane per row and one `@loop` carrying `(counter, best, position)`, so this is the ladder's first fold whose result is a **selection**. **Nothing is modelled** — integer scores below `2^24`, comparisons and multiplications of integers under `4`, no `exp`, no `sqrt`, no `ln`, no division — and it needs **no transcendental at all**, which is why `ln`'s landing was not what unblocked it. Three surface facts it measured, none of them about the arithmetic. (a) **A `@loop`'s domain has one leaf**: a base arm returning the whole state, or a two-slot tuple, is refused (*`a kernel body's index cannot be placed … with leaves [NodeId(135v1)]`*; `crates/lichen-lowlevel/src/loop_conversion.rs:131` and `crates/lichen-compute/src/compute/body.rs:1195`), so the fold returns the position and **the maximum is unobservable afterwards**. (b) **A `Select` inside a fold's step is refused** — *`a kernel body reached a node with neither a value nor an operation, so there is nothing to emit for it`*, a sentence naming a cause it is not — so the selection is arithmetic on the comparison's `0`/`1`, and **the `1 *` anchor is what makes that fragment lower** (without it: *`instruction 15 mixed an integer and a float in one operation`*); it is **not** the `~` mark, and `examples/attention.lichen`'s `if` is therefore not a precedent, its only `if` being the base test. (c) **Ties are the body's choice, not the operator's**: `>` over the countdown fold answers the **highest** position, `[3.0, 2.0, 3.0, 0.0, 3.0]`, and `>=` the **lowest**, `[1.0, 0.0, 0.0, 0.0, 3.0]`, both measured on the same five rows. It consumes `examples/decode.lichen`'s row **verbatim** (`[8.888384, 10.773098]` answers `[1.0]`) and **agrees with the two-`plrun` spelling only once that one is given a *first writer wins* guard** — `>=` alone answers the lowest position. **Top-k is work, not a wall**: `k = 2` runs as two folds in one lane and two output buffers returned as a tuple in output-field order, the second fold wholly in `Int` (`float2int` on the data, a finite seed standing in for `-inf`, `&` refused twice — by the kernel and by the type checker); **the one-buffer gather, `k` slots per lane, was not reached** |
+| **generation** | **the last rung, and its blocker is a budget, not a spelling.** A stop condition **is expressible**: a recursive function's guard may read a top-level binding, an element collected from a `compute.buffer`, or a token a kernel sampled, and a loop that stops on a sampled token answers end to end — measured on `dev@4b9bd7a9`, **host-only** (the CLI installs no backend, so nothing here is a device result). Three shapes, all run: a guard reading `v[s(0)]` against a threshold, `raw 2: ?a`; the same guard with a top-level `Int` binding in place of the literal, `raw 2: ?a`, which this note used to record as **refused**; and the generation shape itself — `examples/sample.lichen`'s `greedy_raw` sampling a token per row, the loop stepping until the sampled token is the sentinel, `raw 1: ?a` on `1 2 3 4 / 5 9 6 7` where row 1's argmax is position `1`. **What bounds it is `WorkBudget`** (`crates/lichen-highlevel/src/checker.rs:384-389`): an unmarked recursion reaches `apply_depth_limit` = **500** at exactly 500 trip counts (*nested applications exceeded 500 levels*) and the `@loop` marker moves it to `apply_total_limit` = **2 000** (*it applied a function more than 2000 times*), both refusals worded as **non-termination** — a sentence about a loop that never ends rather than one whose stop condition was not met. So the boundary is **a pair of tuned constants**, and the checker's own invariant at `:371-374` says the second *"is what a large trip count asks for, since a loop never spends the nesting bound"* |
 
 ## What RMSNorm measured
 
@@ -234,7 +235,17 @@ need a node-local producer for `r`.
   the declared third entry. What is true instead is narrower and cuts the other way — the count is
   **decided by a literal in the recursion's own body**, and replacing that literal with a top-level `Int`
   binding is **refused** (*"table lookup missed — no entry for this key"*) while the literal-only control
-  runs: **the loop can be asked how far it got; it cannot be told what to do.**
+  runs: **the loop can be asked how far it got; it cannot be told what to do.** **Both halves of that
+  sentence were wrong, and are corrected here** (measured on `dev@4b9bd7a9`, host-only — the CLI installs
+  no backend). **The control runs**: a four-line program whose only difference from `decode.lichen`'s
+  guard is that `2` is spelled as a top-level `stop_at = 2` answers `raw 2: ?a` against this note's
+  *refused*. **The quoted error cannot arise from such a program at all** — `TableMiss` is pushed only
+  from `TableGet` (`crates/lichen-lowlevel/src/evaluation.rs:363`, `:389`, `:474`), which is the
+  `t <== k` read of `examples/table.lichen`, so the sentence quoted a diagnostic belonging to a different
+  feature. What is true is the other way round, and it is the sentence this note should have carried: **a
+  recursive function's guard may be any value the language computes — a top-level binding, an element
+  collected from a buffer, or a token a kernel sampled — and the loop stops when it says so.** The
+  refusal that *does* exist is not about the guard; it is the work budget the next bullet measures.
 - **Three bounds on the recursion, two of them silent.** (1) **One level removed, it stops.** A helper whose
   parameter is a buffer and whose **every leaf is a literal** collects `raw none` — no error, no refusal, no
   report line (with a scalar leaf it is refused **loudly**: *"input buffer 0 holds Float elements, but this
@@ -253,11 +264,29 @@ need a node-local producer for `r`.
   written as arithmetic on the comparison's `0`/`1`; and **ties are the body's choice, not the operator's**
   — `>` over a countdown fold answers the highest position and `>=` answers the lowest, both measured. **A
   stop condition is a wall** (item 1 above): a loop that cannot be told
-  when to stop can **unroll but not generate**. **A growing cache is mostly work** with one wall inside it —
-  an **extent that follows the state** is not writable, so a fixed large extent plus masking is the only
-  spelling and it costs the lanes. **Per-token rows are work** (both steps append the same row, because
-  `nk`, `nv` and `q` are top-level constants). And **`wontfix:D9`'s depth is the obvious thing to hit**: the
-  recursion here is depth 2, and a loop of hundreds of steps is unmeasured.
+  when to stop can **unroll but not generate**. **Corrected by measurement: the stop condition is not a
+  wall at all, and the quote above was wrong about it** (see the `generation` row and the correction in
+  item 1). A recursive function **does** stop on a runtime value: the guard reads a value a kernel
+  sampled and the loop steps until that value is the sentinel, which is the generation shape verbatim,
+  and it answers. **What generation hits is the checker's `WorkBudget` and nothing else** — an unmarked
+  recursion reaches the nesting bound at exactly **500** trip counts and a `@loop`-marked one at
+  **2 000**, both refusals worded as non-termination. **A growing cache is mostly work** with one wall
+  inside it — an **extent that follows the state** is not writable, so a fixed large extent plus masking is
+  the only spelling and it costs the lanes. **Per-token rows are work** (both steps append the same row,
+  because `nk`, `nv` and `q` are top-level constants). And **`wontfix:D9`'s depth is the obvious thing to
+  hit**: the recursion here is depth 2, and a loop of hundreds of steps is unmeasured. **That last
+  sentence is measured now** — a buffers-derived stop condition runs to **500** steps unmarked and
+  **2 000** marked, so `wontfix:D9`'s stack paths are not what a generated loop meets; the budget is, and
+  it is a pair of constants rather than a language rule.
+- **A second note's table is stale where its own correction is right, and this measurement is the
+  evidence** (`stop` slice, `dev@4b9bd7a9`). `docs/notes/loop-conversion.md:149-154` still carries the
+  earlier reading — *"| `loop` | decidable | **expanded** — the default still wins when it works" |* —
+  while §8.1 at `:422-425` corrected it to *"`@loop` means 'this is a loop', full stop"*. **Measured**: a
+  buffers-derived stop condition at **600** trip counts **answers** when the recursion is marked and is
+  **refused** when it is not, which is §8.1's column and not §1.1's. **So the marker, not the guard, is
+  what a generated loop needs**, and the table a reader would consult first is the one that is wrong.
+  Reported rather than fixed here — `loop-conversion.md` is a second document and this slice corrected
+  one — but it should not be left to be found again.
 - **A chain is possible, and its cost is one division's placement.** Four of `decode.lichen`'s five stages
   are a landed kernel byte-for-byte (softmax's two) or with only the binder and parameter renamed (the
   append and the score). **Only the last stage changed**, and it is not free: hoisting the softmax out of
