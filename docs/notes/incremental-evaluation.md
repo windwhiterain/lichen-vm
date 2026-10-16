@@ -309,6 +309,23 @@ entry point, and that nothing further should be built.
    gate does not cut the `undecided` verdict they turn on.
    [late-writes-map](late-writes-map.md) §11 holds the measurement, and §11.3–§11.4
    correct this note's step-1 premise about where the first elimination is.
+   **The first elimination has now been measured, and it buys nothing.**
+   [late-writes-map](late-writes-map.md) §12 re-attributed §11.3's remaining writes
+   without a `Backtrace` — **6 268** late writes in `lichen-compute`, **3 621** of them
+   `fill_class_holes`, and **every one** landing on an `undecided` verdict. **All** of
+   those merges are already at a sanctioned site: 76 % at the checker's own
+   `check_unify` (`checker/diagnostics.rs:31`), 24 % at apply-time binds (`apply.rs:78`,
+   `apply.rs:139`, `static_module/apply.rs:90`). Neither route this step names has a
+   handle — the merge is already where it belongs, and `add_equality` forms the class two
+   statements before it fills it.
+   The payoff was then measured rather than argued, by running the change: **2 874** of
+   those fills are ones where the member's verdict *would* have been concrete the first
+   time, so the flip is real — and repairing the verdict at the fill removes **1 descent
+   out of 929 488** (§12.4). Those 2 874 nodes are descended 5 633 times between them,
+   0.61 % of all descents, because their verdicts are re-asked and cut almost
+   immediately anyway. **Nothing landed.** The remaining lever is named as a question,
+   not a change: the checker's evaluate-before-unify order
+   ([eval-before-unify](eval-before-unify.md) §2.1), which is a landed decision.
 2. **The differential harness** — required, not optional. Run the pass with and
    without the cut over the existing test corpus and compare every value, every
    verdict and **every diagnostic**. It is the only oracle for §4.3's two

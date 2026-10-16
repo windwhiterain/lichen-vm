@@ -618,6 +618,14 @@ already names as illegitimate. It is a real target; it is not §8's.
 > That failure is the probe's, not the gate's — §4.2's trap, met again. Every suite
 > number in §11.2 is from a run with no probe in the crate.
 
+> **Superseded on its counts by §12.** The three-suite table above and the frame
+> breakdown under it were re-measured without a `Backtrace` and do not reproduce: §12
+> reads **6 268** late writes in `lichen-compute` where this table reads 201, and
+> attributes 3 621 of them to `fill_class_holes` where this table attributes 154.
+> §12.5 also corrects this section's account of **why** the probe perturbs the suite.
+> What this section still stands for is its shape — the delta is about the `undecided`
+> verdict, and what remains is one class of write — and its correction to §8.
+
 ### 11.4 Why the codomain bind was not hoisted
 
 The brief's Part 2 was to move `module.unify(cell, codomain)` to the moment the
@@ -646,6 +654,200 @@ function is born. It is not done, and the reason is not effort:
 
 Per the brief's own stop condition, this is reported with the measurement rather than
 substituted. The site is untouched.
+
+## 12. The `fill_class_holes` slice: where they come from, and what removing them is worth
+
+> Slice: `feature/class-hole-fill`, worktree `.worktrees/chf`, base `dev@c666a372`.
+> Build: private target `C:\resource\lichen-vm\.worktrees\chf\target`, `-j 1`,
+> `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
+> **No behaviour change landed.** Every code edit this slice made was a scratch probe
+> and was reverted; the branch's code diff against `dev` is empty and it carries
+> documentation only.
+>
+> **Which numbers are probe-free.** Every **suite result** here (§12.6) is from a run
+> with no probe in the crate. Every **count** (§12.2, §12.3, §12.4) needs the probe and
+> is reported as instrumented — see §12.5 for why that is not a formality.
+
+### 12.1 The question this slice was given, and the reading it came to
+
+The brief authorised changing `fill_class_holes`'s own `# Invariant` if the elimination
+required it, on the reading that §11.3's remaining writes are the next elimination. The
+reading this slice measured is narrower and it is the one that decides the work: *a late
+write onto an `undecided` verdict costs a re-descent only if the verdict stays undecided
+longer than it otherwise would.* That is a measurable question, and §12.4 measures it
+by running the change rather than arguing it. The answer is that the cost is **one
+descent in 929 488**.
+
+### 12.2 Where the late writes come from, by `file:line`
+
+The probe tags every *public* unification entry with the `file:line` that called it —
+`Module::unify`, `Module::try_unify`, `write_node_answer`, and each named call site — and
+reads that tag inside `set_node_value` and `fill_class_holes`. Nodes are labelled
+`<module instance>:<NodeId>`, because `NodeId`s restart with every `Module` and a bare id
+is not unique across a suite.
+
+`lichen-compute`, **6 268 late writes** — a write to a node that already holds an
+`evaluated_deep` verdict — of which **every one lands on an `undecided` verdict**:
+
+| writer | count |
+|---|---|
+| `fill_class_holes` (`equality.rs:111`, from `add_equality` `equality.rs:99`) | **3 621** |
+| `propagate_class_value` (`equality.rs:345`) | 556 |
+| `write_node_value` (`equality.rs:257`) | 147 |
+| `relocate_node_value` (`equality.rs:307`) | 0 |
+
+The 3 621 class-hole fills, by the unification that performed the merge:
+
+| origin — `file:line` | what | sanctioned site | fills |
+|---|---|---|---|
+| `lichen-highlevel/src/checker/diagnostics.rs:31` | `Checker::check_unify` | **checker** (site 1) | **2 738** |
+| `lichen-lowlevel/src/apply.rs:139` | `wire_apply_result`'s `unify(node, applied)` | **apply** (site 3) | 653 |
+| `lichen-lowlevel/src/apply.rs:78` | `apply_parameter_check` | **apply** (site 3) | 227 |
+| `lichen-lowlevel/src/static_module/apply.rs:90` | the apply's codomain bind | **apply** (site 3) | 3 |
+
+Traced instances, one per row, as the probe wrote them:
+
+```
+FILL origin=checker/diagnostics.rs:31        rep=NodeId(11v1)  member=2:NodeId(821v1)  verdict=undecided value=array  would_decide=Some(true)
+FILL origin=apply.rs:139                      rep=NodeId(248v1) member=28:NodeId(248v1) verdict=undecided value=scalar would_decide=Some(true)
+FILL origin=apply.rs:78                       rep=NodeId(11v1)  member=…              verdict=undecided value=array  would_decide=Some(false)
+FILL origin=static_module/apply.rs:90         rep=NodeId(321v1) member=884:NodeId(1671v1) verdict=undecided value=scalar would_decide=Some(true)
+```
+
+`lichen-lowlevel` has **12** late writes in the whole suite and `lichen-highlevel` has
+**0**; one of the lowlevel twelve is a `fill_class_holes` write and it is a flip (below).
+
+**Three readings that matter more than the totals.**
+
+1. **The merges are already at sanctioned sites — all of them.** 76 % of the fills are
+   the checker's own `check_unify` (site 1) and the remaining 24 % are apply-time binds
+   (site 3). Not one arrives from a fourth, unsanctioned producer. The brief's first
+   route — *move the merge to the sanctioned moment it belongs to* — has no handle here,
+   because it is already there.
+2. **The brief's second route is also already satisfied.** `add_equality` forms the class
+   at `disjoint::union` (`equality.rs:94`) and calls `fill_class_holes` two statements
+   later in the same function (`equality.rs:99`). The class *is* formed where the fill
+   runs; there is no window between them to move the fill into.
+3. **So what is left is an ordering inside the checker**, not a site: the verdict was
+   written when the checker evaluated the node, and the merge that would have decided it
+   is the checker's own later `check_unify`. That ordering — evaluate the operands,
+   *then* unify — is a landed decision with its own measurement
+   ([eval-before-unify](eval-before-unify.md) §2.1, and `Checker::compute_operands`'s
+   comment: *"undecided-against-decided is the one unify arm that writes"*).
+
+### 12.3 The flip: would the verdict be concrete the first time?
+
+For every fill that lands on a member already carrying an `undecided` verdict, the probe
+asks the counterfactual the brief names: **had this value been in the slot when the
+verdict was computed, would that verdict have been concrete?** It answers with the same
+rule `value_is_undecided` uses, reading dynamic verdicts only; a value whose items
+include a static ref or a table is reported as unknown rather than guessed.
+
+| | events | distinct nodes |
+|---|---|---|
+| the written value would decide the member (`Some(true)`) | **2 874** | **2 874** |
+| it would not (`Some(false)`) | 614 | 614 |
+| unknown — a table, or an item that is a static ref (`None`) | 133 | 133 |
+| **total** | **3 621** | **3 621** |
+
+**The flip count is not zero: 2 874 nodes would have been decided concrete the first
+time** — 79 % of the class-hole fills, 1 236 of them from the checker's own unify and 507
+from apply. Every fill is a distinct node, so there is no double counting to discount.
+
+The lowlevel suite's single `fill_class_holes` late write is also a flip
+(`would_decide=Some(true)`), which is the shape
+[late-writes-map](late-writes-map.md) §5.3 recorded for
+`function_call_operator_preserves_undecided_operand_chain`.
+
+### 12.4 What the flip is worth: one descent in 929 488
+
+The flip being real is not the same as the elimination being worth landing, so this was
+measured by running it. The candidate is the smallest thing that could deliver the flip
+without moving a merge: **`fill_class_holes` writes the member's verdict when the value
+it just wrote decides it**, so the stale `undecided` verdict stops being stale and the
+landed gate cuts the node from that moment. It is behind `LICHEN_VERDICT_ON_FILL` for
+the A/B, both arms over the same probe, same suites, same binary.
+
+| suite | descents (gate passes) `off` | `on` | delta |
+|---|---|---|---|
+| `lichen-compute` | **929 488** | **929 487** | **−1** |
+| `lichen-lowlevel` | 203 641 | 203 685 | +44 |
+| `lichen-highlevel` | 54 080 | 54 114 | +34 |
+
+The compute saving is **one descent in 929 488 — 0.0001 %**. The two smaller suites go
+*up* by an amount at the level of run-to-run noise, and no suite changes its failure set
+in a way attributable to the change.
+
+The static reading explains the number, and it is the finding. The 2 874 flip nodes are
+descended **5 633 times in total** across the whole compute suite — **0.61 %** of all
+descents. So even a perfect elimination caps out at removing well under one percent of
+the deep walk's work, and the A/B shows the realised saving is three orders of magnitude
+below even that cap. The reason is that **these verdicts are already re-decided almost
+immediately**: the suite writes 399 589 re-decisions of which 6 852 turn concrete, and a
+node whose verdict flips concrete is cut by the landed gate from then on. The late fill
+therefore costs the walk one extra ask of a node that was going to be asked again
+anyway, and buys nothing that the next ask does not already buy.
+
+**So: the flip is real and the elimination buys nothing for "run once."** By the brief's
+own stop condition, that is reported rather than landed.
+
+### 12.5 The probe perturbs, and it is not `Backtrace`
+
+§11.3 recorded that `Backtrace::force_capture` moved `lichen-compute` from 204 / 14 / 2
+to 203 / 15 / 2, adding `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched`,
+and attributed the delta to the backtrace. **This slice reproduced that exact delta with
+no backtrace anywhere in the crate** — the same 203 / 15 / 2, the same one added name. The
+probe here uses no `Backtrace` at all: it is a thread-local origin label, two counters,
+and one append-only file.
+
+Two measurements narrow the cause, and both are reported because the correction matters
+more than the attribution:
+
+- Removing the probe's hottest allocation — a `String` built on **every** gate pass
+  (929 487 times) — did **not** remove the delta. It survived unchanged.
+- The `off` and `on` arms differ by that same test's presence in one direction and its
+  absence in the other across two runs, while the descent counts move by 1.
+
+So the delta follows **any** instrumentation that shares mutable state across the suite's
+**parallel test threads** — a global mutex and a file write per event is enough — and it
+is not evidence about `force_capture` in particular. The correct reading of §11.3's note
+is the weaker one it already half makes: *"a probe is not free"*, with the mechanism
+being shared state across threads rather than stack capture.
+
+**Why §11.3's counts do not reproduce is not established here.** 201 against 6 268 is a
+factor of thirty-one, and this slice's probe is materially lighter than a forced capture
+on every late write, so the likelier reading is that §11.3's run was truncated or
+distorted by the capture it installed — but that is a conjecture, and it is recorded as
+one. What is not a conjecture: §12.2's numbers come from one probe over one run and are
+internally consistent (every fill is a distinct node; the writers and the origins
+partition the total).
+
+### 12.6 The suites, probe-free, and the two name-set comparisons
+
+Measured on this branch's tip with **no probe in the crate**, against a pristine `dev`
+run in the same worktree. Name sets compared with `Compare-Object`, never counts.
+
+| suite | pristine `dev` | this branch | name-set delta |
+|---|---|---|---|
+| `cargo test -p lichen-lowlevel -j 1 --no-fail-fast` | 147 / 13 | **147 / 13** | **empty** |
+| `cargo test -p lichen-highlevel -j 1` | 140 / 0 | **140 / 0** | **empty** |
+| `cargo test -p lichen-compute -j 1 --no-fail-fast` | 204 / 14 / 2 | **204 / 14 / 2** | **empty** |
+
+The three epoch tests pass by `--exact` name, unchanged:
+`evaluation::a_stalled_operator_reruns_only_after_a_value_changed`,
+`assert::an_untriggered_assert_is_decided_by_a_later_drain`, and
+`function::function_call_operator_preserves_undecided_operand_chain`.
+
+### 12.7 What this leaves open, stated as a question rather than a change
+
+The one thing that would make these 2 874 verdicts concrete *the first time* is for the
+merge that carries the value to happen **before** the deep walk first reaches the
+member. That is the checker's own evaluation/unify order, and §12.2's third reading says
+why that is a decision and not a code change: [eval-before-unify](eval-before-unify.md)
+§2.1 measured the other order and it loses. Re-deciding it needs the maintainer, not a
+slice. Until then the honest state is that **the remaining late writes are accounted
+for, are all at sanctioned sites, and cost one descent.**
+
 
 
 
