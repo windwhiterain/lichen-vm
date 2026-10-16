@@ -283,13 +283,17 @@ farg     := '.' name expr                         -- named instantiation argumen
   element that is a call has its type applied at compile time as any other call
   does, and a tail whose own type is still open takes the type that call states
   — the coinductive reading, so an infinite structure has the type its first
-  level already gave.  The depth's parens are a **glued** postfix, like every
-  other postfix form in the language, so `@shallow (2)` is the element `(2)` and
-  not a depth; `@shallow` is accepted nowhere else.  The depth is a **bound
-  of at least 1**: a depth of `0` marks no level, so the mark is erased before
-  the checker ever sees the element and the position is checked exactly as if
-  the marker were absent — the resolver refuses that spelling, and the way to
-  write it is a depth of at least 1 or no marker at all.
+  level already gave.  That holds for **both** spellings of the mark; what
+  differs is the position's **declared slot**, which a bare mark takes from the
+  call's own type while `@shallow(n)` keeps open, so a read under the depth's
+  mark is answered by the marked levels themselves.  The depth's parens are a
+  **glued** postfix, like every other postfix form in the language, so
+  `@shallow (2)` is the element `(2)` and not a depth; `@shallow` is accepted
+  nowhere else.  The depth is a **bound of at least 1**: a depth of `0` marks
+  no level, so the mark is erased before the checker ever sees the element and
+  the position is checked exactly as if the marker were absent — the resolver
+  refuses that spelling, and the way to write it is a depth of at least 1 or no
+  marker at all.
 - **Marks (`~`).**  `expr ~ "text"` is a **mark**: compile-time metadata pinned to
   the expression it is written on.  It is not an attribute and never becomes a
   value — no pair slot, no unification, no propagation, no evaluation — and the

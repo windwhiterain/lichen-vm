@@ -379,8 +379,8 @@ where
     /// The value array carries a per-position mask: a bare `@shallow` position's
     /// **value** subtree stays lazy in the deep pass, and a `@shallow(n)` position
     /// is wrapped so the value slot at each of the first `n` levels of its type
-    /// spine stays shallow. A bare mark says nothing of the type, so a marked
-    /// call registers its type application and cell for [`Self::close_shallow_tail`].
+    /// spine stays shallow. A mark is on the value, so a marked call registers its
+    /// type application and cell for [`Self::close_shallow_tail`].
     pub(super) fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let depths = self.range_depths(e);
@@ -406,6 +406,12 @@ where
                     // The wrapped term is a lazy region: its pair chain does not match
                     // the element's type, so its reads get a fresh cell.
                     vals.push(self.wrap_shallow(el, n));
+                    // A marked call is applied as the bare arm's is, so the mark's
+                    // tail cell is decided before a read goes through it.
+                    if let Some(&type_apply) = self.type_applies.get(&el) {
+                        self.shallow_types
+                            .push((type_apply, self.state[el].ty.unwrap()));
+                    }
                     tys.push(self.fresh_cell());
                 }
             }

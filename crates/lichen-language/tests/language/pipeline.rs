@@ -2425,8 +2425,8 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     let (module, value, _) = common::evaluate(
         "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     );
-    // The reads stay lazy under the mark, so the tuple's elements are
-    // underdetermined cells rather than pinned scalars.
+    // The reads stay lazy under the mark, so an element holds a value the
+    // deep pass never forced: a pair is one.
     assert_eq!(
         common::array_values(&module, &value).len(),
         3,
