@@ -100,8 +100,9 @@ where
     /// # Invariant
     /// A known `position` makes the read's type decided rather than lazy: it is
     /// the field's own node out of the field list, which a class question can
-    /// see through where an unevaluated `Index` it cannot. An undecided
-    /// container keeps the lazy form, resolved at the apply.
+    /// see through where an unevaluated `Index` it cannot. A **frozen** field type
+    /// is materialized as a leaf of this table, so a frozen field is decided the
+    /// same way; an undecided container keeps the lazy form, resolved at the apply.
     fn slot_read(
         &mut self,
         container_ty: NodeId,
@@ -115,8 +116,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        // Only a **dynamic** field type is taken directly; a frozen one
-        // is a different node, so it keeps the lazy form.
+        // A field type is a node of this table: a frozen one is materialized as its own leaf.
         let resolved = position
             .and_then(|at| {
                 shape::field_type(
@@ -125,10 +125,7 @@ where
                     at,
                 )
             })
-            .and_then(|ty| match ty {
-                AnyNodeId::Dynamic(node) => Some(node),
-                AnyNodeId::Static(_) => None,
-            });
+            .map(|ty| self.module.as_dynamic(ty, self.current_block));
         let ty_node = match resolved {
             Some(ty_node) => ty_node,
             None => {
