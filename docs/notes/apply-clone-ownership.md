@@ -93,9 +93,10 @@ unification wrote is carried for the same reason: no value is wrong, only a unif
 **The author's ruling on what the gate is for** (`compile-order-class.md` §8, ruling 7): *"啥叫错误的值？
 没有值会是错误的。有的只有 unify 冲突。"* A carried value is never wrong — a disagreement with a later
 computation surfaces as a unify conflict and is reported. So the question the gate answers is "is this a
-**template fact**", not "might carrying it freeze a per-call answer". The gate as written still requires
-`runned`, and a unification-written value is deliberately included in its own bullet above, so whether that
-bullet should carry is the ruling's open end rather than a settled reading of this paragraph.
+**template fact**", not "might carrying it freeze a per-call answer". **The gate is implemented the way the ruling reads.** Both walks carry on `evaluated_deep` alone —
+`function.rs`'s clone rule (`let template_answer = evaluated_deep.is_some();`) and the static walk
+(`let carried = operation.is_none() || evaluated_deep.is_some();`) — so a unification-written value
+travels with the clone, and whether its operator ran does not decide carriage.
 
 A clone that fails either carries **no value at all**: a slot holding a value is a
 slot a static reader (a backend compiling from the graph) reads as decided. An

@@ -127,7 +127,7 @@ build `PreprocessDiag::unattributed`, so a preprocessor diagnostic carried **no 
 directive's offset is known to the block parser — a P2 failure on a surface no parser rule touches.
 Taken; see §7 for the measurement and the `Invariant` it had to edit.
 
-**Still unmeasured**: whether the `?a -> ?b` expected side renders as claimed (`tests/checker.rs:713-736`
+**Still unmeasured**: whether the `?a -> ?b` expected side renders as claimed (`tests/highlevel/checker.rs:713-736`
 supports the value structure but the rendered string was not captured); whether `checker.rs:738` already
 pins the `IndexTarget` wording; the positional-struct `raw[Int, Int]` offender, whose fix belongs to
 `crates/lichen-render/src/render/type_printer.rs` under `docs/notes/type-rendering-inconsistent.md`; and the
@@ -152,7 +152,7 @@ keys** are rendered: a non-scalar key needs the key's *type* node, and value and
 `ExprState` nodes rather than offsets, so there is no O(1) derivation for it — the spelling is missing
 there, not the reachability.
 
-**`DiagKind::IndexTarget` is settled by the pin, and stays unwired.** `tests/checker.rs:738` is *named* for
+**`DiagKind::IndexTarget` is settled by the pin, and stays unwired.** `tests/highlevel/checker.rs:738` is *named* for
 `IndexTarget` but pins a different kind — `assert_eq!(diags[0].kind, DiagKind::Guard)` — with the expected
 side pinned as the **array kind**. So the contract is *"a statically non-indexable read is a `Guard` whose
 expected side is the array kind"*. For `(\x. x)[0]` the two spellings are `expected Array, found (Int ->

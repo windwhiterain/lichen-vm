@@ -135,7 +135,7 @@ rather than a new one:
 | `lichen-lowlevel` | 155 of 156 (the one failure is a *test of the deferral* whose conflict the claim path no longer resurfaced; fixed by also claiming the class's committed value at bind time) |
 | `run examples/` | every program runs except `compute_jit.lichen` |
 | `lichen-language` — everything but compute | green |
-| `lichen-language` **`tests/compute.rs`** | **9 passed, 53 failed** |
+| `lichen-language` **`tests/lichen_compute/compute.rs`** | **9 passed, 53 failed** |
 
 So the wall is the compute extension's template walk, as in §2.3 and as the
 parked `feature/read-kind-unify` measured for the static pin: once a claim can
