@@ -6,8 +6,7 @@ The question the brief asks: **in the passing program, which write fills the ele
 `walk_role` reads?** Everything here is measured. The probe and the `#[track_caller]` recorder that
 produced the measurement were **removed before this note was committed** — the investigation they served
 is closed — so §2's *What proved it* names every write side and the trace positions, which is what makes
-the measurement re-derivable. The defect itself stays pinned by the ignored assertions in
-`crates/lichen-compute/tests/compile_order_class.rs`.
+the measurement re-derivable. The defect itself was **fixed** afterwards: `7eedb125` (*highlevel: a written type term is decided before the definition pass*) un-ignored the three assertions in `crates/lichen-compute/tests/buf_element_class_recorded.rs`, and they are **ordinary passing tests now** (3 passed, 0 ignored) — `the_compiled_fragment_names_the_declared_element_class`, `the_module_holds_a_decided_float_element_type`, `the_recorded_node_carries_the_declared_element_class`.
 
 ## 1. The cell is not the element node — it is that node's pair **value half**
 
@@ -196,8 +195,7 @@ where an undecided class used to become `Int` silently — not a fix for this de
 ## 5. Re-deriving the measurement
 
 The probe and the `#[track_caller]` recorder that produced §1–§3 were **not committed**: their
-investigation is closed, and the defect stays pinned by the ignored assertions in
-`crates/lichen-compute/tests/compile_order_class.rs`. To re-derive them, instrument the five write sides
+investigation is closed, and the defect has since been **fixed** (7eedb125), with its three pins now ordinary passing tests in crates/lichen-compute/tests/buf_element_class_recorded.rs. To re-derive them, instrument the five write sides
 of `Node::value` named in *What proved it*, share one ordered log with the `walk_role` reads and a
 per-`compile_parallel_fragment` counter, and run the two programs — the same write appears in both, only
 its position differs (CONTROL 7422/7447 against a compile at 7854; STEP 8865 against 7961).
@@ -227,13 +225,13 @@ It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-
 `buf_element_class_recorded.lichen` (shows it) and `buf_element_class_direct.lichen` (does not), whose
 kernel, parameter and buffers are **byte-identical** — **the root expression is the only difference**
 (`k` against the `compute.graph` step). Each is its own test binary, so a single process's compile order
-cannot be what decides either answer. One command shows the defect, its two assertions
-`#[ignore]`d **with the reason** so the suite stays green; flipping them is the fix's acceptance:
+cannot be what decides either answer. The historical record of the defect is the pair of assertions below, which
+were #[ignore]d with their reason so the suite stayed green while the defect was open; **the fix (7eedb125) removed the ignores**, and one command now shows them passing:
 
 ```
-cargo test -p lichen-compute --test buf_element_class_recorded -- --ignored
-left: (1, [Int])   right: (1, [Float])
-left: [Int]        right: [Float]
+cargo test -p lichen-compute --test buf_element_class_recorded
+[when the defect was open] left: (1, [Int])   right: (1, [Float])
+[when the defect was open] left: [Int]        right: [Float]
 ```
 
 **What the reduction removed, each measured**: the claims (`~ "combine"`, `~ "identity"`, `~ "element"`,
