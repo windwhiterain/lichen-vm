@@ -210,7 +210,16 @@ position**, and the read path is the one
 Ruled out: `@shallow` alone (§3), and `@loop` (§3). **Not traced:** the write that
 should have carried a type into that element slot once the container resolved. That
 note's own claim that `lazy_infinite` reads the declared form is **not true on
-`dev`** — corrected there.
+`dev`** — corrected there. **Answered, and not by that write:**
+[index-read-unify](index-read-unify.md) §7 traced the chain and found the
+container's type cell undecided *because the `@shallow` mark kept it so*, then
+changed the mark by the user's decision — a `@shallow` position is a **value** mark
+and says nothing about the element's type. `lazy_infinite` now reads its declared
+`(1, 2, 3): tuple{Int, Int, Int}`, and this discriminator's two rows stay two rows:
+`xs(1)` still prints `[2, 3]: array{Int, 2}` and `g(1)` still prints
+`[raw 1, raw 2]: array{?a, 2}`, because that element is a literal and its `?a` is
+`arithmetic_class`'s open class — §7.4 of that note states why that one *should*
+stay undecided.
 
 ### 6.3 Family C — characterised, not traced
 

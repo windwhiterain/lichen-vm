@@ -1,6 +1,8 @@
 # The index read that is never taken
 
-> **Status:** **measurement only; no production change, and no fix proposed.**
+> **Status:** **route 1 of §4 has landed** (the marker's own semantics, by the
+> user's decision, recorded before and after in §7), and **no production change
+> remains open here.** The rest of the note is the measurement that chose it.
 > [arithmetic-class-stated](arithmetic-class-stated.md) §5 re-homed family B onto
 > one cell — `Checker::check_index`'s `lazy_index_path` `elem_cell`
 > (`crates/lichen-highlevel/src/checker/indexing.rs:70-83`) — and called the write
@@ -8,9 +10,10 @@
 > instrumented that path and found neither half of that sentence: **the cell is
 > never built by any example**, the cell that prints `?a` is a different one, and
 > **no unify is skipped** — the chain that would carry a decided type dies one link
-> earlier, on a container whose type is undecided *by construction*. §2 gives the
-> measurement, §3 says which shape reaches the read and which does not, §4 says
-> what would have to change, and §5 is the status line to copy into the companions.
+> earlier, on a container whose type is undecided *because the mark hides it*.
+> §2 gives the measurement, §3 says which shape reaches the read and which does
+> not, §4 says what would have to change, §7 is the route that changed, and §5 is
+> the status line the companions now carry.
 >
 > Companions: [arithmetic-class-stated](arithmetic-class-stated.md) §5, the
 > recommendation this measures and corrects, and §3, the `arithmetic_class`
@@ -22,12 +25,17 @@
 > class vocabulary; [eval-before-unify.md](eval-before-unify.md) §2.2, the
 > positional read's own note.
 
-Everything below was measured on `dev` at `226bed1e`, in the worktree
+Everything in §1–§6 was measured on `dev` at `226bed1e`, in the worktree
 `.worktrees/idx` on `feature/idx`, through `cargo run -p lichen-compiler run` — the
 language front end, which [test-harness](test-harness.md) §"Verify" calls the
 faithful runner for a runtime value — and through
 `cargo test -p lichen-compute --test lichen_compute`. The probes are named in §6
-and were reverted with `git checkout` before this note was written.
+and were reverted with `git checkout` before this note was written. §7 was
+measured and landed on `dev` at `26f07fa1` in the worktree `.worktrees/shal` on
+`feature/shal`; its numbers are its own. The `dev` baseline was `26f07fa1`; the
+branch was rebased onto `9ddbbed5` at the end and **every number in §7.3 was
+re-measured on that rebased tip** — the survey, the four counts, and all thirteen
+control programs, byte for byte as recorded above.
 
 ## 1. The question this note answers
 
@@ -137,6 +145,11 @@ members, **all four undecided**, no member carrying an operator's answer. So:
 **So the write is not skipped: it is never reached.** The join the read needs is
 one level *past* the undecided cell, and nothing can place it.
 
+§7 closes the loop on the sentence §2.3 ends with: the container's type cell is
+undecided **because the mark keeps it that way**, not because it is
+unmaterialisable. Nothing about it is infinite in fact — one level of it is a
+plain array, and the level after that is the same cell again.
+
 ### 2.4 The "already decided" container element cell is not on this path
 
 §5's premise is that a container element cell already holds a decided type (its
@@ -187,18 +200,20 @@ has to happen, and **none of them is a skipped unify**:
    `# Invariant`: *"a bare `@shallow` position's whole subtree stays lazy in the deep
    pass"*. The type of `@shallow f (x + 1)` is infinite; materialising it to make a
    sibling slot readable is a semantics change to the mark, not a bind.
+   **Landed — §7.** The user took this decision; it was measured, not assumed.
 2. **The clone carries its tuple type into the template's cell.** `232v1`'s class
    would have to join the *clone's* slot-1 type cell. The clone's own cell is
    equally undecided — it is the clone's recursive tail — so this carries a value
    that does not exist, and it would cost the laziness the mark exists for.
+   **Refuted by the same measurement (§7): the clone's cell is closed, not carried.**
 3. **The read is answered from the value side rather than the type side.** The
    value read already resolves (`raw 1` is `1`), so a read that asked the value's
    own element cell would answer `Int`. That is a different rule from
    [compound-element-slots](compound-element-slots.md) §"The read path" — *"A field
    read's type has exactly one source: the element **slot's type position**"* — and
-   changing it changes every compound read.
+   changing it changes every compound read. **Not taken: the read path is unchanged.**
 
-All three are user decisions, and the first two are the ones §5's re-homing would
+All three were user decisions, and the first two are the ones §5's re-homing would
 have reached by accident: "decide `arithmetic_class`'s branch earlier" is the
 `Float`-losing, twelve-example route already measured and rejected in
 [arithmetic-class-stated](arithmetic-class-stated.md) §3.
@@ -211,11 +226,20 @@ have reached by accident: "decide `arithmetic_class`'s branch earlier" is the
 > of `lazy_infinite.lichen` are minted by `checker/structs.rs`'s `slot_read` lazy
 > arm. `Module::alias_read` — the index read's own write — never fires for any of
 > those chains, because the container's type cell (`232v1`, class
-> `{89v1, 232v1, 116v1, 156v1}`) is undecided by construction: it is the type of an
-> `@shallow` infinite tail. **No unify is skipped and there is no decided cell to
-> carry from**; what is missing is a rule for reading a decided sibling out of a
-> container whose type is not materialisable. See
+> `{89v1, 232v1, 116v1, 156v1}`) is undecided: it is the type of a `@shallow`
+> infinite tail, and the mark is what kept it undecided. **No unify is skipped and
+> there is no decided cell to carry from**; what was missing is a rule for reading
+> a decided sibling past a container type the mark hides. See
 > [index-read-unify](index-read-unify.md).
+>
+> **And the mark is what kept it undecided — that is now the landed fix.** Route 1 of
+> §4, decided by the user and measured in §7: `@shallow` marks the element's
+> **value** and says nothing about its type, so a marked call's type is applied at
+> compile time as any other call's is, and a tail whose own type is still open
+> closes on the type that call states. `examples/lazy_infinite.lichen` now prints
+> its declared `(1, 2, 3): tuple{Int, Int, Int}`, and the survey is
+> `clean=43 panicked=[] drifted=[]`. The read path itself is untouched. See
+> [index-read-unify](index-read-unify.md) §7.
 
 ## 6. Measured, inferred, unknown
 
@@ -239,7 +263,9 @@ the two cells being the same node read one link apart.
 
 **Unknown** — whether a rule that reads a decided sibling out of an unmaterialised
 container type exists at all. Nothing here measures one; §4 lists what would have
-to change, not what to write.
+to change, not what to write. **§7 answers it for the one shape this note is
+about**, and does so by removing the question rather than adding a rule: the mark
+never made the type unmaterialisable, it only made it unvisited.
 
 **Not this note's subject** — whether `examples/lazy_infinite.lichen`'s declared
 `output = "(1, 2, 3): tuple{Int, Int, Int}"` should be reached by a rule or
@@ -247,7 +273,8 @@ re-declared. [undecided-type-cell](undecided-type-cell.md) §5 rules the re-decl
 out on the merits, and this note does not reopen it; it says the route §5 chose is
 not the one that reaches it.
 
-**No production change.** The probes were six `eprintln!` call sites — one pair in
+**No production change** — for §1–§6, which is what that sentence covers. The
+probes were six `eprintln!` call sites — one pair in
 `crates/lichen-highlevel/src/checker/indexing.rs` (`check_index`'s two `elem_cell`
 arms), one in `crates/lichen-highlevel/src/checker/structs.rs` (`slot_read`'s lazy
 arm), one in `crates/lichen-highlevel/src/checker.rs` (`check_term`'s tail),
@@ -256,4 +283,161 @@ and one in `crates/lichen-lowlevel/src/equality.rs` (`alias_read`) — reverted 
 `git checkout` before this note was committed. `crates/lichen-lowlevel/src/evaluation.rs`
 and `crates/lichen-lowlevel/src/gc.rs` were **not** touched, no `Invariant` or
 `Safety` section was added or changed, no `output =` line was edited, and no test
-was added.
+was added. **§7 is the exception, and it is named there.**
+
+## 7. Route 1, measured and landed: the mark is on the value
+
+§4 route 1 is a **user decision**, and this section is the record of it: the
+documented semantics of `@shallow` changed, and the edit below is that decision,
+not an agent tidying a contract to match its code. The `# Invariant` it changed is
+[`check_shallow_array_term`](../../crates/lichen-highlevel/src/checker/indexing.rs)'s
+own, and `docs/language-spec.md` §"Shallow markers" is the prose form of the same
+sentence. Every other `# Invariant` and `# Safety` section is untouched, and the
+history of §§1–§6 above is intact.
+
+### 7.1 What marks the type side today, and what the change is
+
+There are **two** mask sites in the whole workspace, both in
+`crates/lichen-highlevel/src/checker/indexing.rs`, and both are read by one place,
+`Module::evaluate_node_deep_inner` in `crates/lichen-lowlevel/src/evaluation.rs`:
+
+| site | what it marks | who reads it | what it does to a type cell today |
+|---|---|---|---|
+| `check_shallow_array_term`, the bare arm: `mask.push(depths[i] == usize::MAX)` | the **array position** of a bare `@shallow` | `evaluation.rs`'s `if item.shallow { continue; }` and `value_is_undecided`'s *"An array holding a shallow position can never be proven concrete"* | the position's `Index(apply, 0)` is never walked, so the apply never runs, so **neither** of the apply's two applications runs |
+| `wrap_shallow`, `array_node_masked(…, &[true, false])` | the **value slot** of each level of a `@shallow(n)` wrap | the same two reads | none: `@shallow(n)` already replaces the element's type with `self.fresh_cell()` in `check_shallow_array_term`, and its wrapped pair is `[value, type]` |
+
+So the type side is marked **indirectly and only for the bare form**: the mark
+rides on the value position, and an apply's *type* application
+(`evaluation.rs`'s `apply_callee_type`) is reached only when the apply's *value*
+runs — `crates/lichen-lowlevel/src/evaluation.rs:283` puts both under the `Function`
+arm. A bare `@shallow` therefore hides the type as a side effect of hiding the
+value, which is exactly what "a lazy *value* marker should keep the value lazy, not
+hide the type" names.
+
+**The change**, in three places, all in `lichen-highlevel`:
+
+1. `Checker::check_app` builds a **type-only** application — the same four operand
+   elements over an *undecided* callee value, which is the one shape the apply arm
+   turns into `apply_callee_type` without a body — and records it. It replaces the
+   `type_apply` node that was built and immediately dropped (`let _ = type_apply;`,
+   a dead node since `e0e5ae09`); the replacement is the same intent, reachable.
+2. `check_shallow_array_term`'s bare arm registers `(that application, the
+   element's result type cell)` for every marked element that is a call.
+3. After the written-type pass and before the definition pass — once every type
+   expression is decided and every function's `func_node` holds its `Function` —
+   each registration runs, then `Checker::close_shallow_tail` closes the tail.
+
+### 7.2 Why a second step is needed, and what it is
+
+Running the type application alone decides **one** level. Measured on
+`lazy_infinite.lichen`: `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` becomes
+`(1, raw 2, raw 3): tuple{Int, ?a, ?b}`. The reason is structural, and it is worth
+stating because it is what no `lichen-highlevel` change can walk around:
+
+- `Module::apply_type` (`crates/lichen-lowlevel/src/function.rs:139`) clones the
+  template's return pair and unifies the result cell with **the clone's** codomain.
+  The clone's tail is the *clone's own* result cell, in a class of its own.
+- `regroup_clones` / `unify_clone_groups`
+  (`crates/lichen-lowlevel/src/apply.rs:182`, `:201`) re-establish the template's
+  class topology **among the clones only** — the group is the clones of one
+  template representative, and the template node is never unified into it.
+
+So the decided head is `[shape, kind]` with a **fresh, unbound** cell at its tail's
+type position, and the second read follows exactly that cell. `Checker::close_shallow_tail`
+closes it: when the tail's own type position is **undecided** after the type
+application ran, the tail takes the type the head states. One level suffices —
+the closed cell *is* the head's tail, so `inf(1)(1)`, `inf(1)(1)(1)` and every
+further read follow the same closed cell rather than a fresh one.
+
+**The guard is what keeps this from being an assertion.** Only an *undecided* tail
+position is closed, and only after the type application decided the head: a tail
+that already names a type states it, and an undecided head has nothing to close.
+So `f = x => [x, @shallow f 1]` — where the tail's type is `Int` and is decided —
+is left alone.
+
+### 7.3 The blast radius, measured separately
+
+Each change alone first, through `cargo run -p lichen-compiler`, then the whole
+survey and the suite counts.
+
+| program | `dev` | type application alone | + `close_shallow_tail` |
+|---|---|---|---|
+| `examples/lazy_infinite.lichen` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | `(1, raw 2, raw 3): tuple{Int, ?a, ?b}` | **`(1, 2, 3): tuple{Int, Int, Int}`** |
+| `f = x => [x, @shallow f (x + 1.5)]` ; `inf = f 0.0` ; `(inf(1)(0), inf(1)(1)(0))` | `(raw 1.5, raw 3.0): tuple{?a, ?b}` | `(1.5, raw 3.0): tuple{Float, ?a}` | **`(1.5, 3.0): tuple{Float, Float}`** — `Float` through the same read, decided as `Float` |
+| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `(0.0, raw none): tuple{Float, ?a}` | `(0.0, raw none): tuple{Float, tuple{Float, ?a}}` | `(0.0, raw none): tuple{Float, tuple{Float, tuple{Float, …}}}` — the coinductive type, rendered with its own `…` |
+| `@loop f = x => [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw 1: ?a` | `1: Int` | `1: Int` |
+| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | **unchanged** — see §7.4 |
+| the same with `(x : Int)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | unchanged |
+| `f = x => [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` | unchanged | unchanged |
+| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g` | `(0, [raw none, raw none]): tuple{Int, array{?a, 2}}` | unchanged | unchanged |
+| `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | `[1, 2]: array{Int, 2}` | unchanged | unchanged |
+| `xs = [1, @shallow [2, 3]]` ; `xs(0)` / `xs(1)` | `1: Int` / `[2, 3]: array{Int, 2}` | unchanged | unchanged |
+| `f = x => [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` (no marker) | `error: expected Int, found array{?a, 2}` | unchanged | unchanged |
+| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | unchanged | **unchanged** — `@shallow(n)` is a different mark, §7.5 |
+| `([1, @shallow(2) [2, 3]])(1)(0)` | `raw[raw 2, raw 3]: ?a` | unchanged | unchanged |
+
+The **survey**, `cargo test -p lichen-compute --test lichen_compute
+zz_examples_panic_probe -- --nocapture --test-threads 2`:
+
+| | `dev` | with §7 |
+|---|---|---|
+| clean | 42 | **43** |
+| panicked | — | — |
+| drifted | `lazy_infinite.lichen` | **—** |
+
+And the counts, on the merged tip of this branch:
+
+| | `dev` at `26f07fa1` | with §7 |
+|---|---|---|
+| `lichen-compute --test lichen_compute` | 203 passed / 15 failed / 2 ignored | **204 passed / 14 failed / 2 ignored** |
+| `lichen-language --test language` | 255 passed / 6 failed | **255 passed / 6 failed** — the same six |
+| `lichen-language` lib | 72 passed / 0 failed | **72 passed / 0 failed** |
+| `lichen-highlevel` | 140 passed / 0 failed | **140 passed / 0 failed** |
+
+`pipeline::an_at_shallow_depth_one_on_a_recursive_tail_terminates` is one of those
+six and **does not move**: it is still failing, for the same reason — it spells
+`@shallow(1)`, and §7.5 is about the bare mark. The `examples` test itself was
+already failing on `dev` (it is among the fifteen) and is fixed by this change.
+
+**Nothing refused a working program, nothing panicked, and nothing outside the
+intended case moved.** `lazy_infinite.lichen`'s `output =` line was **not**
+edited; the language came to match it.
+
+### 7.4 The control that correctly stays undecided
+
+`f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` still prints
+`[raw 1, raw 2]: array{?a, 2}`, and that is the **right** answer under the new
+semantics, not an omission. The marked element there is an array **literal**: there
+is no apply, so there is no type application to run and no tail cell to close, and
+the `?a` is `Checker::arithmetic_class`'s open class — family **A**, a different
+question with a different owner. What `@shallow` states is that the value is lazy.
+It says nothing about whether `x + 1`'s class is determined, and that depends on
+`x`'s type, which `f`'s caller supplies. Deciding it is `arithmetic-class-stated`
+§3's D1, measured there as `Float`-losing and twelve examples wide, and this
+change does not touch it. The survey agrees from the other side: the two
+`import` examples that **declare** `raw[?a, ?b]` did not move.
+
+### 7.5 What is deliberately still lazy
+
+`@shallow(n)` keeps both halves of its own semantics: the element's type is a
+**fresh cell** (`check_shallow_array_term`'s `n` arm) and its value is wrapped for
+`n` levels. It is a different mark with a different contract — the depth form says
+*how deep* the laziness reaches — and `an_at_shallow_depth_marks_value_slots_shallow`
+asserts that its read's type stays underdetermined. §7 changes only the bare form.
+
+### 7.6 The files
+
+`crates/lichen-highlevel/src/checker.rs` (the registration and the walk entry
+point), `crates/lichen-highlevel/src/checker/indexing.rs`
+(`check_shallow_array_term`'s registration, `close_shallow_tail`, and that one
+`# Invariant`), `crates/lichen-highlevel/src/checker/lambda.rs` (`check_app`'s
+type-only application), `docs/language-spec.md` §"Shallow markers", and this note
+with its companions. `crates/lichen-lowlevel/src/evaluation.rs` and
+`crates/lichen-lowlevel/src/gc.rs` were **not** touched, no new test was added,
+and no `output =` line was edited.
+
+**Is `sync-readme` safe now?** The survey is `clean=43 panicked=[] drifted=[]`,
+so re-deriving every `output =` from a live run finds nothing to rewrite — and it
+is **not safe to run as part of this change**, because it would commit a rewrite
+across the whole tree on top of a semantics change; the declarations are already
+what the language prints. It is a separate, now-safe run.

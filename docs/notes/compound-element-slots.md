@@ -234,30 +234,34 @@ consequences of taking that seriously:
   pattern an open container was pinned to. A cell's class carries the actual type
   once it resolves, so the elements resolve with it: `lazy_infinite` is the program
   that says so, and this note has claimed since this commit that it reads
-  `(1, 2, 3): tuple{Int, Int, Int}`. **It does not, on `dev` or on any tree this
-  note has been re-measured against**: it reads
+  `(1, 2, 3): tuple{Int, Int, Int}`. **It did not**, on `dev` or on any tree this
+  note was re-measured against for the next several commits: it read
   `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}`, which is what the per-example survey
   in [examples-panic-diagnosis](examples-panic-diagnosis.md) measures. The claim was
   written from the change this commit makes and never re-run against an example;
   the read does go through the container's own type cell, but on this program that
-  cell does not resolve. The diagnosis, with what is traced and what is not, is
+  cell did not resolve. The diagnosis, with what is traced and what is not, is
   [undecided-type-cell](undecided-type-cell.md) — and since then the write has been
   **located**: the element slot holds the *shared open class cell* that
   `Checker::arithmetic_class` returns when neither operand states a class
-  (`crates/lichen-highlevel/src/checker/operators.rs:106`), so what never closes is
+  (`crates/lichen-highlevel/src/checker/operators.rs:106`), so what never closed was
   that class, not the container's read. §10.2 there measures the discriminator; this
-  note records the intent, and the open question is a checker-side one about
+  note records the intent, and the open question was a checker-side one about
   `arithmetic_class`, not about this read path.
   **And that closing sentence is now measured wrong, twice over.**
   [arithmetic-class-stated](arithmetic-class-stated.md) §3 measured that deciding
   the class changes nothing here and costs twelve examples; and
   [index-read-unify](index-read-unify.md) instrumented this read path and found the
-  container's type cell is undecided **by construction** on `lazy_infinite.lichen` —
-  it is the type of an `@shallow` infinite tail, and its class has four members, all
-  undecided. So the read that prints `?a` never receives a write to skip: the
-  `Index` chain dies one link earlier, at the container's shape. The read path's own
-  rule is not in question; the question is whether an unmaterialisable container
-  type may be read past, and that is a user decision.
+  container's type cell undecided because the `@shallow` mark kept it that way —
+  not because it was unmaterialisable. That is now **fixed, on the mark and not
+  here**: §7 of that note landed route 1, a `@shallow` position is a **value** mark
+  that says nothing about the element's type, and `examples/lazy_infinite.lichen`
+  prints its declared `(1, 2, 3): tuple{Int, Int, Int}`. **This read path is
+  untouched by that fix** — the same lazy `Index` chain answers the reads once the
+  container's type cell holds the array it was always going to hold, and no read
+  asks the value's own element cell. §10.2's discriminator and
+  [arithmetic-class-stated](arithmetic-class-stated.md) §3's D1 stand: the
+  `?a` that remains is `arithmetic_class`'s open class, a different owner.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
   (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
   container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an

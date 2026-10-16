@@ -252,8 +252,8 @@ your decision; this one touches nothing.
 | option | verdict | what remains broken | `examples` / `sync-readme` |
 |---|---|---|---|
 | **fix `arithmetic_class` (D1)** | **rejected, measured** | everything in §3's right column | **more blocked than now.** `sync-readme` re-derives every `output =` from a live run, so it would fail on ten examples and rewrite `import/math.lichen`'s and `import/geometry.lichen`'s declarations against an output the language no longer intends |
-| **leave it, fix the index read** | **recommended** | `lazy_infinite.lichen` until that slice lands; nothing else | **blocked until it lands**, then both unblock. Nothing here would record the drift as intended |
-| **leave it and declare the drift intended** | **not available** | four examples' declared forms stay wrong | [undecided-type-cell](undecided-type-cell.md) §5 rules this out on the merits: `operators` §2 specifies `Int`, and three of the four already print `Int` for a neighbouring element of the same shape. `sync-readme` would commit `output = "(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}"` |
+| **leave it, fix the index read** | **recommended — and taken.** [index-read-unify](index-read-unify.md) §7 landed it, on the `@shallow` mark and not on this read | nothing: `lazy_infinite.lichen` reads its declared form | **unblocked.** The survey is `clean=43 panicked=[] drifted=[]`, so `sync-readme` has nothing left to rewrite |
+| **leave it and declare the drift intended** | **not available, and now moot** | — | [undecided-type-cell](undecided-type-cell.md) §5 rules this out on the merits: `operators` §2 specifies `Int`, and three of the four already print `Int` for a neighbouring element of the same shape. The drift it would have committed is gone |
 
 ## 6. Measured, inferred, unknown
 
@@ -278,8 +278,12 @@ reader of its spelling at `render.rs:299`.
 class. Nothing here measures one; §5 says where to look, not what to write.
 **[index-read-unify](index-read-unify.md) answers it: there is no carry to write.**
 The cell §5 names is never built, the cell that prints `?a` is a different one, and
-what the chain needs is the type of an `@shallow` infinite tail — undecided by
-construction.
+what the chain needs is the type of a `@shallow` infinite tail — which the mark,
+not the read, kept undecided. **§7 of that note changed the mark instead, by the
+user's decision, and `lazy_infinite.lichen` now reads its declared form.**
+`arithmetic_class` itself is untouched: the `?a` that remains on
+`f = x => [x, @shallow [x + 1, x + 2]]` is this note's own class, and D1's verdict
+over it stands.
 
 **Not this note's subject** — the `Refinement` *flavour* being unreachable. Measured,
 recorded in §1, and left alone: [operator-polymorphism](operator-polymorphism.md) §8.5
