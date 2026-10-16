@@ -724,7 +724,20 @@ where
         };
         let value_a = entry.map(|e| (e.a, e.b)).and(err.value_a);
         let value_b = entry.map(|e| (e.a, e.b)).and(err.value_b);
-        let loc = entry.map(|e| e.loc.clone());
+        // An engine-side unify has no diary entry: locate it through the descent it recorded.
+        let loc = match entry {
+            Some(entry) => Some(entry.loc.clone()),
+            None => err
+                .steps
+                .last()
+                .and_then(|step| self.node_loc(AnyNodeId::Dynamic(step.a)))
+                .or_else(|| {
+                    err.steps
+                        .last()
+                        .and_then(|step| self.node_loc(AnyNodeId::Dynamic(step.b)))
+                })
+                .or_else(|| self.node_loc(AnyNodeId::Dynamic(err.root_a))),
+        };
         let kind = entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime);
         let field = entry.and_then(|e| e.field.clone());
         Diag {

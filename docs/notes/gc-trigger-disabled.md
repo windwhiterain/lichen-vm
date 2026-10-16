@@ -54,7 +54,7 @@ thirteen are the compaction contract, one test per claim: `compaction::block_run
 `assert::gc_moves_an_assert_condition_with_its_function`, `assert::gc_prunes_asserts_of_dropped_blocks`,
 `function::function_in_local_block_survives_compaction`, `function::function_scope_is_dropped_with_its_block`,
 `function::mixed_blocks_and_functions_survive_compaction`,
-`table::gc_compaction_moves_table_payloads_and_entries`.
+`table::gc_compaction_moves_table_payloads_and_entries`, and `lichen-language`'s `gc_block::a_gc_block_releases_its_scope` (that suite goes from 9 to 10 failures; the other nine are pre-existing reds).
 
 They are red because those tests read a scope **from inside a descent** and require it compacted — which is
 exactly the case that frees the running frame's block. Narrowing the disable to "no collect while
