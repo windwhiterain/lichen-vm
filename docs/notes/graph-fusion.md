@@ -580,7 +580,8 @@ one decision, not one per subcommand. It is applied as a **third channel**, not 
 `render_build`'s refusal gate: that channel returns `Err(diags)`, which the CLI prints *instead of* the
 value and exits `FAILURE` on, so a run that answered would lose its answer to gain a report — a stage
 line is a fact (`region N: …`, `node N: …`, `pack "…" fired`), not an explanation for a value that never
-arrived (`compute-plugin.md`: a refusal is not a verdict). The lines go to **stderr, verbatim and
+arrived ([compiler-plugin](compiler-plugin.md#a-refusal-or-a-stage-observation-and-the-flag-that-carries-it):
+a stage observation is reported beside the value, not instead of it). The lines go to **stderr, verbatim and
 unprefixed** — stdout is the program's output — and `Silent` collects nothing at all, so a run that
 named no pack is byte-for-byte the run it was. What a machine gains: it can now tell *fired* from
 *inert* — `pack "sum-in-shared" fired for schema sha256:b0545f…: its plan stages \`tile\` in Shared over

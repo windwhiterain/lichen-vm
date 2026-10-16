@@ -456,17 +456,14 @@ than a second scan, so the text and the `(line, col)` name the same line.
   an answer that arrived does not make a recorded refusal go away — the program in
   `crates/lichen-compute/tests/inplace_write_refusal.lichen` collects an **input**
   buffer, which has a value whatever the kernel did, and the in-place write it
-  performed was refused by name and answered as if nothing had happened. The walk
-  itself survives where a host still asks the question —
-  `crates/lichen-language/src/testing.rs` and
-  `crates/lichen-testkit/src/probe.rs` — but it no longer decides what a run reports.
-  Its own question remains worth stating: **ask it of the answer's own value graph,
-  not of its root slot**. A tuple whose every position is empty is a program that
-  produced nothing, however much of a value a tuple is structurally, and a root that
-  holds one decided position has arrived. A **shallow** position is a lazy region the
-  walk was told not to enter, so it counts neither way; the test is whether
-  *anything* arrived, not whether everything is decided, which is what keeps a
-  lazily-computed answer — and `examples/lazy_infinite.lichen` — working.
+  performed was refused by name and answered as if nothing had happened. What replaced
+  it is one predicate: `run::render_build` refuses on `Module::has_extension_failures()`,
+  and so do both test helpers — `crates/lichen-language/src/testing.rs` and
+  `crates/lichen-testkit/src/probe.rs` — so a run and a suite agree on what a refusal
+  is by construction rather than by two readings happening to agree. With no reader
+  left, the walk itself is gone: nothing asks whether an answer arrived any more,
+  because a stage line is a fact about the run and belongs beside whatever the program
+  answered, not in place of it.
 
 ### The tooling crate
 
