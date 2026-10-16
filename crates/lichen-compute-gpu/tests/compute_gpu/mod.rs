@@ -10,6 +10,7 @@ mod gpu_matches_cpu;
 mod graph_on_device;
 mod refusals;
 mod spirv_validation;
+mod spliced_transcendentals;
 mod upload_width;
 mod warp_exchange;
 mod workgroup_height;

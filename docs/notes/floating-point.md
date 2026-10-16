@@ -577,6 +577,21 @@ division (§4.4): it is unspecified there, and this is the mechanism behind that
 decision rather than a new finding. It is also the reason the reduction above
 multiplies by a constant instead of dividing by one.
 
+**`ln` reached the kernel vocabulary after all, and on this device its one division did
+not bite.** `ln` is now `KernelInstr::Ln` with `ln_body` in `TRANSCENDENTALS`, a
+straight-line reduction of 42 conditional scalings rather than the loop this section
+below predicted, so the paragraph that follows is history and the definition is in
+`crates/lichen-kernel-ir/src/unary.rs`. `crates/lichen-compute-gpu/tests/compute_gpu/
+spliced_transcendentals.rs` runs that spliced body on an RTX 3060 Laptop GPU over six
+arguments covering the coarse, fine and unit steps — `0.5`, `1.0`, `1.5`, `3.0`, `10.0`,
+`1000.0` — and **the device and `ln_value` agree bit for bit at all six**. The division
+in `(m−1)/(m+1)` is real and its denominators are `1.75`, `2.25` and `1.9765625`, none a
+power of two, so this is the finding the brief expected and it did not appear: **six
+arguments are a sample, not a sweep**, and §8's `sin`/`cos` result is the reminder that a
+zero here is a measurement rather than an exemption. Nothing has changed about §4.4 — a
+kernel's float division is still unspecified — but the hazard is now pinned by a test
+rather than only by a probe.
+
 **`ln` is deferred, and the blocker is the inliner's shape rather than the
 arithmetic.** The shape that works is `x = m · 2^k` with `k` counted in a loop, then
 `ln(m) = 2·atanh((m − 1)/(m + 1))` on the reduced range, added to `k · ln 2`. The
@@ -607,12 +622,12 @@ object `exp`, `sqrt` and `floor` are.**
 
 ## 8. `sin` and `cos`
 
-**These two do not carry a `KernelInstr`.** The runtime's instruction list is closed by the
-artifact schema, so `sin a` / `cos a` are language keywords whose definitions live in
-`crates/lichen-kernel-ir/src/unary.rs` and are spliced in by the lowerer through
-`KernelBody::inline_definition`. The fusion bridge reads the spliced definition the same way it
-reads the inlined `exp` and `sqrt` (`inlined_sin_operand` / `inlined_cos_operand`), so a marked
-`sin` in a body bridges like any other operator.
+**These two carry a `KernelInstr` of their own.** `82640443` moved them out of the lowerer's
+splice and into `KernelInstr::Sin` / `KernelInstr::Cos`, named in `TRANSCENDENTALS` beside
+`Exp`, so `expand_transcendentals` inlines their definitions the same way; the fusion bridge
+still reads the inlined definition (`inlined_sin_operand` / `inlined_cos_operand`), so a marked
+`sin` in a body bridges like any other operator. The definitions live in
+`crates/lichen-kernel-ir/src/unary.rs`.
 
 **The reduction is Cody–Waite**, with `π/2` split into an 11-fraction-bit head
 (`HALF_PI_HEAD = 3217/2048`) plus a tail rounded once **from the `f64` constant**. A
@@ -646,8 +661,28 @@ does, and only a check of **emitted against modelled** catches the difference. T
 `crates/lichen-compute/tests/trig_domain.rs`, and it fails on the commit that had the reversed
 arms.
 
-**What is not proven.** The **SPIR-V** path for a spliced `sin`/`cos` body is untested: the two
-emitters agree on `Select`'s operand convention by inspection and the GPU suite passes, but no
-test feeds an inlined `sin_body` through the SPIR-V emitter, because every example runs on the
-`"cpu"` backend. And accuracy against `f64` was **sampled, not swept** — emitted against modelled
-is exactly 0 ulp at the sampled angles; modelled against `f64` was checked only there.
+**What is now proven.** The **SPIR-V** path for a spliced `sin`/`cos` body has been run:
+`crates/lichen-compute-gpu/tests/compute_gpu/spliced_transcendentals.rs` expands each
+instruction with `expand_transcendentals` — the pass the lowering itself runs — and
+dispatches the spliced body on an RTX 3060 Laptop GPU. **The two backends do not agree.**
+Over six angles covering all four residues of the reduction and a negative operand, the
+device is **exact at three and differs at three**, worst **5 ulp for `sin`** (at `3.0`) and
+**6 ulp for `cos`** (at `-1.5`); every element is printed by the test.
+
+**The divergence is not the definition.** This file's own reference evaluator, reading the
+spliced body instruction by instruction, agrees with `sin_value`/`cos_value` **bit for bit**
+at every point — two independent readings of one sequence, and they are identical. What
+differs is what the device computes from that sequence. It is deterministic (the same
+answer on three runs) and lane-independent (64 identical lanes return one value), so it is
+not a race; and it is not fused-multiply-add contraction, which was modelled three ways
+(`v·z + c` contracted, the reduction's `a − b·c` contracted, and the final `r·(v·z + 1)`
+contracted through the last Horner add) and reproduces none of the device's values. **The
+device is the less accurate of the two at every point where it differs** — at `7.0` it is
+2 ulp out where the definition is within 0.2 ulp of `f64`. **What the operation is remains
+open**; it is inside the emitted sequence, it is systematic, and it is not a division,
+because these two definitions contain none.
+
+**What is still not proven.** Accuracy against `f64` was **sampled, not swept** — and now
+sampled only at the six angles the test dispatches, which is a reading of the divergence
+rather than a bound on it. The one division the language leaves unspecified (§4.4) is still
+a live hazard; `ln`, below, is where it would show.

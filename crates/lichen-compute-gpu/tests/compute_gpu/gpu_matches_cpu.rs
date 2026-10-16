@@ -43,7 +43,7 @@ fn words(data: ScalarData) -> Vec<i64> {
 }
 
 /// The `f32` elements of a fetched payload, for a fragment whose class is `Float`.
-fn floats(data: ScalarData) -> Vec<f32> {
+pub(super) fn floats(data: ScalarData) -> Vec<f32> {
     match data {
         ScalarData::Float(elements) => elements,
         ScalarData::Int(elements) => {
@@ -56,7 +56,7 @@ fn floats(data: ScalarData) -> Vec<f32> {
 }
 
 /// The packed bytes of `values`, one `f32` each.
-fn pack_floats(values: &[f32]) -> Vec<u8> {
+pub(super) fn pack_floats(values: &[f32]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|value| value.to_le_bytes())
@@ -434,7 +434,7 @@ fn staging_refusal(access: lichen_kernel_ir::ValueId) -> String {
 /// it proves the shader agrees with this file and nothing about `lichen-compute`. The reading is per
 /// class, read from the emitter rather than re-derived, and follows the language's rules: `==`/`!=`
 /// compare `to_bits`, a condition is the bit pattern, and a comparison answers `1`/`0`.
-fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64> {
+pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64> {
     let class = lichen_compute_gpu::spirv::module_class(fragment)
         .expect("the reference reads the class the fragment declares");
     let index = fragment.param_shape.flat_arity() - 1;
