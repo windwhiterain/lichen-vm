@@ -19,10 +19,11 @@ use crate::{
     program::{HighProgram, ValueType},
 };
 
+/// The steps `node_loc` follows an origin chain for.
+const ORIGIN_CHAIN_STEPS: usize = 8;
+
 /// The check a unification failure implements, fixing the expected/found
 /// direction of a mismatch's `a`/`b`.
-/// How far `node_loc` follows an origin chain before it gives up on a location.
-const ORIGIN_CHAIN_STEPS: usize = 8;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.
@@ -624,9 +625,7 @@ where
         let AnyNodeId::Dynamic(node) = node else {
             return None;
         };
-        // A chain walk: every step can only fill a miss, so a located failure keeps its
-        // span, and a write-time unify error is attributed to the expression its cells
-        // came from. `Module::node_origin` is a forest, so the walk terminates.
+        // A chain walk: every step can only fill a miss, and the chain is a forest.
         let mut current = node;
         for _ in 0..ORIGIN_CHAIN_STEPS {
             if !self.module.nodes.contains_key(current) {
