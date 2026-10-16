@@ -84,7 +84,7 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    // The CLI reports every runtime refusal (`docs/notes/language-toolchain.md`), while this helper still asserts an older, quieter rule, so a suite built through it is laxer than the CLI about a refusal recorded beside an answer.
+    // Laxer than the CLI, which reports every recorded refusal (`docs/notes/language-toolchain.md`).
     let produced_nothing = !crate::run::answer_arrived(&module, value);
     assert!(
         !(produced_nothing && !module.extension_diagnostics.is_empty()),
