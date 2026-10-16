@@ -15,8 +15,8 @@ use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator,
-    ValueDef, ValueId,
+    KernelShape, LaneHeight, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts,
+    Terminator, ValueDef, ValueId,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -62,6 +62,7 @@ fn adds_one() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -154,6 +155,7 @@ fn scales_a_float() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -177,6 +179,7 @@ fn one_integer_output(body: KernelBody) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -572,6 +575,7 @@ fn index_to_float() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -619,6 +623,7 @@ fn crosses_both_ways() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -703,6 +708,7 @@ fn two_buffer_classes() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -723,6 +729,7 @@ fn nullary_callee() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -755,6 +762,7 @@ fn calls_a_nullary_kernel() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -866,6 +874,7 @@ fn unary_callee() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1082,6 +1091,7 @@ fn folded_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_height: LaneHeight::new(1),
         },
         slices: if tiled {
             vec![Slice {
@@ -1536,6 +1546,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1578,6 +1589,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1749,6 +1761,7 @@ fn stages_a_slice() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

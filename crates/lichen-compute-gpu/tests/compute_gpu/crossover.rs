@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBody, KernelFragment, KernelId, KernelInstr, KernelRoles, KernelShape,
-    LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
+    LaneHeight, LaneWidth, LaunchSet, ScalarClass, TargetFacts, Terminator,
 };
 
 const ONE_IN_ONE_OUT: Binding = Binding {
@@ -33,6 +33,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -91,6 +92,7 @@ fn calls_kernel_7() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -186,6 +188,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -254,6 +257,7 @@ fn an_unbalanced_body_is_refused() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

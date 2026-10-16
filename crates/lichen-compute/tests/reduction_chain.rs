@@ -13,8 +13,9 @@ use lichen_fusion::{BinaryOp, Expr, Reduction};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneWidth, Plan,
-    PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging, TargetFacts, fragment_digest,
+    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
+    LaneWidth, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space, Staging, TargetFacts,
+    fragment_digest,
 };
 use lichen_lowlevel::Module;
 
@@ -179,6 +180,7 @@ fn body_fragment(body: KernelBody, slices: Vec<Slice>) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_height: LaneHeight::new(1),
         },
         slices,
         marks: Vec::new(),

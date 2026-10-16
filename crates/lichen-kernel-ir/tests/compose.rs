@@ -3,8 +3,8 @@
 
 use lichen_kernel_ir::{
     Br, ComposeRefusal, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelMark,
-    KernelRoles, KernelShape, LaneWidth, MarkField, ScalarClass, Slice, Space, TargetFacts,
-    Terminator, ValueDef, ValueId, compose,
+    KernelRoles, KernelShape, LaneHeight, LaneWidth, MarkField, ScalarClass, Slice, Space,
+    TargetFacts, Terminator, ValueDef, ValueId, compose,
 };
 
 /// The lane count one workgroup runs.
@@ -22,6 +22,7 @@ fn target() -> TargetFacts {
     TargetFacts {
         int_width: IntWidth::I64,
         lane_width: LaneWidth::new(LANES),
+        lane_height: LaneHeight::new(1),
     }
 }
 

@@ -314,8 +314,10 @@ pub struct Roles {
 pub struct Target {
     /// The width the body's integers were lowered to mean.
     pub int_width: IntWidth,
-    /// The lane count one workgroup runs.
+    /// The lane count one row of a workgroup runs.
     pub lane_width: u32,
+    /// The row count one workgroup runs.
+    pub lane_height: u32,
 }
 
 /// One memory slice a fragment declares.
@@ -441,7 +443,7 @@ pub struct Artifact {
 /// One number for the whole artifact rather than one per type: the fragment, the claim
 /// and the plan travel as one text, so a reader that could read a fragment at one
 /// version and a plan at another would have to decide which to believe.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The artifact's version, read on its own.
 ///

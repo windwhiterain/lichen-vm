@@ -4,7 +4,7 @@
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaneWidth, LaunchSet, ScalarClass, TargetFacts,
+    LaneHeight, LaneWidth, LaunchSet, ScalarClass, TargetFacts,
 };
 
 /// One `Float` input and one `Float` output, over `(n, a, index)`.
@@ -31,6 +31,7 @@ fn fragment(body: KernelBody) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

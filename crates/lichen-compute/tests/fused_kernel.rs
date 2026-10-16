@@ -3,8 +3,8 @@
 use lichen_compute::{FusedKernel, FusedRefusal, read_fused_kernel, write_fused_kernel};
 use lichen_kernel_ir::{
     IntWidth, KernelBin, KernelBody, KernelClaim, KernelFragment, KernelInstr, KernelMark,
-    KernelRoles, KernelShape, LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass, Slice, Space,
-    Staging, TargetFacts, Terminator, ValueId,
+    KernelRoles, KernelShape, LaneHeight, LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass,
+    Slice, Space, Staging, TargetFacts, Terminator, ValueId,
 };
 
 /// The lane count one workgroup runs.
@@ -58,6 +58,7 @@ fn fragment(space: Space) -> (KernelFragment, ValueId) {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LANES),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -130,7 +131,7 @@ fn a_kernel_with_no_claim_and_an_empty_plan_reads_back() {
 fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "tuple": [{ "scalar": "int" }, { "scalar": "int" }] },
         "roles": {
@@ -163,7 +164,7 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
         "input_classes": ["float"],
         "output_classes": ["int"],
         "result_classes": ["int"],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [{ "class": "int", "count": 64, "space": "shared" }],
         "marks": [{ "value": 4, "payload": [{ "name": null, "text": "tile" }] }]
       },
@@ -193,6 +194,7 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LANES),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -248,14 +250,14 @@ fn json_missing_a_required_field_is_refused_by_path() {
 fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
         "body": { "values": [], "blocks": [], "entry": 0, "barriers": [] },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": [],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [{ "class": "int", "count": 64, "space": "global" }],
         "marks": []
       },
@@ -279,7 +281,7 @@ fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
 fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -303,7 +305,7 @@ fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
         },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": ["int"],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [],
         "marks": []
       },
@@ -351,7 +353,7 @@ fn a_plan_naming_a_mark_the_body_never_published_is_refused() {
 fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -367,7 +369,7 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
         },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": ["int"],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [],
         "marks": []
       },
@@ -391,14 +393,14 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
 fn a_field_the_schema_does_not_have_is_refused_by_path() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
         "body": { "values": [], "blocks": [], "entry": 0, "barriers": [] },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": [],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [{ "class": "int", "count": 64, "space": "shared", "element": "int" }],
         "marks": []
       },
@@ -422,7 +424,7 @@ fn a_field_the_schema_does_not_have_is_refused_by_path() {
 fn every_instruction_the_ir_has_is_expressed_by_the_text() {
     let text = r#"
     {
-      "version": 1,
+      "version": 2,
       "fragment": {
         "param_shape": { "tuple": [
           { "scalar": "int" }, { "scalar": "int" }, { "scalar": "float" }
@@ -461,7 +463,7 @@ fn every_instruction_the_ir_has_is_expressed_by_the_text() {
         },
         "inputs": 1, "outputs": 1,
         "input_classes": ["float"], "output_classes": ["int"], "result_classes": ["int"],
-        "target": { "int_width": "i64", "lane_width": 64 },
+        "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
         "slices": [{ "class": "int", "count": 64, "space": "register" }],
         "marks": []
       },

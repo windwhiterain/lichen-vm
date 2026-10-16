@@ -374,6 +374,7 @@ fn target(at: &str, facts: schema::Target) -> Result<ir::TargetFacts, NotAnIrVal
     Ok(ir::TargetFacts {
         int_width: int_width(&format!("{at}.int_width"), facts.int_width)?,
         lane_width: ir::LaneWidth::new(facts.lane_width),
+        lane_height: ir::LaneHeight::new(facts.lane_height),
     })
 }
 
@@ -382,6 +383,7 @@ impl From<ir::TargetFacts> for schema::Target {
         schema::Target {
             int_width: target.int_width.into(),
             lane_width: target.lane_width.lanes(),
+            lane_height: target.lane_height.rows(),
         }
     }
 }

@@ -11,7 +11,7 @@ use lichen_compute_gpu::RunError;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, ScalarData, TargetFacts,
+    KernelShape, LaneHeight, LaneWidth, LaunchSet, ScalarClass, ScalarData, TargetFacts,
 };
 
 /// A one-fragment launch set: every kernel here stands alone.
@@ -72,6 +72,7 @@ fn shifted(shift: i64) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

@@ -5,7 +5,7 @@ use lichen_compute::{FusedRefusal, LandingRefusal, land_fused_kernel, read_fused
 use lichen_graph_ir::{Count, FragmentShape, Graph, GraphRefusal, KernelNode, Node};
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    LaneWidth, PlanRefusal, ScalarClass, TargetFacts, fragment_digest,
+    LaneHeight, LaneWidth, PlanRefusal, ScalarClass, TargetFacts, fragment_digest,
 };
 
 /// The artifact a caller lands: `out[i] = in[i] + 2`, hand-written.
@@ -16,7 +16,7 @@ use lichen_kernel_ir::{
 /// body, which is what a landed replacement is supposed to change.
 const ARTIFACT: &str = r#"
 {
-  "version": 1,
+  "version": 2,
   "fragment": {
     "param_shape": { "tuple": [{ "scalar": "int" }, { "scalar": "int" }] },
     "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -43,7 +43,7 @@ const ARTIFACT: &str = r#"
     "input_classes": ["int"],
     "output_classes": ["int"],
     "result_classes": ["int"],
-    "target": { "int_width": "i64", "lane_width": 64 },
+    "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
     "slices": [],
     "marks": []
   },
@@ -82,6 +82,7 @@ fn fragment_adding(k: i64) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

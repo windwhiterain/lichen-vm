@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf, Slice, Space,
-    TargetFacts,
+    KernelShape, LaneHeight, LaneWidth, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf,
+    Slice, Space, TargetFacts,
 };
 
 /// A one-fragment launch set: every kernel here stands alone, and a set's
@@ -80,6 +80,7 @@ fn fragment(body: Vec<FlatOp>) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -200,6 +201,7 @@ fn float_conditional() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1049,6 +1051,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1091,6 +1094,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1274,6 +1278,7 @@ fn stages_a_slice() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

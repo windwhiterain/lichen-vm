@@ -3,8 +3,8 @@
 
 use lichen_kernel_ir::{
     IntWidth, KernelBody, KernelFragment, KernelInstr, KernelMark, KernelRoles, KernelShape,
-    LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass, Slice, Space, Staging, TargetFacts,
-    Terminator, ValueId,
+    LaneHeight, LaneWidth, MarkField, Plan, PlanRefusal, ScalarClass, Slice, Space, Staging,
+    TargetFacts, Terminator, ValueId,
 };
 
 /// The lane count one workgroup runs.
@@ -58,6 +58,7 @@ fn fragment(space: Space, marks: &[(&str, ValueId)]) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LANES),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

@@ -10,8 +10,8 @@ use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBody, KernelFragment, KernelMark, KernelRoles, KernelShape,
-    LaneWidth, LaunchSet, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice, Space,
-    Staging, TargetFacts,
+    LaneHeight, LaneWidth, LaunchSet, MarkField, Plan, PlanRefusal, ScalarClass, ScalarData, Slice,
+    Space, Staging, TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -198,6 +198,7 @@ fn staged_fragment(
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

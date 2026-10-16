@@ -113,16 +113,21 @@ runtime would be the second copy of a rule this repository refuses). The probe r
 `spirv::LOCAL_SIZE_X`/`SUBGROUP_WIDTH` as device facts: a loader that compared an artifact against them
 would be checking the compiler against itself.
 
-**The version is an explicit required `version: u32`** on `schema::Artifact` (`FORMAT_VERSION = 1`),
+**The version is an explicit required `version: u32`** on `schema::Artifact` (`FORMAT_VERSION = 2`),
 not a wrapper — `deny_unknown_fields` already refuses a later format's extra fields, so a wrapper would
 only add a second name for one artifact. A missing version is refused by that same denial (measured:
-deleting `"version": 1` fails all five `fused_landing` tests, naming the path `version`), and the
+deleting `"version": 2` fails all five `fused_landing` tests, naming the path `version`), and the
 loader adds what the field cannot: a **named** refusal before a full parse. Measured on the device
-(RTX 3060, `int_bits 64`, `max_workgroup_lanes 1024`, `subgroup_width Some(32)`, `max_shared_bytes
-49152`): the one-call load answers what the direct path answers, a `"version": 2` text is refused with
-`submissions()`/`fence_waits()`/the node's digest all unchanged, and a hand-made `subgroup_width: 16`
-refuses a 32-element `Warp` slice by name. Two mutation checks make those tests discriminate: setting
-the wrong format constant or the matching subgroup width makes them fail.
+(RTX 3060, `int_bits 64`, `max_workgroup_lanes 1024`, `max_workgroup_lanes_y 1024`, `subgroup_width
+Some(32)`, `max_shared_bytes 49152`): the one-call load answers what the direct path answers, a
+`"version": 3` text is refused with `submissions()`/`fence_waits()`/the node's digest all unchanged,
+and a hand-made `subgroup_width: 16` refuses a 32-element `Warp` slice by name. **The bump to 2**,
+`Target`'s gaining `lane_height`, measured the gate in the other direction: a hand-written **version-1**
+text names `VersionMismatch` — *"the text is artifact format 1 and this build reads format 2, so the
+artifact is refused before any of it is parsed"* — where the strict read alone would have answered
+`missing field 'lane_height' in type 'Target' (at 'fragment.target') (bytes 814..815)`. Two mutation
+checks make those tests discriminate: setting the wrong format constant or the matching subgroup
+width makes them fail.
 
 **And the path a server composes is now one call, with nothing else reachable from it**:
 

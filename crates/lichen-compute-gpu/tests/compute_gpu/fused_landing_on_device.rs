@@ -7,8 +7,8 @@ use super::warp_exchange::sums_a_staged_tile;
 use lichen_compute_gpu::{GpuContext, SUBGROUP_WIDTH};
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelFragment, KernelRoles, KernelShape, LaneWidth, Plan, ScalarClass,
-    ScalarData, Slice, Space, TargetFacts, fragment_digest,
+    BufferSlot, IntWidth, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth, Plan,
+    ScalarClass, ScalarData, Slice, Space, TargetFacts, fragment_digest,
 };
 use lichen_runtime::{
     ARTIFACT_FORMAT_VERSION, DeviceFacts, DeviceFactsSource, DeviceRefusal, FusedKernel,
@@ -79,6 +79,7 @@ fn tiled_fragment(tile: u32) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -121,6 +122,7 @@ fn per_lane_fragment(tile: u32) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -400,6 +402,7 @@ impl DeviceFactsSource for NarrowSubgroups {
         DeviceFacts {
             int_bits: 64,
             max_workgroup_lanes: 1024,
+            max_workgroup_lanes_y: 1024,
             subgroup_width: Some(16),
             max_shared_bytes: 48 * 1024,
             max_storage_buffers: 4,

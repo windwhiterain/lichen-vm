@@ -6,8 +6,8 @@
 
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape, LaneWidth,
-    ScalarClass, Slice, Space, TargetFacts, ValueDef, ValueId,
+    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    LaneHeight, LaneWidth, ScalarClass, Slice, Space, TargetFacts, ValueDef, ValueId,
 };
 
 /// A body that writes one slice, leaving behind the version a read would name.
@@ -40,6 +40,7 @@ fn stages_a_slice() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

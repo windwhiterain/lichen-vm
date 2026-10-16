@@ -17,8 +17,8 @@ use lichen_highlevel::shape::{
 };
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
-    KernelMark, KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, ScalarData,
-    ScalarLeaf, TargetFacts,
+    KernelMark, KernelRoles, KernelShape, LaneHeight, LaneWidth, ResidentId, ScalarClass,
+    ScalarData, ScalarLeaf, TargetFacts,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -122,6 +122,7 @@ mod kernel_intern_tests {
             target: TargetFacts {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
+                lane_height: LaneHeight::new(1),
             },
             slices: Vec::new(),
             marks: Vec::new(),
@@ -2272,6 +2273,7 @@ where
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: std::mem::take(&mut tally.marks),
@@ -2516,6 +2518,7 @@ where
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: std::mem::take(&mut tally.marks),
@@ -6380,6 +6383,7 @@ mod parallel_launch_tests {
             target: TargetFacts {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
+                lane_height: LaneHeight::new(1),
             },
             slices: Vec::new(),
             marks: Vec::new(),
@@ -6416,6 +6420,7 @@ mod parallel_launch_tests {
             target: TargetFacts {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(64),
+                lane_height: LaneHeight::new(1),
             },
             slices: vec![Slice {
                 class: ScalarClass::Int,

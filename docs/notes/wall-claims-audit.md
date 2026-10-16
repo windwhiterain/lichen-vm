@@ -209,7 +209,10 @@ recursion state**, and the recursion is the spelling §3 says to use.
   truncated write, and no error, no refusal, no report line"**. That is the class a tile's partial
   sums would pass through. So wall 8 as posed is **not an expressibility question at all**: the
   rectangle lands, and what is left is the silent-wrong-answer class the same section measures,
-  which is a correctness gate rather than a feature.
+  which is a correctness gate rather than a feature. **That gate now exists for the declaration
+  path** — `TargetFacts` carries a `lane_height` and `DeviceFacts::check` refuses anything that is
+  not `x × 1` by name ([two-dimensional-workgroup](two-dimensional-workgroup.md) §9.3) — so the
+  class is unreachable through a fragment and still open through a hand-written module.
 
 ## §6 Wall 6 — the drop is a spelling gap, and a third silent no-op sits beside it
 

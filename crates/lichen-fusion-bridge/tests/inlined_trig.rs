@@ -3,8 +3,8 @@
 use lichen_fusion::{Expr, UnaryOp};
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneWidth, ScalarClass,
-    TargetFacts, ValueDef,
+    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneHeight, LaneWidth,
+    ScalarClass, TargetFacts, ValueDef,
 };
 
 /// A scalar fragment over `body`, whose entry leaf `0` is its datum.
@@ -23,6 +23,7 @@ fn fragment(body: KernelBody) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

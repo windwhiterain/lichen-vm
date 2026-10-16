@@ -1,7 +1,11 @@
 # A workgroup that is not one row: a proposal
 
-> Status: **proposal.** Nothing here is implemented; §4's probe was run and removed, and the
-> tree this note reports from holds no code but itself.
+> Status: **§6's first slice has landed** (commit `fd494671`, `TargetFacts { int_width, lane_width,
+> lane_height }`, `FORMAT_VERSION` 2, `max_workgroup_lanes_y`, and a by-name refusal for a workgroup
+> that is not `x × 1`). **§7 is the rest, and §8 is what is still unknown.** §4's probe was run and
+> removed, and the measurements §9 records were taken on that slice and their probes removed too.
+> Everything §1–§5 below is re-read against `af634c14`, and the three places it is wrong are corrected
+> in §9.
 > Points at: `crates/lichen-compute-gpu/src/spirv.rs` (`OpExecutionModeLocalSize`, the two
 > `Input` built-ins, `slice_pointer`), `crates/lichen-compute-gpu/src/dispatch.rs`
 > (`launch_workgroups`, `device_facts`, the launch signatures),
@@ -281,6 +285,9 @@ Every kernel id in the tree moves, exactly as the `# Invariant` at `:1077-1081` 
 across 12 crates** (it also caught two struct *field* declarations named `lane_width: u32`, which
 a real patch would not). Every one is `TargetFacts { int_width: …, lane_width: … }`.
 
+> **Superseded — §9.** The 74 and the 12 crates are both wrong against the tree this landed on.
+> The measured figure is **80 struct literals in 31 files across 6 crates**.
+
 **Every consumer of the digest, so nothing is missed:**
 
 | consumer | file:line | what a moved id costs it |
@@ -357,17 +364,25 @@ place of the scalar; the digest re-keyed in the same commit; `schema::Target` an
 gaining `max_workgroup_lanes_y` read from `max_compute_work_group_size[1]`; and `check` refusing a
 workgroup that is not `x × 1` **by name**, because nothing downstream can honour one yet.
 
+> **Two corrections, both measured in §9.** The digest was **not** re-keyed: it still hashes the
+> `Debug` string of the whole struct, which is what §5 measured and what the `# Invariant` at
+> `lib.rs:1109-1113` describes. And **`placement_pack`'s `Staging.group_width` was not widened**,
+> because §2 above says a `Plan` is left for the next slice and §6 item 6 is that slice — the two
+> halves of this note disagree, and §2 is the one that holds. A pack carries no `TargetFacts` at
+> all (`placement_pack.rs`'s `Constraints` holds a scalar class and nothing else), so nothing in
+> the pack path means something different at version 2.
+
 **What it proves, on its own:**
 
 - the digest migration is a **version bump and a counted edit** (§5 measured the digest; the edit
-  was made and counted at 74 sites and then reverted), with every digest-keyed test moving
-  together and none of them asserting a number;
+  was made and counted at 74 sites and then reverted — **and §9 recounts it at 80**), with every
+  digest-keyed test moving together and none of them asserting a number;
 - a `v1` artifact is refused **by name at the version gate**, before the parse, on the real
   loader — the migration's whole safety property, demonstrated without a single 2-D launch in the
   tree;
 - **the second axis is checked by something for the first time.** A fragment declaring `64 × 16`
-  is refused against a device whose `maxComputeWorkGroupSize[1]` is 64, and `64 × 4` is accepted —
-  measured on the device, with no geometry change at all.
+  is refused by name, on the real device, with no geometry change at all — **but not by the ceiling
+  it guessed, and not only for `64 × 16`. §9 has both corrections.**
 
 **What it must leave for the next slice:** everything else. No emitter change, no
 `LocalInvocationId`, no `Slice`, no `Plan`, no tiler, no `launch_workgroups`, no 2-D launch, no
@@ -470,3 +485,128 @@ test list.
   `slice.count == subgroup_width`, and under `(16,4,1)` the subgroup's lanes are a subset of the
   workgroup's in an order I did not measure. Untouched by any slice above, and it would be the
   first thing a 2-D workgroup silently broke.
+
+## 9. §6's first slice, measured — and the three places this note was wrong
+
+Commit `fd494671`, on `af634c14`. Two probes, both in `tests/` as files that print and assert
+nothing, both **removed** afterwards: the tree carries no artefact of them. What they printed is
+below, verbatim.
+
+### 9.1 The migration moves 80 struct literals, not 74, in 6 crates, not 12
+
+```
+$ git -C <worktree> grep -c 'TargetFacts\s*{' -- 'crates/**/*.rs'   # 82 lines
+```
+
+82 lines match `TargetFacts {`. **Three of them are not constructions**, and the note's 74 counted
+neither correctly: one is the definition (`lib.rs:606`), one is `fn target() -> TargetFacts {`
+(`tests/compose.rs:21`), and the note's script also caught two struct *field* declarations named
+`lane_width: u32`, which it says itself were false positives. **80 `TargetFacts { … }` struct
+literals, in 31 files, across 6 crates** — `lichen-compute-gpu` 56, `lichen-compute` 12,
+`lichen-fusion-bridge` 5, `lichen-kernel-ir` 5, `lichen-graph-ir` 1, `lichen-runtime` 1. Of the 80,
+**6 are in `src/`** (`compute.rs` 5, `fused/convert.rs` 1) and 74 are in `tests/` and `examples/`.
+The note's "74" is almost exactly the *test-side* count, which is a coincidence worth naming rather
+than reading as a confirmation.
+
+**What the migration did not touch is the larger half of the note's fear.** §5 and §6 predict a
+digest migration that moves "every digest-keyed test". **No test in the tree asserts a digest
+number.** All 77 `fragment_digest` uses are comparisons — `assert_eq!` between two digests, or a
+digest stored and compared later — and no `assert_eq!` in any test compares anything against a
+literal of 15 digits or more. So the digest moved and **zero assertions moved with it**: what the
+80 sites cost is 80 lines and one version bump.
+
+### 9.2 The digest, before and after, on one fragment
+
+Same fragment throughout (`p0 + 1`, scalar shape, no buffers, no slices, no marks). The v1 number
+is computed by hashing the same ten fields in the same order with the **two-field** `Debug` string
+in the `target` slot, so the only difference between the two numbers is that one string:
+
+```
+PROBE target Debug (this build) = TargetFacts { int_width: I64, lane_width: LaneWidth(64), lane_height: LaneHeight(1) }
+PROBE fragment_digest (lane_height: 1) = 14003084899050303553
+PROBE fragment_digest (v1, no lane_height) = 9615707550460718134
+PROBE fragment_digest (lane_height: 4) = 10033502527838007574
+PROBE FORMAT_VERSION = 2
+```
+
+§5's mechanism claim is **confirmed**: a byte-identical fragment's digest moves because one
+`Debug` string grew a field. §5's *numbers* are not comparable — they were a different fragment.
+
+### 9.3 The refusal, measured — and `64 × 4` is **not** accepted
+
+Against a hand-made table answering `max_workgroup_lanes 1024`, `max_workgroup_lanes_y 64`:
+
+```
+PROBE device: max_workgroup_lanes = 1024, max_workgroup_lanes_y = 64
+PROBE 64 x 1   accepted
+PROBE 64 x 4   refused by name "WorkgroupTallerThanOneRow" = one workgroup runs 4 row(s) and this build schedules 1 row(s) per workgroup. A rectangle is a legal module — `OpExecutionModeLocalSize` takes three literals — but the dispatch rounds the count up by the `x` axis alone, so the rows no lane covers are indices nothing writes: no error, no refusal and no report line (`docs/notes/two-dimensional-workgroup.md` §4)
+PROBE 64 x 16  refused by name "WorkgroupTallerThanOneRow" = one workgroup runs 16 row(s) and this build schedules 1 row(s) per workgroup. A rectangle is a legal module — …
+PROBE 64 x 65  refused by name "LaneHeightTooWide" = one workgroup runs 65 row(s) and this device schedules at most 64, so the fragment's `LocalSize` is one no workgroup here can be: it is refused rather than rounded down, which would run a different program (`docs/notes/taking-a-kernel-to-a-server.md`)
+```
+
+**Correction 1: `64 × 4` is refused, not accepted.** §6's bullet is self-contradicting — §2 and §6's
+"Concretely" both say `check` refuses anything that is not `x × 1`, and only the "what it proves"
+bullet says `64 × 4` is accepted. The refusal is the right one: §4 measured that a rectangle is a
+legal, runnable module, so a device ceiling cannot be the thing that catches it. Two refusals, and
+both are reachable: `LaneHeightTooWide` when the height is past the device's, `WorkgroupTallerThanOneRow`
+for every other second row.
+
+**Correction 2: this machine's `maxComputeWorkGroupSize[1]` is 1024, not 64.** §6 says the
+`64 × 16` refusal is "measured on the device" against "a device whose `maxComputeWorkGroupSize[1]`
+is 64". Measured against the RTX 3060 actually present here:
+
+```
+PROBE int_bits              = 64
+PROBE max_workgroup_lanes   = 1024
+PROBE max_workgroup_lanes_y = 1024
+PROBE subgroup_width        = Some(32)
+PROBE 64 x 1     accepted
+PROBE 64 x 4     refused by name "WorkgroupTallerThanOneRow" = …
+PROBE 64 x 16    refused by name "WorkgroupTallerThanOneRow" = …
+PROBE 64 x 64    refused by name "WorkgroupTallerThanOneRow" = …
+PROBE 64 x 65    refused by name "WorkgroupTallerThanOneRow" = …
+PROBE 64 x 1024  refused by name "WorkgroupTallerThanOneRow" = …
+```
+
+So on this device the ceiling is not what refuses a `64 × 16`; every rectangle is refused by the
+build's own one-row rule, and `LaneHeightTooWide` needs a height past 1024. **The ceiling field is
+still read** — that is what `DeviceFacts`' own `# Invariant` (`device.rs:8-13`) requires, and a
+refusal nothing can reach would fail it — but its reach on this machine is narrow.
+
+### 9.4 The version gate, on the real loader, both directions
+
+A hand-written **version-1** text — the exact two-field `target` the tree carried before this
+change — through `load_fused_kernel`:
+
+```
+PROBE read_fused_kernel(v2 text) ok? true
+PROBE load_fused_kernel(v1 text) name    = VersionMismatch
+PROBE load_fused_kernel(v1 text) message = the text is artifact format 1 and this build reads format 2, so the artifact is refused before any of it is parsed: reading another format with this one's fields is how a loader dispatches a kernel nobody wrote (`docs/notes/taking-a-kernel-to-a-server.md`)
+PROBE read_fused_kernel(v1 text) without the gate = Some("the text is not a fused kernel: missing field `lane_height` in type `Target` (at `fragment.target`) (bytes 814..815)")
+```
+
+The last line is the whole point of the gate, side by side: **without** it the same text is a parse
+error naming a byte offset in a field the reader has never heard of. §5's claim — "an old artifact
+meets a clean named refusal rather than a parse error naming a byte offset" — is **confirmed**.
+
+### 9.5 What §7's silent class looks like after this slice
+
+§7's silent wrong answer is §4 row 7: a rectangle under the present `launch_workgroups` covers
+`X · ceil(count / X·Y)` instead of `count`, answers wrong, and reports nothing. **It is not
+reachable after this slice**, and the refusal above is the reason rather than a coincidence:
+`DeviceFacts::check` runs before any dispatch (`load.rs:113-137`'s own ordering), every shape a
+fragment can arrive in goes through it, and a `lane_height` other than 1 is refused by name. What
+§4's probe reached required a patched emitter that no fragment could ask for.
+
+**The hole this slice leaves is one step earlier and it is not closed**: `spirv.rs` still emits
+`OpExecutionModeLocalSize (lane_width, 1, 1)` from `target.lane_width` alone, so a rectangle
+declared in the IR would be refused at the device gate but a rectangle *written by hand into an
+emitted module* still schedules, because nothing between the two reads `lane_height`. That is §6
+item 4's slice, and it is unchanged.
+
+### 9.6 Line numbers
+
+§1–§5 were written against `991e59bb`; this landed on `af634c14`, 57 commits later. The claims
+hold, the pointers drifted: `fragment_digest` is at `lib.rs:1114-1129` (not `1082-1097`), the digest
+`# Invariant` at `1109-1113` (not `1077-1081`), `TargetFacts` at `606-636` (not `605-610`), and
+`FORMAT_VERSION` at `schema.rs:446` (not `435`).

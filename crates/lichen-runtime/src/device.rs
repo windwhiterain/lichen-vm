@@ -27,6 +27,14 @@ pub struct DeviceFacts {
     /// compiler's choice and a device that cannot schedule that many lanes has no way to
     /// honour it. Refused rather than rounded down, which would run a different program.
     pub max_workgroup_lanes: u32,
+    /// The most rows one workgroup may run.
+    ///
+    /// # Invariant
+    /// The second axis of the same question, read rather than left out: a device reports
+    /// `maxComputeWorkGroupSize` as three numbers, and reading `[0]` alone gives a height
+    /// no ceiling at all, so `TargetFacts::lane_height` would be refused against nothing
+    /// (`docs/notes/two-dimensional-workgroup.md` §1.2).
+    pub max_workgroup_lanes_y: u32,
     /// The lanes one subgroup runs, or `None` where the device reported none.
     ///
     /// # Invariant
@@ -68,7 +76,8 @@ pub trait DeviceFactsSource {
 /// # Invariant
 /// One variant per way the two disagree, and each names **both numbers**: an artifact and
 /// a device are two facts that only mean something against each other, so a refusal
-/// stating one of them leaves the caller to guess which was wrong.
+/// stating one of them leaves the caller to guess which was wrong. The one exception is a
+/// fact **no device can change**, which names the value this build supports instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceRefusal {
     /// The device has no integer of the width the fragment was lowered to mean.
@@ -80,10 +89,35 @@ pub enum DeviceRefusal {
     },
     /// The device cannot schedule one workgroup of this many lanes.
     LaneWidthTooWide {
-        /// The lane count one workgroup runs.
+        /// The lane count one row of a workgroup runs.
         asked: u32,
-        /// The most lanes one workgroup may run here.
+        /// The most lanes one row of a workgroup may run here.
         widest: u32,
+    },
+    /// The device cannot schedule one workgroup of this many rows.
+    ///
+    /// # Invariant
+    /// The `y` axis of the ceiling a device already reports: read before the row count is
+    /// refused for being more than one, so a height past the device names the device.
+    LaneHeightTooWide {
+        /// The row count one workgroup runs.
+        asked: u32,
+        /// The most rows one workgroup may run here.
+        tallest: u32,
+    },
+    /// The workgroup is taller than one row, and nothing in this build schedules one.
+    ///
+    /// # Invariant
+    /// **A fact about this build rather than about a device**, so the second number is the
+    /// one row every backend here runs: a rectangle is a legal module, but the launch
+    /// rounds the count up by the `x` axis alone, so the rows no lane covers are indices
+    /// nothing writes, with no error and no report line
+    /// (`docs/notes/two-dimensional-workgroup.md` §4).
+    WorkgroupTallerThanOneRow {
+        /// The row count one workgroup runs.
+        asked: u32,
+        /// The row count a workgroup runs wherever this build schedules one.
+        one_row: u32,
     },
     /// A `Warp` slice is not one element per lane of this device's subgroup.
     ///
@@ -139,6 +173,8 @@ impl DeviceRefusal {
         match self {
             DeviceRefusal::IntWidthNotRepresentable { .. } => "IntWidthNotRepresentable",
             DeviceRefusal::LaneWidthTooWide { .. } => "LaneWidthTooWide",
+            DeviceRefusal::LaneHeightTooWide { .. } => "LaneHeightTooWide",
+            DeviceRefusal::WorkgroupTallerThanOneRow { .. } => "WorkgroupTallerThanOneRow",
             DeviceRefusal::SubgroupWidthMismatch { .. } => "SubgroupWidthMismatch",
             DeviceRefusal::SubgroupWidthNotReported => "SubgroupWidthNotReported",
             DeviceRefusal::SharedMemoryTooLarge { .. } => "SharedMemoryTooLarge",
@@ -160,10 +196,25 @@ impl std::fmt::Display for DeviceRefusal {
             ),
             DeviceRefusal::LaneWidthTooWide { asked, widest } => write!(
                 formatter,
-                "one workgroup runs {asked} lane(s) and this device schedules at most {widest}, \
+                "one row of a workgroup runs {asked} lane(s) and this device schedules at most \
+                 {widest}, so the fragment's `LocalSize` is one no workgroup here can be: it is \
+                 refused rather than rounded down, which would run a different program \
+                 (`docs/notes/taking-a-kernel-to-a-server.md`)"
+            ),
+            DeviceRefusal::LaneHeightTooWide { asked, tallest } => write!(
+                formatter,
+                "one workgroup runs {asked} row(s) and this device schedules at most {tallest}, \
                  so the fragment's `LocalSize` is one no workgroup here can be: it is refused \
                  rather than rounded down, which would run a different program \
                  (`docs/notes/taking-a-kernel-to-a-server.md`)"
+            ),
+            DeviceRefusal::WorkgroupTallerThanOneRow { asked, one_row } => write!(
+                formatter,
+                "one workgroup runs {asked} row(s) and this build schedules {one_row} row(s) per \
+                 workgroup. A rectangle is a legal module — `OpExecutionModeLocalSize` takes three \
+                 literals — but the dispatch rounds the count up by the `x` axis alone, so the \
+                 rows no lane covers are indices nothing writes: no error, no refusal and no \
+                 report line (`docs/notes/two-dimensional-workgroup.md` §4)"
             ),
             DeviceRefusal::SubgroupWidthMismatch {
                 count,
@@ -233,6 +284,19 @@ impl DeviceFacts {
             return Err(DeviceRefusal::LaneWidthTooWide {
                 asked: lanes,
                 widest: self.max_workgroup_lanes,
+            });
+        }
+        let rows = fragment.target.lane_height.rows();
+        if rows > self.max_workgroup_lanes_y {
+            return Err(DeviceRefusal::LaneHeightTooWide {
+                asked: rows,
+                tallest: self.max_workgroup_lanes_y,
+            });
+        }
+        if rows != 1 {
+            return Err(DeviceRefusal::WorkgroupTallerThanOneRow {
+                asked: rows,
+                one_row: 1,
             });
         }
         let buffers = fragment.inputs + fragment.outputs;

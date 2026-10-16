@@ -17,8 +17,8 @@ use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_compute_gpu::{LOCAL_SIZE_X, SUBGROUP_WIDTH};
 use lichen_kernel_ir::{
     Barrier, BufferSlot, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts, Terminator,
-    ValueDef, ValueId,
+    KernelShape, LaneHeight, LaneWidth, LaunchSet, ScalarClass, Slice, Space, TargetFacts,
+    Terminator, ValueDef, ValueId,
 };
 
 /// `OpCapability` (17), `OpExecutionMode` (16) and `OpControlBarrier` (224), the specification's
@@ -179,6 +179,7 @@ pub(super) fn sums_a_staged_tile(space: Space, count: u32) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

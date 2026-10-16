@@ -352,11 +352,10 @@ fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunE
 /// What the chosen device is, as the facts an artifact is checked against.
 ///
 /// # Invariant
-/// Each field is the device's **own** answer, not this target's constant: `shaderInt64`
-/// for the integer width, `maxComputeWorkGroupInvocations` against `maxComputeWorkGroupSize[0]`
-/// for the lanes a workgroup may run, `subgroupSize` for the subgroup, and
-/// `maxComputeSharedMemorySize` and `maxPerStageDescriptorStorageBuffers` for the two
-/// ceilings a module declares against.
+/// Each field is the device's **own** answer, not this target's constant: `shaderInt64` for
+/// the integer width, `maxComputeWorkGroupInvocations` against `maxComputeWorkGroupSize[0]` for
+/// the lanes a row may run and `[1]` for its rows, `subgroupSize` for the subgroup, and the two
+/// limits a module declares against.
 fn device_facts(
     entry: &ash::Entry,
     instance: &ash::Instance,
@@ -370,6 +369,7 @@ fn device_facts(
         max_workgroup_lanes: limits
             .max_compute_work_group_invocations
             .min(limits.max_compute_work_group_size[0]),
+        max_workgroup_lanes_y: limits.max_compute_work_group_size[1],
         subgroup_width: subgroup_width(entry, instance, physical),
         max_shared_bytes: limits.max_compute_shared_memory_size,
         max_storage_buffers: limits.max_per_stage_descriptor_storage_buffers,

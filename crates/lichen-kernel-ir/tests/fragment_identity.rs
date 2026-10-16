@@ -3,8 +3,8 @@
 
 use lichen_kernel_ir::{
     Barrier, Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaneWidth, ScalarClass, Slice, Space, TargetFacts, Terminator, ValueDef, ValueId,
-    from_flat,
+    KernelShape, LaneHeight, LaneWidth, ScalarClass, Slice, Space, TargetFacts, Terminator,
+    ValueDef, ValueId, from_flat,
 };
 
 /// A one-parameter body: `p0 + first`, in SSA.
@@ -54,6 +54,7 @@ fn fragment() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -149,6 +150,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             KernelFragment {
                 target: TargetFacts {
                     lane_width: LaneWidth::new(32),
+                    lane_height: LaneHeight::new(1),
                     ..base.target
                 },
                 ..base.clone()
@@ -411,6 +413,7 @@ fn staging(count: u32, body: KernelBody) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

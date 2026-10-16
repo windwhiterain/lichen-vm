@@ -9,8 +9,8 @@ use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding, TileRefusal};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneWidth,
-    LaunchSet, ScalarClass, ScalarData, Slice, Space, TargetFacts,
+    BufferSlot, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight,
+    LaneWidth, LaunchSet, ScalarClass, ScalarData, Slice, Space, TargetFacts,
 };
 use lichen_lowlevel::Module;
 
@@ -121,6 +121,7 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_height: LaneHeight::new(1),
         },
         slices: if tiled {
             vec![Slice {

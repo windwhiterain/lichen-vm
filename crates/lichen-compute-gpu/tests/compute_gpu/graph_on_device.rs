@@ -12,8 +12,8 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, Br, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
-    KernelRoles, KernelShape, LaneWidth, LaunchSet, ResidentId, ScalarClass, Slice, Space,
-    TargetFacts, Terminator,
+    KernelRoles, KernelShape, LaneHeight, LaneWidth, LaunchSet, ResidentId, ScalarClass, Slice,
+    Space, TargetFacts, Terminator,
 };
 
 /// Whether the emitter's loop machinery carries a value across the backedge at all.
@@ -126,6 +126,7 @@ fn a_hand_built_loop_carries_its_accumulator_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -181,6 +182,7 @@ fn a_two_step_folded_loop_carries_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -246,6 +248,7 @@ fn a_one_step_tiled_loop_folds_the_tile_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -428,6 +431,7 @@ fn the_slice_fold_alone_sums_every_slot_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -497,6 +501,7 @@ fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -564,6 +569,7 @@ fn a_two_step_per_lane_fold_carries_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -706,6 +712,7 @@ fn a_loops_step_count_does_not_depend_on_where_its_seed_comes_from() {
             target: TargetFacts {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(tile),
+                lane_height: LaneHeight::new(1),
             },
             slices: Vec::new(),
             marks: Vec::new(),
@@ -855,6 +862,7 @@ fn a_strided_loop_reads_its_second_element_on_the_device() {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(tile),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1021,6 +1029,7 @@ fn a_two_step_loops_answer_separates_seed_from_stride() {
             target: TargetFacts {
                 int_width: IntWidth::I64,
                 lane_width: LaneWidth::new(tile),
+                lane_height: LaneHeight::new(1),
             },
             slices: Vec::new(),
             marks: Vec::new(),
@@ -1090,6 +1099,7 @@ fn adds() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1135,6 +1145,7 @@ fn sums() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1172,6 +1183,7 @@ fn with_a_runtime_scalar() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
@@ -1589,6 +1601,7 @@ fn stages_between_lanes() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,

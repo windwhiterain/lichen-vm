@@ -573,24 +573,47 @@ impl IntWidth {
     }
 }
 
-/// The lane count one workgroup runs, declared rather than assumed.
+/// The lane count one row of a workgroup runs, declared rather than assumed.
 ///
 /// # Invariant
-/// A fragment states how many lanes a workgroup runs, and a backend whose target cannot schedule
-/// that many refuses the fragment by name rather than rounding silently: the language names no
-/// lane count, so the width is the host compiler's choice, carried as a fact rather than assumed
-/// from any backend's constant (`docs/notes/shared-memory-and-barriers.md` §4).
+/// A fragment states how many lanes one row of a workgroup runs, and a backend whose target
+/// cannot schedule that many refuses the fragment by name rather than rounding silently: the
+/// language names no lane count, so the width is the host compiler's choice, carried as a fact
+/// rather than assumed from any backend's constant
+/// (`docs/notes/shared-memory-and-barriers.md` §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaneWidth(u32);
 
 impl LaneWidth {
-    /// The lane count a host compiler declares for one workgroup.
+    /// The lane count a host compiler declares for one row of a workgroup.
     pub const fn new(lanes: u32) -> Self {
         Self(lanes)
     }
 
-    /// The lane count, as the number a workgroup runs.
+    /// The lane count, as the number one row of a workgroup runs.
     pub const fn lanes(self) -> u32 {
+        self.0
+    }
+}
+
+/// The row count one workgroup runs, declared rather than assumed.
+///
+/// # Invariant
+/// The second axis of [`LaneWidth`]'s declaration, and **one row is the only value downstream
+/// can honour**: the launch counts lanes, `OpExecutionModeLocalSize` is emitted from one number
+/// and a `Shared` slice takes one index, so a second row is scheduled as if it were the first and
+/// answers a different program with no refusal (`docs/notes/two-dimensional-workgroup.md` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneHeight(u32);
+
+impl LaneHeight {
+    /// The row count a host compiler declares for one workgroup.
+    pub const fn new(rows: u32) -> Self {
+        Self(rows)
+    }
+
+    /// The row count, as the number of rows one workgroup runs.
+    pub const fn rows(self) -> u32 {
         self.0
     }
 }
@@ -606,8 +629,10 @@ impl LaneWidth {
 pub struct TargetFacts {
     /// The width the body's integers were lowered to mean.
     pub int_width: IntWidth,
-    /// The lane count one workgroup runs.
+    /// The lane count one row of a workgroup runs.
     pub lane_width: LaneWidth,
+    /// The row count one workgroup runs.
+    pub lane_height: LaneHeight,
 }
 
 /// A fragment's parameter domain, in the IR's own terms rather than the host's.

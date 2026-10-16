@@ -3,8 +3,8 @@
 use lichen_fusion::{Expr, RUNTIME_SCALAR_INPUTS, Variable};
 use lichen_fusion_bridge::{BridgeRefusal, ReadRoles, projection};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneWidth,
-    ScalarClass, TargetFacts, ValueId,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, LaneHeight,
+    LaneWidth, ScalarClass, TargetFacts, ValueId,
 };
 
 /// A parallel fragment with `runtime` runtime scalars beside the extent, marked at `leaf`.
@@ -39,6 +39,7 @@ fn fragment(params: usize, ops: &[FlatOp], param_shape: KernelShape) -> KernelFr
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

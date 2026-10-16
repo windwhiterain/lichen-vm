@@ -3,8 +3,8 @@
 use lichen_compute::compute::{GraphPass, LaunchExtent, pass_chain};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneWidth, ScalarClass,
-    TargetFacts,
+    FlatOp, IntWidth, KernelBody, KernelFragment, KernelRoles, KernelShape, LaneHeight, LaneWidth,
+    ScalarClass, TargetFacts,
 };
 
 /// The count every stub node dispatches over, and the extent every stub is handed.
@@ -67,6 +67,7 @@ fn one_output() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),

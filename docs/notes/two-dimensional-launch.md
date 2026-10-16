@@ -223,13 +223,17 @@ it is the only one of the three that does not stand on the tile-equivalence clai
 
 ## 4. What a full implementation would break
 
-- **`TargetFacts` and therefore every kernel id.** `TargetFacts { int_width, lane_width }`
-  (`kernel-ir/lib.rs:606-611`) is hashed whole; adding a workgroup height changes
-  `fragment_digest` for every fragment in the tree, so every cached artifact and every region
-  hash moves. `lichen-runtime/src/fused/schema.rs:302-310` mirrors it as `Target` with
+- **`TargetFacts` and therefore every kernel id.** `TargetFacts { int_width, lane_width, lane_height }`
+  (`kernel-ir/lib.rs:606-636`) is hashed whole, so the workgroup height is in every fragment's
+  `fragment_digest`. **Landed**: the height is carried, `FORMAT_VERSION` went `1` → `2`, and
+  `DeviceFacts` reads `maxComputeWorkGroupSize[1]` as `max_workgroup_lanes_y`
+  ([two-dimensional-workgroup](two-dimensional-workgroup.md) §6). What is left of the bullet is the
+  **digest**: every kernel id in the tree is new, so every cached artifact and every region hash
+  moves. `lichen-runtime/src/fused/schema.rs:310-321` mirrors it as `Target` with
   `#[facet(deny_unknown_fields)]`, and the pack text `"target": { "int_width": "i64",
-  "lane_width": 64 }` is pinned by `crates/lichen-compute/tests/fused_landing.rs:46`,
-  `fused_kernel.rs:166` and `crates/lichen-compiler/tests/pack_install.rs:104`.
+  "lane_width": 64, "lane_height": 1 }` is pinned by `crates/lichen-compute/tests/fused_landing.rs:46`
+  and `fused_kernel.rs:167`; `crates/lichen-compiler/tests/pack_install.rs:104` pins a
+  `"group_width": 64`, which the landed slice deliberately leaves alone.
 - **`Plan::staging[].group_width: u32`** (`kernel-ir/src/plan.rs:64`) is the pack schema's
   staging width, and `check_plan` (`plan.rs:110-137`) compares it to `target.lane_width`. A
   pack that states a group width would need a shape that can say "16 × 4". `pack_placement.rs:217`

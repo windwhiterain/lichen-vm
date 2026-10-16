@@ -12,8 +12,8 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     Barrier, Br, BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr,
-    KernelRoles, KernelShape, LaneWidth, ResidentId, ScalarClass, ScalarData, Slice, Space,
-    TargetFacts, Terminator,
+    KernelRoles, KernelShape, LaneHeight, LaneWidth, ResidentId, ScalarClass, ScalarData, Slice,
+    Space, TargetFacts, Terminator,
 };
 
 /// The lane count one workgroup runs, which is also what a fragment declares.
@@ -229,6 +229,7 @@ fn counts_the_passing_elements() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LANES),
+            lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
             class: ScalarClass::Int,
@@ -282,6 +283,7 @@ fn doubles_then_one() -> KernelFragment {
         target: TargetFacts {
             int_width: IntWidth::I64,
             lane_width: LaneWidth::new(LANES),
+            lane_height: LaneHeight::new(1),
         },
         slices: Vec::new(),
         marks: Vec::new(),
