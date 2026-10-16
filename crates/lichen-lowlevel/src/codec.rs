@@ -312,7 +312,6 @@ impl OperatorCodec for LowOperator {
             LowOperator::Index => w.u8(0),
             LowOperator::Apply => w.u8(1),
             LowOperator::TableGet => w.u8(2),
-            LowOperator::Instantiate => w.u8(3),
         }
         Ok(())
     }
@@ -322,7 +321,6 @@ impl OperatorCodec for LowOperator {
             0 => LowOperator::Index,
             1 => LowOperator::Apply,
             2 => LowOperator::TableGet,
-            3 => LowOperator::Instantiate,
             tag => return Err(format!("unknown lowlevel operator tag {tag}")),
         })
     }
