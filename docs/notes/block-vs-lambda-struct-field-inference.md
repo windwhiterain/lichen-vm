@@ -1,6 +1,10 @@
 # A block and an applied lambda disagree on a struct field's inferred type
 
-> Status: **current — defect open.** The root cause is known (§7) and a fix
+> Status: **current — the named disagreement is closed; the hole-field half is
+> open.** Re-measured on `dev@83c817ca`, the block and the lambda agree (both print
+> `(Int,): struct{.x Type}`), so what this note is named for no longer reproduces.
+> What remains is the smaller pair below: `h Int` still prints `struct{.x raw[?a,
+> ?b]}` where `struct{.x Int}` is wanted. The root cause is known (§7) and a fix
 > direction is chosen (§8); the second generation of field cells that the
 > clone-ownership rules used to mint is gone
 > ([apply-clone-ownership](apply-clone-ownership.md) owns those rules), but the
@@ -31,6 +35,10 @@ j 1
 | block | `(Int,): struct{.x Type}` |
 | lambda | `(Int,): struct{.x raw[?a, ?b]}` |
 
+**Re-measured on `dev@83c817ca`.** The two programs now agree: both print
+`(Int,): struct{.x Type}`, so the disagreement in the table above is closed. The two smaller programs below still
+disagree — `h Int` prints `struct{.x raw[?a, ?b]}: TypeStruct` and `h2 Int` prints `struct{.x Int}: TypeStruct` — and
+that hole-field half is what §7 and §8 are about.
 The block's answer is the wanted one. `raw[?a, ?b]` is the type printer's
 fallback and means the field's type node is not a readable type at all.
 
