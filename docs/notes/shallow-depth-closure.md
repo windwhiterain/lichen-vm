@@ -301,23 +301,125 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 258 filtered out
 Both facts in §3 are confirmed by this run. The full-binaries counts are taken with the §5
 probe and reported there.
 
-## 5 What would move if the closure were extended — **open, the probe is next**
+## 5 What would move if the closure were extended
 
-**The experiment** (not yet run, and **not yet reverted**): the minimal faithful extension,
-in `check_shallow_array_term`'s `n` arm only — register `(type_apply, self.state[el].ty)`
-for a depth-marked element that is a call, exactly as the bare arm registers
-`(type_apply, ty)`, and leave `tys.push(self.fresh_cell())` in place, because the fresh cell
-*is* the depth form's contract. One registration site, one walk site, no change to
-`wrap_shallow`, none to `close_shallow_tail`, none to `crates/lichen-lowlevel`.
+### 5.1 The experiment, and its exact diff
 
-Its D1-shaped result — `dev` against with-the-change, over the §4.2 programs, the §4.1
-survey, §3's two tests, `Float` through the same read, and the cyclic-tail controls — is
-**not yet measured** and is recorded here as open. §6 stands or falls on it.
+The minimal faithful extension, in `check_shallow_array_term`'s `n` arm only: register
+`(type_apply, self.state[el].ty)` for a depth-marked element **that is a call**, exactly as
+the bare arm registers `(type_apply, ty)` at `indexing.rs:400-402`, and leave
+`tys.push(self.fresh_cell())` in place, because the fresh cell *is* the depth form's
+contract. One registration site; nothing changed in `wrap_shallow`, `close_shallow_tail`,
+`check_app`, the walk at `checker.rs:557-562`, or `crates/lichen-lowlevel`.
 
-## 6 Verdict — **open pending §5**
+Reverted after the run; recorded here so it can be re-applied without re-deriving it.
 
-Not yet given, on purpose: §3 already predicts it will be *"the question does not arise"*,
-because the closure's subject is a type cell and the depth form's declared type slot is
-already a fresh cell while its value stays `raw` by construction. **That is a prediction from
-the reading half, not a measurement**, and it is not the verdict. §5 runs, §5 is reverted,
-§6 is written from the table.
+```diff
+--- a/crates/lichen-highlevel/src/checker/indexing.rs
++++ b/crates/lichen-highlevel/src/checker/indexing.rs
+@@ -406,6 +406,10 @@ where
+                     // The wrapped term is a lazy region: its pair chain does not match
+                     // the element's type, so its reads get a fresh cell.
+                     vals.push(self.wrap_shallow(el, n));
++                    // PROBE P1: the bare arm's registration, applied to the depth arm.
++                    if let Some(&type_apply) = self.type_applies.get(&el) {
++                        self.shallow_types.push((type_apply, self.state[el].ty.unwrap()));
++                    }
+                     tys.push(self.fresh_cell());
+                 }
+             }
+```
+
+**Reverted:** `crates/lichen-highlevel/src/checker/indexing.rs`, four added lines in
+`check_shallow_array_term`'s `n` arm (after the `wrap_shallow` call, before the
+`fresh_cell` push). Nothing else in the tree was touched by the probe. No test was added.
+
+### 5.2 The programs: `dev` against P1
+
+Every row is `lichen-compiler run` output on the same program, on `dev` at `4da09089` and
+with the diff of §5.1 applied. **`changed` marks a reading that is not byte-identical.**
+
+| program | `dev` | P1 |
+|---|---|---|
+| `([1, @shallow(2) [2, 3]])(1)(0)` | `raw[raw 2, raw 3]: ?a` | unchanged |
+| `([1, @shallow(3) [[2], [3]]])(1)(0)(1)` | `raw[raw 3]: ?a` | unchanged |
+| `([1, @shallow(2) [2, 3]])(1)` | `raw[raw[raw 2, raw 3], raw[…]]: ?a` | unchanged |
+| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; the three reads | `(raw[raw 1, raw[raw none, raw none]], raw none, raw none): tuple{?a, ?b, ?c}` | **changed** — top-level types still `tuple{?a, ?b, ?c}`; the graph behind the mark now carries `raw Int`, `raw TypeTuple` where it stopped at `raw none` |
+| the same with `@shallow(2)`, two reads | `(raw[raw 1, raw[raw none, raw none]], raw none): tuple{?a, ?b}` | **changed** — same shape of change |
+| `f = x => [x, @shallow(1) f (x + 1.5)]` ; `inf = f 0.0` ; two reads | `(raw[raw 1.5, raw[raw none, raw none]], raw none): tuple{?a, ?b}` | **changed** — and `raw Float` is now inside, against `?b` at the top level |
+| `f = x => [x, @shallow(1) f 1]` ; `inf = f 0` ; `inf(1)` (cyclic-tail control) | `raw[raw none, raw none]: ?a` | **changed** — same shape |
+| `@loop f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw[raw 1, raw[raw none, raw none]]: ?a` | **changed** — same shape |
+| `f = x => [x, @shallow(1) f (x + 1)]` ; `inf = f 0` ; `inf` | `(0, raw[raw none, raw none]): tuple{Int, ?a}` | **changed** — top level still `tuple{Int, ?a}` |
+| **control**, the bare mark, Int | `(1, 2, 3): tuple{Int, Int, Int}` | **unchanged** |
+| **control**, the bare mark, **Float**, the same read | `(1.5, 3.0): tuple{Float, Float}` | **unchanged** |
+
+**What the table says, precisely.**
+
+1. **Only programs whose depth-marked element is a call moved.** All three array-literal
+   rows are byte-identical, which is structural: the registration is guarded by
+   `self.type_applies.get(&el)`, and an array literal has no apply.
+2. **The declared type of a depth-marked position did not move.** Every moved row still
+   prints `?a`, `?b`, `?c` where §1.1 said the fresh cell is. The change is *inside* the
+   graph behind the mark: a decided `raw Int` / `raw Float` / `raw TypeTuple` now appears
+   where the reading previously stopped at `raw none`.
+3. **No value became concrete.** Every moved row still opens with `raw` at the read
+   positions, and the three bare controls are untouched — including `Float` through the same
+   read, which the bare mark already decides and P1 does not disturb.
+4. **`Float` is not lost and not gained.** The depth form's Float row gains `raw Float`
+   *inside* its structure and keeps `?b` at the top; the bare form's Float row is unchanged.
+   This is the same `Float`-losing shape `arithmetic-class-stated.md` §3 D1 measured, in
+   mirror: there the branch was decided too eagerly and `Float` disappeared; here nothing
+   escapes the fresh cell.
+
+### 5.3 The survey
+
+`cargo test -p lichen-compute --test lichen_compute zz_examples_panic_probe -- --nocapture --test-threads 2`:
+
+| | `dev` | P1 |
+|---|---|---|
+| clean | **43** | **43** |
+| panicked | — | — |
+| drifted | — | — |
+
+**Unmoved.** Which §2 already predicted: no example program spells the depth form, so
+nothing under `examples/` can be reached by it.
+
+### 5.4 The two tests, by name
+
+`cargo test -p lichen-language --test language -- --test-threads 2 shallow`:
+
+| test | `dev` | P1 |
+|---|---|---|
+| `an_at_shallow_depth_marks_value_slots_shallow` | ok | **ok** |
+| `an_at_shallow_depth_one_on_a_recursive_tail_terminates` | **FAILED** — `testing.rs:132`, `an array element has a value` | **ok** |
+| `a_shallow_marked_recursive_tail_stays_lazy` (the bare-form control) | ok | **ok** |
+
+```
+dev: test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 258 filtered out
+ P1: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 258 filtered out
+```
+
+**This is the one behavioural change P1 makes, and it is a pre-existing red turning green.**
+§3 read that red as *"the helper demands values and the depth mark withholds them"*, and
+§3 predicted from that no closure over **types** could fix it. **That prediction was wrong**,
+and the CLI table says why: the closure does not supply the missing value directly, but
+running the type application walks enough of the element that the tuple's element nodes come
+back holding one. **The mechanism is not established here** — this note records the observable
+and marks the mechanism unknown.
+
+**What is not established by it either:** the test's own comment still says *"the reads stay
+lazy under the mark, so the tuple's elements are underdetermined cells rather than pinned
+scalars"*, and P1 satisfies that comment and the assertion at the same time — the elements are
+lazy *pairs*, and `array_values` wants a value per element, which a pair now is. Whether
+that is the semantics the depth form should have, or an accident of what `node_value` counts
+as a value, is **the user's decision and not a measurement**.
+
+### 5.5 The suite counts — **not yet taken**
+
+`lichen-compute --test lichen_compute`, `lichen-language --test language`,
+`lichen-highlevel` under P1 are **not yet run**. Until they are, §5.2–§5.4 show what moved
+among programs and the three named shallow tests, and **not** whether anything else in the
+workspace moved.
+
+## 6 Verdict — **open pending §5.5**
+
