@@ -626,7 +626,11 @@ the only thing that prints one.
   class question is asked of a **cell** (`shape::low_type_of_slot`), which cannot
   see through an unevaluated `Index`: `(x : struct{.a Float}) => x.a + x.a` used to
   find neither operand concretely `Float`, pin the operation to the `Int` default
-  in `check_binop`, and then refuse both operands against it.
+  in `check_binop`, and then refuse both operands against it. A **frozen** field
+  type is materialized as a leaf of the reading table, so a field read on an
+  imported module is decided the same way; leaving it lazy made `a.arrow_t ==`
+  `b.tuple_t` unify two undecided cells and compare no kinds at all — see
+  [universe-containment](universe-containment.md) §3.
 - A constant subscript is not an optimisation but the whole difference for the
   lowering: a kernel body is walked by its operands, and a name table's `TableGet`
   is not a value anything can resolve without re-deriving the struct's field order,

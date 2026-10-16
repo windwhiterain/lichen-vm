@@ -1,14 +1,13 @@
 # "Contains the universe" is not "is the universe"
 
-> Status: **§2 landed; §3 open.** The printer's `is_universe` now tests the whole
-> `[Type, ↺]` shape, so a frozen kind is no longer mistaken for the universe. The
-> lowlevel's twin predicate still tests only the tail, so unification merges two
-> frozen kinds **without comparing their markers**: that is a soundness hole, and
-> landing the verified fix is blocked on the compute-side question §3 records.
+> Status: **§2 and §3 landed.** The printer's `is_universe` now tests the whole
+> `[Type, ↺]` shape, so a frozen kind is no longer mistaken for the universe. Two
+> frozen kinds with different markers no longer unify: §3 records that the lowlevel
+> walk was **never** the thing that merged them, and that the defect was a frozen
+> field read declining to write its type into its own cell.
 >
 > Points at: `crates/lichen-render/src/render.rs` (`is_universe`) and
-> `crates/lichen-lowlevel/src/equality.rs` (`is_self_referential`, and
-> `unify_inner`'s "two self-referential universes" cut that consumes it).
+> `crates/lichen-highlevel/src/checker/structs.rs` (`slot_read`).
 >
 > Companions: [type-of-in-std](type-of-in-std.md) (the `.sig` mis-render §2
 > explains), [type-rendering-inconsistent](type-rendering-inconsistent.md) (a
@@ -93,14 +92,11 @@ k = lib.jit (y => y + y)
 k
 ```
 
-## 3. Why the lowlevel twin is still open
+## 3. The frozen-kind hole, and where it actually was
 
 ### 3.1 The hole
 
-`unify_inner`'s array arm merges two classes **without descending** whenever both
-sides pass `is_self_referential`. With the permissive predicate, every frozen kind
-`[marker, K_static]` passes, so two frozen kinds with *different markers* merge
-silently:
+Two frozen kinds with *different markers* unified silently:
 
 ```lichen
 # a.lichen (frozen)
@@ -116,60 +112,71 @@ tuple_t = tuple{Int, Int}
 a.arrow_t == b.tuple_t
 ```
 
-Measured: **accepted**, evaluating to `0: Int` — the arrow type and the tuple type
-unified without error, and the equality then answered false at runtime. The
-honest descent compares `[TypeFunction, K]` against `[TypeTuple, K]` element-wise
-and must record `expected TypeTuple, found TypeFunction`.
+Measured before the fix: **accepted**, evaluating to `0: Int` — the arrow type and
+the tuple type unified without error, and the equality then answered false at
+runtime. This is a soundness hole, not a rendering quirk: any program that unifies
+two frozen-module types whose shapes happen to match skips the kind comparison
+entirely.
 
-This is a soundness hole, not a rendering quirk: any program that unifies two
-frozen-module types whose shapes happen to match — or whose mismatching parts are
-undecided cells — skips the kind comparison entirely.
+### 3.2 Where it was — not in the walk
 
-### 3.2 The verified fix, and its blocker
+**Correction to the earlier reading of this section.** It claimed that
+`unify_inner`'s array arm merges two classes without descending whenever both sides
+pass `is_self_referential`. **No such cut exists.** `is_self_referential` has no
+caller in `unify_inner`; its only callers are itself (recursing into a static
+item), `function_type_function`, and `shape::struct_term_parts`. What the walk
+actually does is honest throughout: an array's element 0 is compared
+`value_pair_equal`, so two different kind markers are a recorded conflict. The
+"two absences" branch is reached only where at least one side names no node, and a
+class pair of two valueless nodes takes the `(None, None)` merge — correct for a
+cell that is genuinely undecided.
 
-The fix is `is_self_referential`'s static case: keep the honest dynamic self-loop
-test, and for the static case check the whole shape — the tail is the static
-universe **and** the head equals the universe's own head. The lowlevel does not
-know the program's markers, so the head is compared *by value against the static
-universe's head*, the one marker it can reach without vocabulary knowledge.
-(`is_static_universe_id` itself only checks the self-loop, not the head; a
-*static* self-referential 2-array is only ever the frozen universe, so it stays as
-it is.) Measured with that change: the §3.1 repro is rejected with
-`expected TypeTuple, found TypeFunction`, `a.arrow_t == a.arrow_t` still
-evaluates to `1`, and the lowlevel's tests stay green.
+Traced, the `==` check is `check_unify a=NodeId(34v1) b=NodeId(52v1) kind=BinOp`,
+and **both** cells read `ABSENT` while naming nodes, so the `(None, None)` arm
+merged them and the walk was never asked about the kinds at all. `TypeFunction`
+appears **zero** times in a full trace of the run; the two kinds are never compared
+anywhere because neither of them ever exists.
 
-**It breaks three compute tests**, all of which pass otherwise, so this is not a
-GPU-availability artifact:
+### 3.3 The cause and the fix
 
-- `a_gpu_program_chains_two_kernels_on_a_device`
-- `a_float_fragment_agrees_across_the_two_backends`
-- `an_integer_fragment_agrees_across_the_two_backends`
+`slot_read` decides a field read's type eagerly when the key is a literal, by
+reading `shape::field_type` out of the field list. It then discarded a **frozen**
+answer:
 
-Each fails at check time with `expected raw[Int, ?], found Int`, the underlying
-`UnifyError` being `TypeBuffer` vs `Type` markers. Instrumentation located the
-conflict in `apply_parameter_check` of a static function apply — `collect`'s
-parameter lambda in the frozen compute module — where the **actual argument's type
-slot is `[?, K_frozen]`**: shape undecided, kind the bare frozen universe, not a
-marker-kind. The honest descent therefore reaches `TypeBuffer` (the declared
-kind's marker) against `Type` (the universe's head), and the permissive predicate
-used to merge the two sides at the cycle cut before any marker was compared. The
-program shape is the `parallel`/`plrun` chain followed by `compute.collect`.
+```rust
+.and_then(|ty| match ty {
+    AnyNodeId::Dynamic(node) => Some(node),
+    AnyNodeId::Static(_) => None,   // a frozen field type kept the lazy form
+});
+```
 
-**What is not known** is why that argument's type carries the bare frozen universe
-in its kind slot. Two readings, not distinguished:
+So `a.arrow_t`'s type cell was not the field's type but an unevaluated chain of
+three `Index` applies — `NodeId(34v1)`, created by `add_node` with an operation and
+no value. `shape::field_type` had resolved it, to
+`Static(ModuleKey(312), LocalNodeId { index: 27 })`; nothing read the answer. This is
+a **missing write**, not an ordering problem: the cells are still `ABSENT`
+immediately after the unify and never receive a value at any later point in the run.
 
-1. Something upstream — the `$plrun` native's declared codomain, or the lazy
-   `k.sig`-style reads in the parallel wrappers — leaves the result's type
-   half-decided as `[?, K]`, and the program only ever worked because the hole
-   swallowed the mismatch; or
-2. `[?, K]` here is a legitimate *undecided* type (a cell that should still be
-   free to refine into the buffer type), and the honest comparison needs a
-   refinement rule the lowlevel does not have — the cycle cut was doing accidental
-   duty as "an undecided type unifies with anything".
+The fix is the uniform one — the frozen read writing its type into its cell exactly
+as a dynamic field type does, by the same `as_dynamic` the `ExprKind::Static`
+export read already uses. `==` then needs no change: its operands' type cells hold
+real types, the existing array descent runs, and the markers conflict.
 
-Answering that is the prerequisite for landing the lowlevel fix. The printer fix
-did not depend on the answer and landed alone. The order of work is: instrument
-the argument's type at the `collect` apply on the `parallel`/`plrun`/`collect`
-chain and compare it against `$plrun`'s declared codomain in `lichen-compute`;
-then land the lowlevel fix with a regression test for the §3.1 repro (two frozen
-kinds with different markers must not unify).
+**The rendered message** is `expected TypeTuple, found Int -> Int`, not
+`expected TypeTuple, found TypeFunction`: `DiagKind::BinOp` renders the *root* type
+nodes (`printer.node(d.b)` / `printer.node(d.a)`), and a function kind prints as
+its arrow. The underlying `UnifyError` pair is `TypeFunction` vs `TypeTuple`, which
+is the comparison §3.1 called for.
+
+### 3.4 The three compute tests do not break
+
+An earlier draft of this section predicted that the lowlevel-side fix would break
+`a_gpu_program_chains_two_kernels_on_a_device`,
+`a_float_fragment_agrees_across_the_two_backends` and
+`an_integer_fragment_agrees_across_the_two_backends`, each with
+`expected raw[Int, ?], found Int`. **Measured with the landed fix: all three report
+`ok`**, and the whole compute suite holds its baseline — 203 passed / 15 failed /
+2 ignored, with the failure *name* set identical to a pristine `dev` run. The
+prediction came from a different mechanism (`is_self_referential`'s static arm), and
+the argument it rested on — a `[?, K_frozen]` argument type reached at
+`apply_parameter_check` — is not what this defect was.

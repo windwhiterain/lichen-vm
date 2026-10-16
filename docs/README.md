@@ -53,7 +53,7 @@ authority, and this table only names the state.
 | [A colliding answer is a unify error](notes/answer-collision.md) | `lichen-lowlevel` (`equality`, `write_node_answer`), `lichen-compute` | current — the ruling, and the chain measured behind thirteen compute failures |
 | [The read-path collection is disabled](notes/gc-trigger-disabled.md) | `lichen-lowlevel` (`evaluation`, `gc`) | current — off until its trigger is repaired; the trace and the acceptance test are in the note |
 | [Floating point](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-render`, `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current — both classes run kernels on both backends |
-| ["Contains the universe" is not "is the universe"](notes/universe-containment.md) | `lichen-render`, `lichen-lowlevel` (`equality`) | current — the lowlevel frozen-kind half is open |
+| ["Contains the universe" is not "is the universe"](notes/universe-containment.md) | `lichen-render`, `lichen-highlevel` (`checker/structs`) | landed — the frozen-kind hole was a frozen field read that never wrote its type |
 | [Evaluation runs before unification, and nothing wakes what it read](notes/eval-before-unify.md) | `lichen-lowlevel` (`evaluation`/`equality`), `lichen-highlevel` (`checker`) | current — the named reads' wakeup is open |
 | [A stalled operator re-runs only when a value changed](notes/stalled-rerun-epoch.md) | `lichen-lowlevel` (`evaluation`/`equality`/`module`) | current — the epoch gate; the phase-ordering question is closed |
 | [Unify without forcing](notes/unify-without-forcing.md) | `lichen-lowlevel` (`equality`) | historical — the machinery removal it proposed has landed |
