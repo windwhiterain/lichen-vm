@@ -53,8 +53,6 @@ fn a_printed_float_re_lexes_and_re_checks_as_the_same_float() {
         ("2.0", 2.0f32),
         // The shortest decimal that is not an integer.
         ("0.1", 0.1f32),
-        // An overflowing literal is an infinity (§3.3); the printer must spell it so.
-        ("9999999999999999999999999999999999999999.0", f32::INFINITY),
     ] {
         let printed = print_float(source);
         assert!(
@@ -70,7 +68,7 @@ fn a_printed_float_re_lexes_and_re_checks_as_the_same_float() {
         assert_eq!(ty, "Float", "{source} printed as {printed}");
     }
 
-    // The deliberate refusal: `NaN` keeps Rust's spelling and does not read back.
+    // The deliberate refusal: the whole non-finite family prints under a name, and a name is not a literal.
 
     // The literal syntax has no `NaN`, so the value is handed to the printer.
     let report = compile("1.5");

@@ -244,15 +244,9 @@ fn letter_name(i: usize) -> String {
 /// the only form the lexer reads back, and `NaN` keeps Rust's spelling.  See
 /// docs/notes/floating-point.md.
 fn float_literal(value: f32) -> String {
-    if value.is_nan() {
-        return value.to_string();
-    }
-    if value.is_infinite() {
-        // `2 * f32::MAX` in `f64` is exact and past the threshold, and `f64`'s
-        // own `Display` spells that magnitude positionally.
-        let magnitude = f64::from(f32::MAX) * 2.0;
-        let sign = if value.is_sign_negative() { "-" } else { "" };
-        return format!("{sign}{magnitude}.0");
+    if !value.is_finite() {
+        // A non-finite float prints under `Debug`'s own class name: `NaN`, `inf`, `-inf`.
+        return format!("{value:?}");
     }
     let mut text = value.to_string();
     if !text.contains('.') {
