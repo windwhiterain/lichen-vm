@@ -13,8 +13,8 @@ use crate::program::GcdOp;
 
 /// The block scanner, directive helpers and preprocessor data types.
 pub use lichen_preprocess::{
-    Depend, Directive, PreprocessDiag, block_depends, block_directives, block_metadata, depend_of,
-    split_block,
+    Depend, Directive, LocatedDirective, PreprocessDiag, block_depends, block_directives,
+    block_metadata, depend_of, split_block,
 };
 pub use lichen_preprocess::{ImportResolver, ResolvedPackage};
 

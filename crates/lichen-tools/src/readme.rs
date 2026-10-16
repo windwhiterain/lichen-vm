@@ -272,8 +272,8 @@ fn replace_output_comment(source: &str, output: &str) -> String {
     out.push_str("---\n");
     let mut has_output = false;
     if let Some(interior) = interior {
-        for dir in block_directives(interior) {
-            match dir {
+        for located in block_directives(interior) {
+            match located.directive {
                 Directive::Import { name, path } => {
                     out.push_str("  ");
                     out.push_str(&format!("{name} = import \"{path}\""));

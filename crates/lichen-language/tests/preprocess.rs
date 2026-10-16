@@ -1,12 +1,12 @@
-//! An unfetched `depend`/`plug` is a missing directory, not a source problem, so
-//! its diagnostic carries no position.
+//! An unfetched `depend`/`plug` is a missing directory, and its directive's own
+//! line is where the reader edits.
 
 use lichen_language::package::PackageStore;
 use lichen_language::preprocess::stage_depends;
 use lichen_language::program::LangProgram;
 
 #[test]
-fn an_unfetched_dependency_is_not_reported_at_line_one() {
+fn an_unfetched_dependency_is_reported_at_its_own_line() {
     // The alias is unique, so the store cannot have staged it.
     let source = "---p5_13_unfetched_probe = depend \"https://example.invalid/probe.git\"---\n42\n";
     let mut store = PackageStore::<LangProgram>::new();
@@ -20,19 +20,20 @@ fn an_unfetched_dependency_is_not_reported_at_line_one() {
         "the missing directory must be named: {}",
         diagnostic.message
     );
-    assert!(
-        diagnostic.span.is_none(),
-        "a missing directory is not a source position: {diagnostic:?}"
+    assert_eq!(
+        diagnostic.span,
+        Some((1, 4)),
+        "the directive's own line is where the reader edits: {diagnostic:?}"
     );
     let rendered = lichen_language::render::render(source, diagnostic);
     assert!(
-        !rendered.contains("-->") && !rendered.contains('^'),
-        "a missing directory renders without a line-1 caret:\n{rendered}"
+        rendered.contains("--> 1:4"),
+        "the caret lands on the directive, not on a fallback: \n{rendered}"
     );
 }
 
 #[test]
-fn a_dependency_sub_path_outside_its_clone_is_not_reported_at_line_one() {
+fn a_dependency_sub_path_outside_its_clone_is_reported_at_its_own_line() {
     // `sub` is free-form text, rejected as not a relative path inside the clone.
     let source = "---p5_13_sub_probe = depend \"https://example.invalid/probe.git\" \
                   sub = \"../escape\"---\n42\n";
@@ -44,8 +45,9 @@ fn a_dependency_sub_path_outside_its_clone_is_not_reported_at_line_one() {
         "the bad `sub` must be named: {}",
         diagnostic.message
     );
-    assert!(
-        diagnostic.span.is_none(),
-        "a rejected `sub` path is not a source position: {diagnostic:?}"
+    assert_eq!(
+        diagnostic.span,
+        Some((1, 4)),
+        "the directive's own line is where the reader edits: {diagnostic:?}"
     );
 }

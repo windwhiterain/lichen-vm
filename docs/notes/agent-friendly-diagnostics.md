@@ -1,7 +1,8 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and one case is fixed.** The unclosed-delimiter case is fixed
-> (`4cb42d3f`); the offender list below is **parser-heavy and under-covers the checker and the module
+> **Status: the property is stated and two cases are fixed.** The unclosed-delimiter case is fixed
+> (`4cb42d3f`) and the preprocessor's missing span is fixed (§7); the offender list below is
+> **parser-heavy and under-covers the checker and the module
 > layers**, which is the first thing to close before another diagnostics slice.
 > Points at: `crates/lichen-language-parser/src/parse/diagnostics.rs`,
 > `crates/lichen-language-parser/src/parse.rs`, `crates/lichen-highlevel/src/diagnostic.rs`,
@@ -121,9 +122,10 @@ gap is **narrowed, not closed**.
   (`crates/lichen-highlevel/tests/checker.rs:738`, named
   `indexing_a_function_reports_expected_tuple_or_array`) was not read.
 
-**And one claim confirmed verbatim**: `crates/lichen-preprocess/src/lib.rs:429-432` builds
-`PreprocessDiag::unattributed`, so a preprocessor diagnostic carries **no span** even though the
+**And one claim confirmed verbatim, now fixed**: `crates/lichen-preprocess/src/lib.rs:429-432` used to
+build `PreprocessDiag::unattributed`, so a preprocessor diagnostic carried **no span** even though the
 directive's offset is known to the block parser — a P2 failure on a surface no parser rule touches.
+Taken; see §7 for the measurement and the `Invariant` it had to edit.
 
 **Still unmeasured**: whether the `?a -> ?b` expected side renders as claimed (`tests/checker.rs:713-736`
 supports the value structure but the rendered string was not captured); whether `checker.rs:738` already
@@ -159,13 +161,55 @@ both rewrite the pin **and** state a **weaker** requirement (a union of three sh
 one), changing every statically non-indexable read (`5[0]`, `(\x. x)[0]`, `"s"[0]`) with no bug reported.
 Not taken; pin and wiring both left alone.
 
-**The preprocessor's missing span is measured, and it is a contract question, not a defect.** The offset is
-available and discarded one layer up: `parse::parse` returns `LocatedDirective = (Directive, u32)`
-(`crates/lichen-preprocess/src/parse.rs:50`) and `block_directives` drops it with `.map(|(d, _)| d)`
-(`lib.rs:330`), so a `@depend` line's span **could** be carried. It is not, because the behaviour is
-documented as intended (`lib.rs:26-27`, `:42-43`, and the `Invariant` at `:403-407`) — so taking it means
-editing an `Invariant`, and it is left to the user's decision. **That Invariant and this note's P2
-disagree, which is the whole shape of the question.**
+**The preprocessor's missing span is fixed, by the user's decision rather than by a reinterpretation.**
+The offset was available and discarded one layer up: `parse::parse` returns `LocatedDirective`, and
+`block_directives` dropped it with `.map(|(d, _)| d)`. The behaviour was documented as intended
+(`lib.rs:26-27`, `:42-43`, and the `Invariant` at `:403-407`), so taking it meant **editing that
+Invariant** — which the user authorised explicitly, rather than this slice reading the old text a
+different way. **P2 now holds there.** `LocatedDirective` became a struct
+(`crates/lichen-preprocess/src/parse.rs:51`) and `block_directives` returns it (`lib.rs:323`), so the
+offset is in the type: there is no function left that hands out an unlocated directive, and a caller
+that does not want the offset says `.directive` where it drops it. `stage_depends` rebases the
+interior offset onto the file (`lib.rs:419`) and both its diagnostics now carry the span.
+
+Measured on the smallest `@depend` source, before and after:
+
+```
+t =  # a project header
+     ---
+     probe_dep_span = depend "https://example.invalid/probe.git"
+     ---
+     42
+before: dependency 'probe_dep_span' is not fetched (expected <cache>/probe_dep_span) — run `lichen fetch` first
+        span:    None
+after:  dependency 'probe_dep_span' is not fetched (expected <cache>/probe_dep_span) — run `lichen fetch` first
+        span:    Some((3, 1))
+```
+
+One command, both readings:
+
+```
+cargo test -p lichen-preprocess --test directive_span -- --nocapture
+```
+
+**The message is byte-for-byte unchanged**; only the span moved. Rendered at the front end it now
+carries the caret, on the directive rather than nowhere:
+
+```
+error: dependency 'probe_dep_span' is not fetched (…) — run `lichen fetch` first
+  --> 1:4
+ 1 | ---probe_dep_span = depend "https://example.invalid/probe.git"---
+   |    ^
+```
+
+**What did *not* change, and why it is not a leftover.** `PreprocessDiag.span` stays an
+`Option<Span>`: `ImportResolver::resolve_import` is implemented by the caller and returns a
+`PreprocessDiag` it built itself (`crates/lichen-language/src/package.rs:1005`), whose span may
+genuinely be absent, and `preprocess` overwrites it with the import's own position
+(`lib.rs:271`). That is a real boundary where a span is not yet known, not a forgotten one. Two
+tests in `crates/lichen-language/tests/preprocess.rs` pinned the old contract
+(`span.is_none()` and "renders without a line-1 caret"); the user's decision invalidates them, so
+they now pin the directive's line instead.
 
 **And one path correction:** there is no `crates/lichen-highlevel/src/render.rs`. The renderer is
 `crates/lichen-language/src/render.rs`, and `CheckerDiag` is an alias for

@@ -22,7 +22,7 @@ stays small.
 ## What the crate owns
 
 - **The block scanner and its mini-frontend**:
-  `crates/lichen-preprocess/src/{lib,lex,parse}.rs` hold `Directive`, `Depend`,
+  `crates/lichen-preprocess/src/{lib,lex,parse}.rs` hold `Directive`, `LocatedDirective`, `Depend`,
   `Preprocessed`, `ResolvedImport`, the `block_*`/`split_block`/`depend_of`
   helpers, `preprocess`, `stage_depends`, and `scan_block`.
 - **The source-position protocol**: `Span` / `line_starts` / `line_col` live in
@@ -53,7 +53,9 @@ The preprocessor never names a package store or a compile vocabulary.
   ResolvedImport}` keep their old non-generic names.
 - **Diagnostics are program-blind**: `PreprocessDiag { span, message }` (no
   checker payload, no program marker). The language crate widens it to its
-  `Diag` via `Diag::from_preprocess` at `Stage::Preprocess`.
+  `Diag` via `Diag::from_preprocess` at `Stage::Preprocess`. `block_directives`
+  returns `LocatedDirective`, so a directive's offset survives to `stage_depends`
+  and a `@depend` failure is reported on its own line.
 
 ## The shim
 

@@ -47,7 +47,12 @@ pub enum Directive {
 
 /// A parsed directive together with the byte offset, within the block
 /// interior, of its first token.
-pub type LocatedDirective = (Directive, u32);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedDirective {
+    pub directive: Directive,
+    /// The offset, within the block interior, of this directive's first token.
+    pub offset: u32,
+}
 
 /// One parse failure: the offset of the offending token in the interior, and the
 /// message saying what was expected.
@@ -102,22 +107,34 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<LocatedDirective>, Vec<ParseFailure
                     }
                 };
                 i += 1;
-                out.push((Directive::Import { name, path }, stmt_start));
+                out.push(LocatedDirective {
+                    directive: Directive::Import { name, path },
+                    offset: stmt_start,
+                });
             }
             Some(TokenKind::KwDepend) => {
                 i += 1;
                 let depend = parse_depend(tokens, &mut i, name)?;
-                out.push((depend, stmt_start));
+                out.push(LocatedDirective {
+                    directive: depend,
+                    offset: stmt_start,
+                });
             }
             Some(TokenKind::KwPlug) => {
                 i += 1;
                 let plug = parse_plugin(tokens, &mut i, name)?;
-                out.push((plug, stmt_start));
+                out.push(LocatedDirective {
+                    directive: plug,
+                    offset: stmt_start,
+                });
             }
             Some(TokenKind::String(v)) => {
                 let v = v.clone();
                 i += 1;
-                out.push((Directive::Metadata { name, value: v }, stmt_start));
+                out.push(LocatedDirective {
+                    directive: Directive::Metadata { name, value: v },
+                    offset: stmt_start,
+                });
             }
             k => {
                 return Err(vec![err_at(
@@ -331,7 +348,7 @@ mod tests {
         parse(&lexed.tokens)
             .expect("expected a clean parse")
             .into_iter()
-            .map(|(d, _)| d)
+            .map(|located| located.directive)
             .collect()
     }
 

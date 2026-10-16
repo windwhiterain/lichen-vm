@@ -14,7 +14,7 @@ use lichen_span::{Span, line_col, line_starts};
 mod lex;
 mod parse;
 
-pub use parse::Directive;
+pub use parse::{Directive, LocatedDirective};
 
 /// A preprocessor diagnostic: a message plus, for a source failure, the position it
 /// is grounded in.
@@ -22,9 +22,9 @@ pub use parse::Directive;
 /// # Invariant
 ///
 /// Check-free — the preprocessor never touches a checker or a program marker — so it is not typed
-/// over a vocabulary; a caller widens it into its own diagnostic at `Stage::Preprocess`. A failure
-/// about no source text (an unfetched dependency, a `sub` outside its clone) carries no span and
-/// renders as its message alone.
+/// over a vocabulary; a caller widens it into its own diagnostic at `Stage::Preprocess`. Every
+/// failure the crate raises about source text carries the position of the text that fails; only a
+/// resolver's own span-less error, which `preprocess` overwrites, renders as its message alone.
 #[derive(Clone, Debug)]
 pub struct PreprocessDiag {
     pub span: Option<Span>,
@@ -39,8 +39,8 @@ impl PreprocessDiag {
         }
     }
 
-    /// A diagnostic with no source position, for a failure that is not a property
-    /// of any source text.
+    /// A diagnostic with no source position, for a resolver failure the caller
+    /// cannot yet place.
     pub fn unattributed(message: impl Into<String>) -> Self {
         PreprocessDiag {
             span: None,
@@ -254,10 +254,10 @@ where
     if lexed.errors.is_empty() {
         match parse::parse(&lexed.tokens) {
             Ok(dirs) => {
-                for (dir, off) in dirs {
-                    let global = interior_start as u32 + off;
+                for located in dirs {
+                    let global = interior_start as u32 + located.offset;
                     let span = line_col(&starts, global);
-                    match dir {
+                    match located.directive {
                         Directive::Import { name, path } => {
                             match resolver.resolve_import(base, &path) {
                                 Ok(pkg) => imports.push(ResolvedImport {
@@ -317,18 +317,14 @@ pub fn split_block(source: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// Parse a block interior into its directives, in order; empty when it fails to
-/// lex or parse.
-pub fn block_directives(interior: &str) -> Vec<Directive> {
+/// Parse a block interior into its [`LocatedDirective`]s, in order; empty when
+/// it fails to lex or parse.
+pub fn block_directives(interior: &str) -> Vec<LocatedDirective> {
     let lexed = lex::tokenize(interior);
     if !lexed.errors.is_empty() {
         return Vec::new();
     }
-    parse::parse(&lexed.tokens)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(d, _)| d)
-        .collect()
+    parse::parse(&lexed.tokens).unwrap_or_default()
 }
 
 /// The string metadata `(name, value)` entries of a block interior (
@@ -336,7 +332,7 @@ pub fn block_directives(interior: &str) -> Vec<Directive> {
 pub fn block_metadata(interior: &str) -> Vec<(String, String)> {
     block_directives(interior)
         .into_iter()
-        .filter_map(|d| match d {
+        .filter_map(|located| match located.directive {
             Directive::Metadata { name, value } => Some((name, value)),
             _ => None,
         })
@@ -348,7 +344,7 @@ pub fn block_metadata(interior: &str) -> Vec<(String, String)> {
 pub fn block_depends(interior: &str) -> Vec<Depend> {
     block_directives(interior)
         .into_iter()
-        .filter_map(depend_of)
+        .filter_map(|located| depend_of(located.directive))
         .collect()
 }
 
@@ -404,32 +400,40 @@ pub fn depend_of(dir: Directive) -> Option<Depend> {
 ///
 /// The compiler never fetches git sources: a dependency the package manager has not fetched, or
 /// one whose `sub` is not a relative path inside its clone, is a preprocess diagnostic naming the
-/// missing directory.
+/// missing directory. Both point at the directive's own line, which is where the reader edits.
 pub fn stage_depends<E, R>(resolver: &mut R, source: &str) -> Vec<PreprocessDiag>
 where
     R: ImportResolver<E>,
 {
     let mut diags = Vec::new();
-    let (interior, _) = split_block(source);
-    let Some(interior) = interior else {
+    // `scan_block` rather than `split_block`: the rebased offset needs `interior_start`.
+    let Some((interior_start, interior_end, _)) = scan_block(source) else {
         return diags;
     };
-    for dep in block_depends(interior) {
+    let starts = line_starts(source);
+    for located in block_directives(&source[interior_start..interior_end]) {
+        let Some(dep) = depend_of(located.directive) else {
+            continue;
+        };
+        let span = line_col(&starts, interior_start as u32 + located.offset);
         let alias = dep.alias();
         let dir = match dep.vendored_dir() {
             Ok(dir) => dir,
             Err(message) => {
-                diags.push(PreprocessDiag::unattributed(message));
+                diags.push(PreprocessDiag::new(span, message));
                 continue;
             }
         };
         if dir.is_dir() {
             resolver.register_vendored(alias, dir);
         } else {
-            diags.push(PreprocessDiag::unattributed(format!(
-                "dependency '{alias}' is not fetched (expected {}) — run `lichen fetch` first",
-                dir.display()
-            )));
+            diags.push(PreprocessDiag::new(
+                span,
+                format!(
+                    "dependency '{alias}' is not fetched (expected {}) — run `lichen fetch` first",
+                    dir.display()
+                ),
+            ));
         }
     }
     diags
