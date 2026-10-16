@@ -42,9 +42,10 @@
     gather pays `rank`, `row` and one write per layout. **This file ships the gather anyway, for the \
     one thing the tuple does not have**: its ranks are **addressable by arithmetic**, which is what a \
     consumer like `keep` needs and what `gather-spelling.md` §3 says the one-buffer answer buys. \
-    `gather-spelling.md` §2.4 quotes a refusal for a nest's result crossing into the next nest; **the \
-    shape above did not reproduce it**, and no attempt was made to find the boundary, so that \
-    sentence is reported as measured here and not as settled.\n\n\
+    `gather-spelling.md` §2.4's condition was wrong and is corrected there: a cross-read lowers, and the \
+    refusal needs **two** things at once — that read plus a `Bin` outside every nest over a nest result \
+    whose value a `compute.write` takes. This file is that second half's evidence: three nests whose \
+    steps read the previous rank all run.\n\n\
     **Ties: the three ranks do not share one rule, and that is a choice with three measured \
     answers.** Rank zero is `examples/sample.lichen`'s `Float` fold with `>`, and a fold counts \
     **down**, so a later visit never displaces an equal value and the **highest** position wins. \
