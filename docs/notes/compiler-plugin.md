@@ -197,16 +197,70 @@ than a field so no caller can read one vector and forget the other exists.
 
 The host here is `lichen-language`, and it renders them in two places, because a `Module`
 outlives its check in two ways: the report assembly (`lib.rs`) carries the failing ones
-into a failed build's diagnostics, and `run::render_build` reports the rest when the
-program produced no value — a `plrun` whose count is past the bound, whose refusal *is* the
-explanation for the `parameterized` output. A refusal is an explanation and not a verdict,
-so a program that produced a real value drops them: the checker evaluates speculatively,
-and a `$jit` whose parameter domain is not decided yet records a refusal that a later
-attempt supersedes. Recording is idempotent for an identical `(category, node, message)` —
-a node is deep-evaluated several times, and refusing twice is not two findings. That dedup
-now spans both kinds, which is only safe because **no record appears in both**: measured
-across the suite, the two old vectors held **zero** entries sharing a
-`(category, node, message)`.
+into a failed build's diagnostics, and `run::render_build` refuses a run on the failing
+ones. Recording is idempotent for an identical `(category, node, message)` — a node is
+deep-evaluated several times, and refusing twice is not two findings. That dedup spans
+both kinds, which is only safe because **no record appears in both**: measured across the
+suite, the two old vectors held **zero** entries sharing a `(category, node, message)`.
+
+### A refusal or a stage observation, and the flag that carries it
+
+`fails_build` is a question about **what the program may do next**, and the test is one
+sentence: *must the program not quietly answer?* A record that fails the build answers
+no — the operator declined to do what the program asked, so the value beside it is not
+the program's function and a run must refuse rather than print it. A record that leaves
+the build usable answers yes — it is a fact about the run, reported beside whatever the
+program answered, and the answer stands on its own.
+
+`lichen-compute` is the worked example, and its **25 recording sites** are all in
+`crates/lichen-compute/src/compute.rs`. **24 are `note` today and 1 is already
+`failure`** (`compute.graph`, the declared type that is not a graph ABI, at
+`compute.rs:5047`), so the flag had not been carrying the distinction this host needs:
+the CLI's gate read *any* entry as a refusal, so a stage line could never be reported
+beside a value. The classification, one line per site:
+
+| Site (`compute.rs`) | Category | Reports | Kind |
+|---|---|---|---|
+| 616 | caller's | a backend operand is not `"cpu"`/`"gpu"` | refusal |
+| 1025 | `compute.graph` | `unrecordable`: an operator recorded into a graph it cannot join | refusal |
+| 1067 | `compute.jit` | the jit target is outside the kernel-safe subset | refusal |
+| 1095 | `compute.kernel_launch` | `Launch`'s argument is not the scalar/array a kernel takes | refusal |
+| 1108 | `compute.kernel_launch` | the kernel run itself failed | refusal |
+| 1134 | `compute.kernel_launch` | `Call`'s argument is not the shape a kernel takes | refusal |
+| 1147 | `compute.kernel_launch` | the kernel run itself failed | refusal |
+| 1198 | `compute.parallel` | **`compile_parallel_fragment` refused — the misplaced write** | refusal |
+| 1242 | `compute.parallel` | the fragment's leaf classes cannot be read | refusal |
+| 1268 | `compute.parallel` | the launch count is a `Float` where the extent is `Int` | refusal |
+| 1282 | `compute.parallel` | the launch passes an `Int` for a `Float` parameter leaf | refusal |
+| 1440 | `compute.parallel` | `run_parallel_kernel` refused | refusal |
+| 1523 | `compute.parallel` | a resident buffer's fetch failed on a read | refusal |
+| 1589 | `compute.parallel` | a resident buffer's fetch failed on a collect | refusal |
+| 4487 | `compute.parallel` | `not_a_buffer`: the operand position is not a buffer | refusal |
+| 4521 | `compute.buffer` | an array element is undecided and cannot be copied | refusal |
+| 4536 | `compute.buffer` | an array element is not a scalar | refusal |
+| 4551 | `compute.buffer` | the array mixes element classes | refusal |
+| 4587 | `compute.buffer` | `not_an_array`: `compute.buffer` was handed a non-array | refusal |
+| 4689 | `compute.graph` | `recorded_scalar`: a dispatch's scalar leaf has no edge to record | refusal |
+| 4786 | `compute.graph` | `record_launch`: a dispatch cannot be recorded at all | refusal |
+| 5012 | `compute.graph` | `build_graph`: the graph operand is not a function | refusal |
+| 5047 | `compute.graph` | the declared type is not a graph ABI (already `failure`) | refusal |
+| 5368 | `compute.graph` | `run_graph`: an argument is neither a buffer nor a number, or the graph will not run | refusal |
+| 5488 | `compute.graph.pass` | **the installed pass's own stage lines**, `take_graph_pass_lines()` | stage observation |
+
+**24 refusals, 1 stage observation.** The anchor is 1198: a `compute.parallel` whose body
+writes each other's output is refused by name (`output N … is a compute.write to output
+M`), and both `crates/lichen-compute/tests/swallowed_refusal.rs` and
+`crates/lichen-compute/tests/refusal_over_an_answer.rs` pin that a run refuses over it even
+when the program's own answer arrived.
+
+**5488 is the one that must stay a note, and the reason is a category, not a spelling.**
+Its lines come from `take_graph_pass_lines()` — a thread-local the installed pass writes —
+and they are facts about **what the pass did**, including a *refusal of a fusion*: a pass
+that declines to merge node 1 has refused the merge, not the program. The program still
+answered, and the answer is the program's own function, so the line belongs beside it
+(`region N: …`, `node N: …`, `pack "…" fired`). This is the invariant
+`crates/lichen-language/src/run.rs` states: *a stage line is **not a refusal**: the run
+reports it beside the value, so naming a pack still says whether it fired.*
 
 ## Extension point 5: owning a payload (`ValueExt`'s ext-handle contract)
 
