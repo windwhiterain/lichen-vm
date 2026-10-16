@@ -87,8 +87,9 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// The in-progress guard, not the union-find's finiteness, bounds the walk: reading a
     /// member re-enters this same class, so an unguarded walk never returns. A member an
-    /// outer frame holds the mark for is left to that frame — [`Self::alias_read`] joins the
-    /// reader that is running into the class it reads. Membership is read once, at entry.
+    /// outer frame computes is left to that frame — [`Self::alias_read`] joins the running
+    /// reader into the class it reads — and a forced read that reaches one is a dependency,
+    /// not a cycle.
     #[stacksafe]
     fn evaluate_class_first(&mut self, node: NodeId) {
         let representative = self.equality_representative(node);
@@ -128,9 +129,10 @@ impl<P: Program> Module<P> {
         if child_block_root || declared == Some(node) {
             return self.evaluate_block(node);
         }
-        // The class before the node, so the order its members were unified in cannot
-        // decide this node's answer.
-        self.evaluate_class_first(node);
+        // The class before the node runs, so unify's order cannot decide its answer.
+        if self.has_no_result_yet(node) && !self.nodes[node].visiting {
+            self.evaluate_class_first(node);
+        }
         if let Some(value) = self.nodes[node].value {
             // The wildcard is undecided to every reader but the unifier, so it is
             // never a computed answer to hand on.
@@ -151,10 +153,12 @@ impl<P: Program> Module<P> {
             }
             return Some(value);
         }
-        // Visiting with no cached value means an inner frame is computing it, so this read is
-        // cyclic.
+        // A read of a node an outer frame computes is cyclic, unless a class walk forced it.
         if self.nodes[node].visiting {
-            unreachable!("cycle detected: node {node:?} is being evaluated");
+            if self.evaluating_classes.is_empty() {
+                unreachable!("cycle detected: node {node:?} is being evaluated");
+            }
+            return None;
         }
         // An empty slot is undecided; with no operation behind it there is nothing to run.
         if !self.has_no_result_yet(node) {
