@@ -13,7 +13,8 @@ whether any operator it did *not* reach — `softmax`'s body, `attend`, `ln`, `s
 ladder body — diverges. **That is this note's question**, one example per row, and the answer is
 different per operator.
 
-**Two corrections this measurement forces on the notes it follows, kept in their own words.**
+**Two corrections this measurement forces on the notes it follows, kept in their own words, and one
+correction to the brief itself.**
 
 - ~~"[device-leg-of-the-ladder](device-leg-of-the-ladder.md) §2: **Measured: every fragment that
   reached the device is bit-exact. There is no divergence to report**, and no tolerance was loosened
@@ -44,13 +45,23 @@ different per operator.
 | `rope` — the rotation, built on `sin`/`cos` | `rope.lichen` | **runs, diverges** | **3** (of 8 elements, 5 differ) | 3 modules, **3 ACCEPT** |
 | `silu` — SwiGLU's gate, an `exp` body | `silu.lichen` | **runs, diverges** | **1** (of 4 elements, 1 differs) | 2 modules, **2 ACCEPT** |
 | `softmax` — the row softmax | `softmax.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 2 modules, **2 ACCEPT** |
+| `rmsnorm` — a Newton `sqrt` and a division | `rmsnorm.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 2 modules, **2 ACCEPT** |
+| `layernorm` — a diamond of two folds and a Newton `sqrt` | `layernorm.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 3 modules, **3 ACCEPT** |
+| attention — softmax composed with a gemv | **`attention.lichen`** | **runs, diverges** | **1** (of 8 elements, 6 differ) | 2 modules, **2 ACCEPT** |
+| `gemv` | `gemv.lichen` | **refused by name** — the **known** rule | — | 1 module, **1 ACCEPT** |
+| `matmul` | `matmul.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 1 module, **1 ACCEPT** |
 
-The evidence, quoted whole, is [§2](#2-rope--the-transcendental-in-an-operators-own-answer),
-[§3](#3-silu--one-ulp-and-it-is-already-there) and [§4](#4-softmax--the-exponential-and-the-division-agree-here). The
-rows are added here as each operator is measured; the standing question each row answers is named in
-its own section. **No refusal has appeared yet**: every operator measured so far reaches a device on
-the backend literal alone, so [device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1's upload
-rule is satisfied by every input of every one of them.
+The evidence, quoted whole, is [§2](#2-rope--the-transcendental-in-an-operators-own-answer) through
+[§9](#9-matmul--the-same-family-with-a-long-enough-input). **A third correction, and it is a path
+correction: the brief's `examples/attend.lichen` does not exist in this repository.** The operator is
+`attend` and the file is `examples/attention.lichen`; the run is that file's, and the note says so
+rather than quietly renaming the row. Every other path in the brief resolves as written.
+
+**The refusal is the only one measured, and it is the rule already documented.** `gemv`'s is
+[device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1's launch-count/input-length rule,
+`InputShorterThanCount`, quoted verbatim in [§8](#8-gemv--refused-by-name-on-the-known-rule) — **not a
+new rule**. The other seven operators reach a device on the backend literal alone, every input of
+every kernel exactly as long as the launch covers.
 
 ## 2. `rope` — the transcendental in an operator's own answer
 
@@ -248,6 +259,232 @@ ulp on the same device, on the same arithmetic family.
   [floating-point](floating-point.md) §7's and §8's tables already have for the standalone
   definitions.
 
+## 5. `rmsnorm` — a Newton `sqrt` and a division, and both divisors are exact
+
+**Measured: it runs, and it is bit-exact.** The example declares
+
+```
+[3.5, 3.0, 2.0, 8.0]: array{Float, 4}
+```
+
+`cpu` answers exactly that and `gpu` answers **the same string**, so all four answers are the same
+four values:
+
+| element | `cpu` bits | `gpu` bits | ulp |
+|---|---|---|---|
+| 0 | `40600000` | `40600000` | 0 |
+| 1 | `40400000` | `40400000` | 0 |
+| 2 | `40000000` | `40000000` | 0 |
+| 3 | `41000000` | `41000000` | 0 |
+
+The reduction's own buffer is exact too: re-rooted on `sums.s` it answers `[63.0, 63.0, 63.0, 63.0]`
+on both, bits `427c0000` four times.
+
+**Measured: `spirv-val` accepts both modules** — `rescale_raw`, which holds the Newton `sqrt` (3
+inputs, 1 output, **1658** words) and `sumsq_raw` (1 input, 1 output, **337** words). **ACCEPT, both.**
+
+**Measured, and this is the reading these two rows have in common: the example chose its divisors.**
+`rescale_raw`'s body is `sqrt (s / int2float k.n + 0.25)` then `x / d`. The row is `7, 3, 1, 2`, so
+`Σx² = 63`, `/4` is a power-of-two division, `+ 0.25` gives `16`, and `sqrt 16` is `4` exactly — **so
+both divisions divide by an exactly representable number.** The example's own `doc` says exactly this
+(*"`sqrt` answers `4`, and every division below divides by it exactly"*), and
+[floating-point](floating-point.md) §7 measured this device's `/4` as the one divisor of the three it
+swept where **none** of 256 quotients differ.
+
+**So this row does not exonerate the Newton `sqrt` on this device, and must not be read as doing so.**
+§7's own `sqrt` column is the counter-reading: over one sample set on this same device, **21 of 64
+elements differ by one ulp**, while `floor`'s column — which divides nowhere — is identical on all
+64. **The Newton iteration moves here; this example's input is one where it does not.** §7's `ln`
+paragraph already named the shape of the mistake — *"six arguments are a sample, not a sweep"* — and
+this is it again with a denominator chosen rather than swept.
+
+**The kernel work this outcome implies.**
+
+- **Nothing to repair, and nothing decided.** No spelling is missing and no capability is absent.
+- **The precision decision §2 asked for is unchanged, and this row is evidence about its *size*, not
+  about whether to take it**: on the inputs these examples spell, the normalisers cost 0 ulp and the
+  rotation costs 3. **The tolerance a kernel author may rely on is a per-input property, not a per-
+  operator one** — which is the argument for stating a tolerance beside
+  [floating-point](floating-point.md) §4.4 rather than per operator.
+
+## 6. `layernorm` — the same arithmetic, and a second route
+
+**Measured: it runs, and it is bit-exact.** The example declares
+
+```
+[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}
+```
+
+`cpu` answers exactly that and `gpu` answers **the same string**:
+
+| element | `cpu` bits | `gpu` bits | ulp |
+|---|---|---|---|
+| 0 | `c0400000` | `c0400000` | 0 |
+| 1 | `c0000000` | `c0000000` | 0 |
+| 2 | `3f800000` | `3f800000` | 0 |
+| 3 | `40c00000` | `40c00000` | 0 |
+
+Both folds are exact as well: re-rooted, `sm.s` answers `[10.0, 10.0, 10.0, 10.0]` (bits `41200000`)
+and `sq.q` `[30.0, 30.0, 30.0, 30.0]` (bits `41f00000`) on **both** backends.
+
+**Measured: `spirv-val` accepts all three modules** — the two folds (1 input, 1 output, **316** and
+**337** words) and `normalise_raw`, which holds the two divisions, `m * m` and the Newton `sqrt`
+(4 inputs, 1 output, **1734** words). **ACCEPT, three.**
+
+**Measured: this is a different route from the one the example records, and it agrees.**
+`layernorm.lichen`'s own `doc` says *"The RTX 3060 answers `[-3.0, -2.0, 1.0, 6.0]` for the same three
+kernels through `graphrun`"*. This row is the **direct `compute.plrun` leg with the backend literal
+only** — three separate launches, no `compute.graph` and no `graphrun` — and it answers the same four
+values element for element. So the example's recorded device claim is confirmed on a route it does
+not itself spell, and the same exact-divisor reading applies: `count = int2float k.n` is `4.0` and
+`d = sqrt (1.25 + 1.0) = 1.5` exactly, which the `doc` states as deliberate (*"chosen so the
+denominator lands on an exact square"*).
+
+**The kernel work this outcome implies.** As §5: nothing to repair, nothing decided, and the same
+finding that a kernel's tolerance is a property of its inputs. **The one thing this row adds** is
+that the operator's *shape* — a three-kernel diamond, two independent producers feeding one consumer —
+costs nothing on a device. The diamond is a scheduling concern, and both backends schedule it the same
+way.
+
+## 7. attention — softmax composed with a gemv
+
+**Measured: it runs, and it diverges by one ulp on six of eight elements.** The example declares
+
+```
+[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}
+```
+
+`cpu` answers exactly that, and `gpu` answers
+
+```
+[2.510164, 3.510164, 4.510164, 5.510164, 3.924232, 4.9242315, 5.9242315, 6.9242315]: array{Float, 8}
+```
+
+**Measured: the distance per element, from the two backends' own bits:**
+
+| element | `cpu` bits | `gpu` bits | ulp | `cpu` | `gpu` |
+|---|---|---|---|---|---|
+| 0 | `4020a688` | `4020a687` | **1** | `2.5101643` | `2.510164` |
+| 1 | `4060a688` | `4060a687` | **1** | `3.5101643` | `3.510164` |
+| 2 | `40905344` | `40905343` | **1** | `4.5101643` | `4.510164` |
+| 3 | `40b05344` | `40b05343` | **1** | `5.5101643` | `5.510164` |
+| 4 | `407b269e` | `407b269e` | 0 | `3.924232` | `3.924232` |
+| 5 | `409d934f` | `409d934e` | **1** | `4.924232` | `4.9242315` |
+| 6 | `40bd934e` | `40bd934e` | 0 | `5.9242315` | `5.9242315` |
+| 7 | `40dd934f` | `40dd934e` | **1** | `6.924232` | `6.9242315` |
+
+**Measured: the whole divergence is in the second kernel.** Re-rooted on the score buffer, the two
+backends agree bit for bit — `[1.0, 0.5, 0.0, 1.0]`, bits `3f800000`, `3f000000`, `00000000`,
+`3f800000` on both — so `scores_raw` is exact and `attend_raw` (the `@loop` that accumulates
+`exp (s - m) * v` and divides by the denominator on the way out) carries all six differing elements.
+
+**This is the row that makes §4's reading sharper rather than softer.** `softmax.lichen` holds the same
+`exp` expansion and a float division and answered all four lanes bit for bit; here, **composed with a
+gemv, the same family moves by one ulp on six of eight**. The two differences between the programs are
+that the divisor here is a sum of `exp` over the keys rather than a row total, and that the `exp` is
+inside an accumulating fold. **So `softmax`'s zero and this one's one are two samples of one
+arithmetic family, which is the argument §4 made** — and it is now a measurement on both sides of it
+rather than an argument on one.
+
+**Measured: `spirv-val` accepts both modules** — **1785** words (2 inputs, 1 output) and **1052**
+words (2 inputs, 1 output). **ACCEPT, both.** So the one-ulp gap here is again a numerical gap in a
+module the specification accepts.
+
+**The kernel work this outcome implies.**
+
+- **A composition rule someone has to state, not an emitter fix.** One ulp entering an accumulation
+  and coming out through a division is arithmetic a kernel author must budget for; what is missing is
+  a stated tolerance for "softmax composed with a gemv", not a body that miscompiles.
+- **The decomposition probe, again, and now it has a second case.** §3 could not say whether `silu`'s
+  one ulp was the `exp` or the `Div`; here `attend_raw` holds **both plus a fold**, and no buffer
+  exposes them separately. A single per-instruction probe would serve both rows.
+
+## 8. `gemv` — refused by name, on the known rule
+
+**Measured: it is refused by name**, and the refusal, verbatim:
+
+```
+compute.parallel: the "gpu" backend declined this run: input buffer 1 holds 3
+element(s) but the run covers 4 index/indices, so a lane would read past it.
+```
+
+`cpu` answers `[14.0, 32.0, 50.0, 68.0]: array{Float, 4}` and answers it exactly as declared.
+
+**This is the KNOWN rule, not a new one.**
+[device-leg-of-the-ladder](device-leg-of-the-ladder.md) §1's launch-count/input-length rule,
+`InputShorterThanCount` — the same sentence that refused the KV-cache append and the scoring row, and
+`examples/gemv.lichen`'s **own `doc` already records this sentence verbatim**. **This measurement
+reproduces it exactly** and adds one thing the `doc` does not carry.
+
+**Measured: the module is not what refuses.** The run registers **one** fragment — 2 inputs, 1 output,
+**378** words — and `spirv-val` answers **ACCEPT**. **So the emitter produces a valid module and the
+host-side upload check (`staged_bytes`,
+`crates/lichen-compute-gpu/src/dispatch.rs:965-987`) refuses the run before it reaches a pipeline.**
+A module that emits *and would be rejected by the validator* is the thing this slice was told to look
+for; this is the other shape, and the distinction is worth having in the same breath.
+
+**Measured: the spelling the refusal implies works, and it is inert.** Padding the short vector from
+`[1.0, 2.0, 3.0] : array{Float, 3}` to `[1.0, 2.0, 3.0, 0.0] : array{Float, 4}` — **one buffer's width,
+nothing else in the program touched** — makes the same body run on the device and answer
+
+```
+[14.0, 32.0, 50.0, 68.0]: array{Float, 4}
+```
+
+on **both** backends, byte-equal. The fourth element is never read (§5 of
+[device-leg-of-the-ladder](device-leg-of-the-ladder.md) is the same argument, measured), so this is one
+buffer's width rather than a second program.
+
+**Measured, and this is why the two members of the gemm family come out differently.** `gemv`'s
+reduction vector is a **whole buffer** of length `kdim = 3` beside a launch of `M = 4`, so `kdim < M`
+and the input is short. `matmul`'s `k` is `3` beside `n = 4` too — **the same `k < n`** — but neither
+of its inputs is short, because `a` and `b` are the **full matrices** (6 elements each), not one
+reduction vector. **The rule is about buffer length, not about `k`**, and that is why §9 runs and this
+section refuses.
+
+**The kernel work this outcome implies.**
+
+- **The spelling that must be written, and it is known: say the input is short and the body reads its
+  first `kdim`.** That is `device-leg-of-the-ladder` §1's own reading — *"what is missing is a way to
+  say 'this input is short and the body only reads its first `dim`'"* — and it is **not written here**;
+  padding an example's buffer is a measurement, not a capability. Every decode-step GEMV meets it, so
+  the spelling is worth more than any one example.
+- **A capability that is not missing.** The host has two working answers already (pad, or launch over
+  what the buffer holds), and `device-leg` §5 measured the second one and found it **silently wrong**
+  rather than refused — `wontfix:D17`'s every-position-written rule. **Padding is the spelling to
+  take**, for the reason that note gives.
+- **No precision decision and no emitter change** for this row: the module is `spirv-val` **ACCEPT**
+  and never runs.
+
+## 9. `matmul` — the same family, with a long enough input
+
+**Measured: it runs, and it is bit-exact.** The example declares
+
+```
+[58.0, 64.0, 139.0, 154.0]: array{Float, 4}
+```
+
+`cpu` answers exactly that and `gpu` answers **the same string**:
+
+| element | `cpu` bits | `gpu` bits | ulp |
+|---|---|---|---|
+| 0 | `42680000` | `42680000` | 0 |
+| 1 | `42800000` | `42800000` | 0 |
+| 2 | `430b0000` | `430b0000` | 0 |
+| 3 | `431a0000` | `431a0000` | 0 |
+
+**Measured: `spirv-val` accepts its one module** — 2 inputs, 1 output, **417** words. **ACCEPT.** So
+the refusal in §8 is not a property of the gemm family's emitted code: **the module that refuses to be
+*run* is accepted by the validator, and so is the module that runs.**
+
+**The kernel work this outcome implies.**
+
+- **Nothing to repair.** The only difference between this row and §8 is a buffer length.
+- **This row is what makes §8's implication concrete rather than alarming**: the same operator family,
+  the same emitter, the same validator verdict — one refuses on a host-side length check and the other
+  runs bit-exact. **A GEMV with `kdim ≥ M` needs no work at all**; only the shape `kdim < M`, which
+  is every decode-step use, needs the spelling §8 names.
+
 ## How each run was driven
 
 **Measured, so the next reader can repeat it.** The CLI installs no backend
@@ -268,36 +505,79 @@ added it. It:
    `lichen_compute_gpu::spirv::compile` at `Binding { inputs: fragment.inputs, outputs: fragment.outputs }`,
    and pipes the words to `C:\VulkanSDK\1.3.296.0\Bin\spirv-val.exe --target-env vulkan1.1 -`.
 
+**Two further probe variants, both additive and both named where they are used.** A *re-rooted* run
+appends **one** expression to the source, so the root is an intermediate buffer rather than the
+program's own output — it reads an existing binding and changes nothing above it, and it is how §2 and
+§3 attribute a divergence to one of an operator's kernels. A *replaced* run substitutes one literal for
+another — it is how §8 measures the repair a refusal implies. **Neither edits a file**: the examples in
+`examples/` are byte-for-byte as `dev` has them.
+
 **Each operator was run in its own process**, because the registry the run fills and
 `install_default()`'s process-wide backend slot are both process-global, and the device takes one
 process at a time.
 
-**One example's edit was reverted after the run.** The example files themselves are **unchanged**:
-`git diff dev...HEAD -- examples/` is empty, and no `output =` line moved. The `"cpu"` → `"gpu"`
-switch is made in memory, in the probe, and never written back.
+**No example file was edited.** The examples in `examples/` are byte-for-byte as `dev` has them:
+`git diff dev...HEAD -- examples/` is empty, and no `output =` line moved. The `"cpu"` → `"gpu"` switch
+is made in memory, in the probe, and never written back.
 
 ## What was measured, inferred and unknown
 
-**Measured.** `rope.lichen`'s declared, `cpu` and `gpu` outputs, quoted whole; the eight per-element
-ulp distances and both bit patterns; the eight per-element ulp distances for `cosines.c` and
-`sines.s`; the three fragments' word counts and input/output counts; the three `spirv-val` verdicts;
-and that all three kernels of the operator reached a device at all. `silu.lichen`'s declared, `cpu`
-and `gpu` outputs; its four per-element ulp distances and both bit patterns; the same for `act.a`;
-two word counts and two verdicts. `softmax.lichen`'s declared, `cpu` and `gpu` outputs — byte-equal,
-so bit-exact by the injectivity of the printer — its four bit patterns, two word counts and two
-verdicts.
+**Measured.** Every row of §1's table, and for each: the `output =` the example **declares**, the
+**`cpu`** answer, the **`gpu`** answer or the **verbatim refusal**, and the per-element ulp distance
+read off both backends' own bit patterns where they differ. That is, in full:
 
-**Inferred.** That the split is inside the emitted `sin`/`cos` body rather than in the inputs, from
-the inputs being bit-identical across the two runs and the kernels being pure — not re-derived here.
-For `silu`, that the whole divergence sits in `silu_raw` rather than the product, from the product
-being exact and the `act.a` bits already differing — a measurement, not an inference, and stated as
-one.
+- **`rope`** — declared, `cpu` and `gpu` strings; 8 of 8 bit pairs; the per-element ulp table; the 8
+  bit pairs each for `cosines.c` and `sines.s`; 3 fragments at **369**, **594** and **610** words;
+  **3 `spirv-val` verdicts, 3 ACCEPT**.
+- **`silu`** — declared, `cpu` and `gpu` strings; 4 of 4 bit pairs; the same for `act.a`; 2 fragments
+  at **442** and **245** words; **2 verdicts, 2 ACCEPT**.
+- **`softmax`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; 2 fragments at
+  **336** and **726** words; **2 verdicts, 2 ACCEPT**.
+- **`rmsnorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; the same for
+  `sums.s`; 2 fragments at **1658** and **337** words; **2 verdicts, 2 ACCEPT**.
+- **`layernorm`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; the same for
+  `sm.s` and `sq.q`; 3 fragments at **316**, **337** and **1734** words; **3 verdicts, 3 ACCEPT**.
+- **`attention`** — declared, `cpu` and `gpu` strings; 8 of 8 bit pairs; the same for `scale.s`;
+  2 fragments at **1785** and **1052** words; **2 verdicts, 2 ACCEPT**.
+- **`gemv`** — the refusal **verbatim**; the `cpu` string; the `cpu` string of the padded variant
+  (byte-equal with the device's); 1 fragment at **378** words; **1 verdict, 1 ACCEPT** — for a module
+  that **never ran**.
+- **`matmul`** — declared, `cpu` and `gpu` strings, byte-equal; 4 of 4 bit pairs; 1 fragment at
+  **417** words; **1 verdict, 1 ACCEPT**.
 
-**Unknown.** *What the operation is* inside the body:
+**Measured, on this device, and it is a fact about the tree rather than about these programs:**
+[floating-point](floating-point.md) §7 already records that this device's Newton `sqrt` moves (21 of
+64 elements of one sample set differ by 1 ulp) while `floor`'s column is identical on all 64. §5 and
+§6 are read against that: **the two normalisers are exact because their divisors are exact, not
+because the `sqrt` is exact here.** Nothing in this note re-measured §7.
+
+**Inferred.** That `rope`'s split is inside the emitted `sin`/`cos` body rather than in the inputs,
+from the inputs being bit-identical across the two runs and the kernels being pure — not re-derived
+here. That §7's attention row's divergence is arithmetic rather than scheduling, from `scores_raw`
+being bit-exact and the fold+division kernel carrying all six differing elements.
+
+**Unknown.** *What the operation is* inside the transcendental body:
 [floating-point](floating-point.md) §8 already records that it is not FMA contraction, not a
 division (these two definitions contain none), not a race, and not the emitter. **Still unknown, and
-this note did not close it**: whether the transcendental gap changes a *decision* anywhere in the
-ladder (no operator in it compares against a `sin`/`cos` result near a boundary); **which of the two
-candidates inside `silu_raw` moved its one ulp — the `exp` or the `Div`**, which a fused kernel does
-not expose; and whether the operators below behave like `rope`, like `silu`, or like `softmax` —
-measured per row as they land.
+this note did not close any of these:**
+
+- **Whether the transcendental gap changes a *decision* anywhere in the ladder.** No operator
+  measured here compares against a `sin`/`cos` result near a boundary, so this slice can bound the
+  *answer* and not the *consequence*. It is the question that would decide the tolerance in §2's first
+  bullet.
+- **Which instruction moved a given one-ulp divergence.** `silu_raw` holds an `exp` **and** a `Div`;
+  attention's second kernel holds an `exp`, a `Div` **and** a fold; neither exposes them separately,
+  and [floating-point](floating-point.md) §7's and §8's standalone sweeps are on *spliced bodies*, not
+  on these operators. **A per-instruction probe is the one piece of work that would resolve both rows**,
+  and nothing here substitutes for it.
+- **Whether these rows are representative.** Eight examples, four to eight elements each, and every
+  one of them an input a human chose. `rmsnorm` and `layernorm` are exact *because* their divisors
+  were picked exact; `softmax` is exact on four lanes; `matmul`'s inputs are integers below `2^24`.
+  **The gap between "bit-exact here" and "bit-exact in general" is exactly the gap §7's and §8's
+  sweeps measured for the standalone definitions, and this note does not close it for an operator.**
+- **Whether the brief's priority order was right.** It put division and transcendentals first
+  *"because that is where the device is known to differ"*, and the measurements agree that it was: the
+  two diverging bodies with a gap at all are the `sin`/`cos` one and the `exp`-inside-a-fold one.
+  **What the order did not predict** is that the plain `exp` in `softmax.lichen`, and both
+  normalisers, would be bit-exact — so it was right about where to look and wrong about how much
+  would be found there. That is a statement about four-lane examples, and §7's reading applies to it.
