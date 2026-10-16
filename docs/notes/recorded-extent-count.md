@@ -1,6 +1,8 @@
 # The recorded leg's count: the rule is principled, its own sentence is nearly unreachable
 
-> Status: current — one slice, measured on `dev@dd13f417` with `lichen-compiler` on the host.
+> Status: current — the measurement below is one slice at `dev@dd13f417`; the two diagnostic gaps it
+> found are worked in [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes) (`feature/rcd`), and
+> one part of that measurement corrected what this note had only inferred.
 > Points at: `crates/lichen-compute/src/compute.rs` (`record_launch` at `:4786`, its extent read at
 > `:4847-4896`, `build_graph`'s return-value refusal at `:5187-5196`),
 > `crates/lichen-compute/src/compute/graph.rs` (`Extent` and its `# Invariant` at `:312-325`,
@@ -119,7 +121,10 @@ is ordinary (a length off a `collect`), and a graph that cannot take one forces 
 rebuild the graph per run, which is the same as not having a graph."* The cost of C is exactly that
 re-record per value; B is the way out, and it is the spelling a loop wants anyway.
 
-## What is actually the gap: the diagnostic surface, in two measured parts
+## What was actually the gap: the diagnostic surface, in two measured parts
+
+> **Both parts are fixed** — see [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes). What follows is
+> kept as the record of what the gap was.
 
 - **The rule does not speak for the spelling a reader would try.** D, E and F — every way of writing
   a count the body computes from its argument — are intercepted by the graph's **return-value** rule,
@@ -138,12 +143,99 @@ re-record per value; B is the way out, and it is the spelling a loop wants anywa
   act on, and `graph::describe` (`graph.rs:370-380`) already exists for exactly this job: it names a
   buffer, a graph, a parallel kernel and each placeholder kind in words.
 
-## What a fix would touch — nothing here was touched
+## Fixed: both parts, measured on the thirteen shapes
+
+> Status: **one part fixed on the surface, one part fixed underneath it.** Measured at `feature/rcd`
+> (`dcdca031` + this slice) from the CLI on the thirteen shapes of the table above. Two probes beyond
+> the thirteen, T1 and T3, hold the measurement the second part is about; they are named where they
+> are used and were deleted with the rest.
+
+### Part 1 — `{found}` is named, not rendered. `graph::describe_low_value`
+
+The refused count now goes through one helper for **both** leaves of the host's value union
+(`named_value` in `compute.rs`, over `graph::describe_low_value` in `compute/graph.rs`), so no
+`Debug` render is left on this path. G before and after, quoted:
+
+```
+before: error: compute.graph: a dispatch's count is Array(Dynamic(Handle(Pointer { addr: 0x1b76e1cad78, metadata: 1 }))), and a count has to be a literal or one of this function's arguments: …
+after:  error: compute.graph: a dispatch's count is a tuple or a struct value, and a count has to be a literal or one of this function's arguments: …
+```
+
+H and I read as well now, in words rather than as a variant name: `the text "five"` and
+`the float 3.0`. Two runs of G now print the same sentence — the address was an arena pointer and
+differs per run.
+
+### Part 2 — the refusal travels, and the recording is closed with it
+
+`graph::Recording` carries `refusals`; `record_launch`'s `refuse` hands the reason to
+`graph::record_refusal` before it writes the module diagnostic, so the reason is no longer only a
+side effect. `build_graph` closes the recording on **every** path out — `graph::abandon` — and takes
+the refusals with it, so the return-value sentence can say that it is what they left behind:
+
+```
+G/H/I/K after: error: compute.graph: this function's return is not a value a graph can hand back, … and this body's own value is not one of those: a dispatch in this body refused before that, and this is only what it left behind
+```
+
+The deeper sentence is still printed **first** and the refusal is still its own; nothing is traded.
+
+**The closed recording is the part that changes behaviour, and it was a defect on its own.** `RECORDINGS`
+is a thread-local stack, and `build_graph` used to return without popping it, so a refused
+`compute.graph` left the recording open: **every launch after it in the same thread was recorded into a
+graph that is never built, instead of run.** Probe T3 — a graph the count rule refuses, then a plain
+top-level `compute.plrun` — quoted:
+
+```
+before: … argument 0 of this dispatch is not a compute value at all         (the plain launch, intercepted)
+after:  … compute.parallel: a parallel parameter's input buffer is one of the kernel's own `Buf` fields, and position 0 of it holds an array …
+```
+
+Before, the plain launch was filed under `compute.graph` and never ran; after, it is dispatched and
+refused for what it actually is.
+
+### What the measurement contradicts: the count rule is never entered for D/E/F/L/M
+
+The note above called this **inferred**. It is now **measured**, with an `eprintln!` probe in
+`OperatorExt::run` and in `record_launch` (`dev` behaviour, deleted):
+
+| shape | `record_launch` entered | count refusal reached |
+|---|---|---|
+| A, B | twice (both dispatches) | no — both record |
+| D | **never** | no |
+| E, F, L, M | **once** — the first dispatch only; the second is never demanded | no |
+| G, H, I, K | twice | yes (G/H/I) |
+
+So for D/E/F/L/M the count cell **is not a value `record_launch` reads**: `.n (s.n + 1)` is undecided,
+and a `ComputeValue` count (`held.z`, `k1`) leaves the cfg array undecided, so the VM never demands
+the `ParLaunch` operator at all. This holds in every spelling — named struct, retired tuple, count
+bound inside the body — and `graph::describe`'s fallback *"not a value at all"* is never reached
+either. **The count refusal cannot travel from `record_launch` for these shapes, because it is never
+produced there.** Making it travel fixes the shapes where the rule *does* speak (G/H/I/K, above) and
+the leak; reaching D/E/F/L/M needs a *second* reading of the count outside the VM's demand path —
+`build_graph` walking the block's `ParLaunch` nodes — which is **not** in this slice: a walk of
+`module.blocks[block]` finds nine launch nodes for a two-dispatch program (clones), so it would report
+counts from dispatches outside the recorded body.
+
+### One existing test now fails, and why
+
+`graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name` asserts the *"a graph has no node
+for one"* sentence for a scalar-kernel call inside a recorded body. With the recording closed, that
+program's body instead refuses with the buffer sentence (`argument 0 of this dispatch is not a buffer`),
+because the deep pass no longer forces the `compute.call` node the way it did with a stale recording
+underneath. **The three programs that test runs share one thread**, so before this slice the sentence
+was produced with the **leaked** recording of an earlier program still on the stack — the assertion was
+passing on a defect. Fixing the test is a test change and needs the user's permission; it is not done
+here.
+
+## What a fix would touch — the three sizes, and which one was taken
+
+> Kept as the record of the options. **The first two are what the slice took**; the third is the
+> capability and is still open. Nothing in this list was *in* place when the list was written.
 
 - **The wording, smallest.** `record_launch`'s extent read (`compute.rs:4877-4896`): render `{found}`
   through `graph::describe`, and name a `LowValue::Array` as what it is rather than as its handle.
   This is a message, not a rule: `Extent`'s `# Invariant` (`graph.rs:319-323`) is about the type and
-  is unaffected, and **no `Invariant` or `Safety` sentence needs to change**.
+  is unaffected, and **no `Invariant` or `Safety` sentence needs to change**. **Taken**, through
+  `graph::describe_low_value`; measured on G/H/I above.
 - **The interception, middle.** `build_graph` (`compute.rs:5184-5196`) reports the return-value
   sentence over the top of a refusal that already happened deeper. Reporting the deeper one needs the
   reason to travel: today `record_launch` records a diagnostic and returns `None`, so the refusal is
@@ -193,18 +285,35 @@ re-record per value; B is the way out, and it is the spelling a loop wants anywa
   and the exit codes; that a literal count (A), the graph's own argument (B) and a host-computed
   count (C) each record; and that the count rule's own sentence is reachable from the CLI in three
   spellings, which no earlier probe of ours managed (see the correction to [llm-operators](llm-operators.md)).
+  **Corrected since**: C as spelled in the table — a count read back off a `collect` — does **not**
+  record from the CLI; only the return-value sentence prints. The property C stands for (a count
+  computed on the host records, as `Extent::Constant`) does hold for a count read off a host
+  `array{Int, 1}` subscript, which is the spelling the fixed measurements use. The table's spelling
+  for C is wrong; its claim about the rule is not.
+- **Measured, inside**, on `dev` behaviour: `record_launch` is **never entered** for the dispatch whose
+  count D/E/F/L/M compute, so the count refusal is **never produced** for those shapes — the inference
+  this note carried below, now a measurement. See [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes).
+- **Measured, from the CLI, `feature/rcd`**: the naming fix on G/H/I and the clause on G/H/I/K, quoted
+  per shape in [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes); and that closing the
+  recording on the refusal path is a behaviour change of its own — probe T3.
 - **Measured, on the device**: the graph runner's run-time count, one test, one adapter, 4.09 s.
 - **Measured, by reading**: the three sentences that state the rule's reason, and the absence of any
   `wontfix:D<n>` over `record_launch` or the recording path in [code-audit](code-audit.md).
-- **Inferred**: that in D/E/F the operator is never entered for the dispatch whose count is computed,
-  so the count rule's silence there is a consequence rather than a decision; and that a device loop
-  needs nothing from the recorded leg beyond one submission.
+- **Inferred**: that a device loop needs nothing from the recorded leg beyond one submission.
 - **Unknown**: the source-recorded graph run on a device; and whether the `{found}` address in shape
-  G is stable across a release build (it is a handle into an arena, so stability is not expected and
-  was not tested).
+  G is stable across a release build (it is a handle into an arena, so stability is not expected; after
+  the fix there is no address left to be stable — see [Fixed](#fixed-both-parts-measured-on-the-thirteen-shapes)).
 
 ## Probes
 
 Every program above was a probe file under `probe/` in the worktree, deleted before the commit: the
 thirteen `.lichen` shapes, the shared kernel header, and the two device probes (`compute.plrun` on
 `"gpu"`, `compute.graphrun` on a `cpu` graph). No production file, no test and no example was added.
+
+The fix slice added its own probes under the same directory, all deleted before its commit: the
+thirteen shapes re-measured before and after, **T1** and **T3** (a refused `compute.graph` followed by
+a plain launch), and a dozen intermediates used to find a spelling that records (C1–C8, P1–P5, Q1–Q3,
+R1–R8, S1–S3, U1–U2). It also added temporary `eprintln!` probes to `OperatorExt::run` and
+`record_launch` to measure which shapes enter `record_launch` at all; **those were reverted, not
+committed** — `git diff` for this slice names only `crates/lichen-compute/src/compute.rs`,
+`crates/lichen-compute/src/compute/graph.rs` and this note plus [llm-operators](llm-operators.md).

@@ -4775,6 +4775,45 @@ fn scalar_bits(class: ScalarClass, value: &LowValue) -> Option<i64> {
     }
 }
 
+/// The clause a refusal carries when a deeper one already refused.
+///
+/// # Invariant
+/// **Empty when the recording refused nothing**: the sentence that would carry the
+/// clause is then the whole account, and a clause naming no cause only makes it longer.
+/// A recording that did refuse makes the sentence it is attached to a **symptom**, and
+/// says so — the deeper sentence is already on the surface, so this points at it rather
+/// than repeating it.
+fn refused_because_of(refusals: &[String]) -> String {
+    if refusals.is_empty() {
+        return String::new();
+    }
+    ": a dispatch in this body refused before that, and this is only what it left behind"
+        .to_string()
+}
+
+/// What the cell a refusal names holds, in the words its own vocabulary gives it.
+///
+/// # Invariant
+/// One reading for both leaves of the host's value union, and never a `Debug` render:
+/// a handle's address differs between runs, so a sentence built from one names nothing
+/// a reader can act on and two runs of one program print two different complaints.
+fn named_value<P>(module: &Module<P>, node: AnyNodeId) -> String
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    let Some(value) = module.node_value(node) else {
+        return "not a value at all".to_string();
+    };
+    if let Some(low) = AsEnum::<LowValue>::as_enum(&value) {
+        return graph::describe_low_value(&low);
+    }
+    if let Some(compute) = AsEnum::<ComputeValue>::as_enum(&value) {
+        return graph::describe(&compute).to_string();
+    }
+    "not a value at all".to_string()
+}
+
 /// Record one dispatch into the graph being built, in place of running it.
 ///
 /// # Invariant
@@ -4790,6 +4829,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let refuse = |module: &mut Module<P>, reason: String| {
+        graph::record_refusal(&reason);
         module.record_extension_diagnostic(ExtensionDiagnostic::failure(
             GRAPH_DIAGNOSTIC,
             None,
@@ -4871,17 +4911,7 @@ where
                     }) {
                     Some(extent) => extent,
                     None => {
-                        let found = module
-                            .node_value(node)
-                            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-                            .map(|value| format!("{value:?}"))
-                            .unwrap_or_else(|| {
-                                module
-                                    .node_value(node)
-                                    .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
-                                    .map(|value| graph::describe(&value).to_string())
-                                    .unwrap_or_else(|| "not a value at all".to_string())
-                            });
+                        let found = named_value::<P>(module, node);
                         refuse(
                             module,
                             format!(
@@ -5169,14 +5199,17 @@ where
 
     // Not forced, and measured: an unread dispatch is not performed.
     let result = module.evaluate_node_deep(apply, Some(block));
+    // Every path out of the recording closes it, refusals and all.
     let Some(result) = result else {
+        let refusals = graph::abandon();
         refuse(
             module,
             format!(
                 "applying this function to its own input placeholders stayed undecided, so \
                  nothing was recorded. A function whose parameter is not a plain tuple of cells \
-                 cannot be recorded this way, and the parameter here has {} cell(s)",
-                arity
+                 cannot be recorded this way, and the parameter here has {} cell(s){}",
+                arity,
+                refused_because_of(&refusals)
             ),
         );
         return None;
@@ -5185,17 +5218,21 @@ where
     // An unreadable return is a refusal: a graph with no recorded return answers
     // with its whole value table.
     let Some(values) = recorded else {
+        let refusals = graph::abandon();
         refuse(
             module,
-            "this function's return is not a value a graph can hand back, so there is no \
-             graph to record: a graph's value table holds what its dispatches produced and the \
-             arguments it was run with, and this body's own value is not one of those"
-                .into(),
+            format!(
+                "this function's return is not a value a graph can hand back, so there is no \
+                 graph to record: a graph's value table holds what its dispatches produced and the \
+                 arguments it was run with, and this body's own value is not one of those{}",
+                refused_because_of(&refusals)
+            ),
         );
         return None;
     };
     if let Err(reason) = graph::record_return(values) {
-        refuse(module, reason);
+        let refusals = graph::abandon();
+        refuse(module, format!("{reason}{}", refused_because_of(&refusals)));
         return None;
     }
     let value = match graph::finish() {

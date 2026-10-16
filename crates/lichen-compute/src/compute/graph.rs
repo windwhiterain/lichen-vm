@@ -16,6 +16,7 @@ use lichen_graph_ir::{
     ValueId,
 };
 use lichen_kernel_ir::{KernelFragment, ScalarClass, ScalarLeaf};
+use lichen_lowlevel::LowValue;
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -124,6 +125,14 @@ struct Recording {
     /// and an empty list is the real answer for a unit.
     returns: Option<Vec<Edge>>,
     backend: Option<Backend>,
+    /// What refused while this recording was open, in the order it refused.
+    ///
+    /// # Invariant
+    /// A refusal is a fact about the recording and not only about the module that
+    /// reported it: `build_graph` refuses on the body's **return**, which is a
+    /// symptom whenever one of these is present, so the reason has to travel here
+    /// rather than stay a side effect at the dispatch that raised it.
+    refusals: Vec<String>,
 }
 
 /// One recorded dispatch, with its edges in the recording's own numbering.
@@ -207,8 +216,38 @@ pub fn begin() {
             inputs: Vec::new(),
             returns: None,
             backend: None,
+            refusals: Vec::new(),
         })
     });
+}
+
+/// Note a refusal in the innermost recording, if one is open.
+///
+/// # Invariant
+/// A refusal outside any recording is nothing to record here: there is no graph
+/// whose return it could explain, and the module's own diagnostic already carries it.
+pub fn record_refusal(reason: &str) {
+    RECORDINGS.with(|recordings| {
+        if let Some(recording) = recordings.borrow_mut().last_mut() {
+            recording.refusals.push(reason.to_string());
+        }
+    })
+}
+
+/// Close the innermost recording without building a graph, and hand back what refused.
+///
+/// # Invariant
+/// **Every path out of a recording closes it**, because an open one keeps intercepting
+/// dispatches: a refused `compute.graph` would otherwise swallow every launch after it,
+/// recording them into a graph that is never built. The refusals come out with it, since
+/// closing the recording is the only handle `build_graph` has on them.
+pub fn abandon() -> Vec<String> {
+    RECORDINGS.with(|recordings| {
+        recordings
+            .borrow_mut()
+            .pop()
+            .map_or_else(Vec::new, |recording| recording.refusals)
+    })
 }
 
 /// Finish the innermost recording and hand back what it built.
@@ -376,6 +415,27 @@ pub fn describe(value: &ComputeValue) -> &'static str {
         ComputeValue::Graph(..) => "a graph",
         ComputeValue::GraphInput(_) => "a placeholder for a graph's own input",
         ComputeValue::GraphValue(_) => "a placeholder for a value the graph has produced",
+    }
+}
+
+/// What a low-level value is, for a refusal that has to say.
+///
+/// # Invariant
+/// The same job [`describe`] does for a compute value and never a `Debug` render: a
+/// handle's address differs between runs and names nothing a reader can act on, while
+/// what the value **is** is the same sentence on every run. A number and a string carry
+/// the number and the text, because those are the ones a reader can act on.
+pub fn describe_low_value(value: &LowValue) -> String {
+    match value {
+        LowValue::USize(number) => format!("the number {number}"),
+        LowValue::Float(number) => format!("the float {number:?}"),
+        LowValue::Str(text) => format!("the text {text:?}"),
+        LowValue::Array(_) => "a tuple or a struct value".to_string(),
+        LowValue::Table(_) => "a table".to_string(),
+        LowValue::Function(_) => "a function".to_string(),
+        LowValue::None => "the empty value".to_string(),
+        LowValue::Error => "the value of a read that failed".to_string(),
+        LowValue::Any => "a value this run has not decided".to_string(),
     }
 }
 

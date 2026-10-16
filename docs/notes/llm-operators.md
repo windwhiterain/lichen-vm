@@ -372,6 +372,15 @@ need a node-local producer for `r`.
     `.n a.n` measured here), and a count **computed on the host** before recording. What is left of
     the old sentence is the *diagnostic*, not the rule — `{found}` is a `Debug` render, so an
     array-valued count prints an arena address.
+    **Both diagnostics are now worked** ([recorded-extent-count](recorded-extent-count.md) §"Fixed",
+    `feature/rcd`): `{found}` is named through `graph::describe_low_value` — *"a dispatch's count is a
+    tuple or a struct value"*, not an arena address — and the return-value sentence now says it is a
+    symptom when a dispatch inside the body refused first (*"… is not one of those: a dispatch in this
+    body refused before that, and this is only what it left behind"*). **The rule is unchanged.** What
+    the paragraph above still says holds: a count computed *inside* the recording is still intercepted
+    by the return-value rule first, because that dispatch's operator is **never demanded** — the count
+    cell is undecided — so the count refusal is never produced to travel. That is now measured rather
+    than inferred, and closing it needs a second reading of the count outside the VM's demand path.
   - **Two bounds that are rules rather than walls.** The extent is still read as an **`Int`**, and a
     `Float` first leaf is refused by name (`scalar_leaf_classes`, `compute.rs:1850`), so *"the extent
     follows the state"* does not mean any value; and a count past **`MAX_PARALLEL_ELEMENTS` = 2^20** is
