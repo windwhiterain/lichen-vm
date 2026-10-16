@@ -90,15 +90,28 @@ name and not a wrong answer: there is no diagnostic at all. Bisected by measurem
 | **the committed `greedy_raw`**, `sample.lichen:141-146` | 444 words | **crashes** |
 
 `spirv::compile` is the seam: **every one of these emits a module**, the greedy one among them, so
-**the emitter is not at fault and the fragment is not refused**. The crash is at the **dispatch**,
-and the single ingredient separating the last two rows from the row above is **a comparison whose
-`0`/`1` answer is multiplied into arithmetic inside the fold's step** — `(1 * (read > s(1)))`.
-Everything else the committed body does was removed one at a time and each removal ran.
+the fragment is not refused. ~~**the emitter is not at fault and the fragment is not refused**. The
+crash is at the **dispatch**,~~ and the single ingredient separating the last two rows from the
+row above is **a comparison whose `0`/`1` answer is multiplied into arithmetic inside the fold's
+step** — `(1 * (read > s(1)))`. Everything else the committed body does was removed one at a time
+and each removal ran. **Corrected by
+[the sampler's crash, localised to one emitted id](dispatch-crash.md): the emitter *is* at fault,
+the crash is at `vkCreateComputePipelines` rather than at a dispatch of ours, and the single
+ingredient is narrower than "a comparison multiplied into arithmetic" — it is a **boolean
+materialised into the integer class inside a `@loop` in a float module**, which names a constant
+the float arm of the emitter's pool never declares.** The bisect rows above are kept as the
+record; that note has the reduction.
 
-**Unknown.** *Why* the driver dies. `spirv-val` is not installed, so nothing checks the module
-before the driver sees it, and the 444 words were never validated. **This is a production defect
-and it is not fixed here**: reaching the sampler on a device needs a source change in the emitter
-or the lowering, which is a different slice and the user's decision.
+**Unknown.** *Why* the driver dies. ~~`spirv-val` is not installed, so nothing checks the module
+before the driver sees it, and the 444 words were never validated.~~ **Corrected by
+[the sampler's crash, localised to one emitted id](dispatch-crash.md): `spirv-val` *is* installed
+(`C:\VulkanSDK\1.3.296.0\Bin\spirv-val.exe`), and it rejects the 444 words by name — the module
+references `%10`, an id no instruction defines. The cause is the emitter, in
+`crates/lichen-compute-gpu/src/spirv.rs`, and the crash is a driver's compile of a malformed
+module.** That note carries the reduction and the fix site; this note's bisect above is kept as
+the record that opened the question. **This is a production defect and it is not fixed here**:
+reaching the sampler on a device needs a source change in the emitter, which is a different
+slice and the user's decision.
 
 ## 2. Where it does run, does the device answer what `cpu` answers?
 
@@ -201,8 +214,10 @@ not a measured absence of capability, and it should be read that way. The `WorkB
 **Inferred.** That the runtime stop is host-only, from an exhaustive reading of the compute
 namespace rather than an attempt.
 
-**Unknown.** Why the driver dies on the sampler's module; whether a device-side stop condition is
-capable; whether the sampler's `>` against the seed would move; whether any operator of the ladder
+**Unknown.** ~~Why the driver dies on the sampler's module;~~ **answered** by
+[the sampler's crash, localised to one emitted id](dispatch-crash.md) — the module names an
+undefined id and `spirv-val` says so by name. Whether a device-side stop condition is capable;
+whether the sampler's `>` against the seed would move; whether any operator of the ladder
 **not** reached here (`softmax`'s 111-instruction body, `attend`, `ln`, `sin`, `cos` in a ladder
 body) diverges — none of them reached the device, and §8's five-ulp `sin`/`cos` result is a
 standalone measurement, not one of these programs.

@@ -77,6 +77,10 @@ what this target's comparisons produce:
   needs neither, and that is why `I32WrapI64` is a no-op there; the operators in
   [operators](operators.md) are what made the other shapes reachable
   (`(a < b) & c`, a stored predicate, a comparison of a comparison).
+  **One of these two arms names a constant the other does not declare**, and the
+  shape that reaches it is [measured in
+  dispatch-crash.md](dispatch-crash.md): a boolean materialised into the
+  *integer* class inside a `@loop` in a *float* module.
 - **The fragment's integer type is unsigned** — `OpTypeInt 64 0`. This is not a
   style choice: `OpUDiv`, `OpUMod` and `OpULessThan` require operands whose
   signedness is `0`, so a signed type with those opcodes is an invalid module
