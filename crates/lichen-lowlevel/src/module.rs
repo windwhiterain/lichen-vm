@@ -39,6 +39,7 @@ impl<P: Program> Module<P> {
             global_ext: P::GlobalExt::default(),
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
+            evaluating_classes: HashSet::new(),
             apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,

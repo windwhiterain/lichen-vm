@@ -922,6 +922,13 @@ pub struct Module<P: Program> {
     /// Empty between collects: [`Module::garbage_collect`] clears it, and a walk
     /// never re-enters another, so the set only ever holds one collect's classes.
     gc_classes: HashSet<NodeId>,
+    /// The equality classes whose member-first evaluation walk is in progress.
+    ///
+    /// # Invariant
+    /// A class is held exactly while one frame walks its members and cleared on every exit.
+    /// The guard, not the union-find's finiteness, is what bounds that walk: reading a
+    /// member re-enters the same class, so an unguarded walk never returns.
+    evaluating_classes: HashSet<NodeId>,
     apply_total: usize,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,

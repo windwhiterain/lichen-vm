@@ -5,6 +5,7 @@ use crate::{
     LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
     ancestors::AncestorPairs, table::KeyState,
 };
+use lichen_utils::disjoint::Node as _;
 use lichen_utils::extend::AsEnum;
 
 /// The evaluation-attempt mark of one node, released on drop; see [`Module::retain_node`].
@@ -81,6 +82,35 @@ impl<P: Program> Module<P> {
         VisitGuard { module: self, node }
     }
 
+    /// Evaluate the members of `node`'s class that still owe an answer, before `node` runs.
+    ///
+    /// # Invariant
+    /// The in-progress guard, not the union-find's finiteness, bounds the walk: reading a
+    /// member re-enters this same class, so an unguarded walk never returns. A member an
+    /// outer frame holds the mark for is left to that frame — [`Self::alias_read`] joins the
+    /// reader that is running into the class it reads. Membership is read once, at entry.
+    #[stacksafe]
+    fn evaluate_class_first(&mut self, node: NodeId) {
+        let representative = self.equality_representative(node);
+        // A lone node is its whole class: the links the walk follows say so, O(1).
+        if self.nodes[representative].meta().parent().is_none()
+            && self.nodes[representative].meta().next().is_none()
+        {
+            return;
+        }
+        if !self.evaluating_classes.insert(representative) {
+            return;
+        }
+        let members: Vec<NodeId> = self.class_members(representative).collect();
+        for member in members {
+            // Only members that still owe an answer: the rest answer from their own slot.
+            if member != node && self.has_no_result_yet(member) && !self.nodes[member].visiting {
+                self.evaluate_node(Dyn(member), None);
+            }
+        }
+        self.evaluating_classes.remove(&representative);
+    }
+
     /// The body of [`Self::evaluate_node`], past the static-ref leaf rule (no mark to own).
     #[stacksafe]
     fn evaluate_node_body(&mut self, node: NodeId, referer: Option<BlockId>) -> Option<P::Value> {
@@ -98,6 +128,9 @@ impl<P: Program> Module<P> {
         if child_block_root || declared == Some(node) {
             return self.evaluate_block(node);
         }
+        // The class before the node, so the order its members were unified in cannot
+        // decide this node's answer.
+        self.evaluate_class_first(node);
         if let Some(value) = self.nodes[node].value {
             // The wildcard is undecided to every reader but the unifier, so it is
             // never a computed answer to hand on.
