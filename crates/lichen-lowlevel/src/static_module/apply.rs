@@ -81,8 +81,11 @@ impl<P: Program> Module<P> {
             let result = module.evaluate_node(Dyn(applied), Some(block));
             // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
-                && let Some(codomain) = module.pair_type_half(applied)
+                && let Some(codomain) = module.pair_type_item(applied)
             {
+                // A decided codomain stays the frozen ref the clone walk carried; a
+                // leaf in this block gives the bind its value.
+                let codomain = module.as_dynamic(codomain, block);
                 module.evaluate_node(Dyn(codomain), Some(block));
                 module.unify(cell, codomain);
             }

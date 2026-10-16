@@ -152,12 +152,15 @@ impl<P: Program> Module<P> {
         let applied = instantiation.applied;
         // Only a clone whose pair is absent is evaluated; forcing one that answers costs an
         // apply the deep budget counts.
-        if self.pair_type_half(applied).is_none() {
+        if self.pair_type_item(applied).is_none() {
             self.evaluate_node(Dyn(applied), Some(block));
         }
-        let Some(codomain) = self.pair_type_half(applied) else {
+        let Some(codomain) = self.pair_type_item(applied) else {
             return;
         };
+        // A decided codomain stays the frozen ref the clone walk carried; a leaf in
+        // this block gives the bind its value.
+        let codomain = self.as_dynamic(codomain, block);
         self.evaluate_node(Dyn(codomain), Some(block));
         if let Some(cell) = cell {
             self.unify(cell, codomain);

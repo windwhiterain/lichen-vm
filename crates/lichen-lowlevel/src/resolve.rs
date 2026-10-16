@@ -364,15 +364,20 @@ impl<P: Program> Module<P> {
     /// type, and duplicating that decoding is what
     /// docs/notes/checker-encoding-instability.md is about.
     pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
+        match self.pair_type_item(node)? {
+            AnyNodeId::Dynamic(r#type) => Some(r#type),
+            AnyNodeId::Static(_) => None,
+        }
+    }
+
+    /// The **type** half of a `[value, type]` pair node, as the pair's own reference.
+    pub fn pair_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
             return None;
         }
-        match items[1].node {
-            AnyNodeId::Dynamic(r#type) => Some(r#type),
-            AnyNodeId::Static(_) => None,
-        }
+        Some(items[1].node)
     }
 
     /// The structural value `node` holds, when it holds one — what a consumer
