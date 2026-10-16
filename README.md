@@ -2312,8 +2312,14 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scor
     the four order comparisons: there is **no `exp`, no `sqrt`, no `ln`, no division and no \
     `float2int` on data** anywhere in the program, and `int2float` of a position under `4` is \
     exact. The only non-integer values in the whole file are the `-inf` seed and the type \
-    annotations. **Every verdict here is host-only**: the CLI installs no compute backend, so \
-    nothing in this file is a device result.\n\n\
+    annotations. **The declared line above is host-only**, because the CLI installs no compute \
+    backend and this file's own literal is `cpu` — **and the same program answers the same on a \
+    device**, with that one literal `gpu` and a backend installed: an RTX 3060 Laptop GPU returns \
+    `([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0])`, **every entry bit-identical**, and \
+    nothing was loosened to get there. All three kernels are on the device, each emitted module \
+    accepted by `spirv-val`. **The guard is still a host `compute.collect`**, so the stop \
+    condition is decided on the host three times over and the device answers the arithmetic only. \
+    `docs/notes/device-leg-of-the-ladder.md` carries the measurement.\n\n\
     **The hand derivation, before the run.** The cache starts at `1 2 -1 -1 -1`: a two-token \
     prompt and three spare slots, holding `-1` because that is outside the vocabulary `0 1 2 3` \
     and a spare slot must not be confusable with a generated `0`. Negative numbers are spelled \
@@ -2340,8 +2346,13 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scor
     costs nothing: a `plrun`'s output named as the next one's input is the chaining \
     `examples/decode.lichen` measures, and there is no copy anywhere in the file. (3) **The \
     value half is written and never read** — a **consequence** of (1): `column` is `0` at every \
-    lane when `dim = 1`, so `nv` is one element long and every lane writes the same number into \
-    `cached.v`. It is written rather than dropped because `append_raw` is reused verbatim and a \
+    lane when `dim = 1`, so `nv` is read at index `0` alone and every lane writes the same number \
+    into `cached.v`, **and `nv` is as wide as the launch: five elements, not one.** That is the \
+    device's own rule and it is a spelling, not a capability — `InputShorterThanCount` compares a \
+    **host** input's length against the **launch count** rather than against the addresses the body \
+    reads (`crates/lichen-compute-gpu/src/dispatch.rs:961-987`), so a one-element `compute.buffer` \
+    beside a five-index append is refused by name. It is written rather than dropped because \
+    `append_raw` is reused verbatim and a \
     `compute.write` is **the value of an output position and not an effect** \
     (`docs/notes/code-audit.md` P1-42, `wontfix:D17`), so dropping the second write would mean \
     editing a measured body. (4) **The trip count is a state slot rather than a second \
@@ -2352,13 +2363,25 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scor
     every position written on every lane — which is why the append rewrites the whole cache \
     instead of one row, why the sampler's single lane writes one slot, and why a launch cannot \
     grow with the loop.\n\n\
-    **What this file does not reach.** The **device** leg is not reached: the CLI installs no \
-    backend, and `examples/kvcache.lichen` records that this append's narrow incoming row is \
-    refused on a device by `InputShorterThanCount` while the sampler here is one element long by \
-    construction, so that leg would refuse first — **reasoned from those measurements, not \
-    measured here**. The **graph** leg is not reached either, and `examples/decode.lichen` \
-    records the two-input refusal that would meet it. And **a growing cache remains unwritten**: \
-    the extent is a literal `5`, which is the one wall paragraph (c) names."
+    **What this file does not reach.** The **graph** leg is not reached, and \
+    `examples/decode.lichen` records the two-input refusal that would meet it. And **a growing \
+    cache remains unwritten**: the extent is a literal `5`, which is the one wall paragraph (c) \
+    names.\n\n\
+    **The device leg, and a prediction this file's own text had to withdraw.** It used to say the \
+    device leg was not reached, and that the append's narrow incoming row would refuse first \
+    **because the sampler here is one element long by construction** — reasoned from \
+    `examples/kvcache.lichen`'s measurement, not measured here. **Measured instead, on an RTX 3060 \
+    Laptop GPU, the leg runs and answers the declared line element for element.** The prediction \
+    was half right for the wrong reason, and **the reason is the finding**: the one-element input \
+    that refuses is **not** the sampler's pick. `.nk tok.p` is the greedy launch's **own output**, \
+    and a device input stages nothing and so has no length to check; the input that refused is \
+    `nv`, the **host-built** value row, and giving it the launch count's width is the whole repair. \
+    The other two shapes are worse and were measured against: **launching over what the buffer \
+    holds** leaves four cache slots unwritten, which `wontfix:D17`'s every-position rule forbids and \
+    the GEMV would then read stale keys through, and **rebuilding the row on the host from the \
+    collected token** gives up decision (2) — the sampler's own output named as the next input — and \
+    adds a host round trip per step for nothing. \
+    `docs/notes/device-leg-of-the-ladder.md` carries the rows."
   output = "([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0]): tuple{array{Float, 5}, Int, array{Float, 4}}"
 ---
 KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
@@ -2401,7 +2424,7 @@ greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cp
 weights = (compute.buffer ([2.0, 2.0, (0.0 - 3.0), 3.0, 1.0, 4.0, 2.0, (0.0 - 5.0), 3.0, 2.0, 0.0, 4.0, (0.0 - 6.0), 3.0, 3.0, 5.0, 4.0, (0.0 - 3.0), 8.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
 kbuf = (compute.buffer ([1.0, 2.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0)] : array{Float, 5}) : (compute.Buf Float))
 vbuf = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
-nv = (compute.buffer ([0.0] : array{Float, 1}) : (compute.Buf Float))
+nv = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
 blank = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
 sentinel = 3.0
 @loop generate = s => {
