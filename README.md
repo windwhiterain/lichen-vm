@@ -1628,12 +1628,23 @@ compute.collect out.o : array{Float, 2}
     it: it is the symptom of a launch whose buffer or scalar has crossed a function \
     boundary or a block scope, and the recursion's own body is exactly where the launch does \
     follow.\n\n\
-    **One leaf does not follow even that: the extent.** The same three spellings with the \
-    **first** scalar leaf — the launch extent, whatever it is called \
-    (`crates/lichen-compute/src/compute.rs:1849`) — computed from the state as `.n (s(0) * \
-    8)`, collect an **empty** buffer, again with no error and no report line. Every other \
-    leaf follows the recursion; the one that decides how many lanes run does not. That is \
-    the sharpest edge a growing cache meets below.\n\n\
+    **The extent follows the recursion too, so the paragraph that said otherwise is corrected \
+    rather than deleted.** It once read *one leaf does not follow even that — the extent*, and \
+    gave the measurement: the **first** scalar leaf, the launch extent whatever it is called \
+    (`crates/lichen-compute/src/compute.rs:1850`), computed from the state as `.n (s(0) * 8)` \
+    collecting an **empty** buffer with no error and no report line. That was measured at \
+    `dev@01da5a49` and it **does not reproduce** at `dev@81e45151`. Measured now, on this \
+    machine and **host-only**: the extent computed from the state as `.n (s(0) * 2 + 2)` runs, \
+    and with a body that writes its own lane index it answers `[0.0, 1.0, 2.0, 3.0]` — step \
+    zero asked for two lanes and step one for four, so the length is the extent the recursion \
+    asked for and not a literal. **A scalar read back out of a buffer is an extent too**, at \
+    the price of a host round trip per step: `n = float2int (compute.collect stated.g : \
+    array{Float, 1})[0]` launches three lanes and answers `[3.0, 7.0, 0.0]`. **Every leaf of \
+    a launch follows the recursion**, and the one place a count may not is a **recorded** \
+    dispatch inside `compute.graph`, where it must be a literal or one of the graph function's \
+    own arguments (`crates/lichen-compute/src/compute.rs:4885`). **What is left is a rule and \
+    a ceiling, not a wall**: the extent is still read as an `Int`, and a count past `2^20` is \
+    refused before allocation.\n\n\
     **The trip count is not hidden, which §3's stated cost says it is.** \
     `docs/notes/wall-claims-audit.md` §3 records the cost of the loop as *the trip count is \
     a function's own state, so nothing else in the program can see it*. **The third entry \
@@ -1678,11 +1689,14 @@ compute.collect out.o : array{Float, 2}
     operator a sampler needs is not. (b) **A stop condition — not a wall**, corrected by measurement \
     (`docs/notes/llm-operators.md`): a recursive function stops on any value the language computes, \
     including a token a kernel sampled, and what bounds a generated loop is the checker's budget — \
-    `500` trip counts unmarked and `2000` marked. (c) **A growing cache — mostly work, with \
-    one wall inside it.** Carrying a longer cache is a longer buffer and a larger `.n`, both \
-    writable today; what cannot be written is an **extent that follows the state**, which is \
-    the empty-collect paragraph above. Launching a fixed large extent and masking the unused \
-    tail is therefore the only spelling available, and it costs the lanes. (d) **Per-token \
+    `500` trip counts unmarked and `2000` marked. (c) **A growing cache — work, and the wall \
+    inside it has been measured away.** Carrying a longer cache is a longer buffer and a larger \
+    `.n`, both writable today; so is the third thing the old paragraph called unwritable, since \
+    an **extent follows the state** — the paragraph above. A fixed large extent plus a mask is \
+    therefore **a spelling rather than the only one**, and it costs what it says: on the \
+    growing cache `docs/notes/llm-operators.md` measures, it answers the same first three \
+    elements over **six** lanes where three were wanted — three times the lanes over the loop — \
+    and its `collect` hands back `capacity` elements rather than `filled`. (d) **Per-token \
     rows — work.** `nk`, `nv` and `q` are top-level constants here, so both steps append the \
     same row and ask the same question; making them vary is the launch-follows-a-loop-carried-\
     buffer measurement read the other way, since they would be loop-carried buffers.\n\n\

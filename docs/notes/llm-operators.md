@@ -250,11 +250,122 @@ need a node-local producer for `r`.
   parameter is a buffer and whose **every leaf is a literal** collects `raw none` — no error, no refusal, no
   report line (with a scalar leaf it is refused **loudly**: *"input buffer 0 holds Float elements, but this
   kernel reads that position as Int"*), which is why the loop's chain was deliberately **not** factored
-  into a named `step` function: *"the worst of the three, since nothing says so."* (2) **The extent leaf
+  into a named `step` function: *"the worst of the three, since nothing says so."* (2) ~~**The extent leaf
   never follows the recursion**: `.n (s(0) * 8)` collects an **empty buffer, silently** — every other leaf
-  follows, and the one that decides how many lanes run does not. (3) **A `@gc` block inside the recursion
+  follows, and the one that decides how many lanes run does not.~~ **Corrected by measurement: the extent
+  leaf follows the recursion like every other leaf** — the `extent` slice, `dev@81e45151`, host-only, and
+  the programs and their answers are in the finding *"the launch extent follows the state"* below. **The
+  struck sentence was a real measurement at `dev@01da5a49` and it no longer reproduces**: the same
+  recursion with `.n (s(0) * 2 + 2)` and a body that writes its own lane index answers `[0.0, 1.0, 2.0,
+  3.0]` — four lanes, the extent the recursion asked for at its last step. (3) **A `@gc` block inside the
+  recursion
   panics** (`invalid SlotMap key used`, `crates/lichen-lowlevel/src/equality.rs:823`) — measured, worked
   around, not diagnosed.
+- **The launch extent follows the state, measured, and the wall that said otherwise was the spelling**
+  (`extent` slice, `dev@81e45151`; **every verdict below is host-only**, because the CLI installs no
+  compute backend, so `cpu` answers nothing about a device). **Why this was worth re-measuring**: eight
+  claims of this shape have already fallen or narrowed to a spelling when they were measured in this line
+  of work, so the sentence was treated as a hypothesis rather than read as a contract.
+  - **The control.** `dbl_raw` over `struct{.n Int, .in In, .out Out}`, writing `a[i] · 2`, launched at
+    `.n 4` over `[1.0, 2.0, 3.0, 4.0]`, answers **`[2.0, 4.0, 6.0, 8.0]`**. Every row below is this
+    program with the extent written differently, and where a row says so, a body that makes the extent
+    visible.
+  - **Shape A — any value the language computes, not only a literal.** The control with `half = 2` above
+    and `.n (half * 2)` answers **`[2.0, 4.0, 6.0, 8.0]`** — the literal's own answer, because the
+    expression's value *is* `4`, which is the claim in itself. **The row that separates the two** is
+    `n = (x => x + 1) 2` with `.n n`, which answers **`[2.0, 4.0, 6.0]`**: three lanes, an answer no
+    spelling of a literal `4` produces. **So the leaf is read at its own value, not at its source text** —
+    which is the same sentence `scalar_leaf_classes` already states about a leaf's *class*, one step
+    further along.
+  - **Shape B — a value the recursion computes (the crux).** The body writes its own lane index, so the
+    answer's **length is the extent**. `drive = s => if s(0) == 2 then s else { got = (compute.plrun idx
+    ((Arg)(.n (s(0) * 2 + 2), .cap 1, .t 1, .I In(.a src))) : Out)  drive (s(0) + 1, got) }`, seeded
+    `drive (0, Out(.z src))`, answers **`[0.0, 1.0, 2.0, 3.0]`**: step zero asked for 2 lanes and step one
+    for 4, and the state the loop returns is step one's. **This is the direct refutation of the wall**,
+    and it is one leaf: the identical program with `.n 4` spelled as a literal and `.t (s(0) + 1)` read
+    from the state answers **`[2.0, 4.0, 2.0, 4.0]`** — so *both* leaves follow, and neither is a
+    special case of the other.
+
+    ```text
+      idx_raw = (k : Par) => {
+        i = compute.range k.n
+        compute.write ((compute.Write _)(.to k.out.z, .at i, .value (int2float i ~ "element")))
+      }
+      src = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
+      drive = s => if s(0) == 2 then s else {
+        got = (compute.plrun idx ((Arg)(.n (s(0) * 2 + 2), .cap 1, .t 1, .I In(.a src))) : Out)
+        drive (s(0) + 1, got) }
+      final = drive (0, Out(.z src))
+      compute.collect final(1).z
+    ```
+  - **Shape C — a scalar read back out of a buffer, which is the device-shaped spelling.** A one-lane
+    kernel writes `3.0` into a buffer, the loop reads it back and converts:
+    `n = float2int (compute.collect stated.g : array{Float, 1})[0]`, and the score launched at `.n n`
+    over `[1, 2, 3, 4, 0, 0, 0, 0]` answers **`[3.0, 7.0, 0.0]`** — three lanes. **The same read with
+    no loop around it** — a one-lane copy kernel, `float2int (compute.collect stated.z :
+    array{Float, 1})[0]`, and `dbl` launched at `.n n` — answers **`[2.0, 4.0, 6.0]`**, so the buffer
+    spelling is not a recursion artefact either. **The price is the round trip**, not the capability: on
+    a device this is a download per step, and that is the real argument for the masked spelling rather
+    than an inability to write this one.
+  - **The two spellings, side by side, on the growing cache itself.** One program, two recursions over
+    the same cache (`K` of capacity 6 positions × `dim = 2`, the loop asking for 1, 2 and 3 lanes over
+    three steps). The
+    **extent-follows** recursion launches the score at `.n s(1)` and answers **`[3.0, 15.0, 15.0]`**; the
+    **masked** recursion launches it at `.n 6` with a `.used s(1)` leaf and `mine = if live then a + b else
+    held`, and answers **`[3.0, 15.0, 15.0, 0.0, 0.0, 0.0]`**. **The first three elements agree**, so the
+    comparison is like for like: the masked spelling runs **6 lanes where 3 are wanted**, and over the
+    loop **18 where 6 are** — three times the lanes at this fill, a factor of `capacity / filled` in
+    general. **Two more costs, both about what a reader must write**: the mask needs a third config leaf
+    (`.used`) and a `Select` per element, and because the output buffer is as long as the launch the
+    `collect` hands back **`capacity` elements**, not `filled` — so the masking is not only paid in lanes
+    but has to be undone at the boundary.
+
+    ```text
+      score_raw = (k : ParS) => {
+        i = compute.range k.n
+        a = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim)))
+        b = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim + 1)))
+        compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((a + b) ~ "element")))
+      }
+      masked_score_raw = (k : ParM) => {                       # ParM adds a third leaf, .used
+        i = compute.range k.n
+        a = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim)))
+        b = compute.read ((compute.Read _)(.from k.in.k, .at (i * k.dim + 1)))
+        held = 0.0
+        live = i < k.used
+        mine = if live then (a + b) else held
+        compute.write ((compute.Write _)(.to k.out.s, .at i, .value (mine ~ "element")))
+      }
+      following = s => if s(0) == 3 then s else {             # .n s(1): the extent follows
+        grown = (compute.plrun append ((ArgK)(.n 12, .dim 2, .t s(1), .I KVIn(.k s(2), .nk nk))) : KVOut)
+        scored = (compute.plrun score ((ArgS)(.n s(1), .dim 2, .I SIn(.k grown.k))) : SOut)
+        following (s(0) + 1, s(1) + 1, grown.k, scored.s) }
+      masked = s => if s(0) == 3 then s else {                 # .n 6: fixed, and the tail masked
+        grown = (compute.plrun append ((ArgK)(.n 12, .dim 2, .t s(1), .I KVIn(.k s(2), .nk nk))) : KVOut)
+        scored = (compute.plrun masked_score ((ArgM)(.n 6, .dim 2, .used s(1), .I MIn(.k grown.k))) : MOut)
+        masked (s(0) + 1, s(1) + 1, grown.k, scored.s) }
+    ```
+  - **Where it genuinely cannot be done: the recorded leg, and the rule is named.** `record_launch`
+    (`crates/lichen-compute/src/compute.rs:4885-4892`) reads the extent on its own and accepts **a
+    literal or a value already in the graph's table**: *"a dispatch's count is …, and a count has to be
+    a literal or one of this function's arguments: a graph's extent is either known while it is built or
+    read from its own value table at run time"*. **Measured**: inside `compute.graph`, a dispatch at
+    `.n a.n` — the graph function's own argument — records and the program prints `raw ?: ?a`; the same
+    dispatch at `.n (a.n + 1)` does not record, and the surface reports the graph's own failure rather
+    than the count: *"this function's return is not a value a graph can hand back, so there is no graph to
+    record: a graph's value table holds what its dispatches produced and the arguments it was run with, and
+    this body's own value is not one of those"*. **So a growing loop is a `plrun` loop and not a
+    `graphrun` one**, and the sentence above is quoted from the source rather than captured from a run:
+    the CLI's graph body shapes that reach the count all fail on the graph's return value first, and no
+    probe of mine surfaced the count's own sentence.
+  - **Two bounds that are rules rather than walls.** The extent is still read as an **`Int`**, and a
+    `Float` first leaf is refused by name (`scalar_leaf_classes`, `compute.rs:1850`), so *"the extent
+    follows the state"* does not mean any value; and a count past **`MAX_PARALLEL_ELEMENTS` = 2^20** is
+    refused before allocation (`compute.rs:5866`), which is the same ceiling every other launch has.
+  - **What this does not measure.** **The device leg.** Every answer above is `cpu`, and a device run was
+    not attempted: the CLI installs no backend. `run_on_installed_backend` takes the extent as the run's
+    own `count` and the remaining leaves as push-constant scalars (`compute.rs:5798-5804`), which is the
+    same split the host path uses, so the shape is expected to carry over — **expected, not measured.**
 - **What a real decode loop still lacks.** **The sampler is no longer a wall** (`examples/sample.lichen`):
   `ln` is a named operator (`82640443`) and **greedy sampling needs no transcendental at all** — a row of
   integers, a comparison and a position. Three things it measured instead, all of them about the
@@ -278,6 +389,15 @@ need a node-local producer for `r`.
   sentence is measured now** — a buffers-derived stop condition runs to **500** steps unmarked and
   **2 000** marked, so `wontfix:D9`'s stack paths are not what a generated loop meets; the budget is, and
   it is a pair of constants rather than a language rule.
+- **A growing cache is work, and the wall inside it was the spelling, not the capability** — measured, and
+  the sentence below is what it displaced (`extent` slice, `dev@81e45151`, **host-only**: the CLI installs
+  no compute backend, so every verdict here is a `cpu` answer). **What was written**: ~~**A growing cache
+  is mostly work** with one wall inside it — an **extent that follows the state** is not writable, so a
+  fixed large extent plus masking is the only spelling and it costs the lanes.~~ **What is written now:**
+  the extent **does** follow the state on the direct `compute.plrun` path, in three spellings and their
+  controls, and masking is a **choice** rather than the only one. **What survives is the cost, and the
+  recorded leg.** The full programs, their answers and the one rule that still refuses are in the finding
+  below.
 - **A second note's table is stale where its own correction is right, and this measurement is the
   evidence** (`stop` slice, `dev@4b9bd7a9`). `docs/notes/loop-conversion.md:149-154` still carries the
   earlier reading — *"| `loop` | decidable | **expanded** — the default still wins when it works" |* —
