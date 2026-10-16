@@ -451,15 +451,22 @@ than a second scan, so the text and the `(line, col)` name the same line.
   **provisional** refusal — the checker evaluates speculatively, so a `$jit` whose
   parameter domain is not decided yet records one, and a later attempt with the
   domain known compiles the very same kernel — and that program works and has a
-  value. The line between them is the outcome, not the channel: a refusal
-  explains a value that never arrived, and a program that produced one has nothing
-  to explain. **Ask that question of the answer's own value graph, not of its root
-  slot**: a tuple whose every position is empty is a program that produced nothing,
-  however much of a value a tuple is structurally, and a root that holds one decided
-  position has arrived. A **shallow** position is a lazy region the walk was told not
-  to enter, so it counts neither way; the test is whether *anything* arrived, not
-  whether everything is decided, which is what keeps a lazily-computed answer — and
-  `examples/lazy_infinite.lichen` — working.
+  value. **Every recorded refusal is reported**, whatever the answer is: the gate
+  that once asked whether a value had arrived (`answer_arrived`) was deleted, because
+  an answer that arrived does not make a recorded refusal go away — the program in
+  `crates/lichen-compute/tests/inplace_write_refusal.lichen` collects an **input**
+  buffer, which has a value whatever the kernel did, and the in-place write it
+  performed was refused by name and answered as if nothing had happened. The walk
+  itself survives where a host still asks the question —
+  `crates/lichen-language/src/testing.rs` and
+  `crates/lichen-testkit/src/probe.rs` — but it no longer decides what a run reports.
+  Its own question remains worth stating: **ask it of the answer's own value graph,
+  not of its root slot**. A tuple whose every position is empty is a program that
+  produced nothing, however much of a value a tuple is structurally, and a root that
+  holds one decided position has arrived. A **shallow** position is a lazy region the
+  walk was told not to enter, so it counts neither way; the test is whether
+  *anything* arrived, not whether everything is decided, which is what keeps a
+  lazily-computed answer — and `examples/lazy_infinite.lichen` — working.
 
 ### The tooling crate
 

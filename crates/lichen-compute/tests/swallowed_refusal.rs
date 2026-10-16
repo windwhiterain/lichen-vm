@@ -44,10 +44,24 @@ fn a_refusal_reaches_an_answer_that_is_a_tuple() {
     );
 }
 
-/// The other side: a refusal is still not reported when the answer itself arrived.
+/// The other side: the same refusal is reported even though the answer itself arrived.
+///
+/// # Invariant
+///
+/// The tail is `(1, 2)` — a literal that arrived whatever the kernel did — so the refusal
+/// here cannot be explained by a value that never came. The gate that once withheld it
+/// was deleted; this test was `a_refusal_stays_quiet_when_the_answer_arrived`.
 #[test]
-fn a_refusal_stays_quiet_when_the_answer_arrived() {
-    let output =
-        attempt("(1, 2)").expect("a refusal explains a value that never arrived, and this one did");
-    assert_eq!(output, "(1, 2): tuple{Int, Int}");
+fn a_refusal_is_reported_even_when_the_answer_arrived() {
+    let messages = attempt("(1, 2)")
+        .expect_err("an answer that arrived does not make a recorded refusal go away");
+    assert_eq!(
+        messages.len(),
+        1,
+        "one misplaced write is one diagnostic: {messages:?}"
+    );
+    assert!(
+        messages[0].contains("compute.parallel") && messages[0].contains("to output 1"),
+        "the refusal must name the output the write points at: {messages:?}"
+    );
 }

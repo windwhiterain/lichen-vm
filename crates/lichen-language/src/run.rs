@@ -57,11 +57,10 @@ pub struct RunOutput {
 /// The stage lines a run's passes recorded, verbatim, under the named categories.
 ///
 /// # Invariant
-/// **Only the named categories are read**: every other extension diagnostic is a
-/// refusal whose gate is [`render_build`]'s own, and a run that produced a value
-/// drops those on purpose — reporting one here would publish an explanation the
-/// run already decided against. A line is self-describing (`region N: …`,
-/// `node N: …`, `pack "…" fired`), so it is carried as the pass wrote it.
+/// **Only the named categories are read**: a refusal is not a stage line, and
+/// [`render_build`] reports one against the run rather than beside the value. A line
+/// is self-describing (`region N: …`, `node N: …`, `pack "…" fired`), so it is
+/// carried as the pass wrote it.
 fn pass_lines<P: lichen_lowlevel::Program>(module: &Module<P>, categories: &[&str]) -> Vec<String> {
     module
         .extension_diagnostics
@@ -132,10 +131,9 @@ where
 ///
 /// # Invariant
 ///
-/// A runtime refusal explains a value that never arrived, so it is reported only when
-/// evaluation produced nothing — [`Self::answer_arrived`]'s question. A provisional
-/// refusal on a program that produced a value is not reported.
-/// See docs/notes/language-toolchain.md.
+/// Every runtime refusal is reported, whatever the program's answer: a value that
+/// arrived does not make a recorded refusal go away. See
+/// docs/notes/language-toolchain.md.
 ///
 /// A stage line is **not a refusal**: the run reports it beside the value, so
 /// naming a pack still says whether it fired.
@@ -148,8 +146,7 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    let produced_nothing = !answer_arrived(&module, value);
-    if produced_nothing && !module.extension_diagnostics.is_empty() {
+    if !module.extension_diagnostics.is_empty() {
         // The refusing layer's own text; no span. See docs/notes/compiler-plugin.md.
         return Err(module
             .extension_diagnostics
