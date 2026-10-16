@@ -550,7 +550,7 @@ impl<P: Program> Module<P> {
             AnyNodeId::Static(_) => unreachable!(),
         };
         // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
-        // again (late-writes-map.md §8).
+        // again (late-writes-map.md §11).
         if let Some(deep) = self.nodes[node].evaluated_deep
             && !deep.undecided
             && let Some(value) = self.nodes[node].value
