@@ -241,8 +241,13 @@ consequences of taking that seriously:
   written from the change this commit makes and never re-run against an example;
   the read does go through the container's own type cell, but on this program that
   cell does not resolve. The diagnosis, with what is traced and what is not, is
-  [undecided-type-cell](undecided-type-cell.md) §6.2 — so this note records the
-  intent, not a measurement.
+  [undecided-type-cell](undecided-type-cell.md) — and since then the write has been
+  **located**: the element slot holds the *shared open class cell* that
+  `Checker::arithmetic_class` returns when neither operand states a class
+  (`crates/lichen-highlevel/src/checker/operators.rs:106`), so what never closes is
+  that class, not the container's read. §10.2 there measures the discriminator; this
+  note records the intent, and the open question is a checker-side one about
+  `arithmetic_class`, not about this read path.
 - **The requirement is the container's *kind*, never its type.** Naming the kind
   (`checker::tuple_kind_requirement` / `array_kind_requirement` for a decided
   container, a registered `TypeOperator::IsTupleType` / `IsArrayType` assert for an

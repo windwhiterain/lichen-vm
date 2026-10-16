@@ -158,10 +158,10 @@ impl<P: Program> Module<P> {
         let Some(codomain) = self.pair_type_item(applied) else {
             return;
         };
-        // A decided codomain stays the frozen ref the clone walk carried; a leaf in
-        // this block gives the bind its value.
         let codomain = self.as_dynamic(codomain, block);
         self.evaluate_node(Dyn(codomain), Some(block));
+        // A decided codomain stays the frozen ref the clone walk carried; a leaf in
+        // this block gives the bind its value.
         if let Some(cell) = cell {
             self.unify(cell, codomain);
         }

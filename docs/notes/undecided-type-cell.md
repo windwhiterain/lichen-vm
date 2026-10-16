@@ -1,9 +1,12 @@
 # An undecided type cell: the four `examples` drifts
 
-> **Status:** **diagnosis only; no production change.** The read is traced to the
-> line, and the comparison family (2 of the 4) is traced to a join that does not
-> happen. The frozen-module and lazy-chain families are **characterised by their
-> discriminator and not traced** — §6 says what was ruled out and what was not.
+> **Status:** **three of the four fixed** (§10); the fourth is attributed and is a
+> different mechanism. The suppressing condition is one line —
+> `Module::pair_type_half` answers `None` for a **frozen** type half, so the
+> `unify` binding an apply's result type cell to the callee's decided return type
+> was never called. §9 traces it, §10 fixes it, §10.2 attributes what remains.
+> §1–§8 are kept as the diagnosis that led there; where §10 answers one of their
+> open questions, they say so.
 >
 > Companions: [examples-panic-diagnosis](examples-panic-diagnosis.md) §"What the
 > runner says once past the panic", which first tabulated these four with the
@@ -131,12 +134,12 @@ Which pairs differ, concretely:
 
 ## 5. Verdict per instance
 
-| Instance | Should print | Does print | Verdict |
-|---|---|---|---|
-| `assert.lichen` | `(1, 5): tuple{Int, Int}` | `(raw 1, 5): tuple{?a, Int}` | **defect**, family A, traced (§6.1). [operators](operators.md) §2 specifies `Int`. |
-| `assert_in_function.lichen` | `1: Int` | `raw 1: ?a` | **defect**, family A, traced (§6.1). Same cell as above, one apply away. |
-| `import/_.lichen` | `(42, 10, 7): tuple{Int, Int, Int}` | `(raw 42, 10, raw 7): tuple{?a, Int, ?b}` | **defect**, family C, **not traced** (§6.3). |
-| `lazy_infinite.lichen` | `(1, 2, 3): tuple{Int, Int, Int}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | **defect**, family B, **not traced** (§6.2). |
+| Instance | Should print | Does print on `dev` | Verdict | After the fix (§10) |
+|---|---|---|---|---|
+| `assert.lichen` | `(1, 5): tuple{Int, Int}` | `(raw 1, 5): tuple{?a, Int}` | **defect**, family A, traced (§6.1, §9.5). [operators](operators.md) §2 specifies `Int`. | **fixed** |
+| `assert_in_function.lichen` | `1: Int` | `raw 1: ?a` | **defect**, family A, traced (§6.1). Same cell as above, one apply away. | **fixed** — same condition, dynamic route |
+| `import/_.lichen` | `(42, 10, 7): tuple{Int, Int, Int}` | `(raw 42, 10, raw 7): tuple{?a, Int, ?b}` | **defect**, family C — **not** a separate family; the same condition (§10.1). | **fixed** |
+| `lazy_infinite.lichen` | `(1, 2, 3): tuple{Int, Int, Int}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | **defect**, family B — attributed to `arithmetic_class`'s open class cell (§10.2). | **unchanged** |
 
 None of the four should be re-declared to its current output. The suite's own
 message offers that route "if that was intended", and for these four it is not:
@@ -213,32 +216,36 @@ frozen module `geo.double 5` prints `10: Int` while `math.succ 41` does not, so 
 boundary alone cannot be the whole cause.
 
 Ruled out: the frozen status of the callee (a local `succ` decides), and `@loop`
-(§3). **Not traced:** what distinguishes `succ` from `double` across the same
-boundary. [class-channel](class-channel.md) §1.1.2 records the nearest prior
+(§3). ~~**Not traced:** what distinguishes `succ` from `double` across the same
+boundary.~~ **Answered in §10.1:** it is the same distinction family A turns on —
+`double`'s body is `math.add`, whose codomain is an **undecided open class cell**
+(cloned per call, so bound), while `succ`'s body is a **comparison**, whose codomain is
+the **decided** `int_type` (frozen, so refused). The frozen-module boundary was a red
+herring: the discriminator is the *decidedness* of the codomain, not which module the
+callee lives in. [class-channel](class-channel.md) §1.1.2 records the nearest prior
 measurement — for `geo.double 5` the **value** survived and the **type cell did not
 resolve** — and §1.1.3's refutation is the reason this note does not assume the
 class value is merely misplaced: there, the structure was rewritten instead.
 
 ## 7. What a fix would touch
 
-Named per family. **This slice changes none of them**; family A's is a decision
-about the apply's bind, and families B and C are not located closely enough to name
-a line.
+~~**This slice changes none of them.**~~ **Resolved in §10**, and not along the lines
+this section guessed: the change is in `crates/lichen-lowlevel/src/resolve.rs` and in
+the two bind sites that reach for the codomain, and
+`crates/lichen-lowlevel/src/evaluation.rs` — the file named first, and the one another
+session owns — **is not touched**.
 
-- **A** — the runtime apply that is to bind an apply's result type cell to the
-  callee's return pair, in `crates/lichen-lowlevel/src/evaluation.rs` (the apply
-  arm: `wire_apply_result` / `function_apply`). **Another session owns
-  `evaluation.rs` and garbage collection, so this is named and not touched.** The
-  alternative is a checker-side decide at `check_app`, which would have to read the
-  routed callee's return type — the frozen-module read that
-  [class-channel](class-channel.md) §5.1.1 already had to teach one reader to do.
-  **Either way it is the user's decision, not this slice's.**
-- **B** — the index read's element-type carry, the path
-  [compound-element-slots](compound-element-slots.md) §"The read path" names.
-  The line is not located.
-- **C** — the frozen-module carry of a return type across the module boundary;
-  the file is not located. The nearest history is
-  [class-channel](class-channel.md) §1.1.3.
+- **A** — named `evaluation.rs`, and **named wrong**: the bind lives in
+  `static_module/apply.rs` and `function.rs`, and the refusal is one arm of
+  `Module::pair_type_half` in `resolve.rs`. §7's framing — "a checker-side decide at
+  `check_app`, which would have to read the routed callee's return type" — is not
+  needed either: the runtime already read it and discarded it. **Fixed.**
+- **B** — the index read's element-type carry. **Located in §10.2**: not the read, but
+  `Checker::arithmetic_class`'s `else` branch returning the **shared open class cell**
+  when neither operand states a class (`operators.rs:106`). **Not fixed**; it is the
+  user's call whether that branch should decide.
+- **C** — the frozen-module carry of a return type across the module boundary. **Not a
+  separate line**: the same as A. **Fixed.**
 
 ## 8. Measured, inferred, unknown
 
@@ -249,9 +256,10 @@ a line.
   `core.lichen`; that the apply's result cell joins that class for `add` and not for
   `less_or_equal`; that `alias_read` binds the `Int` value in both and names the
   result cell in neither.
-- **Inferred** — that families B and C are both "an undecided cell an indirection
-  failed to fill". Each has a discriminator and a minimal reproduction; neither has
-  a located write.
+- **Inferred** — ~~that families B and C are both "an undecided cell an indirection
+  failed to fill"~~ **half refuted in §10.1**: C was the apply's missing join after all.
+  Only B is "an undecided cell an indirection failed to fill", and its indirection is
+  `arithmetic_class`'s open class cell, not a lazy chain (§10.2).
 - **Unknown** — the commit that introduced any of the four. `9c563a3d` ("the raw
   fallback marks every reading it dumps") is the commit that made a scalar's dump
   *visible*, since before it the fallback spelled `1` correctly by accident, so that
@@ -265,9 +273,9 @@ a line.
 
 ## 9. Reading half — where the join is, and the one condition that refuses it
 
-**Read, not yet measured.** §6.1 stops before naming the suppressing condition; this
-section names the code the join passes through and the one conditional in it that can
-fail. The measurement that decides between them follows in §10.
+**Read, then measured — §9.5 settles it.** §6.1 stops before naming the suppressing
+condition; this section names the code the join passes through and the one conditional
+in it that can fail, and §9.5 decides between the candidates.
 
 ### 9.1 What `check_app` does with the callee's return type: nothing
 
@@ -440,7 +448,7 @@ filled it was skipped — not because a class was refused and not because the va
 mislaid. §6.1's "the static-materializer path that carries a frozen callee's return
 pair" is this: the materializer carries it, and the reader declines it.
 
-### 9.6 Families B and C are **not** this condition — measured
+### 9.6 B and C do not fail the same way — measured, and §10 corrects this
 
 The same probe on the other two examples shows the opposite of family A: **every** apply
 whose bind *does* run ends with its cell in a class whose every member is decided.
@@ -450,21 +458,162 @@ whose bind *does* run ends with its cell in a class whose every member is decide
 | `import/_.lichen` | `126v1 → 154v1`, `194v1 → 265v1`, `333v1 → 345v1`, `382v1 → 394v1`, `68v1 → 255v1`, `528v1 → 556v1`, `492v1 → 588v1` | **all members decided** (`m=…:true` throughout; the largest class has 22) |
 | `lazy_infinite.lichen` | `269v1 → 328v1`, `307v1 → 397v1`, `376v1 → 466v1` | **all members decided** |
 
-So the cells that print `?a` in B and C are **not** an apply's result cell that missed a
-bind — they are decided, and the `?a` sits somewhere else (the note's §6.2 element slot
-and §6.3 frozen-module carry). **Fixing A is therefore not expected to move B or C**,
-which is what §4 warned against assuming. §10 records what each does after the fix.
+**This reading was half wrong, and §10.1 says which half.** It is right for B: the cells
+that print `?a` in `lazy_infinite.lichen` are decided, and the `?a` sits elsewhere
+(§6.2's element slot). It is **wrong for C**: the cells that print `?a` in
+`import/_.lichen` were decided too — but only because the two applies whose bind
+matters, `math.succ` and `geo.inc_twice`, **never reached the probe at all**, the bind
+having been skipped on the very `pair_type_half = None` arm this section measures
+elsewhere. The probe could not see them, and "every bind that ran was decided" was read
+as "nothing is missing".
 
+The transferable lesson is about the method: a probe placed **after** the branch that
+can fail reports only the calls that passed it. §9.5 escaped this by also printing the
+cell's own class and the arm taken; §9.6 did not, and the inference went through
+unchecked.
+
+
+## 10. The fix, and what each instance does after it
+
+**One condition, three of the four instances, fixed.** The change is three files in
+`lichen-lowlevel`, and the same two lines on each of the two routes §9.2 named.
+
+> **A decided return type is carried through the clone walk as the frozen `Static` ref
+> it was, and `Module::pair_type_half` answers `None` for a frozen type half, so the
+> `unify(cell, codomain)` that binds an apply's result type cell to the callee's
+> decided return type was never called.**
+
+`crates/lichen-lowlevel/src/resolve.rs` — the pair's type half as the reference the
+pair itself holds, frozen or not. `pair_type_half` now reads through it, so the width
+rule stays in one place and **its `# Invariant` is unchanged, word for word**:
+
+```rust
+    pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
+        match self.pair_type_item(node)? {
+            AnyNodeId::Dynamic(r#type) => Some(r#type),
+            AnyNodeId::Static(_) => None,
+        }
+    }
+
+    /// The **type** half of a `[value, type]` pair node, as the pair's own reference.
+    pub fn pair_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
+        // SAFETY: `node` is a live node of `self`.
+        let items = unsafe { self.array_items(node) }?;
+        if !(2..=3).contains(&items.len()) {
+            return None;
+        }
+        Some(items[1].node)
+    }
+```
+
+`crates/lichen-lowlevel/src/static_module/apply.rs` — the frozen route's bind:
+
+```rust
+            // A static callee's type is static too, which the dynamic guard refuses.
+            if let Some(cell) = cell
+                && let Some(codomain) = module.pair_type_item(applied)
+            {
+                // A decided codomain stays the frozen ref the clone walk carried; a
+                // leaf in this block gives the bind its value.
+                let codomain = module.as_dynamic(codomain, block);
+                module.evaluate_node(Dyn(codomain), Some(block));
+                module.unify(cell, codomain);
+            }
+```
+
+`crates/lichen-lowlevel/src/function.rs` — `apply_type`, the dynamic route's bind, the
+same two lines. **§7's route choice did not have to be made:** the fix is in
+`resolve.rs` and at the two bind sites, and
+`crates/lichen-lowlevel/src/evaluation.rs` — the file another session owns — **is not
+touched**. `as_dynamic` is the crate's own instrument for this ("a static ref
+materialized into a leaf"), the same one `static_function_signature` documents and
+`check_app`'s guard already uses, so no second reading of a pair's encoding is added.
+
+### 10.1 Per instance, before and after
+
+| example | declared `output =` | before | after | mechanism |
+|---|---|---|---|---|
+| `assert.lichen` | `(1, 5): tuple{Int, Int}` | `(raw 1, 5): tuple{?a, Int}` | **`(1, 5): tuple{Int, Int}`** — matches | the comparison's apply bound on the **frozen** route, `static_function_apply`; §9.5 measured its `pair_type_half` as `None` |
+| `assert_in_function.lichen` | `1: Int` | `raw 1: ?a` | **`1: Int`** — matches | the same condition on the **dynamic** route: `f`'s return pair is `[Dynamic(112v1), Static(ModuleKey(0), index 11)]`, so `apply_type`'s `pair_type_half` was `None` for cell `53v1` |
+| `import/_.lichen` | `(42, 10, 7): tuple{Int, Int, Int}` | `(raw 42, 10, raw 7): tuple{?a, Int, ?b}` | **`(42, 10, 7): tuple{Int, Int, Int}`** — matches | **family C was this condition too**, on both routes: `math.succ`'s and `geo.inc_twice`'s codomains were both carried frozen |
+| `lazy_infinite.lichen` | `(1, 2, 3): tuple{Int, Int, Int}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` — **unchanged** | §10.2: a different mechanism, in `arithmetic_class` |
+
+**§4's "B vs C are not established to be the same" is settled, and against the note's
+guess.** C was not a family of its own: it was the same missing join, reached through
+two frozen modules and two hops, and §6.3's open question is answered in §6.3 above.
+**B is the only family left, and it is genuinely different.**
+
+### 10.2 Family B — attributed, and it is not the apply's join
+
+The join **runs** on `lazy_infinite.lichen`: measured, `inf = f 0`'s result cell `71v1`
+sits in a class whose representative `66v1` is decided. What is undecided is the
+**array's element type slot** — §6.2's own read — and the discriminator is
+`Checker::arithmetic_class`'s `stated` test
+(`crates/lichen-highlevel/src/checker/operators.rs:106`):
+
+```rust
+let stated = self.class_is_stated(left_ty) || self.class_is_stated(right_ty);
+```
+
+A **stated** operand takes the branch that unifies both operands with `int_type` and
+returns `self.int_type`, decided at **check** time, before any run. An **unstated** one
+— a function parameter — takes the `else` branch, returns `left_ty`, **the shared open
+class cell**, and gates the class on a refinement assert that only resolves at run time.
+Measured, one program each:
+
+| program | prints |
+|---|---|
+| `x = 0` ; `xs = [x, @shallow [x + 1, x + 2]]` ; `xs(1)` | `[1, 2]: array{Int, 2}` — stated operand, decided at check time |
+| `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — unstated operand, open class cell |
+| `f = x => [x, @shallow [x, x]]` ; `g = f 0` ; `g(1)` | `[0, 0]: array{Int, 2}` — a bare read of `x` decides, so `@shallow` is **not** the discriminator |
+| `f = (x : Int) => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` — an annotation does not reach it |
+| `f = x => [x, [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `error: expected Int, found array{?a, 2}` — **not** a drift; dropping `@shallow` does not produce the declared output either |
+
+So B's undecided cell holds an **open class the run never closes**, not a declared type
+a join failed to carry. **§10's fix does not apply to B and was not expected to.** B is
+a checker-side question — whether `arithmetic_class`'s `else` branch should decide when
+neither operand states a class — and it is the user's call, as §7 framed A's. **Not
+fixed here.** §6.2's "not traced: the write that should have carried a type into that
+element slot" is now **located**: it is the class commit `arithmetic_class` defers to
+its refinement assert, not a write a reader skipped.
+
+### 10.3 What the fix does not change
+
+`examples/import/math.lichen` and `examples/import/geometry.lichen` print byte for byte
+what they printed before, so no other example's `output =` moved:
+
+```
+math.lichen      (Int => Int, raw[?a, ?b] => …): struct{.succ Int -> Int, .add raw[?a, ?b] => …}
+geometry.lichen  (raw[?a, ?b] => …, Function): struct{.double raw[?a, ?b] -> …, …}
+```
+
+Those two already **declare** `?a` in their `output =`. That records a polymorphic
+lambda's exported signature (`math.add = x => y => x + y` has no stated operand) — the
+same open class B is about, at the level of a module's type — not this defect, so it is
+left as it stands rather than re-declared.
+
+### 10.4 Suite attribution
+
+`cargo test -p lichen-compute --test lichen_compute` on this branch and on a worktree
+checked out at `dev` give the **same 15 failures by name, 203 passed / 15 failed / 2
+ignored** — so the change introduces none and clears none outside `examples`, whose own
+failure goes from four drifts to one (`lazy_infinite.lichen`).
 
 ## Coordination
 
-Two commits landed on `dev` while this note was being written, both in the same neighbourhood as
-the missing join: `86ce6b6f` (*highlevel: an engine-side unify is located through the descent it
-recorded*) and `973d7132` (*highlevel: a conflict keeps the values its error already carries*).
-**If that work is this join, it should finish it, and this note should point at that work rather
-than duplicate it** — say so here, or in that commit, and this section can shrink to a reference.
-If it is something else, the fix has two candidate routes and the choice is the user's: a
-**checker-side decide at `check_app`**, where `add [1, 2]` already joins the callee's decided
-return type and `less_or_equal [1, 2]` does not, or a **runtime bind** in
-`crates/lichen-lowlevel/src/evaluation.rs`, which another session owns and which this diagnosis
-leaves untouched. Families B (lazy read) and C (frozen module) are **not traced** on either route.
+Two commits landed on `dev` while this note was being written, both in the same
+neighbourhood as the missing join: `86ce6b6f` (*highlevel: an engine-side unify is located
+through the descent it recorded*) and `973d7132` (*highlevel: a conflict keeps the values
+its error already carries*). **Neither was this join** — both are in the checker, and
+§9.1 measures that `check_app` never held the join at all: the cell it mints is bound by
+the **runtime**, in `lichen-lowlevel`.
+
+So the choice §7 left open — a *checker-side decide at `check_app`* or a *runtime bind* —
+did not have to be made, because **both halves of it were wrong**: the checker never had
+the call to delete, and the runtime had it but skipped it on one arm. The fix is neither
+route, and it touches neither `crates/lichen-highlevel/src/checker/` nor
+`crates/lichen-lowlevel/src/evaluation.rs`. **Family B (§10.2) is the remaining open
+item**, and it *is* a checker-side decision the user should make.
+
+`crates/lichen-lowlevel/src/evaluation.rs` was not edited and
+`crates/lichen-lowlevel/src/gc.rs` was not touched.
