@@ -127,13 +127,27 @@ build `PreprocessDiag::unattributed`, so a preprocessor diagnostic carried **no 
 directive's offset is known to the block parser — a P2 failure on a surface no parser rule touches.
 Taken; see §7 for the measurement and the `Invariant` it had to edit.
 
-**Still unmeasured**: whether the `?a -> ?b` expected side renders as claimed (`tests/highlevel/checker.rs:713-736`
-supports the value structure but the rendered string was not captured); whether `checker.rs:738` already
-pins the `IndexTarget` wording; the positional-struct `raw[Int, Int]` offender, whose fix belongs to
-`crates/lichen-render/src/render/type_printer.rs` under `docs/notes/type-rendering-inconsistent.md`; and the
-two facts unchanged from the main report — the 37 examples do not run on `dev` (`invalid SlotMap key used`,
-`crates/lichen-lowlevel/src/evaluation.rs:517`, pre-existing) and the eight named compute binaries were
-never run.
+**Measured since**: the `?a -> ?b` claim is confirmed verbatim. The minimal program `5 6` renders
+
+```text
+error: expected ?a -> ?b, found Int
+  --> 1:1
+```
+
+so the guard's expected side is the function the guard built, and it prints as an arrow with two undecided
+slots — the test at `tests/highlevel/checker.rs:713-736` pins the value structure and this is the string it
+produces. And `checker.rs:738` does **not** pin the `IndexTarget` wording: that test asserts the diagnostic's
+kind, location and the requirement's `TypeArray` kind, never a rendered sentence, so `render.rs`'s
+"expected a tuple, array, or struct type, found {}" is unpinned.
+
+**Still open**: the positional-struct `raw[Int, Int]` offender, whose fix belongs to
+`crates/lichen-render/src/render/type_printer.rs` under `docs/notes/type-rendering-inconsistent.md`.
+
+**Superseded here**: the two facts the main report carried are no longer the state of `dev`. The examples no
+longer panic with `invalid SlotMap key used` — the read path's collection is disabled while its trigger is
+repaired ([`gc-trigger-disabled.md`](gc-trigger-disabled.md)), and `examples::every_example_runs_and_prints_what_it_declares`
+fails on its own assertion instead. The "eight named compute binaries" no longer exist: every crate's
+integration suite is one binary now, and the compute one runs 220 tests.
 
 ## 7. What became of the survey's items
 
