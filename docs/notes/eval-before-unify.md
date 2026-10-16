@@ -687,9 +687,8 @@ the only thing that prints one.
   readable pair — it is an apply node, not an array — so its evaluation is forced
   for the nominality check and the field-list read. A callee that depends on an
   undecided parameter stays lazy (the checks defer to the apply), and a
-  non-terminating one trips the VM's guard: it is left lazy, because the build's
-  statement pass evaluates the statement again and reports the `NonTerminating`
-  diagnostic. A refused callee leaves a partly walked graph, so the checker must
+  non-terminating one is the program's own problem: no diagnostic is owed, and the
+  build may simply run (see `nontermination-is-the-programs.md`). A refused callee leaves a partly walked graph, so the checker must
   never force twice — `force_failed` records the first refusal.
 - The apply's result type cell is undecided unless the apply's evaluation syncs it:
   the cell rides in the apply's operand, and the runtime apply unifies the return

@@ -217,30 +217,6 @@ fn expression_statements_check_and_evaluate() {
 }
 
 #[test]
-fn a_nonterminating_binding_is_reported_an_error() {
-    // The checker evaluates every top-level statement, so the
-    // non-terminating `w` hits the VM depth guard.
-    let report = compile("omega = x => x x\nw = omega omega\nif 0 then (w : Int) else 5");
-    assert!(!report.ok(), "a non-terminating binding must not certify");
-    let nonterminating: Vec<_> = report
-        .diagnostics
-        .iter()
-        .filter(|d| {
-            d.stage == Stage::Check
-                && d.check
-                    .as_ref()
-                    .is_some_and(|c| c.kind == DiagKind::NonTerminating)
-        })
-        .collect();
-    assert_eq!(nonterminating.len(), 1, "one NonTerminating diagnostic");
-    assert!(
-        nonterminating[0].message.contains("non-terminating"),
-        "diagnostic message = {:?}",
-        nonterminating[0].message
-    );
-}
-
-#[test]
 fn an_annotated_parameter_checks() {
     assert_eq!(usize_of(&evaluate("(x : Int => x) 5")), 5);
     assert_eq!(usize_of(&evaluate("(x : Int => x) 5 : Int")), 5);
@@ -885,29 +861,6 @@ fn a_blockwide_binding_need_not_be_a_lambda() {
         report.ok(),
         "expected no diagnostic: {:?}",
         report.diagnostics
-    );
-}
-
-#[test]
-fn a_non_terminating_recursive_function_is_reported_at_the_guard() {
-    // No base case: the definition pass runs the recursion forever, and the
-    // VM's application-depth guard refuses the walk.
-    let report = compile("f = n => f n; f 3");
-    let nonterminating: Vec<_> = report
-        .diagnostics
-        .iter()
-        .filter(|d| {
-            d.stage == Stage::Check
-                && d.check
-                    .as_ref()
-                    .is_some_and(|c| c.kind == DiagKind::NonTerminating)
-        })
-        .collect();
-    assert_eq!(nonterminating.len(), 1, "one NonTerminating diagnostic");
-    assert!(
-        nonterminating[0].message.contains("500"),
-        "the message must name the exceeded budget's limit: {:?}",
-        nonterminating[0].message
     );
 }
 

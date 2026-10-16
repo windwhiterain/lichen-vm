@@ -148,7 +148,8 @@ return cells among them — so a signature is re-instantiated per call
 (let-polymorphism) and the template is never bound. Recursion is a function
 referring to its own pair; the apply and evaluation depth budgets record
 `Module::budget_exhausted` and return a value instead of panicking, so a
-non-terminating program is a diagnostic rather than an unwind.
+non-terminating program is the program's own problem: no diagnostic is owed (see
+`nontermination-is-the-programs.md`).
 
 A depth refusal answers the computed-nothing value, not an undecided one: an undecided
 answer promises "try again later", which nothing downstream can honour, because this
