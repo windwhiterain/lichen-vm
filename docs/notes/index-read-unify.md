@@ -364,7 +364,7 @@ survey and the suite counts.
 |---|---|---|---|
 | `examples/lazy_infinite.lichen` | `(raw 1, raw 2, raw 3): tuple{?a, ?b, ?c}` | `(1, raw 2, raw 3): tuple{Int, ?a, ?b}` | **`(1, 2, 3): tuple{Int, Int, Int}`** |
 | `f = x => [x, @shallow f (x + 1.5)]` ; `inf = f 0.0` ; `(inf(1)(0), inf(1)(1)(0))` | `(raw 1.5, raw 3.0): tuple{?a, ?b}` | `(1.5, raw 3.0): tuple{Float, ?a}` | **`(1.5, 3.0): tuple{Float, Float}`** — `Float` through the same read, decided as `Float` |
-| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `(0.0, raw none): tuple{Float, ?a}` | `(0.0, raw none): tuple{Float, tuple{Float, ?a}}` | `(0.0, raw none): tuple{Float, tuple{Float, tuple{Float, …}}}` — the coinductive type, rendered with its own `…` |
+| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `(0.0, raw none): tuple{Float, ?a}` | `(0.0, raw none): tuple{Float, tuple{Float, ?a}}` | `(0.0, raw none): tuple{Float, tuple{Float, tuple{Float, …}}}` — the coinductive type, rendered with its own `…` (§7.6) |
 | `@loop f = x => [x, @shallow f (x + 1)]` ; `inf = f 0` ; `inf(1)(0)` | `raw 1: ?a` | `1: Int` | `1: Int` |
 | `f = x => [x, @shallow [x + 1, x + 2]]` ; `g = f 0` ; `g(1)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | **unchanged** — see §7.4 |
 | the same with `(x : Int)` | `[raw 1, raw 2]: array{?a, 2}` | unchanged | unchanged |
@@ -425,7 +425,49 @@ change does not touch it. The survey agrees from the other side: the two
 *how deep* the laziness reaches — and `an_at_shallow_depth_marks_value_slots_shallow`
 asserts that its read's type stays underdetermined. §7 changes only the bare form.
 
-### 7.6 The files
+### 7.6 The rendering's spec line
+
+The `…` in that table row now has one: `docs/language-spec.md` §5
+["Checker spellings"](../../docs/language-spec.md) states the cut, and why a cut
+type is a **finite notation for an infinite type** rather than a truncation of
+one, and which of the three readings that share the `…` and `?` vocabulary a
+given `…` is. [raw-rendering-mark](raw-rendering-mark.md) §1 already owned the
+same cut for the raw fallback and the universe's self-loop, so the spec line
+cites it rather than restating it.
+
+**Which programs reach it, measured on `dev@4da09089`.** The same probe run at
+`9ddbbed5` (the commit before §7) and at `b8444708` (§7 itself).  A `—` is a program not run at that commit:
+
+| program | `9ddbbed5` | `b8444708` and after |
+|---|---|---|
+| `f = x => [x, @shallow f (x + 1.0)]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, …}}}` |
+| `xs = [@shallow xs]` ; `xs` | — | `tuple{tuple{…}}` — the same cut on a one-element list spine |
+| `g = f => [f, @shallow g f]` ; `inf = g g` ; `inf` | `tuple{?a -> tuple{?a, ?b}, ?c}` | `?a -> tuple{?a, tuple{?a, tuple{?a, …}}}` — the cut inside an **arrow** |
+| `f = x => [x, @shallow g x]` ; `g = y => [y, @shallow f y]` ; `inf = f 0.0` ; `inf` | `tuple{Float, ?a}` | `tuple{Float, tuple{Float, tuple{Float, tuple{?a, …}}}}` — the alternating pair ends on the **undecided-field** `…`, not the cut |
+| `A = struct{.f Int, .g A}` ; `A` | `struct{.f Int, .g struct{.f Int, .g …}}` | **unchanged** — pre-existing, and pinned by `examples/struct_recursion.lichen`'s declared `output` |
+| `A = struct{.g B}; B = struct{.g C}; C = struct{.g A}` ; `A` | — | `struct{.g struct{.g struct{.g struct{.g …}}}}` — a 3-cycle, cut after four levels |
+| the same over `A…E` (a 5-cycle) | — | `struct{.g struct{.g struct{.g struct{.g struct{.g struct{.g …}}}}}}` |
+| `f = x => [@shallow f x]` ; `inf = f 0.0` ; `inf` | `tuple{?a}` | `tuple{tuple{?a}}` — **finite**, no cut |
+| `f = x => [[x, @shallow f x]]` ; `inf = f 0.0` ; `inf` | `array{tuple{Float, ?a}, 1}` | `array{tuple{Float, array{tuple{Float, ?a}, 1}}, 1}` — **finite**, no cut |
+| `is_even`/`is_old` (`examples/mutual_recursion.lichen`) | `(0, 1): tuple{Int, Int}` | unchanged — a mutual *value* cycle whose reads decide the type |
+| `f = x => x` ; `f` | `?a => ?a: ?a -> ?a` | unchanged — a function's own type prints `?a -> ?a`, with no cut |
+| `(Type, Type : Type, (1, Type))` | no `…` | unchanged — the universe's self-loop is cut by the head collapse, so `Type` prints `Type` |
+
+So **the cut itself is pre-existing** and the §7 change is not new rendering
+machinery: the cyclic spelling was already reachable at `9ddbbed5`, through a
+recursive struct type, and `examples/struct_recursion.lichen` has declared it in
+its `output =` line since `772ad9ff`. What §7 changed is that a **coinductive
+value's** spine now reaches it — at `9ddbbed5` that program's type was
+`tuple{Float, ?a}`, with no cyclic structure to show at all.
+
+**Every cyclic shape above terminates**, at the first revisited node.  Each row
+is one `lichen-compiler` run of one file; the sweep is fourteen files (the table
+holds twelve), all exited 0, and at `dev` they took 57–93 ms each.  The first
+run after each build was 2.2–2.4 s, which is the binary's pages being faulted
+in, not the printer.  The printer's own limit is a nesting depth, not a cycle
+([code-audit](code-audit.md) `P4-10`, closed `wontfix:D9`).
+
+### 7.7 The files
 
 `crates/lichen-highlevel/src/checker.rs` (the registration and the walk entry
 point), `crates/lichen-highlevel/src/checker/indexing.rs`
@@ -435,6 +477,14 @@ type-only application), `docs/language-spec.md` §"Shallow markers", and this no
 with its companions. `crates/lichen-lowlevel/src/evaluation.rs` and
 `crates/lichen-lowlevel/src/gc.rs` were **not** touched, no new test was added,
 and no `output =` line was edited.
+
+**The rendering this section could not finish, finished afterwards.** The `…`
+that row needed a spec line for now has one: §7.6 and `docs/language-spec.md`
+§5 "Checker spellings".  That follow-on was **docs only** — no code, no test, no
+`output =` line, and **no `# Invariant` or `# Safety` sentence added or
+changed**; the printer's own (`print_type`'s, in
+`crates/lichen-render/src/render.rs`) already stated the cut and was left
+alone.
 
 **Is `sync-readme` safe now?** The survey is `clean=43 panicked=[] drifted=[]`,
 so re-deriving every `output =` from a live run finds nothing to rewrite — and it

@@ -994,3 +994,21 @@ highlevel `Diag` in `check` stays raw — it carries the structured facts
 (`kind`, the classes `a`/`b` and their values, the `error_index` into
 `unify_errors`) and its own raw message (`TypeInt`, `TypeType`, …).
 
+Unification is equi-recursive (§3), so a type can be **infinite**, and a
+rendered type is then a finite notation for it rather than a truncation of it:
+the walk cuts the spine at the first node it meets again and puts `…` in that
+slot, so the reader sees that the type does not end.  A lazy value's spine —
+`tuple{Float, tuple{Float, tuple{Float, …}}}` for
+`f = x => [x, @shallow f (x + 1.0)]` — and a recursive struct type
+(`examples/struct_recursion.lichen`) cut the same way.  The cut is per walk, so
+it fires at the first revisit and a cycle of any length terminates; what bounds
+the printer is a nesting depth and not the cycle
+([code-audit](notes/code-audit.md) `P4-10`).  Three readings share the `…` and
+`?` vocabulary and each means something different: a repeated `?a` says two
+slots are one unification class, a cut `…` says the spine is back at a node it
+has already shown, and the `…` in `tuple{?a, …}` says the field list is
+**undecided** — a shape the check has not fixed, which is finite so far and may
+stop there.  A cycle inside a raw dump is cut the same way, and that is what
+keeps the universe's self-loop from unrolling
+([raw-rendering-mark](notes/raw-rendering-mark.md) §1).
+
