@@ -311,6 +311,62 @@ build verdict reads only the standing ones — which is a change to
 `ExtensionDiagnostic::fails_build`'s own invariant (`crates/lichen-lowlevel/src/lib.rs:950-955`:
 *"It is set by the recording layer, never inferred"*), and therefore not a decision this note makes.
 
+### 4.7 The author's ruling: read once, and an undecided type at the first read is a real error
+
+> **"不要依赖第二次读，现在正在往只读一次这个方向上重构。所以，JIT 第一次读 kernel function 类型未决，
+> 就真的报错，不要想恢复"** — *Do not rely on a second read; the work is refactoring toward
+> reading once. So when the JIT first reads a kernel function and the type is undecided, it
+> should really error — do not think about recovering.*
+
+**This dissolves §4.6's question instead of answering it.** §4.6 offered a shape — the entry carries
+"superseded" beside `fails_build` — and that shape exists **only because attempts 2 and 3 re-read**
+(§4.2). Under one read there is no attempt 2: attempt 1 is *the* read, and what it finds is a fact
+about the program rather than about the schedule the checker happened to run. Removing the re-reading
+removes the thing that would have to be recorded.
+
+**The error the ruling names already exists**, in both compile paths, by name —
+`UNDECIDED_DOMAIN` (`compute.rs:2738-2740`), returned at `compute.rs:2409-2411` for
+`compute.parallel` and at `compute.rs:2221-2223` for `compute.jit`, whose seed reads *"without one,
+`Unknown`, which the read refuses by name"* (`compute.rs:2209-2210`). **No new gate has to be added**
+for "a JIT must report an undecided type". What the refactor supplies is that this read **happens
+once**, which is what §4.1's three attempts show it does not do today.
+
+**§4.1's three attempts are therefore evidence for the refactor, not for a shape change.** What they
+measure is precisely what a single read removes: one `compile_parallel_fragment` call for one
+`doubler`, entered three times, the first at a point where no `compute.write` is reachable from the
+codomain position and the second and third once more of the program has been demanded. Collapsing
+that to one read moves the whole decision onto the first attempt — and then `BACK_TO_FRONT` **as
+written in §4.1** is a program that should fail, not one that happens to pass.
+
+**So the fixture is corrected on this branch, as the ruling directs.**
+`crates/lichen-compute/tests/graph_structure.rs`'s `BACK_TO_FRONT` declares `compute.Buf Int` on
+`OutA`, `InB` and `OutB` instead of `compute.Buf _`. **That is the author's ruling applied to a test
+fixture, not a convenience**: it is the same edit a user makes to their own program, and it is what
+makes the program honest under the read the refactor is heading for. Its answer, `[6, 8, 10, 12]`, is
+all `Int` either way, so nothing about what the test measures changes.
+
+**And `compute.rs:1198` is left a `note` on this branch**, with the reason stated rather than
+assumed. The reasoning above makes the *undecided-type* case the refactor's business — but
+`compute.rs:1198` is also the recording site for `compute.parallel`'s **standing** refusals (a write
+that names the wrong output, an output that is not a write, a parameter that is not a kernel ABI),
+and those are not undecided types. Under one read there is a single verdict and each refusal is it;
+under today's three, the standing refusals and the transient one share one `RoleUnread::Refusal` and
+one recording site, and **the flag cannot separate them** (§4.3). So the branch keeps the split it
+measured rather than guessing which half the ruling means: standing refusals record as `failure`, and
+the undecided-type refusal is what the refactor will give a real error at `UNDECIDED_DOMAIN`.
+
+**What is measured next, and what each outcome means.** Reverting `compute.rs:1198` to `note` while
+the run gate reads `Module::has_extension_failures()` has one predicted consequence, and it is
+measured rather than argued:
+
+* if `crates/lichen-compute/tests/swallowed_refusal.rs` and
+  `crates/lichen-compute/tests/refusal_over_an_answer.rs` still pass, `1198` can be a note at no cost
+  and this branch simply leaves it so;
+* if they fail, that is the measurement that **`1198` and the gate are one decision**: the misplaced
+  write is a refusal *only* because the site records it as one, so with the site a note there is
+  nothing for the CLI or for a helper to refuse on. That would make "leave `1198` a note" cost two
+  pinned tests, and this note has to say so rather than leave the branch to find out.
+
 ## 5. Re-deriving the measurement
 
 The probe and the `#[track_caller]` recorder that produced §1–§3 were **not committed**: their

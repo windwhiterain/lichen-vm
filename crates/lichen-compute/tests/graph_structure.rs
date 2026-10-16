@@ -160,14 +160,14 @@ const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
 InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf _)}
+OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "cpu"
-InB  = struct{.b (compute.Buf _)}
-OutB = struct{.w (compute.Buf _)}
+InB  = struct{.b (compute.Buf Int)}
+OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
@@ -250,14 +250,14 @@ const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
 ---
 InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf _)}
+OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "cpu"
-InB  = struct{.b (compute.Buf _)}
-OutB = struct{.w (compute.Buf _)}
+InB  = struct{.b (compute.Buf Int)}
+OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 step = (s : ParB) => {
   out = (compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a 0))) : OutA)
@@ -368,18 +368,21 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
 
 /// A graph function that reads its parameter **back to front**, then runs —
 /// the only way to tell position from order.
+///
+/// The element classes are declared, not left to be discovered: an undecided
+/// one is a real error at the compiler's first read, not a "not yet".
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
 InA  = struct{.a Int}
-OutA = struct{.z (compute.Buf _)}
+OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "cpu"
-InB  = struct{.b (compute.Buf _)}
-OutB = struct{.w (compute.Buf _)}
+InB  = struct{.b (compute.Buf Int)}
+OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
