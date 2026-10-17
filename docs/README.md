@@ -15,6 +15,13 @@ documentation in exactly two places, on purpose:
 > is stated in exactly one place — the note, the spec, or the rustdoc. If you are
 > about to repeat a fact, *link to it* instead. A note's source of truth is the code;
 > read the note, then read the modules it names.
+>
+> **Rule: a dead path is named as dead.** A note may cite a path that no longer
+> exists only when the note itself says what became of it — a probe reverted after its
+> measurement, a module that moved, a deliberate "there is no such file" correction.
+> A missing path with no such sentence is a stale note; fix the path or the sentence.
+> A sweep of the notes found every missing path accounted for this way (removed
+> probes, the `whiting` repository's own crates, and one path correction).
 
 ## Read order
 
