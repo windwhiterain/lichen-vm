@@ -580,7 +580,13 @@ maps every span back to the original file.
   self-referential node on the universe's pattern, so its chain closes at
   `f`), so the arrow has no term of its own left to denote and the type of a
   function is one thing rather than two (see
-  [function-type-merge](notes/function-type-merge.md)); and
+  [function-type-merge](notes/function-type-merge.md)); a **recursive**
+  function's type therefore follows from its annotation: `gcd = (p => …) :
+  tuple{Int, Int} -> Int` decides the self-recursive result (`6: Int`), while
+  without the annotation the function's own cells stay open (`?a -> ?b`) and
+  every result derived from it is undecided (`?c`) — `examples/gcd.lichen`
+  states the constraint, and the fold form annotates the same way, `@loop run =
+  ((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`; and
   `array{Int, 3} : Type` *fails*
   (the array type's type is the kind `[ArrayType, Type]`).  There is no
   subtyping relation at all (`Int` is not `<: Type`); kinding is an ordinary

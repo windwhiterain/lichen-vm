@@ -107,6 +107,14 @@ the type is not.
   What follows for a solver: write it **unrolled** when the answer has to have a type (an example
   declares one), and **looped over an array state** when it does not. The type of a fold that
   contains a dispatch is a type-side question, not this family's.
+  **Answered: it is the recursion-annotation rule, not the dispatch.** A loop whose body contains
+  no dispatch at all prints the same shape — unannotated `@loop r = s => … r (s(0) - 1, 7)` gives
+  `r: ?a -> ?b` and `out: raw 7: ?c`, while `@loop r = ((s => …) : tuple{Int, Int} -> Int)` gives
+  `r: tuple{Int, Int} -> Int` and `out: Int` (measured on a toy loop, both with and without an
+  application in the body). A recursive function's type follows from its annotation
+  (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so the solver's
+  array-state loop becomes typed by annotating `run` with `tuple{Int, array{Float, 6}} ->
+  array{Float, 6}` — the dispatch is not what loses the type.
 - **Two dimensions is measured now, and it half-falsified what this note first said.** `compute.row`
   and `compute.col` work, with the **second** scalar leaf as the divisor for both coordinates, so
   `cols` goes second and the strides after it (`examples/matmul.lichen` states the rule for its own
