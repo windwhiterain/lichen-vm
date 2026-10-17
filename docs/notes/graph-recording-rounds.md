@@ -1,11 +1,13 @@
 # Graph recording and the re-drive: one graph is one walk
 
-> Status: **open, and this note is the handover.** The recording pass re-drives its own deep pass so a
-> structural read that stalled on a placeholder cannot keep the returned value unnameable. That fix works, and
-> it has one visible cost: the recording spans **every** round, so a graph now carries two rounds of one body's
-> dispathces and a producer's algebra name reads one role further than it should. The cause is measured; the
-> fix is not made. Whoever owns `lichen-compute` should decide the shape, because the change is to *which
-> dispatches a graph contains*, which is that crate's semantics, not this note's.
+> Status: **landed and accepted.** The recording pass re-drives its own deep pass so a structural read that
+> stalled on a placeholder cannot keep the returned value unnameable. That fix worked, and its one visible cost
+> was that the recording spanned **every** round. The compute owner landed the per-round reset — A′, `e659607e` —
+> and it is accepted: the suite's seventeen names are unchanged, the refusal text is untouched, and three of the
+> nine `graph_jit` controls moved, one of them from *never naming* its return to naming it on the third round,
+> which is the change being proved. `consumer_guard`'s extra role is **not** this defect and was re-attributed to
+> the test's kernel order. The sections below are the before readings, the after readings, the acceptance, and
+> both corrections.
 
 ## The symptom
 
