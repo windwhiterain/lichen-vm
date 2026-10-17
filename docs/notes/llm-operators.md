@@ -559,10 +559,12 @@ need a node-local producer for `r`.
   annotated step reads both argument buffers and answers `[11, 22, 33]` in `Int` and `[11.0, 22.0,
   33.0]` in `Float` (`two_buffers_annotated`, `two_buffers_float`). **The computed read address is not
   it either**: the same GEMV body with both reads at the lane index, `Int`/`Float` aside, refuses the
-  same way (`gemv_at_i`, run once and not yet a committed probe case). So every *body* difference is excluded, and what separates GEMV's probe from
-  every shape that runs is **how its parameter type is built**: the running shapes spell it with
-  `compute.P`/`compute.A`, GEMV's spells it as a plain struct — measured as a difference, not isolated as
-  the cause. The graph leg is still the only path that consults the fusion floor, and it now carries
+  same way (`gemv_at_i`, run once and not yet a committed probe case). **What separates GEMV's probe from
+  every shape that runs is the collect, not the body or the type**: the identical two-buffer program
+  *runs* when the graph run is collected directly — `compute.collect (compute.graphrun built (3, p, q))` —
+  and *refuses* when the same value is bound and its field collected (`out = (compute.graphrun built
+  (3, p, q) : Out2)` then `compute.collect out.w`). GEMV binds and collects a field, and every refusing
+  variant in this probe does the same; the spelling that works is to collect the graph run directly. The graph leg is still the only path that consults the fusion floor, and it now carries
   two-input steps whose returns are annotated.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
