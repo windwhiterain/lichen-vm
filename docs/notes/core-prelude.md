@@ -166,8 +166,17 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
 - **What the jump and the publish are verified against.** `Doc`'s unit tests hold
   the in-memory case; the integration test runs the real binary, so the file path
   the store materializes under the cache root is the one the server names and the
-  failure is published as a second `publishDiagnostics` for it. Not verified: a
-  client actually opening that URI (the server never opens documents itself).
+  failure is published as a second `publishDiagnostics` for it.
+- **A client opens the URI the jump names — verified.** The last gap was the
+  client's side: the server never opens documents itself. A probe built a `Doc`
+  with a persistent cache root, resolved `add`'s definition, took the server's own
+  conversion (`Url::from_file_path(&file.path)`, as `server.rs`'s goto-definition
+  does), then did what a client does — parsed the URI, turned it back into a path,
+  and read the file. Measured:
+  `recorded path = …\.probe-cache\builtin\core.lichen`; `server uri =
+  file:///…/builtin/core.lichen`; the client's path equals the recorded one and
+  `std::fs::read_to_string` answers **750 bytes containing `add = operands`**.
+  So the URI is openable and its file is the prelude source, not an empty stub.
 - **The built-in is compiled by every store and not device-cached.** It is a
   virtual module (`persist::virtual_file_id`), compiled fresh in memory like
   `compute`; its values are ordinary (functions and a set of type values), so
