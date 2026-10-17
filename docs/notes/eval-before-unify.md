@@ -380,11 +380,17 @@ the decided tier remains the kind unify it was; and the refusal is **added to**,
 not instead of, the runtime table messages, because the apply never fails its
 parameter check and so still runs the body it refuses. Re-measured on
 `dev@790f907f`: `f = x => x.a` ; `f [10, 20]` reports **five** diagnostics — two
-`this value is not a container`, two `table lookup missed` (the note's earlier
-reading counted one pair), and the condition's `expected a struct type, found
-array{Int, 2}` at the **definition's** read (`1:5`, not the call site) — while
-`f (S(.a 1))` answers `1: Int` and `t::a` over an array refuses at the call
-(`expected TypeStruct, found array{Int, 2}`, `3:3`). `X::a` was already
+`this value is not a container`, two `table lookup missed`, and the condition's
+`expected a struct type, found array{Int, 2}` at the **definition's** read (`1:5`,
+not the call site) — while `f (S(.a 1))` answers `1: Int` and `t::a` over an array
+refuses at the call (`expected TypeStruct, found array{Int, 2}`, `3:3`). The two
+runtime pairs are **not** one record duplicated: a probe on the eval errors names
+different blamed nodes for the two evaluations — `IndexTarget { target: 84 }` and
+`TableMiss { table: 80, key: 88 }` against `IndexTarget { target: 109 }` and
+`TableMiss { table: 105, key: 113 }`, the definition's evaluation and the apply
+clone's — and the report dedups by kind and blamed node, so both survive by
+design. Neither blamed node carries a source position, which is why all four
+render unattributed. `X::a` was already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
 
