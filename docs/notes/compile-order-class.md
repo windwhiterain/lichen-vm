@@ -269,7 +269,8 @@ Both sentences of the `RoleUnread` invariant (`compute.rs:1897-1902`), verbatim:
 > a refusal into a "not yet".
 
 In that vocabulary `BACK_TO_FRONT` is **`Refusal`**: the annotation is not a cell with no value, and
-§8's ruling 2 says the deciding normalize is the *run-time* one. The second sentence is the sharp
+§8's ruling 2 places the decision at run time, on the apply's unify rather than a normalize of the
+callee ([function-normalization](function-normalization.md) §2). The second sentence is the sharp
 part — a caller must not promote this to `Undecided` by matching on its text, which rules out the
 cheap fix by construction.
 
@@ -481,8 +482,10 @@ measurement under each is what the ruling has already been tested against.
    进一步的 unify。"** A class that is *determinable* is meant to be decided by checking or by a normalize;
    a later phase reads it rather than creating it.
 2. **"检查期间只能 normalize 已经存在的函数，apply clone 出来的函数的 normalize 只能在运行期。"** For a
-   kernel reached as an apply clone the deciding write is therefore a **run-time** normalize — which is what
-   §3 measured: the same field reads `None` when the fragment is recorded and `Float` later in the run.
+   kernel reached as an apply clone the deciding write is therefore the apply's **runtime unify**, not a
+   normalize of the callee — a callee is not re-born per apply, so there is no new function to normalize
+   ([function-normalization](function-normalization.md) §2) — which is what §3 measured: the same field
+   reads `None` when the fragment is recorded and `Float` later in the run.
 3. **A graph step recorded while the parameter reads `Undecided` must report it** — "报错" — never silently
    keep the flat tuple and the ABI's `Int` default. Measured, this is the *record* path's job alone: refusing
    inside `walk_role` instead fixes the four pinned assertions and **breaks four targets and 38 tests**
@@ -500,7 +503,9 @@ measurement under each is what the ruling has already been tested against.
 **What ruling 6 does not licence here, measured.** Carrying more does not reach this cell: with the static
 carry relaxed to `operation.is_none() || value.is_some()`, both pinned assertions still read `[Int]`,
 because the frozen template's own node answers `ctx.module.read(local) == None` — there is nothing on the
-template side to carry. The class is written later, by the clone's own run-time normalize (ruling 2), so the
-gap is the **order in which the recording reads it** — which is what rulings 1 and 6 together demand be
-fixed at that read rather than by materializing more.
+template side to carry. The class is written later, by the apply's runtime unify (the callee is not
+re-born per apply; ruling 2 is about a function's own birth —
+[function-normalization](function-normalization.md) §2 and §3), so the gap is the **order in which the
+recording reads it** — which is what rulings 1 and 6 together demand be fixed at that read rather than by
+materializing more.
 

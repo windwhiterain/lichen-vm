@@ -48,6 +48,7 @@ authority, and this table only names the state.
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | current |
 | [A call's clones belong to the enclosing template](notes/apply-clone-ownership.md) | `lichen-lowlevel` (`function`/`static_module`) | current |
+| [Normalization is a function's birth, not an application](notes/function-normalization.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`static_module`) | current — the concept, the contract, and the apply-time conflation it corrects |
 | [A class carries the call, not only the fact](notes/class-carries-the-call.md) | `lichen-lowlevel` (`equality`), `lichen-compute` | current — measured: a declared type's class holds this call's cells too, so sharing a fact by merging classes shares them as well |
 | [Non-termination is the program's own](notes/nontermination-is-the-programs.md) | `lichen-highlevel` (`checker`), `lichen-lowlevel` (`apply`) | current — the ruling, and what was measured before it |
 | [A colliding answer is a unify error](notes/answer-collision.md) | `lichen-lowlevel` (`equality`, `write_node_answer`), `lichen-compute` | current — the ruling, the chain measured behind thirteen compute failures, and the three diagnostic fixes (span, the carried values, and a message that names the collision and its two values when both cells are open) |
