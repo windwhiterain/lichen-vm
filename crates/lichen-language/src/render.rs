@@ -250,9 +250,18 @@ where
                 None => container_spelling(printer, d),
             };
             let base = format!("no field with this name in the struct type {container}");
-            // A value container carries no type term, so the clause needs the readable case.
+            // A value container carries no type term, so its table supplies the clause.
             let Some(fields) = fields else {
-                return base;
+                let names = kind_name_table(printer.module(), d.b)
+                    .and_then(|table| table_names(printer.module(), table));
+                let clause = match (d.field.as_deref(), names) {
+                    (Some(name), Some(names)) => crate::suggest::did_you_mean(name, names),
+                    _ => None,
+                };
+                return match clause {
+                    Some(clause) => format!("{base}{clause}"),
+                    None => base,
+                };
             };
             with_field_suggestion(d, base, fields)
         }
@@ -437,6 +446,43 @@ where
         Some(clause) => format!("{base}{clause}"),
         None => base,
     }
+}
+
+/// The struct type's name table, read from the kind path (`kind[0][0][1]`).
+fn kind_name_table<P: HighProgram>(module: &Module<P>, kind: NodeId) -> Option<AnyNodeId>
+where
+    P::Value: ValueType,
+{
+    let at = |node: AnyNodeId, index: usize| -> Option<AnyNodeId> {
+        // SAFETY: live module payloads, read only; no block is released here.
+        unsafe { module.array_items_of(node) }
+            .and_then(|items| items.get(index))
+            .map(|item| item.node)
+    };
+    let marker = at(AnyNodeId::Dynamic(kind), 0)?;
+    let payload = at(marker, 0)?;
+    at(payload, 1)
+}
+
+/// The names in a struct type's name table, in the table's own order.
+fn table_names<P: HighProgram>(module: &Module<P>, table: AnyNodeId) -> Option<Vec<&'static str>>
+where
+    P::Value: ValueType,
+{
+    let LowValue::Table(table) = module.node_value(table)?.as_enum()? else {
+        return None;
+    };
+    // SAFETY: the table is a live module payload, read only; no block is released here.
+    let items = unsafe { table.items() };
+    Some(
+        items
+            .iter()
+            .filter_map(|item| match module.node_value(item.key)?.as_enum()? {
+                LowValue::Str(name) => Some(name),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// A refused named read's container: the type printer, or a struct type value's value print.

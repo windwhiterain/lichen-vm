@@ -145,9 +145,11 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   message then needed the renderer fallback: a struct type **value** has no `[shape, kind]` term for
   the type printer, so the arm prints the container through the value printer with the recorded
   container type (`Diag::b`), yielding `no field with this name in the struct type
-  struct{.a Int, .sub Int}` at `2:1`. No did-you-mean: the suggestion helper needs the type term the
-  value does not have. The suites hold at their baselines (highlevel 140/0, language 265/11, compute
-  219/2/2, language-server 21/1).
+  struct{.a Int, .sub Int}` at `2:1`. The did-you-mean clause does not need the type term after
+  all: the arm reads the runtime's own name table off the kind path (`kind[0][0][1]`) and suggests
+  from its entries — `S::sux` is `…, did you mean 'sub'?`, while a name far from every field
+  (`S::aaaa`) gets no clause. The suites hold at their baselines (highlevel 140/0, language 265/11,
+  compute 221/2/2, language-server 21/1).
 
 * **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
   with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —
