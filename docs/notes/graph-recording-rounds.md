@@ -452,7 +452,7 @@ Err(RoleUnread::Undecided) => {}
   It then falls back to the flat tuple — the older `cfg = (n, (buffers…))` shape — so **the role walk never
   runs**, `role_refusal` never speaks, and the program is accepted.
 
-**3. The fix is two halves, and they are bound.** The recording path is a **commit**: once the graph exists it
+**3. (Superseded by the measurement below.) The fix is two halves, and they are bound.** The recording path is a **commit**: once the graph exists it
 stores the roles, so "record now, decide later" has nothing to mean — a recording *is* the collection. That is
 why the fix is to say "cannot record", not to wait: `:5092` must record a **new** refusal sentence — *this
 parameter's type is undecided when the graph is built, so the graph cannot record its roles* — because reusing
@@ -467,3 +467,33 @@ still red — so both halves land together or neither does.**
 
 **What this is not**: a lost rule, or a stale test with a live rule behind it. The rule is intact; its
 precondition is undecided at the one point where the recording cannot wait for it.
+
+### Measured, and the fix settled: the fallback is design, the silence is not
+
+A temporary probe (env-gated, reverted, nothing committed) printed at the recording path's role match whether it
+saw `Ok` or `Undecided`, and for `Ok` how many input roles the table held. The readings, on `dev@c9ba66ac`:
+
+- the capture test's program: **`Ok roles=0 inputs=0`** — `parallel_roles` **succeeds** with an empty role table,
+  so `walk_role` never refuses and `:5092`'s `Undecided` branch is not even reached;
+- the whole suite: **144 `Ok`, 4 `Undecided`**; of the `Ok` ones, **133 carry at least one input role**
+  (`roles=1` 108, `roles=2` 23, `roles=3` 2) and **11 have `roles=0`**;
+- the four `Undecided` readings are `type_slot_value=true struct_fields=None` — a readable type slot the decoder
+  still cannot read, which is a second, separate decoding failure;
+- **`roles=0` is legitimate for some programs**: three were attributed by order (`--test-threads=1`; the method is
+  noisy and the other eight are not attributed), and two of the three are **passing tests that record and run
+  normally** (`a_graph_recorded_for_one_backend_runs_on_another`, `a_graph_runs_at_whichever_extent_its_argument_names`).
+
+So the rule was never lost, the test is not stale, and the parameter type is not "normally undecided" — most
+programs decode roles. What the capture program does is decode to **zero roles**, after which nothing is said.
+
+**The fix the compute owner settled on: a conjunction diagnostic, keeping the fallback.** Alarm on `roles=0`
+alone would shout about the eleven, at least two of which are legitimate. The discriminator has to use what the
+recording side can see and the decoder cannot: the legitimate zero-role programs report **`inputs=0`** — they
+never read a buffer — while the capture program reads a live buffer from outside the body. So the diagnostic
+fires when **the decoded names hold neither `in` nor `out`** *and* **this round's recording contains at least one
+dispatch that read an input buffer**. The fallback stays; the silence goes.
+
+**What this supersedes:** the earlier reading that `:5092`'s empty branch must record a new refusal, and the
+claim that the fix is bound in two halves. The empty branch may stay as it is; the fix is the conjunction, and
+the only remaining change is a test that asserts the new sentence — a **test change, still awaiting the owner's
+sign-off**.
