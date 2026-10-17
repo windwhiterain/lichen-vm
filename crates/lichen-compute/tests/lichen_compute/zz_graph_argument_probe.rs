@@ -191,9 +191,7 @@ Par  = struct{.n Int, .in InG, .out OutG}
 ArgK = struct{.n Int, .I InG}
 f = (k : Par) => {
   i = compute.range k.n
-  y = (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 0))) * compute.read ((compute.Read _)(.from k.in.x, .at 0)))
-    + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 1))) * compute.read ((compute.Read _)(.from k.in.x, .at 1)))
-    + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 2))) * compute.read ((compute.Read _)(.from k.in.x, .at 2)))
+  y = (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 0))) * compute.read ((compute.Read _)(.from k.in.x, .at 0))) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 1))) * compute.read ((compute.Read _)(.from k.in.x, .at 1))) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 2))) * compute.read ((compute.Read _)(.from k.in.x, .at 2)))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value y))
 }
 kg = compute.parallel f "gpu"
@@ -238,9 +236,7 @@ f2 = (k : Par2) => {
 }
 k2 = compute.parallel f2 "gpu"
 GArg = struct{.n Int, .in In2}
-step = (s : GArg) => {
-  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b, .c s.in.c))) : Out2
-}
+step = (s : GArg) => (compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b, .c s.in.c))) : Out2)
 built = compute.graph step
 p = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 q = (compute.buffer ([10.0, 20.0, 30.0] : array{Float, 3}) : (compute.Buf Float))
@@ -277,3 +273,4 @@ fn probe_graph_argument_buffer() {
         }
     }
 }
+
