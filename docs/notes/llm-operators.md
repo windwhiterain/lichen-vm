@@ -563,6 +563,26 @@ need a node-local producer for `r`.
   annotation will collide rather than run — the re-drive is deliberate and the collision is its
   consequence, not a bug to be found in the body.
 
+  **Two failures are left, and neither is the annotation.** Measured on `dev@8b3cbfa9`, the suite is
+  `219 passed / 2 failed / 2 ignored`:
+  - `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` compares the stub backend's log
+    for a plain run of the step against the same step recorded by `compute.graph`. Its two readings are
+    now `left = ["over [0, 3) with 0 input(s) of length 0", "over [0, 3) with 1 input(s) of length 3"]`
+    and `right = []`: **the graph dispatches twice and the plain run dispatches not at all**. Annotating
+    the step's last `plrun` (which the re-drive otherwise doubles) halves the graph's trace from four
+    lines to those two and does not fix the assertion, so the open question is the *plain* leg — a
+    program whose answer is never collected performs no dispatch, and whether that is the intended
+    laziness or a lost forcing is **not diagnosed**. The test's own premise (`plain.len() == 2`) says
+    the author measured two, so something changed on the forcing path and not in the graph.
+  - `graph_structure::a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`
+    refuses to check at all: *"compute.parallel: no output of this parallel index function carries a
+    decided scalar class: its codomain names 1 output(s) and none of them is a `compute.write` of a
+    decided scalar … An undecided class is not an `Int` (`docs/notes/compile-order-class.md` §3)"* at
+    `span: Some((14, 30))`. That is the compile-order class report the type system's owner landed, so
+    the program is spelling a `compute.Buf _` whose element class nothing decides — **the report is
+    right and the test's program is the lenient spelling**, but whether the fix is a decided class in
+    the program or a normalize on the classing path is the owner's call and is not made here.
+
   **What is still open is GEMV's own program**, and it is not the collision: it refuses at stage `Check`
   with the collect's *"empty value of a failed read"* (span `None`) and *"this value is not a container"*
   at the `collect` line, and it does the same with `x` padded to the count — so neither the short input
