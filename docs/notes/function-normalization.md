@@ -123,6 +123,19 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    wildcard is therefore produced in the `Index`/array-literal typing of that
    shape, which is where the next probe should print the read's type node and who
    writes `Any` into it.
+   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
+   `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ;
+   `(f (0, S(.y 3))).y` answers `raw none: ?a`, and so does the identity fold
+   `… then s(1) else f (s(0) - 1, s(1))` over an `S`-typed state. The control is a
+   **tuple-of-Ints** state with the same shape, which answers its value (`raw 7: ?a`):
+   the loss needs the base branch to be a **parameter-derived read** whose type is a
+   struct. The typing path is `check_tuple_term` (`tuples.rs`), which builds one
+   element slot per position and **unifies no element type**, so `[else, then]` is a
+   heterogeneous tuple type and the `if`'s type is a runtime-indexed read of either
+   branch's type; with both branches open, that read stays open. Which exact node
+   the loop then binds (the wildcard clone observed at `Iteration::Exit`) is the
+   remaining question for the owner, and the repro above is the whole test surface
+   it needs.
    The collect's own type stays `?a` in all three annotated variants — a separate,
    cosmetic open cell.
 2. **Once, at birth.** A function is normalized exactly once, at its first
