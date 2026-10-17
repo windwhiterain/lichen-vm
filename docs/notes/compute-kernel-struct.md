@@ -170,6 +170,15 @@ checking. The fix is therefore the result-type bind reaching the cells the check
 apply's `c` — the same class-value propagation family as
 [compile-order-class](compile-order-class.md), not the launch operator table.
 
+**The fill itself is not missing, which narrows the family.** `Module::write_node_value` already
+redistributes a written value to every class member (`propagate_class_value`,
+`crates/lichen-lowlevel/src/equality.rs`), and the apply's result bind goes through it. So the empty
+`.O` is not a slot written without its class: the cell the value holds and the cell the run writes
+are **different nodes in different classes** — the per-call clone boundary
+([apply-clone-ownership](apply-clone-ownership.md) §1). The next measurement is whether the run's
+write lands in a class whose members include the value's check-time cells, which is what would tell
+the clone rule from the bind.
+
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
 over both statements and is red for this reason alone — it is the witness, not a stale assertion.
