@@ -246,3 +246,36 @@ Four steps, in this order. Nothing here needs a decision, so the comparison cann
 
 The probe is reverted before any commit, in both directions: before the change, the table above is the record;
 after it, the compared lines are the record.
+## The before readings, taken on `a4593102`
+
+Requested before the change so the comparison is one run rather than two derivations. Each test was run alone
+with the probe; the readings reproduce the table above line for line, which is itself a check that nothing moved
+between then and now.
+
+```text
+a_buffer_the_body_closed_over_is_refused_by_the_capture          r1 false/0 | r2 true/2
+a_count_the_body_closed_over_is_refused_by_the_count_filter…     r1 false/0 | r2 false/2 | r3 false/2 | r4 false/2
+a_function_that_dispatches_nothing_has_no_backend_to_run_on      r1 true/0   (no re-drive)
+a_graph_dispatches_exactly_what_the_program_dispatches           r1 false/0 | r2 true/2
+a_graph_recorded_for_one_backend_runs_on_another                 twice: r1 false/0 | r2 true/2
+a_graph_runs_at_whichever_extent_its_argument_names              twice: r1 false/0 | r2 true/2
+a_recording_produces_the_same_numbers_as_running_the_dispatches  r1 false/0 | r2 true/2
+one_backend_for_the_whole_graph_is_checked_while_it_is_built      r1 false/0 | r2 false/1 | r3 false/1 | r4 false/1
+what_a_recorded_body_may_not_reach_for_is_refused_by_name        three recordings: false/1 x3, false/1 x3, false/0 x4
+```
+
+The failure-name set is the one measured on the same commit: `lichen-compute` **201 passed / 17 failed /
+2 ignored**, and of the nine programs above only two are among the seventeen —
+`a_buffer_the_body_closed_over_is_refused_by_the_capture` and
+`a_graph_dispatches_exactly_what_the_program_dispatches`. The other seven pass, which is the point the two-way
+clause makes: their refusal is expected and an unnamed return is it working.
+
+The six `(literal, messages containing it)` pairs are read from the source as the acceptance requires; the
+per-message occurrence counts are the source's own, since a passing assertion cannot be observed from outside
+without a probe. What the passing test establishes is presence in every message it checks.
+
+**One caution about the raw run**: the script that took these readings printed every program as `FAILED`, which
+is wrong — its per-test verdict parsing was broken (the suite reports 7 passed / 2 failed for the same nine
+programs). The `nodes` columns are unaffected, because they come from the probe's own lines; the verdicts are to
+be taken from the suite, never from that script. Recorded here because a wrong verdict column in a baseline is
+exactly the kind of thing a later reader would copy.
