@@ -54,6 +54,7 @@ mod zz_examples_panic_probe;
 mod zz_gc_panic_probe;
 
 mod zz_append_slot_probe;
+mod zz_conv2d_probe;
 mod zz_dispatch_timing_probe;
 mod zz_filter_probe;
 mod zz_fold_buffer_probe;
