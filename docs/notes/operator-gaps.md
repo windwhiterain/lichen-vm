@@ -12,8 +12,10 @@ three are an unannotated recursion's own cells and row one is the kernel templat
 look adjacent from the outside and are not.
 
 At `dev@1713ed00` the whole inventory was read in **one run** (six probes, `6 passed`), so that tip is
-the baseline every later check compares against. The next time something does move, the commit that
-moved it belongs in the entry.
+the baseline every later check compares against; at `dev@f1bce423` the same run answered the same six
+readings, and the commit below that tip is about pipeline recordings (`1 / 0`, `float2int` of a `NaN`),
+which is a different mechanism from an unannotated recursion's cells. The next time something does
+move, the commit that moved it belongs in the entry.
 
 ## Gaps: not expressible, or broken
 
@@ -21,8 +23,7 @@ moved it belongs in the entry.
 |---|---|---|---|
 | **an `if` inside a fold body** | `zz_masked_conv_probe.rs`: refused, with a read in the arm *and* with a bare `0.0`/`1.0` — `a kernel body reached a node with neither a value nor an operation` | a masked window computed inside a reduction; the alternatives are a caller's border or a clamp | compute kernel templates (`lichen-compute-gpu`, the fold's template lowering) |
 | **unannotated recursion loses the type** | `zz_fold_type_probe.rs`: `raw[…]: ?a` | a loop's answer has no type, so nothing downstream can use it | the type system (`f : f`, `language-spec` §3) |
-| **unannotated recursion loses the value**, with a struct state | `zz_fold_struct_probe.rs`: `raw none`, **no diagnostic**, still at `dev@4b60622f` | a fold carrying the kernel's output struct; the buffer state is the way around it | the type system (`function-normalization.md` §1) |
-| **`(Out)(.y x)` is not a usable seed** | `zz_operator_floor_probe.rs` and the state probes: a value nothing can read | seeding a fold by hand instead of from a real kernel result | the type system |
+| **unannotated recursion loses the value**, with a struct state | `zz_fold_struct_probe.rs`: `raw none` — a run that answers, so the probe prints the value and no diagnostics either way; the silence is the type system's own reading (`function-normalization.md` §1). A struct seed built by hand, `(Out)(.y x)`, is therefore a value nothing can read | a fold carrying the kernel's output struct; the buffer state is the way around it | the type system (`function-normalization.md` §1) |
 | **a boundary the caller chooses at run time** | not expressible: the condition would have to be data | a boundary that is an argument rather than a leaf or a buffer | the language (control flow on a datum) |
 | **the fusion floor refuses every single operator** | `zz_operator_floor_probe.rs`: `NotClaimed` without a claim; with one, `RegionIsNotAPair` **and** `BeyondANode`, whose sentence says the `element` role reads another node's output while it reads a parameter | fusing any operator this line writes, however it is spelled | fusion / the floor's model (`llm-operators.md`, `physics-operators.md`) |
 
