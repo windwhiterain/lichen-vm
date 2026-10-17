@@ -854,14 +854,11 @@ fn a_recursive_binding_inside_a_block_recurses() {
 
 #[test]
 fn a_blockwide_binding_need_not_be_a_lambda() {
-    // A block-wide binding may be any value, so `a = a` resolves `a` to
-    // itself rather than to a "must be a lambda" error.
-    let report = compile("a = a; a");
-    assert!(
-        report.ok(),
-        "expected no diagnostic: {:?}",
-        report.diagnostics
-    );
+    // A block-wide binding may be any value: `a = 5` binds a non-lambda, and
+    // nothing about the spelling asks for one.
+    assert_eq!(usize_of(&evaluate("a = 5; a")), 5);
+    // `a = a` is refused for naming itself, not for being a non-lambda.
+    assert_self_reference_is_refused("a = a; a");
 }
 
 // --- block-wide visibility --------------------------------------------------
@@ -919,58 +916,42 @@ fn a_let_binding_is_visible_only_to_later_statements() {
 }
 
 #[test]
-fn a_self_referential_array_checks_without_overflow() {
-    // A non-lambda self-reference: the checker cuts the cycle with a
-    // skeleton pair, and the knot is benign.
-    let report = compile("a = [a]; a");
-    // It may report a diagnostic, but must never panic: the checker's
-    // cycle cut totalizes the IR term.
-    if let Some(s) = report.diagnostics.first() {
-        assert_eq!(s.stage, Stage::Resolve, "{s:?}");
-    }
+fn a_self_referential_array_is_refused() {
+    // `a = [a]` is a block-wide binding whose value names it: a self-reference.
+    assert_self_reference_is_refused("a = [a]; a");
 }
 
 #[test]
-fn a_self_nested_struct_checks_without_overflow() {
-    // The checker cuts the type-level cycle: a struct is a nominal type, not a
-    // value, so its nominal id is allocated once.
-    let report = compile("s = struct{.f s}; s");
-    if let Some(s) = report.diagnostics.first() {
-        assert_eq!(s.stage, Stage::Resolve, "{s:?}");
-    }
+fn a_self_nested_struct_is_refused() {
+    // A direct name is a self-reference; the mutual form is what the checker
+    // cuts, in `cyclic_type_cut.rs`.
+    assert_self_reference_is_refused("s = struct{.f s}; s");
 }
 
 #[test]
-fn a_self_referential_field_read_checks_without_overflow() {
-    // The frontend transplants the value's kind into the binding's
-    // placeholder, so a block root may be any expression kind.
-
-    // The checker's cycle cut gates on block-root membership alone.
+fn a_self_referential_field_read_is_refused() {
+    // The same rule by every spelling a name can take inside a value.
     for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a", "a = a::x; a"] {
-        let (mut module, root) = run(source);
-        assert!(
-            module.evaluate_node_deep(root, None).is_none(),
-            "{source:?} must stay undecided like the control"
-        );
+        assert_self_reference_is_refused(source);
     }
 }
 
 #[test]
-fn a_self_referential_record_checks_without_overflow() {
-    // A self-reference through a record block — the fourth kind the old skeleton
-    // gate missed.
+fn a_self_referential_record_is_refused() {
+    // A record block's named non-`let` field is a block-wide binding, so this
+    // is the fourth spelling of the same rule.
+    assert_self_reference_is_refused("a = {x = a}; a");
+}
 
-    // The record value is concrete, so the deep evaluation terminates on
-    // the runtime cycle guard.
-    let (mut module, root) = run("a = {x = a}; a");
-    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
-    assert_eq!(ids.len(), 1, "the record carries its one field");
+/// The resolver refuses `source` for naming the binding it binds, at the name.
+fn assert_self_reference_is_refused(source: &str) {
+    let d = diags(source);
+    assert_eq!(d[0].stage, Stage::Resolve, "{source:?}: {d:?}");
     assert!(
-        matches!(
-            module.node_value(AnyNodeId::Dynamic(ids[0])),
-            Some(LangValue::LowValue(LowValue::Array(_)))
-        ),
-        "the field is the record itself (the evaluated knot)"
+        d[0].message
+            .contains("may not reference the binding it binds"),
+        "{source:?}: the head must name the rule, got {:?}",
+        d[0].message
     );
 }
 
