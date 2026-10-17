@@ -2604,6 +2604,14 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     iterations). The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` the unrolled form \
     gives, and the total is still `8` at every step, which is what makes three steps checkable by \
     hand rather than by comparing two runs.\n\n\
+    **A periodic grid, stepped twice, is where the two dimensions and the loop agree.** The fifth \
+    chain wraps all four taps — `rows = c.n / c.cols`, then `above`/`below` select the last and \
+    first rows and `left`/`right` the last and first columns — and feeds the result back through a \
+    loop of one, so the answer is two steps of a 3×3 torus. With the four wraps in place every \
+    element contributes to exactly two taps, so **the total cannot move**: the plane sums to `8`, \
+    the wrapped step sums to `8`, and so does the looped one. That is the contrast the fourth and \
+    fifth chains are for, and it is a reading rather than an argument — the Dirichlet grid's step \
+    sums to `5`, having lost three through its four zero edges, while the torus holds at `8`.\n\n\
     **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
     has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
@@ -2612,7 +2620,7 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
     on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
     leave the answer untouched."
-  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}, array{Float, 6}}"
+  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}, array{Float, 6}, array{Float, 9}}"
 ---
 XIn  = struct{.x (compute.Buf Float)}
 XOut = struct{.y (compute.Buf Float)}
@@ -2658,7 +2666,24 @@ looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 seed = (compute.collect looped.y : array{Float, 6})
 @loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, 6}))) : tuple{Int, array{Float, 6}} -> array{Float, 6})
 solved = march (2, seed)
-(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6}, solved)
+torus_raw = (c : GPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  rows = (c.n / c.cols)
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  above = if row == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at ((rows - 1) * c.cols + col)))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col))))
+  below = if row == (rows - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at col))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))))
+  left = if col == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (i + c.cols - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if col == (c.cols - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at (i - c.cols + 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+}
+torus = compute.parallel torus_raw "cpu"
+wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
+seed2 = (compute.collect wrapped.y : array{Float, 9})
+@loop march2 = ((s => if s(0) == 0 then s(1) else march2 (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
+solved2 = march2 (1, seed2)
+(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6}, solved, solved2)
 ```
 
 <!-- end: examples -->

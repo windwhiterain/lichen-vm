@@ -131,6 +131,11 @@ the type is not.
   cites from `attention.lichen`'s `scores` was about arms computed in *different* classes — so the
   horizontal boundary costs one `Select` per direction and nothing else. Measured: `agrees, 15 of 15
   element(s)` on the RTX 3060, both chains together, so the mask is right on the device too.
+  **A torus wraps all four taps** — `rows = c.n / c.cols`, `above`/`below` selecting the last and
+  first rows and `left`/`right` the last and first columns — and then every element contributes to
+  exactly two taps, so **the total cannot move**: the plane sums to `8` and so do two wrapped steps,
+  against the Dirichlet grid's step which sums to `5`. That is the fifth chain in
+  `examples/stencil.lichen`, looped once, measured `agrees, 36 of 36 element(s)` with the other four.
 - **A periodic boundary is measured, and it changes the answer in one place.** A `Float`-armed
   `Select` is accepted, so the ring is the wrap done on purpose:
   `if i == 0 then read (n - 1) else read (i - 1)` and the mirror at `n - 1`. On the **same**
