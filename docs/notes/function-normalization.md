@@ -106,9 +106,16 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    read still points at the template's parameter cell. **The candidate tried and
    measured — make the walk enter the type half too** (`node_apply(pair_type_half(return))`
    right after the return pair): the fold still reads `raw none`, so the type half
-   was already referenced in place or the operand chain breaks elsewhere. The next
-   step is a probe at `loop_iteration`'s `Iteration::Exit` printing whether
-   `node_of(type_half)` is a clone and what its operand chain evaluates to.
+   was already referenced in place or the operand chain breaks elsewhere.
+   **The probe answer: the return type is a wildcard.** At `Iteration::Exit`,
+   `node_of(type_half)` *is* a fresh clone (`origin` = the template node), but the
+   clone has **no operation and no value** — the clone walk mints a blank cell for a
+   `LowValue::Any` node (its own rule: "each reach mints its own undecided cell"),
+   so the exit's `unify(cell, r#type)` merges the result cell with a blank. The
+   un-annotated recursive body's **tail type is a wildcard hole** nothing fills, and
+   the annotation is what turns it into a real type — so the fix belongs to the
+   checker's body typing (the `if`-join of the two branches must not leave a
+   wildcard when one branch is the recursion), not to the loop's bind.
    The collect's own type stays `?a` in all three annotated variants — a separate,
    cosmetic open cell.
 2. **Once, at birth.** A function is normalized exactly once, at its first
