@@ -261,6 +261,9 @@ where
         // checked below, the clone resetting its own cells.
         let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
+        // A runtime failure naming the argument resolves to it (`compute-graph-jit.md`).
+        self.node_edges
+            .insert(argument_value, self.loc(argument, 0));
         let argument_type = self.state[argument].ty.unwrap();
         let argument_pair = match &param_persp {
             Some((marker, _)) => {

@@ -715,10 +715,15 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   this note implied more: **no unannotated step completes a recording** — the fallback's
   placeholder is a bare `GraphInput` rather than a `Buf`, so a dispatch that reads a buffer
   refuses it — what it buys is that the recording is entered and the fallback's own wording is
-  what such a step hears. **Still open: no source span.** The refusal names the step's function
-  node, and a lambda's value node has no `node_edges` entry, so `node_loc` answers `None` and
-  the error is unattributed; giving it one means `check_app` inserting an edge for the
-  argument's value node, which would re-attribute every runtime diagnostic naming an argument.
+  what such a step hears. **Still open: no source span — only the recording half.** The
+  refusal files its record with `node: None` (`ExtensionDiagnostic::failure(category, None,
+  reason)`), so `node_loc` answers `None` and the error is unattributed. The checker half has
+  landed: `check_app` now attributes each application argument's value node, so the step
+  function's value node — a lambda's — has a `node_edges` entry and would resolve to the
+  argument's source position. What remains is the recording site passing that node instead of
+  `None`; the re-attribution this note predicted (every runtime diagnostic naming an argument)
+  is measured and harmless — the highlevel, language, compute and language-server suites hold
+  their baselines.
 
 ## Landmines, each of which is a silent wrong answer
 
