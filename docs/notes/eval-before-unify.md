@@ -197,15 +197,14 @@ with no annotation and no statement order:
 
 | read | concrete container | deferred container (a parameter) |
 |---|---|---|
-| `l.a` on an array | `error: expected TypeStruct, found TypeArray` | before: two runtime diagnostics about tables; **now** those two *plus* `error: expected a struct type, found array{Int, 2}`, the read's registered condition firing at the apply (§5.2) |
+| `l.a` on an array | `error: expected TypeStruct, found TypeArray` | now: the read fails at its own site — `this value is not a container — it has no element to read` — because the undecided tier carries no requirement (§6.2, the author's ruling); the assert tier is gone |
 | `l::a` on an array | `error: expected TypeStruct, found array{Int, 2}` | before: **a panic** — `unreachable!("TableGet target must be a table")`; **now**: refused at the apply, `expected TypeStruct, found array{Int, 2}` (the struct-kind unify) |
 | `l.a` / `l::a` on a tuple | `expected TypeStruct, found TypeTuple` / `found tuple{Int, Int}` | — |
 
-Only `.a`'s **decided** tier is judged where it stands; its undecided tier
-registers the requirement as a condition and re-checks it per apply (§5.2), which
-is why the deferred array now carries a message about the read as well as the two
-about tables — the table messages stay, because the apply's parameter check still
-passes and the body the condition refuses still runs. `X::a` states its
+Only `.a`'s **decided** tier is judged where it stands; its undecided tier carries
+**nothing** — the apply's own parameter unify binds the container and the read
+evaluates on that result (§6.2, the author's ruling) — which is why a wrong-kind
+argument now fails once, at the read the body built. `X::a` states its
 requirement as a unify in both tiers, and its deferred half is refused by the
 apply that binds the container, which is what closed the panic. The paren read's
 hole was *silent* (a wrong program accepted and evaluated); the named reads' were
@@ -466,7 +465,7 @@ fixed by the commit reaching the class (§5.1) rather than by asking later.
   alternative was purely additive (keep the disjunction, register the condition),
   and it is what the named reads still need, §6.2.
 
-### 6.2 The fix direction (the paren read and the named read landed; the pin stays rejected)
+### 6.2 The fix direction (the paren read landed; the named read's tier is the author's ruling at the end of this section; the pin stays rejected)
 
 The gap is that the paren read could not simply copy the bracket read's pin: a pin
 is a unify against **one** concrete kind, and `a(k)` accepted a *disjunction* — a
@@ -475,8 +474,9 @@ struct, not array": whatever flows in binds the cell, `ArrayType` included. The
 options, in the order the analysis ranked them (the ranking is **reasoned from the
 encoding**, not measured — only §2.4's two rows are measurements):
 
-1. **Re-checkable assert (landed for `a.name`; see §5.2).** Keep skipping the
-   static guard when the container is undecided, and register the condition on the
+1. **Re-checkable assert (landed for `a.name`, then withdrawn by the ruling — see the
+   end of this section).** Keep skipping the static guard when the container is
+   undecided, and register the condition on the
    assert worklist exactly like `InDomain` and the bounds assert: a
    `TypeOperator` over the container type answering `USize(0/1)` for "a struct
    type" — the predicate to wrap is `shape::is_struct_type_any` — plus an
@@ -519,8 +519,9 @@ route**, because the undecided tier's term-shaped pin binds the container's own
 **type** cell, so a consumer that reads a type structurally through the class —
 `lichen-compute`, which forces a template's parameter type before any apply —
 reads the pin's open cells instead of deferring through the class, and the compute
-suite collapses. What it needs is option 1's **re-checkable assert**, which is
-what has since landed for `.a`. Whoever needs the pin's earlier refusal can lift
+suite collapses. What it needs is option 1's **re-checkable assert**, which was the
+route landed for `.a` and later **withdrawn** by the author's ruling (the end of
+this section). Whoever needs the pin's earlier refusal can lift
 its refusals, its diagnostic fix and its docs, and must **re-measure** the compute
 suite rather than trusting any number here.
 
@@ -535,9 +536,16 @@ a derived read the checker allocates outside it. A pinned read holds a decided
 array and is never re-evaluated, and suppressing the pin changes nothing either.
 The deferral itself is not optional: without it the same unify is a check-time
 conflict (`expected TypeStruct, found ?a`) that refuses the struct case too. Only
-the whole-term pin refuses at the apply, and it still costs the extension. Option
-1's assert is the route that landed for `.a`; the whole-term pin stays the
-rejected one.
+the whole-term pin refuses at the apply, and it still costs the extension.
+
+**The ruling landed this unify and then dropped the requirement itself (measured).**
+With the kind-slot unify in place the wrong-kind case still did not refuse at the
+apply — it failed at the read (`this value is not a container`) — and the empty
+requirement template became the kind class's value, so
+`examples/decode_loop.lichen` and `examples/generate.lichen` read `raw none` instead
+of their arrays. The requirement node was therefore **removed** from the undecided
+tier rather than unified (the end of this section); the assert route was withdrawn
+with it, and the whole-term pin stays the rejected one.
 
 **A call result's named read resolved nothing, and the fix is the chain's root.**
 `st = struct{.a Int}` ; `f = x => st(.a 7)` ; `(f 1).a` used to print `raw none: ?a`,
@@ -605,6 +613,7 @@ were deleted at the author's direction.
 type must read the field type, and today it yields `none`. The `::` chains root at the
 container's **type item**; for an instance's `type_of` the type value lives one level
 in (its *value*), which is the shape the `.a` fix resolved by rooting at the pair.
+*(Superseded by the probe and the fix below.)*
 
 **Probed, then fixed by rooting the chains at the pair.** On the first registry
 program (`v = f.f (_(.x 1, .y 2))` ; `T = type_of v` ; `(v.x, v.y, T::x == Int,
@@ -619,8 +628,8 @@ Rooting the `::` chains at the container **pair's type item** (`Index(pair, 1)`,
 same shape as the `.a` fix) makes that evaluation force the binding: both programs
 now read `(1, 2, 1, 1)`, the two `registry` tests pass, and `S1::a` (a type
 expression) plus `f = x => x::a` applied to `S1` are unchanged at `Int: Type`.
-Language 269/3 — the remaining three are `gc_block` and the two `pipeline`
-recordings.
+Language 271/1 — the one remaining is `gc_block`, the disabled read-path
+collection ([gc-trigger-disabled](gc-trigger-disabled.md), the maintainer's ruling).
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
@@ -638,8 +647,10 @@ undecided) turns `T::a`'s refusal into `expected a struct type, found Type`, but
 table")` (`crates/lichen-lowlevel/src/evaluation.rs`). That `unreachable!` is
 protected by the checker never building a `TableGet` against a non-table, so a
 deferred `::` needs either a recorded miss in that arm (a lowlevel invariant change)
-or a check-time decision. The change was reverted; the inline case
-`(type_of S1)::a` still reads `raw none: ?a` with no diagnostic.
+or a check-time decision. The change was reverted. **The type-of-a-type inline case
+is refused after all** (measured on the merged tip): `(type_of S1)::a` reports
+`expected raw[?a, TypeStruct], found Type` at the read, the same verdict the bound
+form gets — the meaningless read is a refusal, not a silent `none`.
 
 ### 6.3 The message/predicate disagreement
 
