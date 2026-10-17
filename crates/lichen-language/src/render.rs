@@ -250,25 +250,25 @@ where
                 None => container_spelling(printer, d),
             };
             let base = format!("no field with this name in the struct type {container}");
-            // Append a did-you-mean clause naming the struct's actual fields.
-            let Some(name) = d.field.as_deref() else {
-                return base;
-            };
+            // A value container carries no type term, so the clause needs the readable case.
             let Some(fields) = fields else {
                 return base;
             };
-            match crate::suggest::did_you_mean(name, fields.into_iter().flatten()) {
-                Some(clause) => format!("{base}{clause}"),
-                None => base,
-            }
+            with_field_suggestion(d, base, fields)
         }
-        DiagKind::StructUnknownField => match &d.field {
-            Some(name) => format!(
-                "no field named {name} in the struct type {}",
-                printer.node(d.a)
-            ),
-            None => format!("no such field in the struct type {}", printer.node(d.a)),
-        },
+        DiagKind::StructUnknownField => {
+            let base = match &d.field {
+                Some(name) => format!(
+                    "no field named {name} in the struct type {}",
+                    printer.node(d.a)
+                ),
+                None => format!("no such field in the struct type {}", printer.node(d.a)),
+            };
+            let Some(fields) = struct_type_named_fields(printer.module(), d.a) else {
+                return base;
+            };
+            with_field_suggestion(d, base, fields)
+        }
         DiagKind::StructDuplicateField => match &d.field {
             Some(name) => format!("duplicate field {name} in struct instantiation"),
             None => "duplicate field in struct instantiation".to_string(),
@@ -410,6 +410,24 @@ where
              no backend emits one yet, so the call is refused rather than expanded"
                 .to_string()
         }
+    }
+}
+
+/// `base` plus a did-you-mean clause over the struct type's own field names.
+fn with_field_suggestion<P>(
+    d: &CheckerDiag<P>,
+    base: String,
+    fields: Vec<Option<&'static str>>,
+) -> String
+where
+    P: HighProgram,
+{
+    let Some(name) = d.field.as_deref() else {
+        return base;
+    };
+    match crate::suggest::did_you_mean(name, fields.into_iter().flatten()) {
+        Some(clause) => format!("{base}{clause}"),
+        None => base,
     }
 }
 

@@ -117,6 +117,9 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   `missing field a in struct instantiation` — for one typo. The unknown name explains the gap, so the
   missing-field pass now skips an instantiation that has an unknown name: one typo is one diagnostic
   (P4), and a genuine omission (`S(.a 1)` on a two-field struct) still reports the missing field.
+  The unknown-field message now also appends the struct's did-you-mean clause —
+  `S(.sbu 1)` is `no field named sbu in the struct type struct{.a Int, .sub Int}#11, did you mean
+  'sub'?` — the clause the field read already carried, so an instantiation typo names its fix too.
 
 * **The check-level assert was printed after the runtime consequences, and it now heads the report.**
   `f = x => x.a` ; `f [10, 20]` reported five diagnostics: four runtime read failures
