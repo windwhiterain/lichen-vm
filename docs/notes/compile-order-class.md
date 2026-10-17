@@ -219,6 +219,14 @@ work. What remains is the site that *does* know the class — the checker's type
 callee is already force-evaluated there: ruling 1 asks exactly for determinable facts to be decided
 during checking, and this is the one place both the class and the application node are in hand.
 
+**The ruling that settles the direction.** A function's types **must be determined at its
+normalize** (`function-normalization.md` §3, first contract clause). `adder` and `doubler` are born
+at checking, and their `Buf Int` element class is determinable from the written `Int`; the birth
+normalize leaves it open — the term is materialized by the VM later — so the fragment recording
+reads an empty cell. On that reading the read-order candidate and the apply-site candidate are both
+*compensations* for a normalize that did not decide: the fix belongs at the function's birth
+normalize, which must leave the term decided, not at the recording and not at the apply.
+
 ## 4. One half of that did land: an undecided class is refused, not guessed
 
 `compile_parallel_fragment` now returns `RoleUnread::Refusal` naming what it could not read

@@ -53,24 +53,33 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
 
 ## 3. The contract
 
-1. **Once, at birth.** A function is normalized exactly once, at its first
+1. **A function's types are determined at its normalize.** The maintainer's
+   ruling: *"normalize 的时候类型应当确定。"* After a function is born, every type
+   cell its template carries that the program made **determinable** holds a
+   value. A determinable cell still open after the normalize is a defect in the
+   normalize, not in a later read: ruling 1 of
+   [compile-order-class](compile-order-class.md) §8 exists so that later phases
+   *read* decided facts instead of creating them. What may legitimately remain
+   open is a cell the program itself left open — a `_` hole or a genuinely
+   generic position — and that is reported where a reader needs it (ruling 3).
+2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
-2. **A checking-time function normalizes at checking.** A function that exists in
+3. **A checking-time function normalizes at checking.** A function that exists in
    the source (a lambda, a definition) is born and normalized before the
    definition pass — site 2 of [late-writes-map](late-writes-map.md) §2.1.
-3. **A function that first appears at run time normalizes at run time.** A
+4. **A function that first appears at run time normalizes at run time.** A
    closure materialized while the program runs is a new function; its birth is
    when its own template settles. Ruling 2 of
    [compile-order-class](compile-order-class.md) §8 is about this case — a
    function's own birth — and it says nothing about the applied callee.
-4. **A read may rely on a cell only after the pass that decides it.** A read that
+5. **A read may rely on a cell only after the pass that decides it.** A read that
    runs before the function's normalize — or before the apply unify that decides a
    caller-owned clone's cell — sees the cell **empty**, not a default. An
    undecided class is reported, never guessed (ruling 3 of
    [compile-order-class](compile-order-class.md) §8); "the read is early" is an
    ordering fact to fix where the decision belongs, not a reason to seed one.
-5. **No fourth unify site.** Beyond the checker's initial unify, a function's
+6. **No fourth unify site.** Beyond the checker's initial unify, a function's
    birth normalize, and an apply's runtime unify, nothing creates a unification
    dynamically. "Normalize the type term when it is cloned" would be such a fourth
    site: it needs a ruling, not an implementation detail.
