@@ -888,9 +888,11 @@ maps every span back to the original file.
   codomain.  The clone per call is what keeps polymorphism — with
   `type_of = x => {t = _; x: t; t}`, `(type_of (1), type_of Int)` is
   `(Int, Type)`, where comparing against the template's own cells answers
-  `expected Int, found Type` at the second call.  A lambda nobody applies is
-  still read: `x => { x: Int -> Int; x 1.0 }` is `expected Int, found Float`
-  with nothing run, and `x => { x: Int -> Int; x 1 }` states its result.
+  `expected Int, found Type` at the second call.  A lambda body is typed at its
+  definition (`x => { x: Int -> Int; x 1 }` states its result), and a mismatched
+  body is refused where the lambda is **applied** — `(x => { x: Int -> Int; x 1.0 })
+  5` is `expected Int, found Float`; an unapplied lambda with that body prints its
+  value and reports nothing (measured).
 - **The placeholder is inert.**  An annotation's unconstrained positions hold
   the **wildcard**, which states nothing and binds nothing: it is one shared
   node, and unification neither merges nor writes it, so no class can bind it
