@@ -576,11 +576,22 @@ layout work. The syntactic case works because the checker's item for a type
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
-right and the repair must come from the **value's kind**; that value is only
-available after the binding's evaluation, so the read has to be deferred the way the
-named read's per-apply assert is — with a decode of the value's own term, which is
-the open piece. The four `defer_pending` tests read through exactly this shape
-(`T::I` with `T = type_of (P _)(…)`).
+right — and the operation itself is what has no meaning: the author's rule is that
+**`a::b` requires `a` to be a `struct{…}`** (*"a::b 要求 a 是一个 struct{...}"*), so a
+`::` read on a runtime type value is not a read to repair but a refusal to state.
+The four `defer_pending` tests encode exactly that meaningless read
+(`T::I` with `T = type_of (P _)(…)`) and are ill-posed under the rule.
+
+**The deferral cannot be borrowed naively, measured.** Giving `check_named_type_access`
+the named read's two-tier shape (an `IsStructType` assert when the container's item is
+undecided) turns `T::a`'s refusal into `expected a struct type, found Type`, but it
+**panics** for `f = x => x::a` ; `f [10, 20]`: the deferred names chain evaluates
+`TableGet` against a non-table and hits `unreachable!("TableGet target must be a
+table")` (`crates/lichen-lowlevel/src/evaluation.rs`). That `unreachable!` is
+protected by the checker never building a `TableGet` against a non-table, so a
+deferred `::` needs either a recorded miss in that arm (a lowlevel invariant change)
+or a check-time decision. The change was reverted; the inline case
+`(type_of S1)::a` still reads `raw none: ?a` with no diagnostic.
 
 ### 6.3 The message/predicate disagreement
 
