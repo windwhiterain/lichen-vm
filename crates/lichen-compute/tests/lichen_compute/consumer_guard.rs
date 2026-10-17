@@ -168,7 +168,7 @@ fn run(source: &str) -> Run {
         .collect();
     ids.sort_unstable();
     ids.dedup();
-    let kernels: Vec<Instance> = ids
+    let mut kernels: Vec<Instance> = ids
         .into_iter()
         .map(|kernel| Instance {
             kernel,
@@ -176,6 +176,8 @@ fn run(source: &str) -> Run {
             fragment: fragment_of(kernel).expect("the registry holds the fragment it compiled"),
         })
         .collect();
+    // By buffer count, not by id: an id sort follows registration, not the source's order.
+    kernels.sort_by_key(|kernel| kernel.fragment.inputs);
     Run {
         module,
         value,
