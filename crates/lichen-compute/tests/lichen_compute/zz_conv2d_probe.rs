@@ -2,11 +2,10 @@
 //!
 //! # Invariant
 //!
-//! Print-only. One lane per output cell of a row-major 5x5 grid; the nine taps are one fold whose
-//! count-down index is split into `(s(0) - 1) / 3` and `(s(0) - 1) % 3`, so the window address is
-//! `(row - 1 + j) * cols + (col - 1 + k)`. The probe's data is a single `8.0` at the centre and a box
-//! of nine `0.125` taps, so every answer is `1.0` where the centre is inside the window and `0.0`
-//! elsewhere — exact, and insensitive to the flat wrap a left-edge tap would otherwise read.
+//! Print-only. One lane per cell of a row-major 5x5 grid; the nine taps are one fold splitting its
+//! count-down index by `/ 3` and `% 3`, and the window address is a precomputed base plus
+//! `(s(0) - 1) / 3 * cols + (s(0) - 1) % 3`. Nine `0.125` taps under one `8.0` answer `1.0` wherever
+//! the centre is inside the window.
 
 use super::common;
 
@@ -34,9 +33,11 @@ out = (compute.plrun convolve ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x x, .w w
 compute.collect out.y : array{Float, 25}
 "#;
 
-/// The same kernel with a second `8.0` at `(1, 4)`, so the flat wrap is visible: cell `(2, 0)`'s
-/// left tap is `(1, 4)`, because its address is `base - 1` and the row-major layout makes that the
-/// previous row's last cell rather than the padding.
+/// The same kernel with a second `8.0` at `(1, 4)`, so the flat wrap is visible.
+///
+/// # Invariant
+/// Cell `(2, 0)`'s left tap is `(1, 4)`: its address is `base - 1`, and the row-major layout makes that
+/// the previous row's last cell rather than the padding, so the answer carries an extra `1.0` there.
 const WRAP_PROGRAM: &str = r#"
 --- compute = import "compute.lichen" ---
 CIn  = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
