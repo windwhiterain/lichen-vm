@@ -227,3 +227,22 @@ each of the three messages. Six = 1 + 1 + 2 + (1 × 3 messages).
 `:390-397`, `:398-409`) hold the `contains` arguments; the table only says where to look, and if the two ever
 disagree the source wins. A table used as the input freezes the acceptance on **old** text the day the source
 changes, and nothing reports the divergence.
+## Running the acceptance
+
+Four steps, in this order. Nothing here needs a decision, so the comparison cannot drift between whoever runs it.
+
+1. **Re-apply the probe** (the same two edits the table was taken with): `graph::probe_node_count` returning the
+   innermost recording's `nodes.len()`, and the `eprintln!("ROUNDPROBE round=… recorded=… nodes=…")` at the end
+   of each round in `reenter_recording`.
+2. **Run the nine programs alone**, one process each, and collect the `ROUNDPROBE` lines:
+   `cargo test -p lichen-compute --test lichen_compute lichen_compute::graph_jit::<name> -- --exact --nocapture`,
+   for each name in the table above. Compare **per recording, in order**, against the baseline.
+3. **Run the suite and diff the failure names**:
+   `cargo test -p lichen-compute -j 1 --no-fail-fast`, then `Compare-Object` the `… FAILED` names against a
+   pristine `dev` run. `consumer_guard` must leave the set; the other sixteen must not move.
+4. **Read the six refusal fragments from the source**, not from this note: the `contains` arguments of the four
+   `assert` blocks at `graph_jit.rs:342-348`, `:367-372`, `:390-397`, `:398-409`. Check each against the
+   messages `fail()` collects, with `"compute.graph"` appearing exactly three times.
+
+The probe is reverted before any commit, in both directions: before the change, the table above is the record;
+after it, the compared lines are the record.
