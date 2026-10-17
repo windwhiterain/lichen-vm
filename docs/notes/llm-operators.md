@@ -559,10 +559,13 @@ need a node-local producer for `r`.
   straight-line sum of three terms, with `.kdim` no longer read from the graph argument at all, refuses
   the same way (`gemv_no_fold` in the probe). **Nor is it two buffers, or `Float`**: a two-buffer
   annotated step reads both argument buffers and answers `[11, 22, 33]` in `Int` and `[11.0, 22.0,
-  33.0]` in `Float` (`two_buffers_annotated`, `two_buffers_float`). What is left between GEMV and every
-  shape that runs is the **computed read address** (`i * 3 + k`, rather than reading at the lane index).
-  The graph leg is still the only path that consults the fusion floor, and it now carries two-input
-  steps whose returns are annotated.
+  33.0]` in `Float` (`two_buffers_annotated`, `two_buffers_float`). **The computed read address is not
+  it either**: the same GEMV body with both reads at the lane index, `Int`/`Float` aside, refuses the
+  same way (`gemv_at_i`). So every *body* difference is excluded, and what separates GEMV's probe from
+  every shape that runs is **how its parameter type is built**: the running shapes spell it with
+  `compute.P`/`compute.A`, GEMV's spells it as a plain struct — measured as a difference, not isolated as
+  the cause. The graph leg is still the only path that consults the fusion floor, and it now carries
+  two-input steps whose returns are annotated.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
