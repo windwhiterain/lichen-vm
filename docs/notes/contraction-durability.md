@@ -105,3 +105,24 @@ measurement. If that ever fails where
 changed under the measurement — and the **plain** column of
 [the mechanism note](transcendental-gap-mechanism.md) is the control that says
 whether the environment or the code moved.
+
+## The cold-cache control: there is no application-side cache to warm
+
+The open item above asked for "a Vulkan-level cold-cache control". Measured, the question is **moot for
+this path** rather than answered by a control:
+
+- **The application passes `vk::PipelineCache::null()`** (`crates/lichen-compute-gpu/src/dispatch.rs:2048`),
+  so it hands the driver **no pipeline cache to reuse**. There is nothing on the toolchain's side whose
+  warmth or coldness could change an answer.
+- **The driver keeps no visible Vulkan cache on this machine**: `%LOCALAPPDATA%\NVIDIA` holds `DXCache`
+  (Direct3D) and `GLCache` (OpenGL) and **no Vulkan directory**, and `%ProgramData%\Khronos\Vulkan\Drivers`
+  does not exist — the ICDs come from the registry and the vendored JSON that `VK_DRIVER_FILES` selects.
+
+What is left is a **driver-internal** cache with no observable handle. If one exists, a duplicate run is a
+duplicate *measurement* only if the driver is not answering from a stale module — and any module it could
+be answering from is keyed on words this emitter no longer produces, since the decoration is in them
+(`sin` 578 → 683). So the residual risk is bounded by an **argument**, not by a measurement, and this note
+says which rather than claiming a control that has not been found.
+
+A reader who wants the measurement anyway needs a **Vulkan-level** control — a loader or ICD variable that
+relocates the driver's shader cache — and none is documented for this ICD.
