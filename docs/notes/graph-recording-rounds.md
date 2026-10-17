@@ -200,3 +200,27 @@ diagnostic; the test file itself is the authority, so this table is a pointer wi
 - **A reason that disappears fails the acceptance even though the test turns green**, because the test asserts
   that the refusal is issued — a silent refusal is a lost diagnostic that looks like success. This is the
   failure mode that a "does it pass?" check cannot see, and it is the reason this clause is written separately.
+### The frozen set is (literal, count), read from the source
+
+The acceptance does not freeze "the six strings are still somewhere in the messages". It freezes **six pairs of
+(literal, how many messages contain it)**, because two failures are invisible to a presence check:
+
+- a fragment that **disappears** — that message has lost part of its reason;
+- a fragment that **gains an occurrence** — an extra refused path now produces the same fragment, which is a
+  refusal that did not exist before.
+
+Over the messages `fail()` returns for the three programs:
+
+| literal | messages that must contain it |
+| --- | --- |
+| `"a collect is asked here"` | 1 |
+| `"after the graph has run"` | 1 |
+| `"a host read is asked here"` | 1 |
+| `"a graph has no node for one"` | 1 |
+| `"nowhere for what it computes"` | 1 |
+| `"compute.graph"` | **3** — one per program's message, the three checks at `:401`, `:402`, `:405` |
+
+**Read the input from the source, never from this table.** The four `assert` blocks (`:342-348`, `:367-372`,
+`:390-397`, `:398-409`) hold the `contains` arguments; the table only says where to look, and if the two ever
+disagree the source wins. A table used as the input freezes the acceptance on **old** text the day the source
+changes, and nothing reports the divergence.
