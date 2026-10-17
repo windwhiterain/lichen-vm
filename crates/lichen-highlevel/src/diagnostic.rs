@@ -431,6 +431,42 @@ where
         // An error no diary entry owns: a deep apply-time failure with no
         // recording position.
         out.extend(index.orphan_indexes().map(|i| self.mismatch(i, &index)));
+        // The assert explaining a runtime failure comes first (`agent-friendly-diagnostics.md`).
+        for err in &self.module.assert_errors {
+            let template = match err.template {
+                AnyNodeId::Dynamic(template) => template,
+                // Cloned out of a static module: the diagnostic carries the
+                // static ref.
+                AnyNodeId::Static(sref) => {
+                    out.push(Diag {
+                        clone: Some(err.condition),
+                        assert_value: Some(err.value),
+                        static_template: Some(sref),
+                        ..Diag::factual(DiagKind::Assert, None)
+                    });
+                    continue;
+                }
+            };
+            if self.user_asserts.contains(&template) {
+                // The registered spelling, with a read-kind requirement's
+                // subject resolved against the *failing* condition.
+                let assert_spelling = match self.assert_spellings.get(&template) {
+                    Some(spelling) => Some(
+                        self.read_assert_subject(err.condition)
+                            .map_or(*spelling, |container| spelling.with_container(container)),
+                    ),
+                    None => None,
+                };
+                out.push(Diag {
+                    assert_value: Some(err.value),
+                    assert_spelling,
+                    ..Diag::factual(
+                        DiagKind::Assert,
+                        self.node_loc(AnyNodeId::Dynamic(template)),
+                    )
+                });
+            }
+        }
         // Runtime evaluation failures, deduplicated by kind and blamed node.
         let mut seen = HashSet::new();
         for err in &self.module.eval_errors {
@@ -504,43 +540,6 @@ where
                     DiagKind::RuntimeApplyTarget,
                     self.node_loc(*function),
                 )),
-            }
-        }
-        // Failed asserts, keyed by the template condition a clone records:
-        // only explicit `assert` expressions are rendered.
-        for err in &self.module.assert_errors {
-            let template = match err.template {
-                AnyNodeId::Dynamic(template) => template,
-                // Cloned out of a static module: the diagnostic carries the
-                // static ref.
-                AnyNodeId::Static(sref) => {
-                    out.push(Diag {
-                        clone: Some(err.condition),
-                        assert_value: Some(err.value),
-                        static_template: Some(sref),
-                        ..Diag::factual(DiagKind::Assert, None)
-                    });
-                    continue;
-                }
-            };
-            if self.user_asserts.contains(&template) {
-                // The registered spelling, with a read-kind requirement's
-                // subject resolved against the *failing* condition.
-                let assert_spelling = match self.assert_spellings.get(&template) {
-                    Some(spelling) => Some(
-                        self.read_assert_subject(err.condition)
-                            .map_or(*spelling, |container| spelling.with_container(container)),
-                    ),
-                    None => None,
-                };
-                out.push(Diag {
-                    assert_value: Some(err.value),
-                    assert_spelling,
-                    ..Diag::factual(
-                        DiagKind::Assert,
-                        self.node_loc(AnyNodeId::Dynamic(template)),
-                    )
-                });
             }
         }
         out

@@ -1,11 +1,12 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and three cases are fixed.** The unclosed-delimiter case is fixed
-> (`4cb42d3f`), the preprocessor's missing span is fixed (§7), and the `NamedField` miss now blames the
-> read (P2, in the corrections below); the offender list below is
+> **Status: the property is stated and four cases are fixed.** The unclosed-delimiter case is fixed
+> (`4cb42d3f`), the preprocessor's missing span is fixed (§7), the `NamedField` miss now blames the
+> read (P2), and the report's check-level assert now heads its runtime consequences (P3) — both in the
+> corrections below; the offender list below is
 > **parser-heavy and under-covers the checker and the module
-> layers**, which is the first thing to close before another diagnostics slice — the `NamedField` case is
-> the checker layer's first reproduction-verified entry.
+> layers**, which is the first thing to close before another diagnostics slice — the two cases above are
+> the checker layer's first reproduction-verified entries.
 > Points at: `crates/lichen-language-parser/src/parse/diagnostics.rs`,
 > `crates/lichen-language-parser/src/parse.rs`, `crates/lichen-highlevel/src/diagnostic.rs`,
 > `crates/lichen-highlevel/src/checker/`.
@@ -107,7 +108,15 @@ load-bearing claims itself** — but *"neither survey ran anything: every claim 
 reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
 reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
-**Three corrections to what the surveys first said, each worth more than the claims they replaced.**
+**Four corrections to what the surveys first said, each worth more than the claims they replaced.**
+
+* **The check-level assert was printed after the runtime consequences, and it now heads the report.**
+  `f = x => x.a` ; `f [10, 20]` reported five diagnostics: four runtime read failures
+  (`this value is not a container`, `table lookup missed`, twice each) and the actionable
+  `expected a struct type, found array{Int, 2}`. `Build::diagnostics` pushed `assert_errors` after
+  `eval_errors`, so the head of the report was about consequences and the cause came last — the P3
+  failure, verbatim. The asserts block now precedes the runtime-failure block: the
+  `expected a struct type` line is first (`1:5`), the four consequences follow (`1:10`).
 
 * **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
   with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —
