@@ -426,3 +426,44 @@ genuinely dispatches nothing".
 round*, which means the graph shared across rounds was **blocking the naming**. That is what A′ repaired. The two
 zeroed readings are the same fact seen from the other side: those rounds produced nothing, so keeping only the
 last one keeps nothing — and their tests assert refusals, which is why the name set does not move.
+
+## `a_buffer_the_body_closed_over_is_refused_by_the_capture`: the determination
+
+Three things, and the first two are why this is **not** "a rule was lost".
+
+**1. The rule is intact.** The capture test expects a message containing both `hold` and `parameter`. That is
+`role_refusal` (`compute.rs:2105-2112`), emitted from `walk_role`'s only refusing arm — `LeafRole::Scalar`
+(`:2040`, *"a buffer outside `.in`/`.out`"*) — and every role is decoded from the parameter's **type slot**
+(`parallel_roles`, `:1932` onward). Nothing on this path depends on the walk's width.
+
+**2. Undecided is decided earlier than the leaf.** `parallel_roles` returns `RoleUnread::Undecided` at four
+points — `:1940`, `:1943`, `:1951`, `:1960` — before any role is assigned. The two callers then differ:
+
+- the **kernel compile** path propagates it (`:2394`, `let roles = parallel_roles(module, cfg_pair)?;`), so a
+  later compilation sees the type once it resolves;
+- the **recording** path matches on it (`:5076`), records a diagnostic for a `Refusal` (`:5079`), and for
+  `Undecided` runs this, verbatim, the only physical evidence in the chain:
+
+```rust
+// A "not yet", and only that: the flat tuple below is the honest reading.
+Err(RoleUnread::Undecided) => {}
+```
+
+  It then falls back to the flat tuple — the older `cfg = (n, (buffers…))` shape — so **the role walk never
+  runs**, `role_refusal` never speaks, and the program is accepted.
+
+**3. The fix is two halves, and they are bound.** The recording path is a **commit**: once the graph exists it
+stores the roles, so "record now, decide later" has nothing to mean — a recording *is* the collection. That is
+why the fix is to say "cannot record", not to wait: `:5092` must record a **new** refusal sentence — *this
+parameter's type is undecided when the graph is built, so the graph cannot record its roles* — because reusing
+`role_refusal`'s sentence would say "the position is wrong" about a program whose problem is "the type is not
+known yet", and would mislead whoever reads the log next.
+
+But the new sentence is **not** the one the test asserts, so the test would still fail — correctly, since it
+asserts the old shape. The complete change is therefore `:5092` records the refusal **and** the test asserts the
+new sentence, and the second half is a **test change that needs the owner's sign-off** (still pending). **Doing
+only the first half moves the program from a false acceptance to a true refusal with a mismatched assertion —
+still red — so both halves land together or neither does.**
+
+**What this is not**: a lost rule, or a stale test with a live rule behind it. The rule is intact; its
+precondition is undecided at the one point where the recording cannot wait for it.
