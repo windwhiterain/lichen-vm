@@ -529,6 +529,15 @@ PROBE fragment_digest (lane_height: 4) = 10033502527838007574
 PROBE FORMAT_VERSION = 2
 ```
 
+**That block is this slice's own build, and `FORMAT_VERSION` has since gone to `3`** — for a body
+field added on a different branch, which is the same gate and the same required-field rule §5
+describes. The three `fragment_digest` numbers above are **not** comparable with a digest taken
+today, for a second reason as well as the one this section names: a `KernelBody` field has since
+joined the body's `Debug` string, so today's build hashes a different string again. The claim §5
+rests on — *a byte-identical fragment's digest moves because one `Debug` string grew a field* — is
+what survives, and [contraction-control](contraction-control.md) §9.2 re-measures it on a body
+field rather than a `target` one.
+
 §5's mechanism claim is **confirmed**: a byte-identical fragment's digest moves because one
 `Debug` string grew a field. §5's *numbers* are not comparable — they were a different fragment.
 

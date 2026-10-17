@@ -604,6 +604,15 @@ division (§4.4): it is unspecified there, and this is the mechanism behind that
 decision rather than a new finding. It is also the reason the reduction above
 multiplies by a constant instead of dividing by one.
 
+> **Not re-measured, and deliberately not claimed fixed.** Every figure in the paragraph above was
+> taken on the **undecorated** path. `NoContraction` now reaches this section's bodies —
+> `sqrt`, `floor` and `ln` all inline a definition, so their float results are decorated too
+> ([contraction-control](contraction-control.md) §9.1) — but **`NoContraction` forbids a driver's
+> fusion and reassociation; it does not make a division correctly rounded.** Whether these two
+> numbers move is a measurement this slice did not take, and §4.4's "a kernel's float division is
+> unspecified" is **unchanged** and remains the position. What §8's correction does *not* reach is
+> stated here rather than left to be inferred.
+
 **`ln` reached the kernel vocabulary after all, and on this device its one division did
 not bite.** `ln` is now `KernelInstr::Ln` with `ln_body` in `TRANSCENDENTALS`, a
 straight-line reduction of 42 conditional scalings rather than the loop this section
@@ -699,6 +708,21 @@ device is the less accurate of the two at every point where it differs** — at 
 2 ulp out where the definition is within 0.2 ulp of `f64`. **What the operation is remains
 open**; it is inside the emitted sequence, it is systematic, and it is not a division,
 because these two definitions contain none.
+
+> **Corrected, and the correction is this section's own conclusion.** The three models above were
+> the wrong three: contraction is not *one* of the places it shows up, it is the driver's
+> **both** acts at once — it fuses the Horner **and** folds the two-term reduction back into
+> `q·(HEAD+TAIL)` — which is what
+> [transcendental-gap-mechanism](transcendental-gap-mechanism.md) §1.1's `both` model reproduces at
+> 512/512 and what this section's single-fuse models could not. **The control is emitted and the
+> divergence is zero**: `OpDecorate %id NoContraction` on every float result of a body that
+> inlined a definition, on two vendors. [contraction-control](contraction-control.md) §9.3 measures
+> `sin` **256/256** and **512/512** and **2048/2048** on each side of `[4000, 8192]`, the 5200
+> crossings **5200/5200 bit-exact with 0 sign disagreements**, and `cos`'s worst absolute error
+> over `[0, 8192]` **0.0 ulp of one** — so `sin`'s 5 ulp and `cos`'s 6 ulp above are **0**, and
+> **"what the operation is remains open" is answered: contraction, on both vendors.**
+> **What is still not proven below is unchanged** — the sampling against `f64` and the §4.4
+> division hazard are still what they were.
 
 **What is still not proven.** Accuracy against `f64` was **sampled, not swept** — and now
 sampled only at the six angles the test dispatches, which is a reading of the divergence

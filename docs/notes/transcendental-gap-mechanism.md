@@ -1,9 +1,18 @@
 # The transcendental gap, named
 
-> Status: **current** — every figure below is from an RTX 3060 Laptop GPU on this branch, off
+> Status: **current — and the mechanism it named is now fixed, by the user's decision.** Every figure
+> below is from an RTX 3060 Laptop GPU on this branch, off
 > `dev@6861f451`, driven the way [device-body-sweep](device-body-sweep.md) §1 drove its own:
 > expand the operator's body with `expand_transcendentals`, dispatch it, and read each lane's
 > `to_bits()` back. **Nothing here changed production code, and no test was added.**
+>
+> **[contraction-control](contraction-control.md) found the control this note's §6 named, and
+> `feature/ncir` now emits it.** §§1–8 below are unchanged and remain the record of how the
+> mechanism was found; §9 is what the shipped emitter does about it. **The gap this note names is
+> closed on both vendors**: with `NoContraction` on every float result of a body that inlined a
+> definition, `sin` is **256/256**, **512/512** and **2048/2048** on both sides of `[4000, 8192]`,
+> the 5200 crossings are **5200/5200 bit-exact with 0 sign disagreements**, and `cos`'s worst
+> absolute error over `[0, 8192]` is **0.0 ulp of one** where this note measured `1908.5`.
 
 [device-body-sweep](device-body-sweep.md) closed its slices with two sentences it could not
 convert into a measurement, and named the probe that would:
@@ -302,7 +311,11 @@ one line each, and what this note says about each.
   §1.2 census says where to put it: the module has **no `Fma` and no `OpExtInst` to remove**, so the
   attribute is not a deletion but a *constraint on a rewrite the module does not itself perform*. Its
   whole effect is one flag, and the fact that §1.1's model reproduces the device exactly means the
-  probe to verify it is already written.
+  probe to verify it is already written. **Landed**: [contraction-control](contraction-control.md)
+  §3.1 measured the candidate — `OpDecorate %id NoContraction`, decoration `42` — and
+  `feature/ncir` emits it on every float result of a body that inlined a definition. The second
+  half of this bullet, *"or the driver's own switch turned off"*, has **no referent**: no driver
+  or toolchain switch was found, and the attribute half is what works.
 - **The emitted polynomial and its constants.** Nothing here needs a new coefficient or a new degree:
   the coefficients are the same on both sides and the difference is a rounding, not a truncation
   (§1.1's `exp` row, where the fused Horner reproduces the device at 512/512 with the definition's own
@@ -368,6 +381,15 @@ from their size, not a sweep of `HALVINGS`.
 - **Whether the fusion is stable across recompiles.** [device-body-sweep](device-body-sweep.md) §3.1
   records determinism for `sin` at six angles; this slice did not re-check it, and a rewrite applied by
   a cost model is not obviously stable where one applied by an algebraic simplifier is.
+
+**Two of the four are closed since, and by this note's own terms.** **The first** is answered by
+[contraction-control](contraction-control.md) §2: the rewrite is the platform's, on two vendors —
+an RTX 3060 and an Intel Iris Xe — returning **the same bits** for `sin`, `cos` and `exp` at every
+grid, which is a stronger fact than "both contract". **The second** is answered the same way:
+the reduction does not survive a small module on either device, and **it does survive both whole
+ones when the module forbids contraction** — `split` at 4096/4096 on both. **The third and fourth
+are still open**: what the platform's own `sin` says near `θ = 8133` is a gap in every note that
+has touched it, and nothing here ran a cold-cache recompile.
 
 ## 8. What this slice deleted
 

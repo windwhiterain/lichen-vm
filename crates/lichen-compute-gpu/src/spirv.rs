@@ -1004,11 +1004,6 @@ pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
 
 /// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, position
 /// `0` being the entry point.
-///
-/// A fragment whose body inlined a transcendental definition has its float results
-/// decorated `NoContraction`, so the module rounds where the language's definition does.
-/// The decision is read from the body, not from a flag: `dispatch`'s pipeline cache keys on
-/// the fragment digest, and a body field is in that digest by construction.
 pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
     let ordered = launch.ordered();
     let root = launch.root();
@@ -1206,10 +1201,6 @@ struct Function<'a> {
 /// run to a cursor the next function starts above, so nothing two functions emit
 /// can be one value — and a module-scope id is never reissued as a local one,
 /// which is what would make a constant and a local the same id.
-///
-/// `exact_results` collects the float results this function's body owes a
-/// `NoContraction`, and is left empty unless `fragment.body` says the arithmetic
-/// is exact by the language's definition (`docs/notes/contraction-control.md`).
 fn emit_function(
     function: Function<'_>,
     ids: &Ids,
@@ -1229,8 +1220,7 @@ fn emit_function(
         binding,
         shared,
     } = function;
-    // **The IR's own decision**: a flag here would not be in the fragment digest,
-    // and the pipeline cache keys on the digest.
+    // The float results this body owes a `NoContraction`, per the IR's own decision.
     let exact = fragment.body.exact_float_arithmetic;
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
@@ -3247,7 +3237,7 @@ fn assemble(
         op::DECORATE,
         vec![ids.gid, decoration::BUILT_IN, BUILT_IN_GLOBAL_INVOCATION_ID],
     ));
-    // **One decoration per float result, and no operand**: three words each.
+    // **One `NoContraction` per float result, and no operand**: three words each.
     for &result in exact_results {
         annotations.push(Inst::new(
             op::DECORATE,

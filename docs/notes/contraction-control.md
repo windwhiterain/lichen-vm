@@ -1,13 +1,20 @@
 # The contraction can be forbidden
 
-> Status: **current** — every figure below is measured on **two** devices on this branch, off
-> `dev@71adaa1a`: an RTX 3060 Laptop GPU (NVIDIA driver 596.36.0.0) and an Intel Iris Xe
-> Graphics (Intel driver 101.6790), reached by running the **same binary twice** with
-> `VK_DRIVER_FILES` pointed at each vendor's ICD manifest. **Nothing here changed production
-> code, and no test was added.** [transcendental-gap-mechanism](transcendental-gap-mechanism.md)
+> Status: **current, and the control it found is shipped** — every figure in §§1–8 stands as
+> measured on **two** devices off `dev@71adaa1a`: an RTX 3060 Laptop GPU (NVIDIA driver
+> 596.36.0.0) and an Intel Iris Xe Graphics (Intel driver 101.6790), reached by running the
+> **same binary twice** with `VK_DRIVER_FILES` pointed at each vendor's ICD manifest.
+> [transcendental-gap-mechanism](transcendental-gap-mechanism.md)
 > established the mechanism; this note answers the two questions its own §7 left open — can the
 > rewrite be forbidden, and is it one device's or the platform's — and it corrects one of its
 > claims.
+>
+> **§3.2's decoration is now emitted by the shipped emitter. This change is the user's
+> decision**, taken on this measurement. §3.4 was the list of what turning it on would touch and
+> §8 recorded why the slice stopped short of it; **§9 is what landed**, and it re-measures every
+> row of §3.2 and §3.3 through `spirv::compile` rather than through the scratch hook §§1–8 used.
+> **No example file was edited and no `output =` line moved**; the one thing outside the emitter
+> that moved is the fused artifact's format version, §9.5.
 
 Two verdicts, one per job, and the second one is not the one the first note's wording predicts.
 
@@ -279,9 +286,9 @@ capability, no execution mode, no `OpExtInst`, no `Fma`. `spirv-dis` shows the d
 (`OpDecorate %43 NoContraction`) and the arithmetic underneath it is the same
 17 `OpFMul` / 11 `OpFAdd` / 7 `OpFSub` as before it.
 
-### 3.4 What using it would touch — and why this slice stops here
+### 3.4 What using it would touch
 
-**No production change is made or proposed here; the user decides.** [transcendental-gap-mechanism](transcendental-gap-mechanism.md)
+**As measured here, no production change is made; the user decides.** [transcendental-gap-mechanism](transcendental-gap-mechanism.md)
 §6's first bullet named the fix as *"a contraction-forbidding attribute in the emitted module"*
 and said *"the attribute is not a deletion but a constraint on a rewrite the module does not
 itself perform"*. That is now measured rather than asserted, and this is what turning it on
@@ -312,6 +319,11 @@ tolerance. **What is not settled by this measurement is whether the language wan
 backend-wide constraint on a driver's optimiser is a policy, not an arithmetic change, and
 [floating-point](floating-point.md) §6's question about a device running a body that does not
 reproduce the definition is still open. It is just no longer open *for want of a control*.
+
+> **Landed, on `feature/ncir`, by the user's decision on this measurement.** All four bullets are
+> addressed and §9 measures the result through the shipped emitter. The third one resolved the
+> way the note says it must: **the decision rides in the IR, not a flag**, so the pipeline cache
+> key needed no change at all — §9.2.
 
 ## 4. What the validator says
 
@@ -379,26 +391,28 @@ specification accepts.
 
 ## 6. The kernel work this implies
 
-**No production change is made or proposed here.** What a follow-up slice would have to decide,
-one line each:
+**Each of these was decided in §9, by the user's choice.** What the follow-up had to decide,
+one line each, and what it decided:
 
-- **Whether the IR marks float arithmetic that must keep its rounding points**, and therefore
-  whether the decoration is per-instruction or per-module. §3.3 measured the whole-module price;
-  a per-instruction price has not been measured.
-- **Whether `NoContraction` is on by default for the GPU backend or is a knob.** It is a core
-  decoration of `Shader` and two vendors honour it, so a per-module opt-in is a language policy
-  question rather than a portability risk; §4's eighteen validations are the portability
-  evidence, and it is two vendors wide, which is the same width as every other device claim in
-  these notes.
-- **The pipeline cache key** (§3.4): free if the decision rides in the IR, a change if it
-  rides in a flag.
+- **Whether the IR marks float arithmetic that must keep its rounding points, and therefore
+  whether the decoration is per-instruction or per-module.** §3.3 measured the whole-module
+  price. **Decided: the IR marks it, and the emitter decorates every float result of a marked
+  body.** A narrower set was not measured, and one that is narrower is only better if it still
+  gives §3.2's numbers, so the whole module is what ships.
+- **Whether `NoContraction` is on by default for the GPU backend or is a knob.** **Decided: on,
+  and not a knob** — it rides in the IR rather than in a setting, so a body that inlined a
+  definition gets it and a body that did not does not, which is the scope §3.4's last bullet
+  asked for. §4's eighteen validations and §9.4's twenty-six more are the portability evidence.
+- **The pipeline cache key** (§3.4): free if the decision rides in the IR, a change if it rides
+  in a flag. **It rides in the IR**, and §9.2 measures the digest moving because of it.
 - **What the `spliced_transcendentals` test would say.** Its tolerances are 5 ulp for `sin` and
   6 for `cos` because the device diverges; with the decoration the divergence is zero and those
-  numbers would be `0`. **No test was changed here** — the brief forbids production changes, and
-  a tolerance is the user's to move.
+  numbers would be `0`. **No test was changed** — a tolerance is the user's to move, and the
+  suite's counts are unmoved either way (§9.6).
 - **No `wontfix:D<n>` is involved.** [code-audit](code-audit.md) carries no decision over the
   transcendentals, the emitter or the polynomial; the nearest is `wontfix:D9` via `P4-10`, the
-  type printer's nesting bound, which this slice does not touch.
+  type printer's nesting bound, which this slice does not touch. **Re-checked on this branch and
+  still true.**
 
 ## 7. What is measured, what is inferred, what is unknown
 
@@ -456,3 +470,182 @@ shipped emitter does not build, which is what §3.4 is for. **No example file wa
 no production file was touched.** The twenty-seven modules are gone with the two artefacts; §4's
 word counts and §2.4's census are what remain, and both are re-derivable from `unary.rs` and
 `spirv::compile` in one command each.
+
+## 9. What landed, measured through the shipped emitter
+
+**The control §§1–8 measured is emitted by `spirv::compile` itself. This change is the user's
+decision**, taken on that measurement; §§1–8 are unchanged above and remain the record of how
+it was found. This section is what the shipped emitter does with it, and it is measured on the
+same two devices by the same two `VK_DRIVER_FILES` runs of §1 — one binary, one emitter, no
+scratch hook and no hand-assembled module anywhere in it.
+
+### 9.1 The three places the decoration now lives in
+
+**The IR carries the decision.** `KernelBody` gains one field,
+`exact_float_arithmetic`, and the only writer is `KernelBody::inline_definition` — the one place
+a transcendental's definition is spliced into a body, which `expand_transcendentals` and the
+language's own lowering both go through. So the marker rides exactly where §3.4's last bullet
+said it would, and the guarantee is bought for the bodies that inlined a definition rather than
+for the whole backend.
+
+**The emitter reads it and allocates nothing new.** `emit_function` takes the decision from
+`fragment.body`, and pushes the id of every float arithmetic result it allocates onto one
+per-module list: the `(ScalarClass::Float, KernelBin::Add | Sub | Mul | Div)` arms of the binary
+table, and the `Max`/`Min` `OpSelect` that is a float one. **A comparison is not arithmetic and
+is not decorated** — its result is a bool, and the note's own census decorated only the five
+float ops. `assemble` then writes one `OpDecorate <result> NoContraction` per id into the
+annotation section, after the buffer and `BuiltIn` decorations, which is where the logical layout
+puts them.
+
+**The set is "every float result", not a narrower one.** §3.2 decorated all 35 of `sin`'s and got
+256/256, and no narrower set has been measured to give the same numbers — so the wider one ships.
+
+### 9.2 The decision is in the pipeline cache key, for free
+
+**The cache key is not the module's words**, so a decision that lives outside the fragment would
+not be in it. `crates/lichen-compute-gpu/src/dispatch.rs` builds it as:
+
+```rust
+let key = (
+    launch
+        .ordered()
+        .iter()
+        .map(|fragment| fragment_digest(fragment))
+        .collect::<Vec<u64>>(),
+    binding.inputs,
+    binding.outputs,
+);
+```
+
+and `fragment_digest` hashes `format!("{:?}", fragment.body)` among ten fields — so a body field
+is in the key **by construction**, with no change to `dispatch.rs` at all. **Measured**, on two
+bodies differing in nothing but the one flag:
+
+| body | digest | module |
+|---|---|---|
+| `a·b + c`, undecorated | `0x723e3ea78be662a9` | 277 words, 0 decorations |
+| `a·b + c`, decorated | `0xe08dbf7a7b3822a8` | 283 words, 2 decorations |
+| `sin`, undecorated | `0x8912f05b24d6edf8` | 578 words, 0 decorations |
+| `sin`, decorated | `0xb1c57379da646f46` | 683 words, 35 decorations |
+| the reduction, undecorated | `0x07e3772318813cc4` | 279 words, 0 decorations |
+| the reduction, decorated | `0x51853230c098fb2e` | 291 words, 4 decorations |
+
+**Two fragments that differ only in this field are two cache entries**, which is the hazard §3.4
+named and it does not arise.
+
+### 9.3 The sweeps, through `spirv::compile`
+
+**Measured.** Every module below is what `spirv::compile` returned and what `GpuContext::run`
+dispatched. **The two columns are the same body**, differing in one boolean, so the difference
+between them is the decoration and nothing else. The left column is the plain column repeated
+from the shipped emitter rather than §3.2's scratch-hook numbers, and it lands on them.
+
+| what the probe measures | RTX 3060 plain | RTX 3060 `NoContraction` | Iris Xe plain | Iris Xe `NoContraction` |
+|---|---|---|---|---|
+| `a·b + c`, 4096 points, mul-then-add | 0/4096 | **4096/4096** | 0/4096 | **4096/4096** |
+| `a·b + c`, 4096 points, fused | 4096/4096 | **0/4096** | 4096/4096 | **0/4096** |
+| `sin`, `[−8, 8)`, 256 | 91/256 | **256/256** | 91/256 | **256/256** |
+| `sin`, `[−1, 0)`, 512 | 437/512 | **512/512** | 437/512 | **512/512** |
+| `sin`, `[4000, 8192]`, 2048 | 0/2048 | **2048/2048** | 0/2048 | **2048/2048** |
+| `sin`, `(−8192, −4000]`, 2048 | 0/2048 | **2048/2048** | 0/2048 | **2048/2048** |
+| `cos`, `[−8, 8)`, 256 | 71/256 | **256/256** | 71/256 | **256/256** |
+| `cos`, `[4000, 8192]`, 2048 | 0/2048 | **2048/2048** | 0/2048 | **2048/2048** |
+| `cos`, `(−8192, −4000]`, 2048 | 0/2048 | **2048/2048** | 0/2048 | **2048/2048** |
+| `exp`, `[−16, 16)`, 256 | 244/256 | **256/256** | 244/256 | **256/256** |
+| `sin`, 5200 crossings, bit-exact | 0/5200 | **5200/5200** | 0/5200 | **5200/5200** |
+| `sin`, 5200 crossings, sign disagreements | 923/5200 | **0/5200** | 923/5200 | **0/5200** |
+| `cos`, 5200 crossings, bit-exact | 2159/5200 | **5200/5200** | 2159/5200 | **5200/5200** |
+| `cos` tail, worst absolute over `[0, 8192]` | 1908.5 ulp of one | **0.0** | 1908.5 | **0.0** |
+| the two-term reduction, plain reading | `summed` 4096/4096 | — | `fused` 4096/4096 | — |
+| the two-term reduction, decorated reading | — | **`split` 4096/4096** | — | **`split` 4096/4096** |
+
+**The `cos` tail row is §3.3's 1908.5 to the digit on both devices, now 0.0 on both.** The
+reduction row is §2.4's device split exactly as that table has it — the RTX 3060 reading the
+plain module as `summed` and the Iris Xe as `fused`, both becoming `split` — and the decorated
+readings are **identical on the two vendors**, which is a stronger statement than "both honour
+the decoration".
+
+**Two cells differ from §3.2 by a point or two, and the grids are the reason.** `sin`
+`(−8192, −4000]` reads 0/2048 plain here against §3.2's 5/2048, and the crossing sweep reads
+0/5200 bit-exact with 923 wrong signs against §3.2's 1/5200 and 934. **The probe's own grid is
+its own**: `[4000, 8192]` is spanned by 2048 points at `4000 + i·4192/2048`, whose last point is
+`8189.953`, and the crossings are the representable `f32` nearest `k·π` for `k = 1…5200`. §3.2's
+grids were built separately and are not reproducible from this one. **No count that §3.2 states
+exactly is contradicted by a count here**: `91`, `437`, `244`, `71`, `2160 → 2159`, `934 → 923`
+and `1908.5` all agree to the grid.
+
+**The `a·b + c` grid is this slice's own too, and it is stated because the note §2.1 says the
+point selection is a fact about the grid.** Thirteen fraction bits each (`1 + m/8192`), so
+`a·b` needs twenty-six and is inexact; a coarser significand makes the product exact and then
+both readings round the same real number — **the first grid this probe built had twelve fraction
+bits, produced `0` discriminating points out of 1,048,576 scanned, and failed to separate the
+readings at all.** Points where the two readings differ are taken from a scan until 4096 are
+found, and §2.1's three properties are all re-derived rather than copied.
+
+### 9.4 The validator, and `spirv-dis`
+
+**Measured: 26 of 26 modules the shipped emitter produced here are `spirv-val` ACCEPT** at
+`C:\VulkanSDK\1.3.296.0\Bin\spirv-val.exe --target-env vulkan1.1` — thirteen bodies, each in its
+plain and its decorated spelling. That extends §4's count from 27 to 53.
+
+**And `spirv-dis` does not object to decoration 42.** This is the finding §3.1 asked for,
+because the same tool refused to print `NoReassociation` at all (`error: 16: Invalid decoration
+operand: 4268`) while `spirv-val` accepted it. On `sin`'s decorated module, `spirv-dis` exits 0
+and prints:
+
+```
+OpDecorate %43 NoContraction
+```
+
+**35 of them**, and the arithmetic underneath is unchanged — **17 `OpFMul`, 11 `OpFAdd`,
+7 `OpFSub`, zero `OpFDiv`, zero `OpFma`, zero `OpFNegate`, zero `GLSL.std.450`**. That is §2.4's
+census and §3.3's word counts, reproduced by the shipped emitter rather than by a scratch hook:
+**578 → 683 words for `sin`, 562 → 664 for `cos`, 412 → 496 for `exp`, 277 → 283 for `a·b + c`,
+279 → 291 for the reduction**, and the decoration count is the float-operation count in all five.
+
+### 9.5 The one thing outside the emitter that moved
+
+**The fused artifact's format version, `2 → 3`.** `KernelBody`'s field travels in
+`crates/lichen-runtime/src/fused/schema.rs`, because the fused text is how a fragment reaches
+the emitter and a landed fused transcendental would otherwise come back from a round trip
+without its rounding points. The field is **required**, not defaulted: with
+`#[facet(default)]` a version-2 text would read as `false` and the kernel would quietly
+diverge, which is the same hazard `fragment_digest`'s own invariant names for a field left out
+of the digest. **The schema's invariant already answers this case** — *"a version that does not
+match is a refusal rather than a mis-parse"* — so an artifact written by the previous build is
+**refused by name** rather than mis-read. The seven hand-written literals in `fused_kernel` and
+`fused_landing` moved with it, and [two-dimensional-workgroup](two-dimensional-workgroup.md)
+§5's `lane_height` bump is the precedent this follows.
+
+### 9.6 What did not move
+
+**Measured, on this branch and on `dev`:** the examples survey is
+**`clean=43 panicked=[] drifted=[]`** and `lichen-compute` is **204 passed / 14 failed /
+2 ignored**, the same fourteen names as `dev` and no `output =` line among them. The GPU suite is
+**88 passed / 0 failed / 0 ignored**, unchanged from `dev`. **No example file was edited and
+`git diff dev...HEAD -- examples/` is empty**, so no example's declared output can have moved.
+
+**No test was added and no tolerance was changed.** `spliced_transcendentals` still holds `sin`
+to 5 ulp and `cos` to 6; §9.3 says the divergence is now zero, and **a tolerance is the user's
+to move**, so the number stayed and the suite's counts are unmoved either way.
+
+**No `Invariant` or `Safety` sentence was added or changed.** The new field's own documentation
+states what it means and points at this note; §9 is where the contract lives.
+
+### 9.7 What this slice deleted, and what it left open
+
+**Deleted before the commit, as the slices before it were.** The probe that ran every §9.3
+measurement — `crates/lichen-compute-gpu/examples/ncir-sweep.rs`, one binary that built each
+fragment, called `spirv::compile`, dispatched it through `GpuContext::run` and wrote the module
+to `target/ncir/` — was **deleted before this section's commit**. It held no production code and
+nothing else referenced it. **Twenty-six modules were left behind in `target/`, which is not a
+tree.** `git diff dev...HEAD -- examples/` is empty.
+
+**Left open, unchanged by this slice.** Whether a **third** vendor honours the decoration — two
+devices, two vendors, and the [body sweep](device-body-sweep.md) §1's rules are two samples of a
+population. Whether the decoration is **stable across recompiles and pipeline caches** — it is a
+module fact and the digest now covers it, but nothing here ran a second compile with a cold
+cache. Whether a **narrower set** would give §9.3's numbers at a lower price. And
+[floating-point](floating-point.md) §6's question — **whether a device should be required to
+reproduce a body bit for bit at all** — which is a policy, is still open; what changed is that
+the backend now does it without asking.
