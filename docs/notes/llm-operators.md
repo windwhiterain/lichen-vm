@@ -522,8 +522,9 @@ need a node-local producer for `r`.
   are not all the same length: 48 and 12"* — it compared **payload bytes** — and a GEMV's two inputs
   (`M · kdim` against `kdim`) are **never** the same length except at `M = 1`, so **the check's own
   sentence was false of a legitimate body**. It was removed with the length rule (the correction above),
-  and **the removal is not what unblocks the graph leg: it cannot take a host buffer in its argument
-  yet.** Measured on the RTX 3060 with `crates/lichen-compute/examples/graph_leg_probe.rs`:
+  and **the removal is not what unblocks the graph leg: a graph step that reads an argument buffer is
+  refused at check, by a rule that is deliberate.** Measured on the RTX 3060 with
+  `crates/lichen-compute/examples/graph_leg_probe.rs`:
 
   | graph argument | reading |
   |---|---|
@@ -533,23 +534,29 @@ need a node-local producer for `r`.
   | GEMV's two buffers, read, unequal (12 and 3) | *"a `compute.collect` reads every element of one buffer, and its buffer position holds nothing (the empty value of a failed read)"* |
   | non-square matmul's two, unequal (6 and 9) | *"expected ?, found ?"* |
 
-  So **merely passing a buffer is enough** — reading it is not required — and the failing message is a
-  unify failure, which is not proof it happens at check time (this language unifies lazily during the
-  run too). **One locus is measured, and it is not the table's**: a program whose *root is the graph
-  value* (`built = compute.graph step` and nothing else) is refused at **stage `Check`**, span on the
-  `compute.parallel` line inside the step, *"expected ?, found ?"*, with the two nodes carrying
-  `ComputeValue(GraphValue(1))` and `ComputeValue(GraphValue(0))` — probed from
-  `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs`. So the diagnostic is a
-  check-stage unify of two graph placeholders, not a run-time one, **for that shape**; the collect
-  programs' failure is not localised by it. The same two-buffer shape passes through the **stub**
-  backend in
-  `crates/lichen-compute/tests/lichen_compute/graph_argument.rs` (**6 passed, 0 failed** at `dev@0380e8fc`),
-  whose programs differ from the probe in the backend and in carrying claims. **Where the split is, is
-  open**: the device's `run_batch` (the class it reports for what it produces, and how it binds an
-  argument buffer) and the graph's argument binding are the candidates; the compile-order class defect
-  is not implicated, because the all-`Int` row, which does no arithmetic on its buffer at all, fails
-  the same way.
-  The graph leg is still the only path that consults the fusion floor.
+  **The `expected ?, found ?` rows are answer collisions, and the collision is intended.** A
+  correspondence evaluated twice mints a cell each, `write_node_answer`
+  (`lichen-lowlevel/src/equality.rs`) unifies the new answer with the one already propagated into the
+  class, the two element placeholders are `GraphValue(1)` against `GraphValue(0)`, and the engine
+  reports the disagreement — the maintainer's ruling is *"答案相撞就 unify error 啊，有什么问题"*
+  ([answer-collision](answer-collision.md), which also records the two diagnostic defects fixed on the
+  way: the missing span and the dropped `value_a`/`value_b`). **And the buffer is not what decides which
+  rows collide**: the example's own **two-kernel** chain runs (`[20, 22, 24]`), while every
+  **one-kernel** variant here collides — with or without an argument buffer — which is the shape the
+  recording's re-drive mints twice. So the table's `expected ?, found ?` rows are instances of the known
+  collision class, not a property of argument buffers, and **where these programs should check is the
+  compute side's decision**, not a defect in the graph run or in the device. The device path is not
+  implicated either: the type system's owner reproduced the same collision through the CLI with **no
+  compute backend installed**. The probe
+  `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs` prints it for all four shapes,
+  including the two that end in `collect` — **stage `Check`, span on the `compute.parallel` line**, both
+  placeholders named — so the check-stage locus is measured and it is the same one for every
+  `expected ?, found ?` row.
+
+  **One row is not that collision, and it is not localised**: the two-buffer GEMV reaches the run and
+  answers the collect's *"empty value of a failed read"*, with no `compute.graph` reason in the
+  diagnostic list. It is the only shape here that gets past the check. The graph leg is still the only
+  path that consults the fusion floor.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
