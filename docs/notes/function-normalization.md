@@ -79,10 +79,15 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    value slot, not the struct — so `settled(1)` reports `index 1 out of bounds
    (array length 1)` and `settled.y` is `none`. The annotated form returns the
    struct itself. So the apply of a function whose type is cyclic (the
-   un-annotated recursive case) wires the template's return **slot** into the
-   caller's cell instead of the body's value; the fix belongs where the static
-   apply wires its result (`function.rs`, `wire_apply_result`) and needs the slot
-   unwrapped, not a change to the fold.
+   un-annotated recursive case) hands the caller a **slot** instead of the body's
+   value. **Where it is *not* created, measured**: a probe at
+   `wire_apply_result` (`apply.rs`) fires for both programs with the identical
+   shape — the return pair is `Array(len 2)` whose value slot is `none` and whose
+   type slot is a pair — so that call does not create the wrapper, and unwrapping
+   there would be the wrong fix. The difference appears **after** the pair is
+   wired, in the caller's read of it; the next probe should print only the fold's
+   own apply (the compute internals fire the same line) and follow the pair from
+   the read side.
 2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
