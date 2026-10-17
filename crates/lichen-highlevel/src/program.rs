@@ -71,6 +71,14 @@ pub struct PackageSource {
     /// `(frozen node index, line, column)`, sorted by index so a lookup is a
     /// binary search.
     pub spans: Vec<(usize, (u32, u32))>,
+    /// `(frozen assert-template index, how its failure reads)`, sorted by index so a
+    /// lookup is a binary search.
+    ///
+    /// # Invariant
+    /// The spelling is rendered where the build that registered it could read its
+    /// nodes: a refinement's domain names a node of **that** module, so the reading
+    /// build keeps the text rather than the node (`docs/notes/core-prelude.md`).
+    pub assert_spellings: Vec<(usize, String)>,
 }
 
 impl PackageSource {
@@ -80,6 +88,15 @@ impl PackageSource {
             .binary_search_by_key(&index.index, |(node, _)| *node)
             .ok()
             .map(|at| self.spans[at].1)
+    }
+
+    /// How a failed assert registered at the frozen node `index` reads, when the
+    /// registering build spelled it.
+    pub fn assert_spelling_of(&self, index: lichen_lowlevel::LocalNodeId) -> Option<&str> {
+        self.assert_spellings
+            .binary_search_by_key(&index.index, |(node, _)| *node)
+            .ok()
+            .map(|at| self.assert_spellings[at].1.as_str())
     }
 }
 

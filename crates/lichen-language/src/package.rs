@@ -62,6 +62,33 @@ pub fn is_prelude_import(import: &ResolvedImport) -> bool {
         .is_some_and(|name| name == CORE_PATH)
 }
 
+/// The assert spellings a built-in build registered, rendered where their nodes are
+/// readable.
+///
+/// # Invariant
+///
+/// Keyed by the assert's **template**: the spelling survives a per-call clone, and
+/// the reading build has no entry for a static template, so the text travels in the
+/// record (`docs/notes/core-prelude.md`).
+fn rendered_assert_spellings<P>(build: &Build<P>) -> Vec<(NodeId, String)>
+where
+    P: LangProgramShape,
+    P::Value: ValueType,
+{
+    let mut printer =
+        crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
+    build
+        .assert_spellings
+        .iter()
+        .filter_map(|(&template, &spelling)| {
+            Some((
+                template,
+                crate::render::assert_spelling_text(&mut printer, spelling)?,
+            ))
+        })
+        .collect()
+}
+
 /// Every node of a checked built-in that has a source position, paired with it.
 ///
 /// # Invariant
@@ -434,12 +461,14 @@ where
         path
     }
 
-    /// The source record of a built-in the store just froze: its file and node spans.
+    /// The source record of a built-in the store just froze: its file, node spans and
+    /// assert spellings.
     fn builtin_source(
         &self,
         name: &str,
         source: &str,
         located: &[(NodeId, (u32, u32))],
+        spellings: &[(NodeId, String)],
         node_map: &HashMap<NodeId, LocalNodeId>,
     ) -> PackageSource {
         let path = self.materialize_builtin(name, source);
@@ -451,10 +480,17 @@ where
         // One position per frozen node: the first recorded wins, so a node the
         // build located twice does not shadow itself.
         spans.dedup_by_key(|(index, _)| *index);
+        let mut assert_spellings: Vec<(usize, String)> = spellings
+            .iter()
+            .filter_map(|(node, text)| Some((node_map.get(node)?.index, text.clone())))
+            .collect();
+        assert_spellings.sort_unstable_by_key(|(index, _)| *index);
+        assert_spellings.dedup_by_key(|(index, _)| *index);
         PackageSource {
             path,
             code: std::sync::Arc::from(source),
             spans,
+            assert_spellings,
         }
     }
 
@@ -535,6 +571,7 @@ where
         // Read the names' pairs and the nodes' positions before the freeze.
         let terms = core_terms(&build)?;
         let located = located_nodes(&build, report.span_index.as_ref());
+        let spellings = rendered_assert_spellings(&build);
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
@@ -551,7 +588,8 @@ where
             index: freeze.node_map[&build.root_term],
         };
         let direct = core_direct(terms, freeze.key, &freeze.node_map)?;
-        let package_source = self.builtin_source(CORE_PATH, source, &located, &freeze.node_map);
+        let package_source =
+            self.builtin_source(CORE_PATH, source, &located, &spellings, &freeze.node_map);
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -944,6 +982,7 @@ where
 
         // The nodes' positions, read before the module moves into the freeze.
         let located = located_nodes(&build, report.span_index.as_ref());
+        let spellings = rendered_assert_spellings(&build);
         // Fully evaluate the exported value and type before freezing.
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
@@ -961,7 +1000,8 @@ where
             module: freeze.key,
             index: freeze.node_map[&build.root_term],
         };
-        let package_source = self.builtin_source(virtual_path, source, &located, &freeze.node_map);
+        let package_source =
+            self.builtin_source(virtual_path, source, &located, &spellings, &freeze.node_map);
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

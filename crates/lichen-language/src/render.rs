@@ -133,6 +133,47 @@ where
     }
 }
 
+/// The spelling a non-`Condition` assert failure reads, rendered through `printer`.
+///
+/// # Invariant
+/// `None` only for [`AssertSpelling::Condition`], whose message needs the failure's
+/// own value; every other spelling is a fact of the assertion and is the same on
+/// every failure of that template (`docs/notes/core-prelude.md`).
+pub fn assert_spelling_text<P>(
+    printer: &mut TypePrinter<'_, P>,
+    spelling: AssertSpelling,
+) -> Option<String>
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    match spelling {
+        AssertSpelling::Condition => None,
+        // A refinement: the value is outside the admitted class set.
+        // See docs/notes/operator-polymorphism.md §8.5.
+        AssertSpelling::Refinement { domain } => Some(format!(
+            "does not satisfy {}",
+            class_domain(printer, domain)
+        )),
+        // The deferred half of the container-kind requirement, in the read's own
+        // vocabulary.
+        AssertSpelling::StructKind { container } => Some(format!(
+            "expected a struct type, found {}",
+            printer.node(container)
+        )),
+        // The positional read's half of the same requirement.
+        AssertSpelling::TupleKind { container } => Some(format!(
+            "expected a tuple type, found {}",
+            printer.node(container)
+        )),
+        // The index read's half.
+        AssertSpelling::ArrayKind { container } => Some(format!(
+            "expected an array type, found {}",
+            printer.node(container)
+        )),
+    }
+}
+
 /// Render a whole diagnostic list back to back: one caret block each.
 pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
     let starts = crate::lex::line_starts(source);
@@ -288,30 +329,11 @@ where
             "this expression carries an attribute, but this build has no attribute extension to lower it"
                 .to_string()
         }
-        DiagKind::Assert => match d.assert_spelling {
-            // A refinement: the value is outside the admitted class set.
-            // See docs/notes/operator-polymorphism.md §8.5.
-            Some(AssertSpelling::Refinement { domain }) => {
-                format!("does not satisfy {}", class_domain(printer, domain))
-            }
-            // The deferred half of the container-kind requirement, in the read's
-            // own vocabulary.
-            Some(AssertSpelling::StructKind { container }) => format!(
-                "expected a struct type, found {}",
-                printer.node(container)
-            ),
-            // The positional read's half of the same requirement.
-            Some(AssertSpelling::TupleKind { container }) => format!(
-                "expected a tuple type, found {}",
-                printer.node(container)
-            ),
-            // The index read's half.
-            Some(AssertSpelling::ArrayKind { container }) => format!(
-                "expected an array type, found {}",
-                printer.node(container)
-            ),
-            // An explicit `@assert e`: the condition's own failed value.
-            _ => {
+        DiagKind::Assert => d
+            .assert_spelling
+            .and_then(|spelling| assert_spelling_text(printer, spelling))
+            .unwrap_or_else(|| {
+                // An explicit `@assert e`: the condition's own failed value.
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                     Some(LowValue::USize(n)) => n.to_string(),
                     Some(LowValue::None | LowValue::Error) => "none".to_string(),
@@ -319,8 +341,7 @@ where
                     None => "—".to_string(),
                 };
                 format!("assertion failed: expected 1, found {value}")
-            }
-        },
+            }),
         DiagKind::NonTerminating => match d.budget {
             // The recorded guard and its limit name the runaway shape exactly.
             Some(BudgetExhausted::ApplyDepth { limit }) => format!(

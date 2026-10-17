@@ -397,22 +397,29 @@ where
                                         .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                                 })
                         });
-                    // A failure cloned out of a **static** module belongs to that
-                    // module's source; no kept source, no diagnostic.
-                    let (span, file) = match d.static_template {
+                    // A static failure names its own source; its spelling travels in the record
+                    // (`docs/notes/core-prelude.md` §5).
+                    let (span, file, spelling) = match d.static_template {
                         Some(sref) => {
                             let source = registry
                                 .read()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                                 .get(sref.module)
                                 .and_then(|package| package.meta.source.clone())?;
-                            (Some(source.span_of(sref.index)?), Some(Arc::new(source)))
+                            let spelling = if d.assert_spelling.is_none() {
+                                source.assert_spelling_of(sref.index).map(str::to_string)
+                            } else {
+                                None
+                            };
+                            let position = source.span_of(sref.index)?;
+                            (Some(position), Some(Arc::new(source)), spelling)
                         }
-                        None => (span, None),
+                        None => (span, None, None),
                     };
                     Some(Diag {
                         span,
-                        message: crate::render::checker_message(&mut printer, &d),
+                        message: spelling
+                            .unwrap_or_else(|| crate::render::checker_message(&mut printer, &d)),
                         stage: Stage::Check,
                         file,
                         related: None,

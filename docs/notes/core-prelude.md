@@ -131,15 +131,19 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
 
 ## 5. What is open
 
-- **A failure inside the prelude is unattributed from the document's point of
-  view.** The line inside the built-in is named (§4), but **the domain spelling
-  is not carried across modules**: a refusal inside the prelude reads
-  `assertion failed: expected 1, found 0` where the same assertion written in the
-  document reads `does not satisfy {Int, Float}`, because the spelling
-  (`AssertSpelling::Refinement { domain }`) and the domain node live in the
-  *built-in's* build, and the record keeps positions, not checker facts. Carrying
-  them — the spelling table plus the domain's node, printed through the module the
-  failure names — is the next step on this leg.
+- **A failure inside the prelude now carries its spelling across the boundary — closed.**
+  The line inside the built-in was already named (§4); what did not cross modules was the
+  **domain spelling**, so a refusal inside the prelude read `assertion failed: expected 1,
+  found 0` where the same assertion written in the document reads `does not satisfy {Int,
+  Float}`. The spelling (`AssertSpelling::Refinement { domain }`) and its domain node live
+  in the built-in's build, which is the only place they can be printed; so that build renders
+  them, and `PackageSource` carries `(frozen template index, text)` beside the positions.
+  When a diagnostic resolves through a static template, the reading build uses the carried
+  text for a spelling its own table has no entry for. Measured: `add ["a", "b"]` reports the
+  class failure as **`does not satisfy {Int, Float}`** at `core.lichen:3:56` (was the
+  channel's generic wording), beside the annotation's own `assertion failed: expected 1,
+  found 0` at `3:39` — that one is an `AssertSpelling::Condition` by registration
+  (`checker/annotations.rs`) and is meant to stay generic.
 - **The call site is not attached.** The diagnostic names the built-in's line; it
   does not also name the application in the document that failed the contract,
   because an assert's clone records its *template* and not the apply that made it.
