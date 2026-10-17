@@ -939,7 +939,7 @@ array, `Module::write_node_value` it — never a write into the function's cells
 ```bash
 cargo check --workspace
 cargo test -q -p lichen-highlevel -p lichen-compute
-cargo test -q -p lichen-language --test pipeline --test defer_pending
+cargo test -q -p lichen-language --test language
 cargo test -q -p lichen-compute --test lichen_compute
 ```
 
@@ -953,20 +953,27 @@ cargo test -q -p lichen-compute --test lichen_compute
   (`crates/lichen-compute/tests/lichen_compute/runtime_only_package.rs:41`) — the `launch` gate
   must resolve the domain of an open kernel signature.
 
-**Where the tree stands after §5.1 and §5.1.1** (`--test compute`, 60 cases): 58
-pass.  The two reds are one shape each, and neither is a printer:
+**Superseded snapshot: where the tree stands now** (`dev@4ae2f585`, `--test
+lichen_compute`, 221 cases). The paragraph this replaces recorded "58 of 60, two
+red" for `--test compute` — a target name the tree no longer has — and held the
+cross-kernel residual open. Measured now, that family is green:
+`jit_cross_kernel` filters to **7 passed, 0 failed** (call, subexpr, wrapper, the
+tuple variants and the parameter pass-through), and
+`jit_an_operator_inside_a_cross_kernel_argument_is_emitted` is **1 passed**; the
+residual route the replaced table held open is the one
+[operator-polymorphism](operator-polymorphism.md) §7.1 records as closed by
+`Module::static_function_compute_operator` reading the operator out of the frozen
+callee. `examples/compute_jit.lichen` is still parked in `examples.rs`'s
+`WORK_IN_PROGRESS`, but for a different reason than the table gave: not the
+cross-kernel argument, but the launch result's **type**. Measured with the CLI, it
+runs and answers `raw 6: raw[?a, raw[?b, ?c]]` while declaring `output = "6:
+Int"` — the value is right and the type is the open cell §5.2 is about. Both §5.2
+acceptance targets pass (`a_kernel_value_and_type_render_by_name`,
+`an_imported_package_that_jits_at_its_top_level_still_runs`, each 1/0).
 
-| case | what it needs |
-|---|---|
-| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  **This is not a class question and no author-side specialization answers it** — the parameter is annotated and the body still has the shape.  **Measured root**: the *routing* lowered `x + 1` to a **call of the prelude's binding** (`Apply(Static(add), [x, 1])`), and inside a kernel **template that call is never evaluated** — `wire_apply_result` (the lowlevel's own wiring, whose doc says "the apply node *is* the return pair") is never called for it — so the body the call stands for has no edge from the call.  Three routes were tried and measured: (a) reading the residual from the call's own value — nothing is written there for a template call; (b) merging call with body in `wire_apply_result`'s scalar/undecided arm — **breaks** `lichen-highlevel --test dependent` (`dependent_type_resolves_per_argument_via_laziness`), so it cannot be unconditional; (c) forcing the body once at `jit` time (`evaluate_node_deep(ret_value)`) — the class still does not hold the residual.  What is left is the operator workstream's own recorded alternative: **expand the binding's body at the call site** instead of calling it (`operator-polymorphism` §7.1), which leaves `x + 1` an `Add` node in the body and removes the question entirely; until then the refusal stands |
-| `examples/compute_jit.lichen` (`--test examples`) | the same shape through a `compute.launch` argument |
-
-The `jit_cross_kernel_*` cases and the example are annotated as the rule requires;
-their remaining failure is the residual edge above, not the class.  Both
-`a_kernel_value_and_type_render_by_name` and
-`an_imported_package_that_jits_at_its_top_level_still_runs` — the two targets
-§5.2/§8.8 recorded as red — **pass** with the class stated, which is what the
-rule says they need.
+The `jit_cross_kernel_*` cases and the example were annotated as the rule
+requires; the cases now pass and the example's remaining gap is §5.2's open
+launch-result type, not an annotation or a class.
 
 The probes that pin the rest (scratch files, not committed):
 
