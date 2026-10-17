@@ -1,22 +1,27 @@
-# A self-referential `let` in a kernel body kills the host process
+# A self-referential block-wide binding: the crash, the ruling, and what is left open
 
-> Status: **current** — every figure below was measured at `dev@12425166` on this machine, by
-> building the worktree's own `lichen-compute` and running **one case per process** so that a
-> crash names its own case. **This note changed no production file and no test**; the two probes
-> it names in §10 are gone.
+> Status: **the refusal has landed; one crash is closed and one is not.** The user's ruling, in
+> their words: *"准确来说，这在图语义中并不合法，相当于自指，应当用 let 表示重绑定，但前端可能还未支持自指的重绑定"* — *"accurately, this is not legal in the graph semantics; it is equivalent to
+> self-reference; it should be written with `let` as a rebinding, though the front end may not yet
+> support a self-referential rebinding."* **Both halves of the uncertainty are now measured, and
+> both were wrong in the tree's favour**: a self-referential block-wide binding is not legal, and
+> the front end **does** support `let` rebinding — it runs and answers correctly (§11.2).
 >
-> **What is being diagnosed** is the one thing [division-rounding-gap](division-rounding-gap.md)
-> §7 left: *"a `let` whose value reads the name it binds — **overflows the host stack** and the
-> probe process dies with `0xC00000FD` on both vendors, before anything reaches a device. The same
-> two lines written with a second name run."* That note measured the arithmetic and declined to
-> diagnose the front end, so it is **referenced here, not restated**. What follows is the
-> front end: the minimal program, the cause with its evidence, whether the program is legal, and
-> what a fix would touch.
+> **What this slice changed**: `crates/lichen-language/src/resolve.rs` refuses the self-reference
+> at the name, `docs/language-spec.md` §Bindings carries the corrected sentence (**the user's
+> decision**, quoted before and after in §5), and five tests in
+> `crates/lichen-language/tests/language/pipeline.rs` that pinned the old reading now assert the
+> refusal. **The user's "may not yet support" is measured false**, and the record of it is §11.2.
 >
-> **The one-sentence result: the program is legal, the language promises it will not overflow, and
-> it overflows anyway — because the guard that was supposed to stop the walk fires at a depth the
-> default 1 MiB stack cannot reach.** The `#[stacksafe]` annotation that made the walk survivable
-> was **deleted in `2101384e`** and the comment that documents it was left behind.
+> **What the refusal closed**: `rc = rc * 2.0` in a kernel body was `0xC00000FD`; it is now a
+> named resolve refusal, exit `0` (§11.1). **What it did not close**: a **mutual** value cycle
+> — `a = b; b = qb * a`, which the language permits and the spec still promises — still overflows
+> at a 1 MiB stack and reaches the 512-level refusal at 2 MiB (§11.3). **That second finding is
+> the more important one, and it is the user's to decide.**
+>
+> Everything below §1–§10 is the diagnosis as it was measured at `dev@12425166`, kept as it was
+> written. **Where §5 read the spec and concluded the program is legal, §5 now records that the
+> reading was overturned by the user** — the measurement it rests on stands.
 
 ## 1. The minimal reproduction
 
@@ -160,8 +165,12 @@ refusal names it.
 
 ## 5. Is it a crash on a legal program?
 
-**Measured and read from the spec: the program is legal, and the language says so in terms that
-also promise no overflow.** [`docs/language-spec.md`](../language-spec.md) §Bindings:
+**This section was written as "no", and the user overruled it.** The reading below is kept as it
+was measured, because the measurement still stands and the *conclusion* drawn from it is what
+changed. **The edit to the spec is the user's decision, not this note's.**
+
+**As measured then, and read from the spec: the program looked legal, and the language said so in
+terms that also promise no overflow.** [`docs/language-spec.md`](../language-spec.md) §Bindings:
 
 > A binding is **block-wide** by default: its name is in scope throughout the block — forward *and*
 > backward — so a value may reference its own name, a later binding, or any other binding of the
@@ -171,26 +180,60 @@ also promise no overflow.** [`docs/language-spec.md`](../language-spec.md) §Bin
 > which the checker totalizes by pre-registering a skeleton pair and binding the skeleton's cells
 > to the finished pair (**no recursion, no overflow**).
 
-Three things follow, and each decides part of the fix:
+Three things follow, and **the first is the one the user overturned**:
 
-1. **`rc = rc * 2.0` is legal.** A value may reference its own name; this is not a program the
-   language should refuse. The fix is therefore **not** a new diagnostic on self-reference.
+1. **`rc = rc * 2.0` is legal** — *this was the reading, and it was wrong.* A value may reference
+   its own name; this is not a program the language should refuse, so the fix is not a new
+   diagnostic on self-reference. **The user's ruling is the opposite**: in graph semantics a value
+   that names the binding it binds **is** its own input, so it is a self-reference and is not
+   legal; a rebinding is written with `let`. **The sentence this reading rests on is the sentence
+   the user had corrected** — §5.1 quotes it before and after, and §11.1 is the refusal that
+   implements the decision.
 2. **The cycle is expected and the checker is supposed to absorb it.** `rc = rc * 2.0` outside a
-   kernel body answers `none: Float`, which is the spec's promise kept. The checker does its half:
-   [`check_term`](../../crates/lichen-highlevel/src/checker.rs) pre-registers a skeleton pair for
-   any `block_roots` member — *"A cycle forms only through a block-wide placeholder"*, gated on
-   `block_roots` alone. **The checker is not where this breaks.**
+   kernel body answered `none: Float`, which was the spec's promise kept. The checker does its
+   half: [`check_term`](../../crates/lichen-highlevel/src/checker.rs) pre-registers a skeleton pair
+   for any `block_roots` member — *"A cycle forms only through a block-wide placeholder"*, gated on
+   `block_roots` alone. **The checker is not where this breaks** — and after the refusal it is not
+   even reached for this shape, while the **mutual** cycle that the ruling leaves alone still
+   reaches it (§11.3).
 3. **`let` is the restrictive form and it is the correct spelling.** The same spec: *"`let name =
    expr` is the *restrictive* form: the value compiles before the name enters scope, so the name is
    visible only to later statements"*, and `let a = a` resolves `a` to the **outer** binding.
    Measured: `rc = 1.0/qb; let rc = rc * 2.0` **runs and answers correctly** (§2). The reporting
    note's *"a Newton iteration is expressible; writing it the way one writes it is not"* is a true
    observation about **`=`**, and **`let` is the answer that is already there** — which is worth
-   saying before anyone treats the crash as a request for a new refusal.
+   saying before anyone treats the crash as a request for a new refusal. **The user was unsure
+   whether the front end supported it; §11.2 measures six `let` shapes, and it does.**
 
-**So the language has already answered this once, in the wrong place.** The spec promises *no
-recursion, no overflow* for the self-reference cycle, and the cycle is well formed; what overflows
-is a **consumer of** that cycle on a path the promise did not name.
+**So the language had already answered this once, in the wrong place.** The spec promised *no
+recursion, no overflow* for the self-reference cycle, and the cycle was well formed; what overflowed
+was a **consumer of** that cycle on a path the promise did not name.
+
+### 5.1 The spec sentence, before and after — **the user's decision**
+
+**Before** (`docs/language-spec.md` §Bindings, as quoted above and as `dev` carried it):
+
+> … so a value **may reference its own name**, a later binding, or any other binding of the block,
+> and may recurse with them. … so a **self/mutual** reference makes the IR a cycle there … (**no
+> recursion, no overflow**).
+
+**After** (the same paragraph, corrected):
+
+> … so a value may reference a later binding, or any other binding of the block, and may recurse
+> with them. It **may not name the binding it binds**: the name **is** the value's own node in the
+> graph, so such a value is its own input, and it is a **resolve diagnostic** at the name. A
+> rebinding is written with `let` … The one self-reference the language admits is the **recursive
+> call**: a binding named as the head of an apply inside a `=>` body … because that edge is a call
+> and not a value read.
+
+**Two further sentences carried the same claim and were corrected with it** — the IR table's *"a
+self/mutual reference makes the IR a cycle there"* (now *mutual*, plus the refused use lowering
+inert) and §Name resolution's *"a value may reference a binding defined later **or itself**"* (now
+*another binding*, plus the recursive call as the one admitted self-reference). **The history is
+in §5 above**: the quote that was read, the reading it produced, and the ruling that replaced it.
+
+**What the correction does not say**: it does not make the *mutual* cycle illegal, and it does not
+claim that the kernel-body walk survives one. Both are §11.3's open question.
 
 ## 6. The comment that says this is already fixed, and is not
 
@@ -334,12 +377,225 @@ that would be a production change.
   no longer reachable on a default stack. Its trip-count table does not reproduce on this tree
   (§6), so it cannot be used as the threshold.
 
-## 10. What this slice deleted
+## 10. What the diagnosis slice deleted
 
 **Two probes, and they are gone.** `crates/lichen-language/examples/selfref_probe.rs` — the
 scratch driver for the no-`compute` readings in §2 and §5 — and
 `crates/lichen-compute/examples/selfref_probe.rs` — the one-case-per-process driver behind every
 figure in §1 to §6, carrying the stack-size argument, the check/evaluate split and the trip-count
-probe. **Both held no production code and nothing else referenced them.** **No production file and
-no test was touched**, `git diff dev...HEAD -- crates/` is empty, **no example file was edited**,
-and the two devices were never involved: every row above is the `cpu` backend on the host.
+probe. **Both held no production code and nothing else referenced them.** That slice touched **no
+production file and no test**, **no example file was edited**, and the two devices were never
+involved: every row above is the `cpu` backend on the host.
+
+## 11. The refusal, landed and measured
+
+**Everything in §11 was measured on this machine, in this worktree, one case per process** so that
+a crash names its own case, with the worktree's own build and a private `CARGO_TARGET_DIR`. The
+driver is named in §11.5.
+
+### 11.1 The refusal
+
+`crates/lichen-language/src/resolve.rs` refuses the self-reference at the name, at
+`Stage::Resolve`, before any IR is built. **The resolver is where the language puts a binding's
+scope rules** — its own `# Invariant` says *"The resolver is the only authority for the frontend's
+scope rules"* — so that is where the rule lands, and the refusal is one named message
+(`self_referential_binding`) shaped like the tree's own: the rule, then the way out.
+
+> ``rc`` names itself in its own value: a block-wide binding's value may not reference the binding
+> it binds, because the name **is** the value's own node in the IR graph, so the value would be its
+> own input. Write the rebinding with `let`, which compiles the value before the name enters scope,
+> so `let rc = …` reads the **outer** `rc` and binds a new one — recursion is spelled the same way,
+> with the reference under a `=>` parameter (`f = n => … f (n - 1)`), which is a call rather than a
+> self-reference.
+
+**Measured, `cpu` backend, one case per process. The "was" column is this note's own §1–§3.**
+
+| kernel body | was | now |
+|---|---|---|
+| `rc = rc * 2.0` | **`0xC00000FD`** | **refused by name**, exit `0` |
+| `rc = qb * rc` | **`0xC00000FD`** | refused, exit `0` |
+| `rc = 1.0/qb; rc = rc * (2.0 - qb*rc)` (the reported two lines) | **`0xC00000FD`** | refused, exit `0` |
+| `rc = rc` (bare) | refused by the kernel walk | refused by the resolver, at the same span |
+| `rc = id (rc * 2.0)` — **through a call** | **`0xC00000FD`** | refused, exit `0` |
+| `rc = [rc * 2.0][0]` — **through an array read** | **`0xC00000FD`** | refused, exit `0` |
+| `rc = (n => rc * n) (qb * 2.0)` — **self-reference under a lambda** | **`0xC00000FD`** | refused, exit `0` |
+| `rc = (n => rc * n) ((n => rc * n) (qb * 2.0))` | **`0xC00000FD`** | refused, exit `0` |
+| `rc = 1.0/qb; let rc = rc * 2.0` | runs | **runs**, `[0.6666667, 0.6666667, 0.6666667, 0.6666667]` |
+| `qb = 3.0; rc = qb * 2.0` (no self-reference) | runs | **runs**, `[6.0, 6.0, 6.0, 6.0]` |
+| the two-name quotient `rc0 = 1.0/qb; rc = rc0 * (2.0 - qb*rc0)` | runs | **runs**, `[0.33333334, …]` |
+| the forward reference `rc = qb * 2.0; qb = 3.0` | runs | **runs**, `[6.0, …]` |
+| `f = n => … f (n - 1); rc = f 3` (the recursive call) | runs | **runs**, `[4.0, …]` |
+| `even`/`odd`, mutual recursion | runs | **runs**, `[0.0, …]` |
+| `f = n => … f (n - 1); rc = f 400` (trip 400) | runs | **runs**, `[400.0, …]` |
+
+**The last four rows are the rule's edge, and they are why the refusal is not "under a lambda".**
+A self-reference is legal exactly when it is **the head of an apply inside a `=>` body** — the
+recursive call, which is a call edge and not a value read. Every spelling in the tree is that
+shape (`fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]`,
+`@loop dot = s => … dot (s(0) - 1, …)`, `sum_to = s => … sum_to (…, …)`), so all of them keep
+running. **`rc = (n => rc * n) (qb * 2.0)` is the same self-reference wearing recursion's clothes**
+— it crashed before this slice and is refused now, and a rule that stopped at "under a lambda"
+would have let it through.
+
+**Two things the refusal needed beyond the diagnostic**, both measured rather than assumed:
+
+- **The use is left unresolved**, so it lowers to the inert `ErrorBlock` an unresolved name
+  lowers to. **A resolve diagnostic alone is not enough**: `compile_with_imports_at` reports
+  diagnostics *and* lowers the program in the same call, and the cycle that lowering walks is what
+  overflowed. With the diagnostic alone, `rc = rc * 2.0` in a kernel body **still died with
+  `0xC00000FD`** — measured, on this worktree, before the inert lowering was added.
+- **The refused use is reported once per binding**, at the first reference, and every further
+  self-reference in the same value is still lowered inert (so no cycle survives anywhere in it).
+
+**What a refused kernel program prints**: the resolve refusal first, then the kernel walk's own
+*"a kernel body reached a node with neither a value nor an operation"* for the inert node that
+replaced the self-reference. **The head is the right one** — it names the rule and the fix at the
+offending use — and the second is the same cascade an unresolved name produces today, which the
+spec's §Diagnostics describes as the frontend's recovery. Outside a kernel body there is
+no second diagnostic.
+
+**It is a check-time refusal, not a run-time one**: `compile("rc = rc * 2.0\nrc")` alone — parse,
+resolve, lower, check, **no evaluation** — reports `checked = false` with exactly one diagnostic.
+
+### 11.2 Is `let`-rebinding fully supported? — **yes, and the user's "may not yet" is false**
+
+**Measured, plain front end, no `compute` import, one program per process.** The user wrote that
+the front end *"may not yet support a self-referential rebinding"*; it does, and it answers
+correctly.
+
+| program | answer |
+|---|---|
+| `qb = 3.0; rc = 1.0/qb; let rc = rc * 2.0; rc` | **`0.6666667: Float`** — reads the outer `rc`, binds a new one |
+| `let a = 1.0; let a = a + 1.0; let a = a + 1.0; a` | **`3.0: Float`** — a `let` chain |
+| `a = 1.0; let a = a + 1.0; a` | **`2.0: Float`** — a `let` over a block-wide binding |
+| `{ a = 1.0; let a = a + 1.0; a }` | **`2.0: Float`** — shadowing inside a block |
+| `let a = a + 1.0; a` | refused as **`unresolved name 'a'`** — with no outer `a`, `let` has nothing to read, and that is the documented behaviour, unchanged |
+| `f = n => { t = if n == 0 then 0.0 else f (n - 1); t + 1.0 }; f 4` | **`5.0: Float`** — the recursive call inside a block-bodied function |
+| `f = n => if n <= 0 then 0.0 else 1.0 + f (n - 1); f 4` | **`4.0: Float`** |
+| `even`/`odd` mutual recursion | **`1.0: Float`** |
+| `a = b * 2.0; b = 3.0; a` (forward) | **`6.0: Float`** |
+| `a = b; a = 1.0; b = a; (a, b)` (mutual, later wins) | **`(1.0, 1.0): tuple{Float, Float}`** |
+
+**The refuted half of the user's sentence, stated plainly**: nothing about `let` needed building
+for this. The restrictive form is the spec's §Bindings *"compiles the value before the name enters
+scope"*, and it answers a self-referential rebinding correctly today.
+
+### 11.3 The second finding — **a legal program still overflows**
+
+**`a = b` and `b = qb * a` in a `compute.parallel` body is legal, and it still dies with
+`0xC00000FD`.** This is the finding that matters more than the one the ruling closed, because the
+ruling does not touch it: a **mutual** value cycle is a *different* binding naming the other, the
+spec still promises it (`"any other binding of the block"`, and
+[`compile_scope_statements`](../../crates/lichen-language/src/compile.rs)'s own `# Invariant`:
+*"a value may forward- or mutually reference the block's bindings"*), and the checker totalizes it
+outside a kernel body — measured, it answers.
+
+**Measured, `cpu` backend, the same driver, on a thread of a chosen stack:**
+
+| stack | `a = b; b = qb * a; rc = a` in a kernel body |
+|---|---|
+| **1 MiB** — the default main-thread stack on Windows | **`0xC00000FD`** |
+| 2 MiB | the repository's own **512-level refusal** |
+| 4, 8, 64 MiB | the same 512-level refusal, unchanged |
+
+**So the refusal closed the crash for the shape the ruling names, and the walk's exposure is
+unchanged for the shape the ruling does not name.** The walk reaches the same budget it always
+reached; §3's finding stands — the budget is a depth the default stack cannot reach — and §6's two
+false comments still describe it in the present tense.
+
+**The neighbouring shape, measured, because it decides how the rule is drawn**: `a = b; b = c;
+c = qb * a` does **not** crash — the aliasing in `compile.rs` collapses the three-name chain and
+the kernel walk refuses it by name (*"a kernel body reached a node with neither a value nor an
+operation"*), exit `0`. So the exposure is not "any cycle": it is a cycle whose edges all survive
+aliasing. **A one-line change to the walk would change which programs land in which column**, and
+that is a decision, not a measurement.
+
+**Why this is the user's call, and not this slice's.** Three ways out, and they disagree about what
+the language means:
+
+1. **Restore `#[stacksafe]` on the kernel-body walk** — §7's first bullet, a plain defect fix, and
+   it makes the 512 budget *reachable*, which is what §3 says the refusal is for. It changes no
+   semantics and no number a program is written against. **It is the smallest thing that closes
+   this crash**, and it is a one-line change to a file whose comments are already wrong (§6).
+2. **An in-progress marker in the walk**, so a cycle is cut rather than budgeted — a contract
+   change: the walk would have to decide what a kernel body *writes* for a value that is its own
+   input.
+3. **Lower `512` to fit a 1 MiB stack** — §7's second bullet, and the constant's own `# Invariant`
+   says *"a constant, never derived from the thread's stack"*. **That sentence is one of the two
+   this note did not touch**, and lowering the number would trade a crash for a refusal at a trip
+   count a program could once be written against.
+
+**This slice did none of the three.** It refused the shape the user ruled illegal, and it says here
+that the other shape is still open.
+
+### 11.4 The two false `# Invariant` statements — quoted, unchanged, with a recommendation
+
+§6 quotes both. **Neither was edited, and this slice could not edit them without permission**: a
+`# Invariant` sentence may not be added or changed by an agent. Here they are again, verbatim, so
+the recommendation sits beside them.
+
+`crates/lichen-compute/src/compute.rs:2920-2927` — **before, unchanged**:
+
+```rust
+/// How many levels deep [`emit_node`]'s walk may go before it refuses.
+///
+/// # Invariant
+/// The budget is on the walk, and the walk's depth is the trip count: an unmarked
+/// recursion is expanded into a nested chain, so depth is linear in the trips.
+/// `emit_node` is `#[stacksafe]` and this limit is the policy — a constant, never
+/// derived from the thread's stack, and unreachable except by expansion.
+const MAX_KERNEL_BODY_DEPTH: usize = 512;
+```
+
+`crates/lichen-compute/Cargo.toml:7-10` — **before, unchanged**:
+
+```toml
+# `emit_node` is the one recursive walk on the kernel lowering path that nothing
+# else grows the stack for, so it is `#[stacksafe]` and depth-budgeted
+# (`MAX_KERNEL_BODY_DEPTH` in `compute.rs`).
+stacksafe.workspace = true
+```
+
+**Both are still false, and the refusal does not make them true.** What did change is their
+*reachability for this program*: `rc = rc * 2.0` no longer reaches that walk at all, so the
+sentence *"unreachable except by expansion"* is now true of **the self-reference** — while §11.3
+measures a legal program that reaches the budget anyway, which is the sentence being false about
+the code rather than about one program. `emit_node` still does not exist, and nothing in
+`lichen-compute` is still `#[stacksafe]`.
+
+**Recommendation, and why it is not this slice's to make.** Restore the annotation **on
+`Lower::value`** in `crates/lichen-compute/src/compute/body.rs`, which is the walk that carries the
+budget (§6 measured that `2101384e` removed it), and rewrite both sentences to name *that*
+function. It restores a stated invariant rather than changing one; `stacksafe` is already a
+dependency; and it is the half §11.3's first option needs to close the crash that remains. **Two
+reasons it did not happen here**: it is a **production change to another crate's hot walk** on the
+strength of a §11.3 measurement taken on this machine only, and **editing an `# Invariant` needs
+the user's permission** — which this slice does not have. **If the user wants option 1, it is one
+annotation and two sentences, and this note names all three places.**
+
+### 11.5 What this slice changed, what it deleted, and what the suites say
+
+**Changed**: `crates/lichen-language/src/resolve.rs` (the refusal, the `Apply` head-position
+tracking, the lambda depth, and the message); `docs/language-spec.md` (§Bindings, the IR table's
+cycle sentence, §Name resolution, and the frontend-recovery sentence in the spec's §Diagnostics);
+five tests in
+`crates/lichen-language/tests/language/pipeline.rs`; this note; and the `docs/README.md` index row.
+
+**Deleted, and named, before the commit**: `crates/lichen-language/examples/selfref_probe.rs` (the
+no-`compute` readings in §11.1 and §11.2, one program per process) and
+`crates/lichen-compute/examples/kernel_selfref_probe.rs` (the kernel-body rows of §11.1, the
+stack-size argument of §3 and of §11.3, and the check/evaluate split of §4). **Both are scratch
+drivers; neither is referenced by anything in the tree.**
+
+**The suites, each measured here and attributed**:
+
+| suite | result | movement |
+|---|---|---|
+| examples survey (`zz_examples_panic_probe`) | **`clean=43 panicked=[] drifted=[]`** | **none** — the required figures, unmoved |
+| `lichen-compute` | **201 passed / 17 failed / 2 ignored** | **none** — the *same seventeen* names with the change reverted, measured in this worktree. **The brief's "204 / 14 / 2" does not reproduce at `dev@72b765aa` on this machine**; the seventeen are `automatic_tiling` (3), `combine_fold`, `consumer_guard`, `fold_datum` (2), `graph_jit` (2), `graph_structure`, `identity_from_body` (3), `pack_placement` (4), and they fail identically before and after |
+| `lichen-compute-gpu` | **88 passed / 0 failed** | **none** — the RTX 3060 figure, so the default device here is the 3060; the Iris Xe figure (87 / 1, the `ln`) is the other device's |
+| `lichen-language` | **260 passed / 11 failed** | **none** — the same eleven at `dev`. Before this slice's test update it was 257 / 14: the three new ones were the tests that pinned the overturned reading, and they are updated here |
+
+**No `# Invariant` or `# Safety` sentence was added or changed anywhere.** The spec correction is
+not one of those sections, and §11.4 names the two that are still wrong rather than editing them.
+`crates/lichen-lowlevel/src/evaluation.rs` and `gc.rs` were not touched.

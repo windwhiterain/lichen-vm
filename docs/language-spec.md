@@ -470,14 +470,25 @@ maps every span back to the original file.
   There is no `let` node and no desugared lambda — the tail stays the program's
   root, so its type is determinable exactly like a bare program's.  A binding is
   **block-wide** by default: its name is in scope throughout the block —
-  forward *and* backward — so a value may reference its own name, a later
-  binding, or any other binding of the block, and may recurse with them.  The
+  forward *and* backward — so a value may reference a later binding, or any
+  other binding of the block, and may recurse with them.  It may **not** name
+  the binding it binds: the name **is** the value's own node in the graph, so
+  such a value is its own input, and it is a **resolve diagnostic** at the name.
+  A rebinding is written with `let` (the *restrictive* form, below).  The one
+  self-reference the language admits is the **recursive call**: a binding named
+  as the head of an apply inside a `=>` body — `f = n => f (n - 1)`,
+  `fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]`,
+  `@loop dot = s => … dot (s(0) - 1, …)` — because that edge is a call and not
+  a value read.  The
   frontend reserves a placeholder id per block-wide binding, enters all the
   names before compiling any value, then fills each placeholder with its
-  value's node — so a self/mutual reference makes the IR a cycle there (the
+  value's node — so a *mutual* reference makes the IR a cycle there (the
   graph contains a back-edge), which the checker totalizes by pre-registering
   a skeleton pair and binding the skeleton's cells to the finished pair (no
-  recursion, no overflow).  `let name = expr` is the *restrictive* form: the
+  recursion, no overflow **in the checker**; what a kernel-body lowering walk
+  does with such a cycle is a separate question, measured in
+  [self-referential-binding-overflow](notes/self-referential-binding-overflow.md)).
+  `let name = expr` is the *restrictive* form: the
   value compiles before the name enters scope, so the name is visible only to
   later statements (`let a = a` resolves `a` to the outer binding — the
   sequential, non-recursive case).  `cache name = expr` marks the binding as a
@@ -923,8 +934,10 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 
 There is no desugar step: bindings are graph sharing, and a block-wide
 binding reserves a placeholder id, compiles its value, then fills the id with
-the value's node — so a self/mutual reference makes the IR a cycle there,
-which the checker totalizes with a skeleton pair.
+the value's node — so a mutual reference makes the IR a cycle there,
+which the checker totalizes with a skeleton pair.  A use of a binding's *own*
+name inside its own value never reaches that: the resolver refuses it and the
+use lowers to an inert `ErrorBlock`, as an unresolved name's does.
 
 ### Name resolution
 
@@ -940,9 +953,13 @@ scope stack is keyed by it, and the IR carries no name strings.  A block-wide
 binding `a = e` resolves differently: the frontend first reserves a
 `Placeholder` id for every block-wide binding of the scope, enters all the
 names in one frame, then compiles each value — so a value may reference a
-binding defined *later* or *itself*.  A use of `a` in a value resolves to the
+binding defined *later* or *another* binding of the same block, and may name
+itself only as the head of an apply inside a `=>` body, which is the recursive
+call.  A use of `a` in a value resolves to the
 reserved id; once the value compiles, the id is filled with the value's node
-(a bare `a = b` aliases `b`'s node instead).  A restrictive `let a = e`
+(a bare `a = b` aliases `b`'s node instead).  A use of `a` in its own value is
+a **resolve diagnostic** at that use, and the use is left unresolved so it
+lowers to an inert `ErrorBlock`.  A restrictive `let a = e`
 compiles the value first and pushes `a` afterwards, so the name is visible
 only to later statements.  A block `{ a = e; …; e }` does the same and pops
 its scope frames (truncates) at the `}` — inside, the block's names shadow
@@ -972,8 +989,10 @@ classes `a`/`b` and their recorded values, `span`) — which tests and tooling
 match on instead of the message; frontend errors leave it `None`.  The
 frontend *recovers*: lex errors accumulate (an unexpected character is skipped
 and lexing continues), the parser skips a broken statement and reports it,
-an unresolved name lowers to an inert `ErrorBlock` (masked, checker-skipped),
-and the checker still runs on the resulting partial program — so one pass
+an unresolved name lowers to an inert `ErrorBlock` (masked, checker-skipped)
+— as does a use of a binding's own name inside its own value, which the
+resolver refuses — and the checker still runs on the resulting partial program
+— so one pass
 reports every problem it can find.  Checker diagnostics
 can be many, in order.
 
