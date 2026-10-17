@@ -282,12 +282,19 @@ q = (compute.buffer ([10.0, 20.0, 30.0] : array{Float, 3}) : (compute.Buf Float)
 out = (compute.graphrun built (3, p, q) : Out2)
 compute.collect out.w
 "#;
+const GRAPH_OF_A_CONSTANT: &str = r#"
+--- compute = import "compute.lichen" ---
+step = (n : Int) => n + 1
+built = compute.graph step
+built
+"#;
 #[test]
 fn probe_graph_argument_buffer() {
     let Some((_context, _guard)) = common::device("zz_graph_argument_probe") else {
         return;
     };
     for (name, source) in [
+        ("graph_of_a_constant", GRAPH_OF_A_CONSTANT),
         ("two_buffers_float", TWO_BUFFERS_FLOAT),
         ("two_buffers_annotated", TWO_BUFFERS_ANNOTATED),
         ("gemv_no_fold", GEMV_NO_FOLD),
