@@ -70,6 +70,19 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    diagnostic. Annotating the recursive function (`… : tuple{Int, XOut} -> XOut`)
    restores both the value and the type (`[2.1875, …]: array{Float, 6}`, measured
    on the same three-step ring, for `@loop` and plain recursion alike).
+   **The lost value is a slot, and the recursion's *presence* is the trigger**
+   (measured on the same ring, distance 0 so the body returns its own argument):
+   `@loop m = (s => s(1))` ; `m (0, seed)` collects the seed's numbers, and so do
+   a plain lambda and `s(0)`; but the recursive body
+   `s => if s(0) == 0 then s(1) else march (…)` returns
+   `raw[raw[raw Buffer, raw Float]]` — a **one-element array**, the return pair's
+   value slot, not the struct — so `settled(1)` reports `index 1 out of bounds
+   (array length 1)` and `settled.y` is `none`. The annotated form returns the
+   struct itself. So the apply of a function whose type is cyclic (the
+   un-annotated recursive case) wires the template's return **slot** into the
+   caller's cell instead of the body's value; the fix belongs where the static
+   apply wires its result (`function.rs`, `wire_apply_result`) and needs the slot
+   unwrapped, not a change to the fold.
 2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
