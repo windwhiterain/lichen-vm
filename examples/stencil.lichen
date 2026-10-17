@@ -1,0 +1,63 @@
+---
+  order = "30"
+  compute = import "compute.lichen"
+  doc = "One explicit step of the 1D heat equation: `y[i] = x[i] + alpha * (x[i - 1] - 2 * x[i] + \
+    x[i + 1])`, the three-point Laplacian, one lane per element. It is the ladder's first \
+    **physics** operator and its first whose **read set is wider than its lane**: every operator \
+    below it reads `x[i]` or a slice from `0`, this one reads `i - 1` and `i + 1` as well.\n\n\
+    **The boundary condition is the padding, not a special case.** At `i = 0` the left index is \
+    `i - 1` and at `i = n - 1` the right one is `i + 1`, and both are **outside the buffer** — an \
+    out-of-buffer read answers `0` (`crates/lichen-compute/src/compute.rs:6234`; the same rule that \
+    made `examples/gemv.lichen` answer `0` for `x`'s fourth element). So both ends are \
+    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the operator has no case \
+    analysis in it at all. That is a choice of operator rather than a limitation of the surface: a \
+    different boundary is a different operator, because the surface has no way to spell a boundary \
+    that is a parameter without a `Select`, and a `Select` refuses when its two arms are computed \
+    in different classes (`attention.lichen`'s `scores` refusal, fixed at `b6dea46c`).\n\n\
+    **The write address is the lane's own index.** A `compute.write` names a slot of an output \
+    buffer exactly as long as the launch's extent \
+    (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range c.n` with `.at i` is a \
+    bijection and the answer does not depend on a schedule. The **read** address is the interesting \
+    one: `[i - 1, i + 1]` is not a prefix of the buffer and not a slice of it, so a body that \
+    reaches outside its own lane has to be checked against the device's tail-lane rule rather than \
+    assumed — the guard at the entry point is what makes a surplus lane write nothing \
+    (`docs/notes/lichen-compute-gpu.md`, the tail-lane obligation).\n\n\
+    **`alpha` is a `Float` leaf, and the diffusion number is the operator's argument.** The first \
+    scalar leaf is the extent and every other leaf is carried for what it is (`e24d00fb`), so the \
+    number that decides **stability** is a caller's to choose: this step is stable only for \
+    `alpha <= 1/2`, which is a fact about the physics and not something the operator can enforce, \
+    because `alpha` is a runtime value by design. The rule that bites is positional: the **second** \
+    leaf is what `compute.row`/`compute.col` divide by (`crates/lichen-compute/src/compute_body` \
+    note: `body.rs:788-815`), and this body has no coordinates, so the second leaf is free.\n\n\
+    **The arithmetic is exact, and the declared output is worked out by hand.** `x` is a bump at \
+    both ends, `4 0 0 0 0 4`, and `alpha` is `0.25`. Lane `0` reads the padding as `0`, so \
+    `4 + 0.25 * (0 + 0 - 8) = 2`; lane `1` is `0 + 0.25 * (4 + 0 - 0) = 1`; lanes `2` and `3` have \
+    zeroes on all three taps and stay `0`; lane `4` is `0 + 0.25 * (0 + 4) = 1`; and lane `5`, \
+    with the right padding as its right neighbour, is `4 + 0.25 * (0 + 0 - 8) = 2`. The answer is \
+    `2 1 0 0 1 2` — every value a quarter or a half below `2^24`, so **nothing is modelled**: no \
+    `exp`, no `sqrt`, no `ln`, no division.\n\n\
+    **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
+    has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
+    `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
+    `examples/kvcache.lichen`'s append before the guard landed. A six-element stencil is therefore \
+    a device check of the tail-lane guard, not only a physics demonstration, and the sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
+    on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
+    leave the answer untouched."
+  output = "[2.0, 1.0, 0.0, 0.0, 1.0, 2.0]: array{Float, 6}"
+---
+XIn  = struct{.x (compute.Buf Float)}
+XOut = struct{.y (compute.Buf Float)}
+XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
+XArg = struct{.n Int, .alpha Float, .I XIn}
+stencil_raw = (c : XPar) => {
+  i = compute.range c.n
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  left = compute.read ((compute.Read _)(.from c.in.x, .at (i - 1)))
+  right = compute.read ((compute.Read _)(.from c.in.x, .at (i + 1)))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+}
+stencil = compute.parallel stencil_raw "cpu"
+x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
+out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+compute.collect out.y : array{Float, 6}

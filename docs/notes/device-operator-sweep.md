@@ -58,6 +58,8 @@ correction to the brief itself.**
 | attention — softmax composed with a gemv | **`attention.lichen`** | **runs, diverges** | **1** (of 8 elements, 6 differ) | 2 modules, **2 ACCEPT** |
 | `gemv` | `gemv.lichen` | **refused by name** — the **known** rule; **removed since, and it runs** (§ The sweep, as a program) | — | 1 module, **1 ACCEPT** |
 | `matmul` | `matmul.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 1 module, **1 ACCEPT** |
+| the elementwise and reduction library — `scale`, `lerp`, `clamp`, `rowsum` | `mathlib.lichen` | **runs, bit-exact** | **0** (of 6 elements) | not checked in this note's run |
+| a 1D stencil — the three-point Laplacian, both boundaries taken from the padding | `stencil.lichen` | **runs, bit-exact** | **0** (of 6 elements) | not checked in this note's run |
 
 > **Every row of that table was measured on a device with no `NoContraction`, and two of them
 > have since moved. [operator-reverification](operator-reverification.md) §2 re-ran each of these
