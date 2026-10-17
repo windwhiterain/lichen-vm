@@ -387,3 +387,11 @@ Writing greedy sampling exposed two refusals that fail **P1** — neither names 
 Both are recorded here rather than fixed: the first needs a diagnostic that distinguishes a step whose value has no
 `Select` from one whose alias is filled later, and the second needs a sentence naming the one-slot rule. Neither is
 a message change, so neither belongs to the slice that fixed the unclosed delimiter.
+
+* **A runtime read's own type cannot name the container — measured and reverted.** The deferred named read's
+  refusal (`f = x => x.a` ; `f [10, 20]`) is `Diag::IndexTarget`, whose recorded node is the read's
+  **type-chain** node: carrying it into the renderer and printing the node's type answers `TypeArray`, `Type`
+  and `TypeTuple` for the array, scalar and tuple arguments — the kind of the chain node, not the user's
+  `array{Int, 2}`. So the wording would expose internals. Naming the value the user passed needs the checker
+  to record the **container expression's type** as a fact on the diagnostic (a new field), not a re-read of the
+  runtime error's node; the plain sentence stays until then.
