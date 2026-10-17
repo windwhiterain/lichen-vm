@@ -124,37 +124,39 @@ fn an_index_above_the_count_answers_the_element_the_host_holds() {
     );
 }
 
-/// A lane above the count writes nothing, and the tail of the allocation stays as cleared.
+/// A lane above the count writes nothing, so the tail keeps what the allocation held.
 ///
 /// # Invariant
-/// Two runs on one context, both at a count of 100 and so both allocated 128 elements, which is
-/// what puts the second on the first's buffer. The first run's 28 surplus lanes run no instruction
-/// and so write nothing, leaving the tail at the cleared `0`; the second run writes its own 100
-/// elements over the first's and leaves the same 28, which is what a recycled allocation shows.
+/// The first run covers a whole workgroup, so all 128 slots are written; the second covers 100 on
+/// a fresh 128-slot allocation from the same pool, and its 28 surplus lanes run no instruction, so
+/// those slots still hold the first run's answers. That is what proves the guard: the tail is
+/// neither cleared nor overwritten, and only the first `count` elements are the answer.
 #[test]
-fn the_padding_past_the_buffer_is_cleared_and_read_as_zero() {
-    let test = "the_padding_past_the_buffer_is_cleared_and_read_as_zero";
+fn the_padding_past_the_buffer_keeps_what_the_allocation_held() {
+    let test = "the_padding_past_the_buffer_keeps_what_the_allocation_held";
     let Some(context) = common::context(test) else {
         return;
     };
     let fragment = shifted(0);
     let long: Vec<i64> = (0..128).collect();
-    let first = dispatched(&context, &fragment, &long, 100, 128);
+    let first = dispatched(&context, &fragment, &long, 128, 128);
     assert_eq!(
-        first[100..],
-        [0i64; 28],
-        "a surplus lane runs no instruction, so the tail is the cleared allocation and not the \
-         real element above the count"
+        first, long,
+        "a whole workgroup writes every slot, so the answer is the input element for element"
     );
 
     let short: Vec<i64> = (0..100).map(|value| value - 50).collect();
     let second = dispatched(&context, &fragment, &short, 100, 128);
-    let mut expected = short.clone();
-    expected.resize(128, 0);
     assert_eq!(
-        second, expected,
-        "the padding past the 100-element input is the first run's allocation, so it must be \
-         cleared rather than left holding the bytes the first run wrote there"
+        second[..100],
+        short[..],
+        "the run's own 100 lanes answer the input element for element"
+    );
+    assert_eq!(
+        second[100..],
+        first[100..],
+        "a surplus lane runs no instruction, so the tail still holds what the previous run left \
+         there rather than being cleared or overwritten"
     );
 }
 
