@@ -570,17 +570,25 @@ need a node-local producer for `r`.
     now `left = ["over [0, 3) with 0 input(s) of length 0", "over [0, 3) with 1 input(s) of length 3"]`
     and `right = []`: **the graph dispatches twice and the plain run dispatches not at all**. Annotating
     the step's last `plrun` (which the re-drive otherwise doubles) halves the graph's trace from four
-    lines to those two and does not fix the assertion, so the open question is the *plain* leg — a
-    program whose answer is never collected performs no dispatch, and whether that is the intended
-    laziness or a lost forcing is **not diagnosed**. The test's own premise (`plain.len() == 2`) says
-    the author measured two, so something changed on the forcing path and not in the graph.
-    **Two hypotheses were then tested and excluded**: collecting the plain answer
-    (`out = compute.collect r.w` instead of returning the step's struct) leaves `plain` empty, and so
-    does deciding every class in the shared `KERNELS` (`compute.Buf Int`, `compute.KT Int`) — with both,
-    the plain leg still logs nothing while the graph logs its two lines, and the plain run's root comes
-    back as an array with **no diagnostics**: a `compute.collect` that answers without a dispatch, which
-    is the reading to start from rather than a wrong answer to the test's question. The two edits were
-    reverted, so the test still spells the program it was written with.
+    lines to those two and does not fix the assertion, so what is open is the *plain* leg. **It is now
+    diagnosed, and the premise is stale rather than the behaviour wrong**: a plain host run is **one
+    pass** and writes a run stamp once, so `run_deferred` reports undecided when an operator's operand
+    array is not yet decided and returns without running it, and `run_stamp_is_set`
+    (`crates/lichen-lowlevel/src/module.rs`) means an operator asked before its operand was decided is
+    never asked again. Only `build_graph`'s `evaluate_until_the_return_is_nameable` re-drives, because it
+    calls `reopen_stalled` (`compute.rs:5350-5379`). The readings, from
+    `crates/lichen-compute/tests/lichen_compute/zz_plain_leg_probe.rs`: every applied program's
+    `ParLaunch` is `owed=true value=no-value verdict=never-walked` — the kernel's own `Parallel`
+    definitions among them — the depth-2 clones of the body that the apply instantiated **are never
+    walked**, and `extension diagnostics: 0 recorded, has_failures=false`. So it is not "a collect that
+    answers without a dispatch": the unread variant's root is the program's **definition table** with
+    `verdict=undecided`, and the collect variant does not answer at all — `common::run` panics *"the
+    program's root value is undecided"*. `graph-recording-rounds.md` already names this very test as a
+    **test premise**: *"under a plain run gate the host run performs no dispatch, so plain and recorded
+    cannot agree"*. A plain call and a recording therefore cannot be compared this way, and what the test
+    needs is a premise that fits the gate, not a fix in the body or the collect. The two shapes tested on
+    the way — collecting the answer, and deciding every class in the shared `KERNELS` — both leave the
+    plain leg inert for that reason, and both edits were reverted.
   - `graph_structure::a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`
     refuses to check at all: *"compute.parallel: no output of this parallel index function carries a
     decided scalar class: its codomain names 1 output(s) and none of them is a `compute.write` of a
