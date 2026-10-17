@@ -525,6 +525,41 @@ two vendors.
 **It would change `ln`'s bits on both vendors**, which is why it is a separate decision and not a
 consequence of shipping the instruction.
 
+### 11.4a What wiring it in would buy, and the identity that makes it a construction
+
+§11.4 says it would change `ln`'s bits and leaves the size open. The size is **0 ulp**, and the argument is
+a line-by-line identity rather than a measurement of the composite:
+
+| step | `ln_body` (the device's sequence) | `ln_value` (the host reference) | same? |
+|---|---|---|---|
+| reduction | `ln_scale` × (5 coarse + 32 fine + 5 unit), same constants, same comparisons | `ln_reduce_value`, same order, same constants | yes |
+| the quotient | `(value - 1) / (value + 1)` | the same division | yes |
+| the series | Horner over `LN_COEFFICIENTS[..9]` in reverse | the same loop, same order | yes |
+| the answer | `(z * 2) * series + track * LN_TWO` | `2.0 * z * series + track * LN_TWO`, same association | yes |
+
+**The one operation that differs is the quotient**, which is exactly what `ln_body`'s own `# Invariant`
+states. So once the quotient is the correctly rounded one, every later operation receives the same inputs on
+both sides and rounds the same way — the device's answer becomes the host's **bit for bit**, not merely close.
+Two facts carry that:
+
+- the compensated division is **4096 of 4096, worst 0 ulp** on precisely this band (`[1/sqrt 2, sqrt 2)`,
+  §11.3's `band` grid), so the quotient it produces is the correctly rounded one;
+- **default Rust does not contract** `a * b + c` into a fused multiply-add, so the host side rounds the way
+  the decorated device does.
+
+**Which is why both sites move together.** Changing `ln_body` alone would leave `ln_value` on the old sequence,
+and `spliced_transcendentals` compares the device against `ln_value` — the bound would then be broken by the
+**reference** rather than by the device.
+
+**What this does not measure:** the composite on the device. The claim is an inference from the quotient's
+measurement plus the identity above, and it is labelled as one. It is falsifiable in one run: if the rewired
+body is not bit-identical to `ln_value` over the band, one of the two facts above is wrong.
+
+**And the `# Invariant` above `ln_body` would become false.** That sentence states the up-to-a-unit-in-the-last-
+place cross-backend divergence; a correctly rounded quotient removes it, so the sentence needs editing — and
+that is an `# Invariant` change, so it is the owner's decision, taken with the rewiring itself rather than
+after it.
+
 ### 11.5 What the two backends that cannot run it do
 
 **Both refuse it by name, and the brief's own question — whether `sqrt`/`floor`/`ln` are host calls
