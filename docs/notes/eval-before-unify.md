@@ -8,8 +8,8 @@
 > closed `X::a`'s panic). The class-attached blocked list remains a sketch, and
 > the rest of §5 stays a sketch. The **ordering** half of the question is settled
 > and measured: reordering evaluation against unification cannot be the fix, and
-> the runtime's own answer is a memoization on the stalled node
-> ([stalled-rerun-epoch](stalled-rerun-epoch.md)).
+> the runtime's own answer was a memoization on the stalled node
+> ([stalled-rerun-epoch](stalled-rerun-epoch.md)), now retired.
 >
 > Points at: `crates/lichen-lowlevel/src/equality.rs` (`unify`/`unify_inner`,
 > `add_equality`, `write_node_value`), `crates/lichen-lowlevel/src/evaluation.rs`
@@ -544,11 +544,12 @@ The other reading of this note's problem — "evaluation runs too early, so unif
 should go first" — was measured and closed. A node that stalls on an undecided
 class is not re-asked too soon: it is re-asked **without knowing whether anything
 changed**, and a schedule (a second pass, a later phase) does not give it that
-fact. What does is one number per node — the value epoch it ran at
-([stalled-rerun-epoch](stalled-rerun-epoch.md)), whose retirement is measured and held, not taken:
-measured, dropping the epoch's part of the gate costs 65 `lichen-compute` programs
-their build (that note's §8). **The conclusion this section closes is the ordering
-one, and it stands** — reordering evaluation against unification is not the fix.
+fact. What did is one number per node — the value epoch it ran at
+([stalled-rerun-epoch](stalled-rerun-epoch.md)) — and that retirement has now been taken:
+dropping the epoch's part of the gate costs 3 `lichen-compute` tests
+(that note's §8, [late-writes-map](late-writes-map.md) §15). **The conclusion this section
+closes is the ordering one, and it stands** — reordering evaluation against unification is
+not the fix.
 Deferring the checker's decisions to run time would also cost the tier that
 expresses them (§3.2), so the order stays as it is.
 

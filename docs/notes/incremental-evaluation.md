@@ -3,12 +3,12 @@
 > Status: **proposed; the `settled` cut itself is REJECTED.** Step 0 is measured (§1.3). The maintainer
 > rejected §4's second bit in these words: "重构的目标就是要只跑一次啊，加了settled等于没重构" — adding it means
 > the refactor did not happen. The goal is that a node is evaluated and decided **once**, so that
-> `evaluated` (the value-epoch stamp) and `evaluated_deep.is_some()` are sufficient gates. The writes
+> `evaluated` (the run stamp) and `evaluated_deep.is_some()` are sufficient gates. The writes
 > §4.3 would have tolerated are therefore **elimination targets**, not a cost to accept; §7 records the
-> decision and §5's roadmap is amended to match. **§5's step 1 has now been run to its end and does not
-> land**: the deep half of the goal costs 4 `lichen-compute` tests and the run half costs 65, of which 59
-> are a checked outcome changing — [stalled-rerun-epoch](stalled-rerun-epoch.md) §8 and
-> [late-writes-map](late-writes-map.md) §13 hold it.
+> decision and §5's roadmap is amended to match. **§5's step 1 has been run to its end and the run half of
+> it has landed**: the deep half costs 4 `lichen-compute` tests and adds nothing on top, and the run half
+> is retired with a measured cost of 3 — [stalled-rerun-epoch](stalled-rerun-epoch.md) §8 and
+> [late-writes-map](late-writes-map.md) §15 hold it.
 ## 1. What is being asked, and what it costs today
 
 ### 1.1 There is no separate "evaluation" stage to make incremental
@@ -307,9 +307,10 @@ entry point, and that nothing further should be built.
    `-j 1`, **name sets compared with `Compare-Object`, never counts**:
    `lichen-lowlevel` 147 / 13 (empty delta), `lichen-highlevel` 140 / 0,
    `lichen-compute` 204 / 14 / 2 (empty delta) — identical to `dev` in all three.
-   **The three epoch tests pass unchanged under it**, by `--exact` name, so
-   [stalled-rerun-epoch](stalled-rerun-epoch.md)'s run stamp is **not** retired: this
-   gate does not cut the `undecided` verdict they turn on.
+   **The three epoch tests pass unchanged under it**, by `--exact` name, so that gate
+   did not retire [stalled-rerun-epoch](stalled-rerun-epoch.md)'s run stamp: it does
+   not cut the `undecided` verdict they turn on. The run stamp was retired separately,
+   on the run axis alone (§7).
    [late-writes-map](late-writes-map.md) §11 holds the measurement, and §11.3–§11.4
    correct this note's step-1 premise about where the first elimination is.
    **The first elimination has now been measured, and it buys nothing.**
@@ -353,11 +354,15 @@ entry point, and that nothing further should be built.
    removing the re-run itself.
    The sixty-five are one refusal — `compute.graph` cannot read back the return of
    the body it just applied to placeholders — and fifty-seven of them are a program
-   that **no longer checks**. That is this step's `wrong-value` bucket, so the
-   decision the step was taken toward is not taken. The measurement, the
-   per-test classification and the three lowlevel tests the retirement pins are in
-   [stalled-rerun-epoch](stalled-rerun-epoch.md) §8 and
-   [late-writes-map](late-writes-map.md) §13.
+   that **no longer checks**. That was this step's `wrong-value` bucket, so the
+   decision the step was taken toward was held rather than taken. The measurement and
+   the per-test classification are in [stalled-rerun-epoch](stalled-rerun-epoch.md) §8
+   and [late-writes-map](late-writes-map.md) §13.
+   **The decision has since been taken, and the sixty-five are the wrong number to
+   decide by.** [late-writes-map](late-writes-map.md) §14 removed the recording's
+   dependence on the re-run with a bounded, local retry, which took the plain run
+   gate's cost to **three** tests — and not one of the three is a checked outcome
+   changing. §15 of that note holds the by-name comparison; §7 records the decision.
 2. **The differential harness** — required, not optional. Run the pass with and
    without the cut over the existing test corpus and compare every value, every
    verdict and **every diagnostic**. It is the only oracle for §4.3's two
@@ -386,17 +391,27 @@ entry point, and that nothing further should be built.
 
 **Decided (the superior):**
 
-- **No blanket retirement of the epoch gate.** Making a stalled node final was measured: the plain run gate costs
-  **65 `lichen-compute` tests**, of which **59 are capability failures** — 57 programs stop checking, 2 stop
-  recording a graph — all through one cause: `compute.graph` records a function by applying it to placeholders,
-  and operators that stalled in that pass never re-run, so `compute.rs:5222-5231` refuses. The plain **deep** gate
-  costs only 4 compute tests and 2 lowlevel design-pins, and adds nothing on top of the run gate.
-  So the route is the root cause, not the gate: graph recording must stop depending on a stalled operator
-  re-running. The gates stay as they are until that fix is measured. The measurement and the per-test list are
-  in [late-writes-map](late-writes-map.md) §13.
+- **The epoch run gate is retired, and the retirement has landed.** The decision this
+  section recorded as *held* was taken: `Module::run_stamp_is_current` is
+  `Module::run_stamp_is_set`, reading `runned != 0` with nothing to compare it against, and
+  `Module::value_epoch` is gone. The cost, measured, is **three `lichen-compute` tests**
+  (`223 / 14 / 2` to `220 / 17 / 2` for the package, the integration binary `204 / 14 / 2` to
+  `201 / 17 / 2`) against a pristine `dev` in the same worktree — not the sixty-five the
+  decision was held over, because [late-writes-map](late-writes-map.md) §14 took the recording's
+  dependency away first, and **not zero**. Of the three, one is the recording reading an
+  algebra name further, one is the capture rule ceasing to fire, and one is a premise mismatch:
+  the *host* run performs no dispatch at all, so "a graph is a transcript of the run" has
+  nothing to be a transcript of. `lichen-lowlevel` is 146 / 13 — the epoch test retired — and
+  `lichen-highlevel` is untouched at 140 / 0. [stalled-rerun-epoch](stalled-rerun-epoch.md) §8
+  and [late-writes-map](late-writes-map.md) §15 hold it by name.
+- **The deep half of §5's step 1 was not taken, and does not need to be.** `evaluation.rs:552-559`
+  still cuts a **concrete** verdict only, which is [late-writes-map](late-writes-map.md) §11.1's
+  gate: the arm measurement records that cutting an `undecided` verdict too adds nothing on top
+  of the plain run gate, two of its four compute failures disappearing once the run gate is
+  plain and the other two being among that gate's.
 - **The `settled` bit is rejected** (this note's §4, and §5's step 1 with it). The words:
   "重构的目标就是要只跑一次啊，加了settled等于没重构". The goal is that a node is evaluated and
-  decided exactly once, so that `evaluated` (the value-epoch stamp) and
+  decided exactly once, so that `evaluated` (the run stamp) and
   `evaluated_deep.is_some()` are sufficient gates. A write that lands after a verdict is
   therefore a defect to remove at its source — not a reason for a second bit, and not a
   cost to accept. The three lowlevel epoch tests and the four compute late-write tests are
@@ -435,18 +450,17 @@ entry point, and that nothing further should be built.
   (§5 step 1), and the three epoch tests pass unchanged under it, so §4's design stays
   rejected and [stalled-rerun-epoch](stalled-rerun-epoch.md)'s run stamp stood unretired
   at that point. [late-writes-map](late-writes-map.md) §11 is the measurement.
-- **The same gate taken to `is_some()`, measured, not landed.** §5 step 1 records the
+- **The same gate taken to `is_some()`, measured, and then decided in halves.** §5 step 1 records the
   arm-by-arm measurement: the deep gate cut to `is_some()` costs 2 lowlevel and **4**
   compute failures, and the run gate cut to `runned != 0` costs 3 lowlevel and **65**
-  compute failures, the two together costing what the run gate costs alone. The deep
-  half is what §11 was reaching for and it is close to free; the run half retires
-  [stalled-rerun-epoch](stalled-rerun-epoch.md) §5 and it is not. Fifty-seven of the
-  sixty-five are programs that no longer check, which is §5's `wrong-value` bucket and
-  the one that decides the question, so the plain deep gate is left on its own rather
-  than landed with it. The epoch's only remaining reader is
-  `tests/basic/evaluation.rs:417`; `value_epoch`, `bump_value_epoch` and `value_epoch()`
-  are dead state and were **not** removed. [stalled-rerun-epoch](stalled-rerun-epoch.md)
-  §8 and [late-writes-map](late-writes-map.md) §13 hold the measurement.
+  compute failures, the two together costing what the run gate costs alone. The **run half
+  is landed** — [stalled-rerun-epoch](stalled-rerun-epoch.md) §8 — and it costs three compute tests
+  rather than sixty-five, because §14 of [late-writes-map](late-writes-map.md) had already removed
+  the recording's dependence on the re-run. The **deep half is not taken**: the arm measurement
+  records it adding nothing on top, and `evaluation.rs:552-559` stays as §11 landed it. The
+  epoch machinery (`value_epoch`, `bump_value_epoch`, `Module::value_epoch()`) is gone with the
+  comparison; the three epoch tests are retired or rewritten. §8 and §13.6 measured what it
+  cost, §15 measured what it costs.
 
 **Open:**
 

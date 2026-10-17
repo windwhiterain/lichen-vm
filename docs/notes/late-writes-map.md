@@ -911,6 +911,9 @@ The `lichen-highlevel` suite is unaffected by either arm: 140 / 0 throughout.
 
 Against the thirteen GC/compaction baseline failures of §3, by name:
 
+> **This slice edited no test.** §15 records what became of all three: the epoch test
+> retired, the other two rewritten to the narrower true statement.
+
 ```
 assert::an_untriggered_assert_is_decided_by_a_later_drain          broken by both arms
 evaluation::a_stalled_operator_reruns_only_after_a_value_changed   broken by both arms
@@ -1050,6 +1053,9 @@ accessor `Module::value_epoch()`, whose only reader in the tree is
 `crates/lichen-lowlevel/tests/basic/evaluation.rs:417` — a test this slice is not
 allowed to edit. `Node::runned` is read only for `!= 0`, so the `u32` is a `bool`
 with room to spare. **Nothing was removed.**
+
+> **Superseded by §15.** That test has since been retired, and with it all three items:
+> `Module::value_epoch`, `bump_value_epoch` and `Module::value_epoch()` are gone.
 
 ### 13.7 What this leaves open
 
@@ -1196,12 +1202,54 @@ Gates untouched, against the pristine `dev` measured in this same worktree
 
 The recording was the run gate's last **recorded** dependent, and it no longer is:
 the dependency was an accident of the epoch happening to move, and it is now an
-explicit, bounded, local retry. What remains is §8.5's three lowlevel tests plus the
-three above — and §14.4 attributes two of those three to the plain gate's reach
-outside the recording. The epoch comparison itself is untouched and
-[stalled-rerun-epoch](stalled-rerun-epoch.md) §9 records the same finding from that
-side.
+explicit, bounded, local retry. §8.5's three lowlevel design-pins and
+§14.4's three compute failures were what the epoch comparison was waiting
+on, and both lists have since been disposed of: [stalled-rerun-epoch](stalled-rerun-epoch.md)
+§8 records the retirement and §15 below records its cost.
 
+## 15. The retirement landed: three names, by comparison
 
+> Slice: `feature/retire-epoch`, worktree `.worktrees/re`, base `dev@12425166`. Private
+> target `C:\resource\lichen-vm\.worktrees\re\target`, `-j 1`, `CARGO_INCREMENTAL=0`,
+> `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`. **Probe-free**: no
+> instrumentation is in any measured crate, so §12.5's trap is not in play.
+> `git diff dev...HEAD --name-only` lists four `lichen-lowlevel` sources, three
+> `lichen-lowlevel` tests and the notes; no `lichen-compute` file is touched.
 
+### 15.1 The suites, against a pristine `dev` measured in the same worktree
 
+Name sets compared with `Compare-Object`, never counts.
+
+| suite | pristine `dev` | after the retirement | name-set delta |
+|---|---|---|---|
+| `cargo test -p lichen-lowlevel -j 1 --no-fail-fast` | 147 / 13 | **146 / 13** | the retired test leaves and the rewritten assert test changes name; **no failure moves** |
+| `cargo test -p lichen-highlevel -j 1` | 140 / 0 | **140 / 0** | **empty** |
+| `cargo test -p lichen-compute -j 1 --no-fail-fast` | 223 / 14 / 2 | **220 / 17 / 2** | three new failures, §15.2 |
+
+The `lichen-compute` integration binary alone reads 204 / 14 / 2 before and **201 / 17 / 2**
+after; the package figure adds that binary's 19 unit tests, which are green either way.
+
+**§13's sixty-five are gone and §14.4's three are what landed.** The comparison confirms
+§14.4's list by name rather than by count: exactly the three it names, and nothing else moves
+in either direction — no name stops failing, and no name starts.
+
+### 15.2 The three, and what each one is
+
+| name | assertion site and observation | what it is |
+|---|---|---|
+| `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | `consumer_guard.rs:256` — the **producer's** claim reads `left: ["combine","identity","element"]` against `right: ["combine","identity"]` | **the recording, reading one algebra name further.** §14.4's reading holds: re-driving a pass (`Module::reopen_stalled`) forces operand edges the first pass did not reach, so the role the producer is not supposed to claim is now in its claim |
+| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | `graph_jit.rs:135` — `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` | **the capture rule stops firing where it must.** Of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves: the program is accepted, so the refusal the test is about is not issued |
+| `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | `graph_jit.rs:514` — `left` is the recorded graph's two dispatch lines, `right` is `[]` | **a premise mismatch, not a recording failure.** `right` is the trace of the **host** run, and the plain gate makes the program itself perform no dispatch at all — so the premise "a graph is a transcript of the run" has nothing to be a transcript of. No way of driving the recording repairs this |
+
+### 15.3 What is no longer true of §13 and §14
+
+§13.5's `wrong-value` bucket held the retirement back: fifty-seven programs stopped
+checking. **None of them does now** — §14's bounded retry took that bucket to zero, and what
+remains is a claim one role too wide, a refusal that does not fire, and a host run with no
+dispatch in it. §13.7's "the re-run is load-bearing" was true only for the recording, and
+§13's own closing note already said so; §15 measures the consequence: with the recording
+fixed, the re-run it removed was worth **three tests, and not one of the three is a
+recording failure**.
+
+[stalled-rerun-epoch](stalled-rerun-epoch.md) §8 holds the retirement's own account, §8.5 the
+three `lichen-lowlevel` test dispositions, and §8.6 the same three costs read from that side.
