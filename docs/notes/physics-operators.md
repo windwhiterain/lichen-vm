@@ -24,8 +24,8 @@ it.
 That this holds on the **device** too is the measurement, not an assumption: the input is uploaded
 at its own length and the tail past it is zeroed on the device, so a lane whose index runs off the
 end reads that zero. `crates/lichen-compute/examples/operators_on_device.rs` answers
-`agrees, 6 of 6 element(s)` on the RTX 3060 for `x = 4 0 0 0 0 4`, `alpha = 0.25`, whose answer is
-`2 1 0 0 1 2` by hand.
+`agrees, 18 of 18 element(s)` on the RTX 3060 for `stencil.lichen`'s three chains of six — this one, on
+`x = 4 0 0 0 0 4` with `alpha = 0.25`, is `2 1 0 0 1 2` by hand.
 
 **A different boundary is a different operator, and that is the surface's shape rather than this
 file's choice.** A periodic boundary needs integer modulo on the index; a clamped one needs `max`;
@@ -173,7 +173,7 @@ of a pair it does not have.
   `if i == 0 then read (n - 1) else read (i - 1)` and the mirror at `n - 1`. On the **same**
   `4 0 0 0 0 4`, the Dirichlet step answers `2 1 0 0 1 2` and the ring answers `3 1 0 0 1 3` — the
   two edges stop leaking — and all three chains together answer
-  `agrees, 21 of 21 element(s)` on the RTX 3060. What is *not* expressible is a boundary that is a
+  `agrees, 18 of 18 element(s)` on the RTX 3060. What is *not* expressible is a boundary that is a
   **runtime parameter**: the condition would have to be data, and the surface has no such `Select`.
 - **A conserved quantity can be *read* but not *stated*.** The ring's total is unchanged — `8` in,
   `8` out — while the Dirichlet step's is `6`, because the Laplacian sums to zero over a ring, so
