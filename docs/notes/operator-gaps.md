@@ -9,8 +9,11 @@ that decides the reading — most of these are not the operator line's to fix.
 `the :: chains root at the pair, so a deferred type access resolves`. **Nothing moved**, and the reason
 is worth keeping: that fix resolves a **type access** through a deferred chain, while rows two and
 three are an unannotated recursion's own cells and row one is the kernel template. Two mechanisms that
-look adjacent from the outside and are not. The next time something does move, the commit that moved it
-belongs in the entry.
+look adjacent from the outside and are not.
+
+At `dev@1713ed00` the whole inventory was read in **one run** (six probes, `6 passed`), so that tip is
+the baseline every later check compares against. The next time something does move, the commit that
+moved it belongs in the entry.
 
 ## Gaps: not expressible, or broken
 
@@ -40,17 +43,21 @@ belongs in the entry.
 
 ## Keeping this current
 
-Each row names a probe; a row is stale the moment that probe prints something else. Four of the six rows
-are covered by one command, and a libtest run takes several `--exact` filters and ORs them:
+Each row names a probe; a row is stale the moment that probe prints something else. **One command
+prints every reading in this file**, because a libtest run takes several `--exact` filters and ORs
+them:
 
 ```text
 cargo test -p lichen-compute --test lichen_compute -j 3 -- --exact \
   lichen_compute::zz_fold_struct_probe::probe_the_struct_annotation \
   lichen_compute::zz_fold_type_probe::probe_the_fold_type \
   lichen_compute::zz_fold_buffer_probe::probe_the_fold_state \
-  lichen_compute::zz_masked_conv_probe::probe_the_masked_window --nocapture
+  lichen_compute::zz_masked_conv_probe::probe_the_masked_window \
+  lichen_compute::zz_operator_floor_probe::probe_the_floor_on_a_real_operator \
+  lichen_compute::zz_replicate_address_probe::probe_the_replicate_addresses --nocapture
 ```
 
-`zz_operator_floor_probe` covers the fusion row and `zz_replicate_address_probe` the unsigned trap, on
-the same pattern. The notes that carry the readings (`physics-operators.md`,
-`writing-a-solver.md`) say what each one means for the operator library.
+Read it against the tables above: `?a` for row two, `raw none` for row three, `refused: a kernel body
+reached a node …` for row one, `NotClaimed` and `RegionIsNotAPair` for the fusion row, and
+`4, 0, 1, 2, 3` for the unsigned trap. The notes that carry the readings
+(`physics-operators.md`, `writing-a-solver.md`) say what each one means for the operator library.
