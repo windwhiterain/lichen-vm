@@ -1,11 +1,14 @@
 # A stalled operator re-runs only when a value changed
 
-> Status: **current.** The epoch gate is landed on `feature/stall-epoch-gate`
-> (§5): a node whose operator ran and could not decide records the value epoch it
-> ran at, and a read of it while the epoch has not moved answers `None` without
-> re-descending. §2 is the measurement the decision rests on. §3 records why the
-> order of evaluation and unification is **not** the fix, and §6 the two
-> dependency-edge designs that were considered and rejected.
+> Status: **retired**, measured. The gate §5 landed is superseded by the decision
+> that a node is evaluated and decided exactly once: the run stamp is read as "this
+> operator has run", and the epoch it recorded is compared with nothing. **§8**
+> records the retirement, what it costs, and who owns the three tests that pin it.
+> §1–§7 are kept as the record of the design as it stood — §2 the measurement
+> behind it, §3 why the order of evaluation and unification is not the fix, §5 the
+> landed form, §6 the two dependency-edge designs that were rejected. The ordering
+> conclusion of §3 survives the retirement; the memoization it names does not.
+
 >
 > Points at: `crates/lichen-lowlevel/src/evaluation.rs` (`evaluate_node_body`'s
 > run gate, `evaluate_node_operation`'s stall postlude, `ran_undecided`),
@@ -186,3 +189,124 @@ re-descent of already-decided subgraphs is
 [incremental-evaluation](incremental-evaluation.md) §4's `settled` bit, whose
 measured headroom (34–72% of deep-pass visits) is an order of magnitude larger
 than this note's. The gate is orthogonal to it, and both can land.
+
+## 8. Retired: the stamp no longer compares against the epoch
+
+**Status: retired, not landed.** [incremental-evaluation](incremental-evaluation.md)
+§5's step 1 puts the other half of this note's question: `evaluate` and
+`evaluate_deep` gate on their stamps and re-decide nothing — neither a concrete
+verdict nor an `undecided` one. That decides §5's run gate against its own form.
+The stamp is read as "this operator has run", and the epoch it recorded is compared
+with nothing.
+
+### 8.1 The two gates, and where each sits
+
+Branch `feature/undecided-final`, worktree `.worktrees/ufin`, base `dev@71adaa1a`,
+private target, `-j 1`, `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`,
+`CARGO_PROFILE_TEST_DEBUG=0`.
+
+| gate | site | before | after |
+|---|---|---|---|
+| deep | `crates/lichen-lowlevel/src/evaluation.rs`, `evaluate_node_deep_inner` | cut a **concrete** verdict only (`is_some_and(\|deep\| !deep.undecided)`) | cut **any** verdict (`evaluated_deep.is_some()`) |
+| run | `crates/lichen-lowlevel/src/evaluation.rs`, the empty-slot read, through `Module::run_stamp_is_set` (was `run_stamp_is_current`, `module.rs:358-362`) | stamp non-zero **and** equal to the epoch | stamp non-zero |
+
+### 8.2 The cost, and the attribution between the two halves
+
+Probe-free runs, every number from a run with no instrumentation in the crate, name
+sets compared with `Compare-Object`, never counts. The `dev` row and every arm ran
+in the same worktree, so the artifact tree differs by exactly the one file.
+
+| arm | `lichen-lowlevel` | `lichen-highlevel` | `lichen-compute` | new failures by name |
+|---|---|---|---|---|
+| `dev@71adaa1a` | 147 / 13 | 140 / 0 | 204 / 14 / 2 | — |
+| deep gate plain alone | 145 / 15 | 140 / 0 | 200 / 18 / 2 | 2 lowlevel, **4** compute |
+| run gate plain alone | 144 / 16 | 140 / 0 | 139 / 79 / 2 | 3 lowlevel, **65** compute |
+| both | 144 / 16 | 140 / 0 | 139 / 79 / 2 | 3 lowlevel, 65 compute |
+
+The arms are the finding. **The deep half costs four `lichen-compute` tests and the
+run half costs sixty-five**, and the two together cost exactly what the run half
+costs alone: the failure name sets under the run gate alone and under both gates are
+identical, name for name. Two of the deep gate's four do not fail at all once the
+run gate is also plain, and the other two are among the sixty-five — so the deep cut
+adds nothing on top of the run gate's, and this note's own gate is what carries the
+delta.
+
+That corrects [late-writes-map](late-writes-map.md) §4.1 and §4.4 by omission.
+§4.1 recorded the **run** gate's row for `lichen-lowlevel` ("the same three, by
+name") and §4.4 recorded the **deep** gate's row for `lichen-compute` (four new) —
+so the run gate was never run over `lichen-compute`, and the price of this note's
+own gate was never measured. The deep gate alone reproduces §4.4 exactly
+(200 / 18 / 2, the same four names), which is why the base changes since then moved
+nothing on that arm: they did not touch the run axis.
+
+**§3's closing sentence named this note's own gate** — "the fix has to be a
+memoization on the undecided node, not a schedule". The *ordering* half of §3 stands
+and is unaffected: reordering evaluation against unification is still not the fix,
+and that measurement is untouched. What is retired is the memoization it answered
+with.
+
+### 8.3 What the sixty-five are
+
+One refusal, everywhere. `compute.graph` records a function by applying it to its
+own placeholder arguments and reading what came back; under the plain run gate the
+operators that stalled during that first pass never run again, so the body's return
+is not resolvable to a value-table entry and the recording reports *"this
+function's return is not a value a graph can hand back, so there is no graph to
+record"*.
+
+| how it surfaces | count |
+|---|---|
+| the program no longer checks — the checker's own `report.ok()`, or a `compile(...).expect("the chain compiles")` on the same source | **57** |
+| the test asserts a graph **was recorded**, and none is | 2 |
+| the test asserts the wording of a refusal, and gets this sentence instead | 6 |
+
+Fifty-seven of the sixty-five are a **checked outcome changing**: a kernel that
+merged, tiled, recorded and answered on the device no longer builds, and the single
+diagnostic in all fifty-seven is that one sentence. The six refusals keep their
+outcome — the program is still refused — and lose their cause, so the rule each of
+them is about is no longer the rule that fires. §13 of
+[late-writes-map](late-writes-map.md) holds the per-test classification.
+
+### 8.4 The epoch is now unread
+
+After this change nothing in `lichen-lowlevel` reads `Module::value_epoch`. What
+remains is: `bump_value_epoch`'s own write, `stamp_node_ran`'s read of it to stamp
+with, and the public accessor `Module::value_epoch()` — whose only reader in the
+tree is `crates/lichen-lowlevel/tests/basic/evaluation.rs:417`, one of the three
+tests §8.5 lists. `Node::runned` is read only for its zero test (`!= 0`), so the
+`u32` is a `bool` with room to spare, and `value_epoch`, `bump_value_epoch` and
+`value_epoch()` are dead state once that test goes.
+
+**Nothing was removed.** The brief for this step says to report the dead machinery
+rather than delete it, and deleting it would require editing a test.
+
+### 8.5 The three tests that pin this note, and their proposed disposition
+
+They are red and they stay red: no test was edited. All three are in
+`crates/lichen-lowlevel/tests/basic/`.
+
+| test | assertion | observed | what it pins | proposed |
+|---|---|---|---|---|
+| `evaluation::a_stalled_operator_reruns_only_after_a_value_changed` (`evaluation.rs:433-436`) | `assert_eq!(u128_of(m.evaluate_node(add, None).unwrap()), 5)` | panics at `:434` — `unwrap()` on `None` | a stalled operator re-deciding after a value changed | **retire** — it is this note's own test of the retired gate, and §8.2 measures what the gate was worth (2.7 % of operation attempts) |
+| `assert::an_untriggered_assert_is_decided_by_a_later_drain` (`assert.rs:242`) | `assert!(m.asserts.is_empty(), "the pending entry got decided")` | still pending | a later drain deciding an entry a first drain could not | **rewrite** to assert what remains true: the first drain leaves the entry pending and records no error (`assert.rs:229-234`, which passes unchanged) |
+| `function::function_call_operator_preserves_undecided_operand_chain` (`function.rs:145`) | `assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 99)` | panics at `:145` — `unwrap()` on `None` | an `undecided` verdict being revised after the argument unifies | **rewrite** to assert what remains true: the undecided argument stays lazy and the template body is untouched (`function.rs:126-134`, which passes unchanged) |
+
+The first drain of the second and the head of the third already pass, so each
+rewrite keeps the half that is still true and drops the re-decision. The first has
+no such half — it is the retired design's own test.
+
+### 8.6 What this leaves as the decision
+
+The step does not land on this measurement. The sixty-five `lichen-compute`
+failures are not design-pins: none of them asserts a re-decision, and each asserts
+that the compiler accepts a program it now refuses. That is a checked/unchecked
+outcome changing, which is
+[incremental-evaluation](incremental-evaluation.md)'s `wrong-value` bucket and the
+one its §5 step 1 says decides the question.
+
+The remaining lever is the one §12.7 of [late-writes-map](late-writes-map.md) names
+as a question: the 6 268 late writes are all at sanctioned sites, and the checker's
+evaluate-before-unify order is a landed decision
+([eval-before-unify](eval-before-unify.md) §2.1). Until that order is re-decided,
+the plain run gate is not free — it is sixty-five programs that stop building.
+

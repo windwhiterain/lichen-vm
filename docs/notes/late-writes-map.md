@@ -5,6 +5,10 @@
 > **§11 records what has since landed** — the concrete-only deep gate, the suites it
 > was measured on, and the correction §11.3 makes to this map's own §8. Where §8
 > names a first target, read §11.3 with it.
+> **§13 runs §1's goal on both gates and does not land it**: the deep gate alone
+> costs 4 `lichen-compute` tests, the run gate alone 65, and §13.2 corrects §4.1's
+> and §4.4's silence about the run axis. Where §4 or §11 is quoted as the map's
+> headline, read §13.2 with it.
 >
 > Slice: measurement only, as §1–§10 stand. **No behaviour change landed there.** The
 > gate below is a scratch edit that is reverted before the commit; what this file holds
@@ -847,6 +851,210 @@ why that is a decision and not a code change: [eval-before-unify](eval-before-un
 §2.1 measured the other order and it loses. Re-deciding it needs the maintainer, not a
 slice. Until then the honest state is that **the remaining late writes are accounted
 for, are all at sanctioned sites, and cost one descent.**
+
+## 13. The plain gates, measured together and apart
+
+> Slice: `feature/undecided-final`, worktree `.worktrees/ufin`, base `dev@71adaa1a`.
+> Build: private target `C:\resource\lichen-vm\.worktrees\ufin\target`, `-j 1`,
+> `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`.
+> **No probe and no instrumentation anywhere in the measured crates.** Every suite
+> number below is from a run with nothing else in the process, and each arm was run
+> **twice** with identical name sets, so §12.5's trap is not in play here.
+> `git diff dev...HEAD --name-only` on this branch lists
+> `crates/lichen-lowlevel/src/evaluation.rs`, `crates/lichen-lowlevel/src/module.rs`
+> and the three notes, and nothing else. **No test was edited.**
+
+### 13.1 What was made plain
+
+Both gates of §0's goal at once: `evaluate_node_deep_inner` cuts **any** verdict
+(§11.1's `is_some_and(|deep| !deep.undecided)` becomes `evaluated_deep.is_some()`),
+and the run gate stops comparing the stamp with the value epoch
+(`Module::run_stamp_is_current` becomes `run_stamp_is_set`, reading `runned != 0`).
+
+### 13.2 The arms, and what each one costs
+
+Probe-free, in this worktree, so the `dev` row and every arm differ by exactly the
+one file. **Name sets compared with `Compare-Object`, never counts.**
+
+| arm | `lichen-lowlevel` | `lichen-highlevel` | `lichen-compute` | new failures by name |
+|---|---|---|---|---|
+| `dev@71adaa1a` | 147 / 13 | 140 / 0 | 204 / 14 / 2 | — |
+| deep gate plain alone | 145 / 15 | 140 / 0 | 200 / 18 / 2 | 2 lowlevel, **4** compute |
+| run gate plain alone | 144 / 16 | 140 / 0 | 139 / 79 / 2 | 3 lowlevel, **65** compute |
+| both | 144 / 16 | 140 / 0 | 139 / 79 / 2 | 3 lowlevel, 65 compute |
+
+**§4.1 and §4.4 were right about what they measured and silent about the other
+half.** §4.1 recorded the run gate's `lichen-lowlevel` row ("the same three, by
+name"); §4.4 recorded the deep gate's `lichen-compute` row (four new). Neither ran
+the **run** gate over `lichen-compute`, so this map's own headline claim — that the
+delta is about the `undecided` verdict and not about re-descending decided
+subtrees — was never tested against the axis that turned out to carry 61 of the 65.
+The deep gate alone still reproduces §4.4 exactly (200 / 18 / 2, the same four
+names), so the base changes since then moved nothing on that arm.
+
+**The two arms are not additive.** Under the run gate alone and under both gates the
+three suites' failure name sets are identical, name for name. Two of the deep gate's
+four — `graph_structure::a_body_dispatches_through_an_apply_whose_callee_holds_the_operator`
+and `graph_structure::the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct`
+— do not fail at all once the run gate is also plain, and the other two are among the
+run gate's sixty-five. So the deep cut adds nothing on top of the run gate's, and it
+is the run gate that carries the whole delta.
+
+The `lichen-highlevel` suite is unaffected by either arm: 140 / 0 throughout.
+
+### 13.3 `lichen-lowlevel`: three new, all of them design-pins
+
+Against the thirteen GC/compaction baseline failures of §3, by name:
+
+```
+assert::an_untriggered_assert_is_decided_by_a_later_drain          broken by both arms
+evaluation::a_stalled_operator_reruns_only_after_a_value_changed   broken by both arms
+function::function_call_operator_preserves_undecided_operand_chain broken by the run gate alone
+```
+
+All three assert the retired behaviour itself and nothing else, and
+[stalled-rerun-epoch](stalled-rerun-epoch.md) §8.5 gives each one's assertion line,
+its observed value and its proposed disposition. No test was edited.
+
+### 13.4 `lichen-compute`: sixty-five new, classified
+
+One cause behind all sixty-five: `compute.graph` records a function by applying it
+to its own placeholder arguments, and under the plain run gate the operators that
+stalled during that first pass never run again, so the body's return is not
+resolvable to a value-table entry. The refusal is `compute.rs:5222-5231`:
+
+> compute.graph: this function's return is not a value a graph can hand back, so
+> there is no graph to record: a graph's value table holds what its dispatches
+> produced and the arguments it was run with, and this body's own value is not one
+> of those
+
+**57 wrong-value — the program no longer checks.** Fifty-six fail at the testing
+helper's own `assert!(report.ok(), …)` (`crates/lichen-language/src/testing.rs:70`)
+and one at `crates/lichen-compute/tests/lichen_compute/composed_chain.rs:26`
+(`compile(SOURCE).expect("the chain compiles")`). Each has exactly that one
+diagnostic where it had none: a kernel that merged, tiled, recorded and answered on
+the device does not build at all.
+
+```
+lichen_compute::chain_merge::a_chain_of_three_merges_into_one_node_under_the_floor
+lichen_compute::chain_merge::a_consumer_that_reads_two_producers_is_a_fan_in_and_merges
+lichen_compute::chain_merge::a_returned_middle_output_is_refused_by_name_and_nothing_merges
+lichen_compute::chain_merge::the_merged_chain_answers_the_un_passed_program_and_a_moved_bias_moves_it
+lichen_compute::composed_chain::the_composed_chain_answers_the_two_pass_reference_and_the_recorded_graph
+lichen_compute::consumer_guard::a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds
+lichen_compute::consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched
+lichen_compute::consumer_guard::the_program_answers_the_same_with_the_pass_and_without_it
+lichen_compute::elementwise_chain::an_elementwise_chain_derives_a_schema_the_floor_declines_by_name
+lichen_compute::elementwise_chain::two_elementwise_kernels_derive_a_region_and_the_floor_declines_it_by_name
+lichen_compute::fan_in_merge::a_consumer_of_two_producers_merges_into_one_node_under_the_floor
+lichen_compute::fan_in_merge::a_fan_in_whose_element_does_not_name_its_second_producer_is_refused_by_name
+lichen_compute::fan_out_merge::a_fan_out_derives_a_region_a_pack_can_name
+lichen_compute::fan_out_merge::a_pack_naming_the_fan_out_merges_all_three_nodes_into_one
+lichen_compute::fan_out_merge::under_a_pack_the_device_answers_the_program_and_the_counterfactual_moves
+lichen_compute::fan_out_merge::without_a_pack_the_fan_out_is_refused_by_name_and_nothing_merges
+lichen_compute::fuse_licence::a_lane_dependent_value_read_at_a_computed_address_is_recomputed
+lichen_compute::fuse_licence::a_pack_naming_another_region_is_inert
+lichen_compute::fuse_licence::a_pack_naming_the_region_merges_it_and_the_report_names_the_pack
+lichen_compute::fuse_licence::a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves
+lichen_compute::fuse_licence::a_read_at_a_conditional_address_runs_on_the_device_and_the_counterfactual_moves
+lichen_compute::fuse_licence::an_elementwise_producer_feeding_a_reduction_consumer_merges_and_the_device_agrees
+lichen_compute::fuse_licence::the_floor_still_merges_a_reduction_chain_with_no_pack_installed
+lichen_compute::fuse_licence::the_fuse_directive_is_read_as_the_format_spells_it
+lichen_compute::fuse_licence::with_the_pack_the_device_answers_the_program_and_the_counterfactual_moves
+lichen_compute::fuse_licence::without_a_pack_the_floor_declines_by_name_and_the_graph_is_untouched
+lichen_compute::fused_region::a_composed_node_is_named_by_a_second_merge_pass_and_left_alone
+lichen_compute::fused_region::a_fan_out_region_with_no_pack_is_refused_by_name
+lichen_compute::fused_region::a_returned_producer_output_is_refused_by_name_and_nothing_merges
+lichen_compute::fused_region::an_address_the_consumer_computes_is_answered_by_the_producer_s_own_cone
+lichen_compute::fused_region::extents_that_do_not_correspond_are_refused_by_name_and_nothing_merges
+lichen_compute::fused_region::the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node
+lichen_compute::fused_region::the_floor_run_reports_both_stages_and_answers_the_un_passed_program
+lichen_compute::fused_region::the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fragment
+lichen_compute::graph_argument::a_step_whose_argument_names_two_buffers_records_three_inputs
+lichen_compute::graph_argument::the_two_buffer_chain_runs_on_the_device_and_answers_over_both
+lichen_compute::graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches
+lichen_compute::graph_jit::a_graph_runs_at_whichever_extent_its_argument_names
+lichen_compute::graph_jit::a_recording_produces_the_same_numbers_as_running_the_dispatches
+lichen_compute::mark_anchor::a_mark_inside_a_loop_still_names_its_whole_expression
+lichen_compute::mark_anchor::a_mark_on_a_top_level_operator_names_its_whole_expression
+lichen_compute::recompute_reads::the_merge_copies_the_producer_cone_once_per_read_at_that_read_s_address
+lichen_compute::recompute_reads::the_recording_reads_one_buffer_at_two_addresses
+lichen_compute::recompute_reads::two_reads_merge_and_the_device_answers_the_program
+lichen_compute::rmsnorm_denominator::a_fixed_size_and_a_runtime_extent_both_fuse
+lichen_compute::runtime_scalar_leaf::a_normalise_reading_a_runtime_scalar_merges_into_one_node
+lichen_compute::runtime_scalar_leaf::a_producer_declaring_a_runtime_scalar_is_refused_by_name
+lichen_compute::runtime_scalar_leaf::the_merged_diamond_answers_the_body_and_a_moved_bias_moves_it
+lichen_compute::sibling_diamond::a_sibling_diamond_merges_into_one_node_under_the_floor
+lichen_compute::sibling_diamond::a_sibling_diamond_reading_the_launch_extent_is_one_region_and_merges
+lichen_compute::sibling_diamond::a_sibling_diamond_whose_element_names_one_producer_is_refused_by_name
+lichen_compute::sibling_diamond::an_element_reading_the_invocation_index_is_one_region_and_merges
+lichen_compute::sparse_input_classes::the_consumer_that_reads_only_its_second_input_runs_and_answers_the_closed_form
+lichen_compute::tiling_visibility::a_composed_node_is_reported_by_name_and_nothing_lands_in_it
+lichen_compute::tiling_visibility::an_ordinary_graph_reports_one_line_per_node
+lichen_compute::union_ports::a_consumer_naming_only_the_absorbed_buffer_merges_and_the_device_agrees
+lichen_compute::union_ports::a_node_whose_ordinals_disagree_with_its_body_is_refused_by_name
+```
+
+**2 wrong-value — nothing is recorded where the test asserts a recorded fragment.**
+Both in `crates/lichen-compute/tests/lichen_compute/graph_argument.rs`, and both are
+`assert!(records(&chain(…)))`: `:275` (the control) and `:368` (the accepted half of
+the rule). Observed `false` where the baseline observed a fused fragment.
+
+```
+lichen_compute::graph_argument::a_second_buffer_records_under_the_in_group_and_does_not_beside_it
+lichen_compute::graph_argument::a_declared_buffer_beside_the_in_group_fails_the_build_and_never_runs
+```
+
+**6 diagnostic-only — the refusal stands and its cause changes.** The program is
+still refused, so the outcome is the one the test asks for, but the sentence is the
+graph's fallback rule instead of the rule each test is about — which means the rule
+under test no longer fires and the coverage is silently lost even where the outcome
+matches.
+
+```
+lichen_compute::graph_argument::an_unannotated_step_is_never_refused_by_the_rule   graph_argument.rs:416
+lichen_compute::graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture graph_jit.rs:263
+lichen_compute::graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one graph_jit.rs:303
+lichen_compute::graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name graph_jit.rs:342
+lichen_compute::graph_jit::one_backend_for_the_whole_graph_is_checked_while_it_is_built graph_jit.rs:471
+lichen_compute::graph_jit::a_graph_recorded_for_one_backend_runs_on_another graph_jit.rs:572
+```
+
+### 13.5 The counts, and what decides the question
+
+| bucket | `lichen-lowlevel` | `lichen-compute` |
+|---|---|---|
+| design-pin | 3 | **0** |
+| diagnostic-only | 0 | 6 |
+| **wrong-value** | **0** | **59** |
+
+`lichen-highlevel` has none of the three: 140 / 0 in every arm.
+
+**The `wrong-value` bucket is not empty**, so by
+[incremental-evaluation](incremental-evaluation.md) §5 step 1's own condition the
+plain run gate does not land. Sixty-five `lichen-compute` tests, none of them a
+pin of the retired behaviour, and fifty-nine of them asserting that the compiler
+accepts a program it now refuses.
+
+### 13.6 The epoch is unread
+
+`Module::value_epoch` has no production reader after the run gate stops comparing
+against it. What is left is `bump_value_epoch`'s own write (`equality.rs:288`),
+`stamp_node_ran`'s read of it to stamp with (`module.rs:338`), and the public
+accessor `Module::value_epoch()`, whose only reader in the tree is
+`crates/lichen-lowlevel/tests/basic/evaluation.rs:417` — a test this slice is not
+allowed to edit. `Node::runned` is read only for `!= 0`, so the `u32` is a `bool`
+with room to spare. **Nothing was removed.**
+
+### 13.7 What this leaves open
+
+§12.4 measured that *repairing* a late write buys one descent in 929 488. This slice
+measures something §12.4 never touched: **removing the re-run itself** costs 65
+programs that stop building. Those are different quantities, and together they say
+the elimination path is not only cheap — the re-run it would remove is load-bearing.
+The lever §12.7 named is unchanged and is still a maintainer's decision: the
+checker's evaluate-before-unify order ([eval-before-unify](eval-before-unify.md)
+§2.1).
 
 
 
