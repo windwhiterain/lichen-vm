@@ -168,7 +168,15 @@ fn elements(rendered: &str) -> Vec<Element> {
             let token = token.trim().to_string();
             let value = token.parse::<f32>().unwrap();
             Element {
-                round_trips: format!("{value:?}") == token,
+                // `float_literal` in `lichen-render`: `f32`'s positional `Display`
+                // with a forced `.`, which is the spelling the two backends printed.
+                round_trips: {
+                    let mut text = value.to_string();
+                    if !text.contains('.') {
+                        text.push_str(".0");
+                    }
+                    text == token
+                },
                 token,
                 value,
             }
@@ -302,7 +310,7 @@ impl Report {
                 .iter()
                 .filter(|&&i| model(self.a[i], self.b[i]) == self.device[i].value)
                 .count();
-            if hits * 4 >= n * 3 {
+            if hits * 4 >= n * 3 || hits > 0 {
                 println!("  MODEL {name} explains {hits}/{n}");
             }
         }
@@ -414,6 +422,26 @@ fn ln_band() {
             reciprocal.to_bits(),
         );
     }
+    for i in 0..n {
+        let distance = ulps_apart(device[i].value, cpu[i].value);
+        if distance < 2 {
+            continue;
+        }
+        let numerator = v[i] - 1.0;
+        let denominator = v[i] + 1.0;
+        println!(
+            "  LN-WORST lane={i} v={} numerator={} denominator={} cpu_bits=0x{:08x} \
+             device_bits=0x{:08x} ulp={distance} recip_model_bits=0x{:08x} \
+             trunc_recip_bits=0x{:08x}",
+            v[i],
+            numerator,
+            denominator,
+            cpu[i].value.to_bits(),
+            device[i].value.to_bits(),
+            (numerator * (1.0 / denominator)).to_bits(),
+            (numerator * truncated_reciprocal(denominator)).to_bits(),
+        );
+    }
 }
 
 /// `rmsnorm`'s own divisor: the Newton `sqrt` computed on the device, then the
@@ -471,12 +499,14 @@ fn rmsnorm(spelling: &str) -> Report {
     report
 }
 
-/// `softmax`'s gathered divisor, `exp (x[i]) / total[i]`.
+/// `softmax`'s gathered divisor, `exp (x[i]) / total[i]`, over both of the grids
+/// `operator-reverification.md` §3 swept.
 fn softmax_gathered() {
     let file = readme::example_dir().join("softmax.lichen");
     let source = readme::read_normalized(&file);
     let n = 256;
-    let a: Vec<f32> = (0..n).map(|m| 0.0 + m as f32 / 16.0).collect();
+    for base in [-16.0f32, 0.0] {
+    let a: Vec<f32> = (0..n).map(|m| base + m as f32 / 16.0).collect();
     let totals: Vec<f32> = (0..n).map(|m| grid(m % 64, -4)).collect();
     let body = source
         .replace("[1.0, 2.0, 3.0, 4.0] : array{Float, 4}", &array(&a))
@@ -505,12 +535,26 @@ fn softmax_gathered() {
         .map(|i| ulps_apart(device[i].value, cpu[i].value))
         .max()
         .unwrap_or(0);
+    let mut shown = 0;
+    for i in 0..n {
+        if !cpu[i].round_trips && shown < 3 {
+            println!(
+                "  PRINT lane={i} token={} display={} debug={:?} bits=0x{:08x}",
+                cpu[i].token,
+                cpu[i].value,
+                cpu[i].value,
+                cpu[i].value.to_bits()
+            );
+            shown += 1;
+        }
+    }
     println!(
-        "SOFTMAX_GATHERED n={n} same={all} worst_ulp={worst} \
+        "SOFTMAX_GATHERED base={base} n={n} same={all} worst_ulp={worst} \
          cpu_round_trips={} device_round_trips={}",
         (0..n).filter(|&i| cpu[i].round_trips).count(),
         (0..n).filter(|&i| device[i].round_trips).count(),
     );
+    }
 }
 
 /// Compensated spellings of `qa / qb`, over `rmsnorm`'s own divisor grid.
@@ -629,6 +673,110 @@ fn compensated(spelling: &str) {
     }
 }
 
+/// `1 / b` rounded toward zero, by integer division, so the two vendors' divisors
+/// can be told apart from their correctly rounded ones.
+fn truncated_reciprocal(b: f32) -> f32 {
+    let (n1, d1, shift) = as_ratio(1.0f32, b);
+    let significand = ((n1 as u128) << 23) / d1 as u128;
+    assemble(false, significand as u32, shift)
+}
+
+/// The per-lane reciprocal interval over the `ln` band, so `a / b = a · r` is
+/// tested where the divisor is itself a computed value and not a grid constant.
+fn ln_reciprocal_search() {
+    let n = 4096;
+    let low = 0.707_106_78f32;
+    let high = 1.414_213_5f32;
+    let v: Vec<f32> = (0..n)
+        .map(|m| low + (high - low) * m as f32 / n as f32)
+        .collect();
+    let body = "  result = (qa - 1.0) / (qa + 1.0)";
+    let (_, device) = measure(&quotient_program(n, &v, &vec![1.0f32; n], body));
+    let mut non_empty = 0usize;
+    let mut width_zero = 0usize;
+    let mut away_from_nearest = 0usize;
+    for i in 0..n {
+        let numerator = v[i] - 1.0;
+        let denominator = v[i] + 1.0;
+        let reciprocal = 1.0f32 / denominator;
+        let (lo, hi) = interval(
+            numerator.abs(),
+            device[i].value.abs(),
+            (reciprocal * 0.75).to_bits(),
+            (reciprocal * 1.25).to_bits(),
+        );
+        if lo <= hi {
+            non_empty += 1;
+            if lo == hi {
+                width_zero += 1;
+                if lo != reciprocal.to_bits() {
+                    away_from_nearest += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "LNRECIP lanes={n} non_empty={non_empty} width_zero={width_zero} \
+         r_not_the_nearest_reciprocal={away_from_nearest}"
+    );
+}
+
+/// The `f32` reciprocal one divisor's answers are consistent with, over the whole
+/// 64-numerator grid, so the two vendors can be read against each other divisor
+/// by divisor.
+fn per_divisor() {
+    let n = 4096;
+    let (mut tally_total, mut tally_exact, mut tally_trunc) = (0usize, 0usize, 0usize);
+    let (mut tally_width, mut tally_empty, mut tally_power_of_two) = (0usize, 0usize, 0usize);
+    let a: Vec<f32> = (0..n).map(|m| grid(m % 64, 0)).collect();
+    let b: Vec<f32> = (0..n).map(|m| grid((m / 64) % 64, -4)).collect();
+    let (_, device) = measure(&quotient_program(n, &a, &b, "  result = qa / qb"));
+    for divisor_index in 0..64 {
+        let divisor = grid(divisor_index, -4);
+        let reciprocal = 1.0f32 / divisor;
+        let low = (reciprocal * 0.75).to_bits();
+        let high = (reciprocal * 1.25).to_bits();
+        let mut open_low = low;
+        let mut open_high = high;
+        let mut empty = 0usize;
+        for m in 0..64 {
+            let i = m + 64 * divisor_index;
+            let (lo, hi) = interval(a[i], device[i].value, low, high);
+            if lo > hi {
+                empty += 1;
+                continue;
+            }
+            open_low = open_low.max(lo);
+            open_high = open_high.min(hi);
+        }
+        let width = open_high as i64 - open_low as i64;
+        let found = f32::from_bits(open_low);
+        let dropped = reciprocal.to_bits() as i64 - found.to_bits() as i64;
+        let truncated = truncated_reciprocal(divisor);
+        let _ = f32::from_bits(reciprocal.to_bits() & !1);
+        let power_of_two = divisor.to_bits() & 0x007f_ffff == 0;
+        tally_power_of_two += usize::from(power_of_two);
+        tally_width += usize::from(width == 0);
+        tally_empty += usize::from(empty == 0);
+        tally_exact += usize::from(dropped == 0);
+        tally_trunc += usize::from(found.to_bits() == truncated.to_bits());
+        tally_total += 1;
+        if dropped != 0 {
+            println!(
+                "PERDIV-OFF divisor={divisor} width={width} r=0x{:08x} fl(1/b)=0x{:08x} \
+                 delta={dropped} r_is_trunc={}",
+                found.to_bits(),
+                reciprocal.to_bits(),
+                usize::from(found.to_bits() == truncated.to_bits())
+            );
+        }
+    }
+    println!(
+        "PERDIV-TOTAL divisors={tally_total} all_exact_r={tally_exact} r_is_trunc(1/b)={tally_trunc} \
+         width_zero={tally_width} no_empty_lane={tally_empty} power_of_two={tally_power_of_two}"
+    );
+}
+
 /// The `f32` reciprocal the device's answers are consistent with, if one exists.
 fn reciprocal_search() {
     for divisor in [3.0f32, 7.0, 2.5, 0.1] {
@@ -696,7 +844,8 @@ fn main() {
     let asked: Vec<String> = std::env::args().skip(1).collect();
     let asks: Vec<String> = if asked.is_empty() {
         [
-            "selfcheck", "fixed", "grid", "dense", "recip", "ln", "rmsnorm", "softmax",
+            "selfcheck", "fixed", "grid", "dense", "recip", "perdiv", "ln", "rmsnorm",
+            "softmax",
             "compensated",
         ]
         .iter()
@@ -728,6 +877,8 @@ fn main() {
                 }
             }
             "recip" => reciprocal_search(),
+            "lnrecip" => ln_reciprocal_search(),
+            "perdiv" => per_divisor(),
             "ln" => {
                 ln_band();
             }
