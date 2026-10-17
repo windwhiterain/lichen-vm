@@ -5,8 +5,9 @@
 > paren read `a(k)` is the tuple read, and a named read states its container
 > requirement in both tiers (the decided one as a kind unify, the undecided one as
 > a registered `IsStructType` condition re-checked per apply clone, which also
-> closed `X::a`'s panic). The class-attached blocked list remains a sketch, and
-> the rest of §5 stays a sketch. The **ordering** half of the question is settled
+> closed `X::a`'s panic). The class-attached blocked list remains a sketch; §5.2's
+> re-checkable assert landed for the named read and the paren read's unify for
+> `a(k)`. The **ordering** half of the question is settled
 > and measured: reordering evaluation against unification cannot be the fix, and
 > the runtime's own answer was a memoization on the stalled node
 > ([stalled-rerun-epoch](stalled-rerun-epoch.md)), now retired.
@@ -376,8 +377,14 @@ an operand because the runtime has no canonical universe node to read.
 <container type>`. Measured: the condition fires for an array argument and stays
 silent for a struct — named or a block's record — through the same apply clone;
 the decided tier remains the kind unify it was; and the refusal is **added to**,
-not instead of, the two runtime table messages, because the apply never fails its
-parameter check and so still runs the body it refuses. `X::a` was already
+not instead of, the runtime table messages, because the apply never fails its
+parameter check and so still runs the body it refuses. Re-measured on
+`dev@790f907f`: `f = x => x.a` ; `f [10, 20]` reports **five** diagnostics — two
+`this value is not a container`, two `table lookup missed` (the note's earlier
+reading counted one pair), and the condition's `expected a struct type, found
+array{Int, 2}` at the **definition's** read (`1:5`, not the call site) — while
+`f (S(.a 1))` answers `1: Int` and `t::a` over an array refuses at the call
+(`expected TypeStruct, found array{Int, 2}`, `3:3`). `X::a` was already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
 
@@ -432,7 +439,7 @@ fixed by the commit reaching the class (§5.1) rather than by asking later.
   alternative was purely additive (keep the disjunction, register the condition),
   and it is what the named reads still need, §6.2.
 
-### 6.2 The fix direction (the paren read landed; the named reads open)
+### 6.2 The fix direction (the paren read and the named read landed; the pin stays rejected)
 
 The gap is that the paren read could not simply copy the bracket read's pin: a pin
 is a unify against **one** concrete kind, and `a(k)` accepted a *disjunction* — a
