@@ -703,7 +703,9 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
   undecided must not lose the value its class carries — which is why the class is taken
   whole from such a node. A shared type makes one class the program: a scalar cell's class
   can hold hundreds of members. Anything that changes the edge must re-check `apply.rs`'s
-  `regroup_clones`/`static_function_captures` and the equality suite's class tests.
+  `regroup_clones` and
+`static_module.rs`'s `static_closure_has_open_captures` (it asked about openness, not a
+target, since `7ceee3eb`), and the equality suite's class tests.
 
 ## 9. What would falsify it
 
