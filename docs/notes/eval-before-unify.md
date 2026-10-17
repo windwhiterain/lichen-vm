@@ -562,11 +562,25 @@ so `T::a` is refused as `expected raw[?a, TypeStruct], found Type`, and the inli
 `(type_of S1)::a` is `raw none: ?a`. The read is guarded on the container's
 **type item**, and for a call whose value is a type that item is the universe rather
 than the value's kind; the `::` chains also root at that item, so they cannot see
-the value's own kind. Two candidate fixes, neither landed: fill the kind into the
-result item when the returned value is a type (the `type_of` definition's `t` cell
-never receives one), or let the guard and the chains ask the **value's** marker when
-the type item is the universe. The four `defer_pending` tests read through exactly
-this shape (`T::I` with `T = type_of (P _)(…)`).
+the value's own kind.
+
+**Measured with a probe at the read (reverted):** at the moment `T::a` is checked,
+`T`'s **type item is decided** (the universe) while `T`'s **value is still
+undecided** — the binding's evaluation has not run yet — so neither the type-based
+guard nor a value-based one can answer at check time, and `struct_names_any` on the
+value returns `None`. `S1::a`'s own read sees a one-element value array on its first
+pass and the term on the second, so a value-based chain would also need the term's
+layout, not the value node's.
+
+Two candidate fixes, neither landed: **fill the kind into the result item** when the
+returned value is a type — the type system's own rule that a type's type is its kind,
+which the `type_of` definition's `t` cell never receives (a real inference rule, not
+a local read) — or **defer the `::` guard and read** until the value exists, treating
+the universe-typed container as "cannot tell yet" rather than as a decided
+non-struct kind. The first matches the author's ruling that types are determined at
+check time; the second is the named read's deferred-assert shape extended to `::`.
+The four `defer_pending` tests read through exactly this shape (`T::I` with
+`T = type_of (P _)(…)`).
 
 ### 6.3 The message/predicate disagreement
 
