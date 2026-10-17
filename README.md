@@ -2534,11 +2534,20 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `i - 1` and at `i = n - 1` the right one is `i + 1`, and both are **outside the buffer** — an \
     out-of-buffer read answers `0` (`crates/lichen-compute/src/compute.rs:6234`; the same rule that \
     made `examples/gemv.lichen` answer `0` for `x`'s fourth element). So both ends are \
-    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the operator has no case \
-    analysis in it at all. That is a choice of operator rather than a limitation of the surface: a \
+    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the **one-dimensional** \
+    operator has no case analysis in it at all. That is a choice of operator rather than a limitation of the surface: a \
     different boundary is a different operator, because the surface has no way to spell a boundary \
     that is a parameter without a `Select`, and a `Select` refuses when its two arms are computed \
     in different classes (`attention.lichen`'s `scores` refusal, fixed at `b6dea46c`).\n\n\
+    **Two dimensions show where the padding stops being the boundary.** A row-major flattening makes \
+    the vertical taps honest — `(row - 1) * cols + col` is negative on the first row and past the end \
+    on the last, so both answer `0` — but the **horizontal** ones are not: `i - 1` at `col = 0` is the \
+    *previous row's last element* and `i + 1` at `col = cols - 1` is the *next row's first*, so a flat \
+    neighbour walk **wraps** instead of vanishing. The second chain therefore masks them, \
+    `if col == 0 then 0.0 else read (i - 1)` and the same at `cols - 1`. A `Select` whose two arms are \
+    both `Float` is **accepted** — the refusal recorded on `attention.lichen`'s `scores` was about arms \
+    computed in *different* classes (`b6dea46c`) — so the horizontal boundary costs one `Select` per \
+    direction and nothing else, and the vertical one still costs nothing.\n\n\
     **The write address is the lane's own index.** A `compute.write` names a slot of an output \
     buffer exactly as long as the launch's extent \
     (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range c.n` with `.at i` is a \
@@ -2561,6 +2570,14 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     with the right padding as its right neighbour, is `4 + 0.25 * (0 + 0 - 8) = 2`. The answer is \
     `2 1 0 0 1 2` — every value a quarter or a half below `2^24`, so **nothing is modelled**: no \
     `exp`, no `sqrt`, no `ln`, no division.\n\n\
+    **The grid's own answer, by hand.** `cols = 3`, `alpha = 0.25`, and the grid is `0 0 4 / 4 0 0 / 0 0 \
+    0` — the two `4`s sit at the cells that make the wrap **visible**, because `(0, 2)`'s unmasked right \
+    neighbour is `(1, 0)` and `(1, 0)`'s unmasked left is `(0, 2)`. Masked, both taps are `0` and the \
+    two `4`s simply decay: `4 + 0.25 * (0 - 16) = 0`. Unmasked, each would instead add `0.25 * 4 = 1` \
+    from the other row's edge cell and answer `1`, which is the difference the mask buys. Every other \
+    cell takes `0.25 * 4 = 1` from the one `4` that is a real neighbour — `(0, 0)` from below, `(0, 1)` \
+    from the right, `(1, 1)` from the left, `(1, 2)` and `(2, 0)` from above — and `(2, 1)`, `(2, 2)` \
+    have no `4` at any tap and stay `0`. The answer is `1 1 0 / 0 1 1 / 1 0 0`.\n\n\
     **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
     has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
@@ -2569,7 +2586,7 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
     on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
     leave the answer untouched."
-  output = "[2.0, 1.0, 0.0, 0.0, 1.0, 2.0]: array{Float, 6}"
+  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]): tuple{array{Float, 6}, array{Float, 9}}"
 ---
 XIn  = struct{.x (compute.Buf Float)}
 XOut = struct{.y (compute.Buf Float)}
@@ -2583,9 +2600,27 @@ stencil_raw = (c : XPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
 stencil = compute.parallel stencil_raw "cpu"
+GIn  = struct{.x (compute.Buf Float)}
+GOut = struct{.y (compute.Buf Float)}
+GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
+GArg = struct{.n Int, .cols Int, .alpha Float, .I GIn}
+grid_raw = (c : GPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  above = compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col)))
+  below = compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col)))
+  left = if col == 0 then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if col == (c.cols - 1) then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+}
+grid = compute.parallel grid_raw "cpu"
 x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
-compute.collect out.y : array{Float, 6}
+plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
+stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
+(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9})
 ```
 
 <!-- end: examples -->

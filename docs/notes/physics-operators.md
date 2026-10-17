@@ -34,6 +34,11 @@ computed in different classes (`examples/attention.lichen`'s `scores` refusal, f
 `b6dea46c`). So the honest statement is that this file spells the one boundary the language can
 spell without a conditional, and the others are work rather than impossibility.
 
+**In two dimensions only half of that survives, and the half that does not is worth naming
+up front**: the vertical taps are the padding, the horizontal ones are not, because a row-major
+flattening makes them cross into the neighbouring row. See §What the family needs next, where the
+second chain and the mask are the measurement.
+
 ## The read set is wider than the lane, and that has two consequences
 
 - **The read set is not a prefix of the buffer.** The upload-width rule ("a host input is uploaded
@@ -60,12 +65,23 @@ backends agree bit for bit.
 
 - **A second step** is a second `plrun` over the first step's output: no new spelling, and the
   answer is exact only for the same reason (the arithmetic is multiply-add and subtract).
-- **Two dimensions** needs `compute.row`/`compute.col` and then the positional rule bites: the
-  **second** scalar leaf is the divisor for both coordinates, so the strides go after it
-  (`examples/matmul.lichen` states the rule for its own `k`). Four neighbours make the boundary the
-  same padding question four times.
-- **A periodic or clamped boundary** is the first thing in this family that needs a conditional, and
-  the class rule above is what decides whether it can be spelled at all today.
+- **Two dimensions is measured now, and it half-falsified what this note first said.** `compute.row`
+  and `compute.col` work, with the **second** scalar leaf as the divisor for both coordinates, so
+  `cols` goes second and the strides after it (`examples/matmul.lichen` states the rule for its own
+  `k`). But the boundary is **not** the same padding question four times. The vertical taps are —
+  `(row +/- 1) * cols + col` runs off the end and answers `0` — and the **horizontal** ones are not:
+  `i - 1` at `col = 0` is the *previous row's last element* and `i + 1` at `col = cols - 1` is the
+  *next row's first*, so a flat neighbour walk **wraps**. The second chain of
+  `examples/stencil.lichen` masks them, `if col == 0 then 0.0 else read (i - 1)` and the same at
+  `cols - 1`, and **a `Select` whose two arms are both `Float` is accepted** — the refusal this note
+  cites from `attention.lichen`'s `scores` was about arms computed in *different* classes — so the
+  horizontal boundary costs one `Select` per direction and nothing else. Measured: `agrees, 15 of 15
+  element(s)` on the RTX 3060, both chains together, so the mask is right on the device too.
+- **A periodic or clamped boundary is no longer blocked by the class rule.** A `Float`-armed `Select`
+  is accepted, so a periodic boundary is the wrap done on purpose
+  (`if col == 0 then read (row * cols + cols - 1) else read (i - 1)`) and a clamped one is `max` on
+  the index. What is *not* expressible is a boundary that is a **runtime parameter**: the condition
+  would have to be data, and the surface has no such `Select`.
 - **A conserved quantity** — mass, energy — cannot be stated: the language has no place for a
   physical invariant, so the declared output is the only acceptance there is. That is honest rather
   than convenient, and it is what a solver written in this language has to live with.
