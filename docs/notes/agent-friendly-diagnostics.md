@@ -238,6 +238,12 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   (`compute_kernel_bindings_render_by_name_not_raw_layout`) is **fixed**. A future red is a
   regression against *this* line.
 
+  **Re-checked on the merged tip after the type-system work (`dev@44c8c20d`, measured there)**: lowlevel
+  **146/13** (the same compaction set the GC ruling lists), highlevel **140/0**, language **271/1**
+  (`gc_block`), compute **229/2/2** (the same `graph_jit` and `graph_structure`; the pass count moved from
+  230 with the operator side's probe churn, e.g. `d09c2205`), language-server **22/0**. The failure sets are
+  unchanged from the line above; only the compute pass count moved, and its reds did not.
+
   **The measurement method, so it is cheap to redo**: the language front end, one
   `lichen_language::compile(&source)` call per program, reading `report.diagnostics` — the `message`
   is `render::checker_message`'s own output and `check.kind` the highlevel's kind, so the probe needs
