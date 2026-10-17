@@ -595,16 +595,16 @@ application's result…): `(type_of S1)::a` and `(f S1)::a` are refused at the r
 while `x::a` on a parameter still resolves (`f = x => x::a` applied to `S1` is
 `Int: Type`). A binding whose value is a call is the same expression — a top-level
 name *is* its value's node — so `T = type_of S1` ; `T::a` refuses with that message
-too. The four `defer_pending` tests now fail at their `report.ok()` (the read is
-refused), which is the ill-posed read the ruling names.
+too. The four `defer_pending` tests encoded that ill-posed read and were **deleted
+at the author's direction**; the module keeps `the_type_constant_is_the_universe_marker`.
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
 right — and the operation itself is what has no meaning: the author's rule is that
 **`a::b` requires `a` to be a `struct{…}`** (*"a::b 要求 a 是一个 struct{...}"*), so a
 `::` read on a runtime type value is not a read to repair but a refusal to state.
-The four `defer_pending` tests encode exactly that meaningless read
-(`T::I` with `T = type_of (P _)(…)`) and are ill-posed under the rule.
+Four `defer_pending` tests encoded exactly that meaningless read
+(`T::I` with `T = type_of (P _)(…)`); they were deleted once the rule landed.
 
 **The deferral cannot be borrowed naively, measured.** Giving `check_named_type_access`
 the named read's two-tier shape (an `IsStructType` assert when the container's item is

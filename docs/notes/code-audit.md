@@ -37,7 +37,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | fixed — the type-conflict refusal no longer reproduces; the residual stop is the budget (P1-40) |
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | fixed — the registry's tags are checked at compile time |
-| P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
+| P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | partly fixed — the message names the shared fact and lists the three shapes; the missing apply (a kernel compiled against an applied body) is parked under `compute-jit-low-types.md` |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
