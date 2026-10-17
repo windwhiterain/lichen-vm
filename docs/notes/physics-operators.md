@@ -93,10 +93,13 @@ the type is not.
   visible in the declared output, which is the form an example can pin.
   A top-level `@loop` around the same dispatch behaves differently depending on what it carries:
   - **state is a plain `array{Float, 6}` and each step builds its input with `compute.buffer (s(1))`**:
-    the loop **dispatches and answers the same six numbers**, but its type is **undecided** — the
-    printer shows `raw[raw 2.1875, …]: ?a`. So iteration *does* compose with dispatch, and the gap
-    is on the **type** side, not the numerics: a caller cannot yet use the answer as an
-    `array{Float, 6}`.
+    the loop **dispatches and answers the same six numbers**, and its type is **undecided** —
+    the printer shows `raw[raw 2.1875, …]: ?a` — until the recursive function is annotated, when it
+    prints the typed array. Both spellings are measured on *this* program by
+    `crates/lichen-compute/tests/lichen_compute/zz_fold_type_probe.rs`, whose four readings are
+    `[straight]` (control, typed), `[loop]` (`?a`), `[loop_root_annotated]` (`(out : array{Float, 6})`,
+    typed) and `[loop_recursion_annotated]`
+    (`((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`, typed).
   - **state is the `XOut` struct** (seed a real kernel result, or hand-build `(XOut)(.y x)`): the
     fold never resolves — one iteration, two or three all print `raw none: array{Float, 6}`, and the
     same fold with the dispatch removed *fails* the harness outright. So the struct-carrying fold is
@@ -104,17 +107,18 @@ the type is not.
   - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read,
     which is why the array-state form above exists at all.
 
-  What follows for a solver: write it **unrolled** when the answer has to have a type (an example
-  declares one), and **looped over an array state** when it does not. The type of a fold that
-  contains a dispatch is a type-side question, not this family's.
-  **Answered: it is the recursion-annotation rule, not the dispatch.** A loop whose body contains
-  no dispatch at all prints the same shape — unannotated `@loop r = s => … r (s(0) - 1, 7)` gives
-  `r: ?a -> ?b` and `out: raw 7: ?c`, while `@loop r = ((s => …) : tuple{Int, Int} -> Int)` gives
-  `r: tuple{Int, Int} -> Int` and `out: Int` (measured on a toy loop, both with and without an
-  application in the body). A recursive function's type follows from its annotation
-  (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so the solver's
-  array-state loop becomes typed by annotating `run` with `tuple{Int, array{Float, 6}} ->
-  array{Float, 6}` — the dispatch is not what loses the type.
+  **Answered: the `?a` is the recursion-annotation rule, not the dispatch.** A loop whose body
+  contains no dispatch at all prints the same shape — unannotated `@loop r = s => … r (s(0) - 1, 7)`
+  gives `r: ?a -> ?b` and `out: raw 7: ?c`, while `@loop r = ((s => …) : tuple{Int, Int} -> Int)`
+  gives `r: tuple{Int, Int} -> Int` and `out: Int` (the type system's owner measured both on a toy
+  loop, with and without an application in the body). A recursive function's type follows from its
+  annotation (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so the
+  array-state loop is typed by annotating `run` — the dispatch is not what loses the type.
+
+  What follows for a solver: **it can be looped and typed.** Write it unrolled, or as a fold over an
+  array state whose recursive function carries `tuple{Int, array{Float, 6}} -> array{Float, 6}`; an
+  example that declares an output should prefer the annotated loop or the unrolled form, and the
+  root annotation works too but states the answer's type away from the function that computes it.
 - **Two dimensions is measured now, and it half-falsified what this note first said.** `compute.row`
   and `compute.col` work, with the **second** scalar leaf as the divisor for both coordinates, so
   `cols` goes second and the strides after it (`examples/matmul.lichen` states the rule for its own
