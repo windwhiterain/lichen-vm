@@ -22,7 +22,8 @@ The test's own words: *"the producer's claim declares the node-local algebra and
 
 ## The cause, measured
 
-1. `reenter_recording` (`crates/lichen-compute/src/compute.rs:5369-5382`) deep-evaluates the apply, and when
+1. `evaluate_until_the_return_is_nameable` — defined at `compute.rs:5360`, called once at `:5201` — deep-evaluates
+   the apply in its own body (`crates/lichen-compute/src/compute.rs:5369-5382`), and when
    the returned value is not nameable it calls `Module::reopen_stalled(block)` and evaluates again, up to
    `RECORDING_ROUNDS`.
 2. `reopen_stalled` (`crates/lichen-lowlevel/src/module.rs:368-397`) clears the run stamp of every operation
@@ -31,11 +32,13 @@ The test's own words: *"the producer's claim declares the node-local algebra and
 3. The second round therefore resolves the reads that stalled in the first, and the deep walk **continues past
    the point where it previously stopped**. Operators beyond that point run for the first time, and each
    dispatch appends its algebra role to the producer's claim.
-4. The recording, however, is opened once around **all** the rounds (`graph::begin` before the loop,
-   `graph::finish` after it), so the appended dispatches of every round land in one graph. That is the defect:
-   `graph::is_recording`'s invariant says *"one graph is built by one evaluation"*
-   (`crates/lichen-compute/src/compute/graph.rs:194-197`), and a body walked twice is two evaluations' worth of
-   dispatches.
+4. The recording, however, is opened once around **all** the rounds (`graph::begin` at `compute.rs:5196`,
+   `graph::finish` at `:5237`, with the re-drive loop at `:5201` between them), so the appended dispatches of
+   every round land in one graph. That is the defect: `graph::is_recording`'s invariant has **the thread** as its
+   subject — *"The thread is load-bearing: one graph is built by one evaluation, so a dispatch on another thread
+   is not part of it"* (`graph.rs:193-197`) — and that a round **is** an evaluation is an **inference** from that
+   invariant, not its literal words. The compute owner confirmed the inference; it is recorded as one so that
+   nobody can cite this note as licence to change that invariant.
 
 So the algebra name is the *symptom*; the cause is that a recording outlives the round it belongs to.
 
@@ -74,9 +77,9 @@ Two alternatives were considered and are worse:
 
 - The recording lifecycle is `graph::begin` / `graph::abandon` / `graph::finish`
   (`crates/lichen-compute/src/compute/graph.rs:198-269`), and the recording is a **thread-local stack**
-  (`recordings.borrow_mut().push(...)`), so `begin`/`abandon` inside `reenter_recording` is on the right thread
+  (`recordings.borrow_mut().push(...)`), so `begin`/`abandon` inside `evaluate_until_the_return_is_nameable` is on the right thread
   by construction.
-- The re-drive loop is `reenter_recording` (`compute.rs:5369-5382`); `RECORDING_ROUNDS` bounds it and
+- The re-drive loop is `evaluate_until_the_return_is_nameable` (`compute.rs:5369-5382`); `RECORDING_ROUNDS` bounds it and
   `returned_value_ids` decides whether a round succeeded.
 - `reopen_stalled` is lowlevel and is **not** the thing to change: it is what makes a re-drive possible at all,
   and its stamp discipline is pinned by the lowlevel's own tests.
@@ -162,7 +165,7 @@ rule should refuse it, which is a different defect with a different shape (the w
 ## Replicating the table
 
 The probe is not an artefact and was reverted; the readings are reproduced by re-applying it — `graph::probe_node_count`
-returning the innermost recording's `nodes.len()`, and an `eprintln!` at each round's end in `reenter_recording`
+returning the innermost recording's `nodes.len()`, and an `eprintln!` at each round's end in `evaluate_until_the_return_is_nameable`
 (`compute.rs:5369-5382`) — and running each test **alone**:
 
 ```text
@@ -233,10 +236,10 @@ Four steps, in this order. Nothing here needs a decision, so the comparison cann
 
 1. **Re-apply the probe** (the same two edits the table was taken with): `graph::probe_node_count` returning the
    innermost recording's `nodes.len()`, and the `eprintln!("ROUNDPROBE round=… recorded=… nodes=…")` at the end
-   of each round in `reenter_recording`.
+   of each round in `evaluate_until_the_return_is_nameable`.
 2. **Run the nine programs alone**, one process each, and collect the `ROUNDPROBE` lines:
    `cargo test -p lichen-compute --test lichen_compute lichen_compute::graph_jit::<name> -- --exact --nocapture`,
-   for each name in the table above. Compare **per recording, in order**, against the baseline.
+   for each name in the table above. Compare **per recording, in order**, and as a **single-program** comparison — the same program measured on its own commit before and after, never the whole table against the whole table (see "The comparison is single-program" below).
 3. **Run the suite and diff the failure names**:
    `cargo test -p lichen-compute -j 1 --no-fail-fast`, then `Compare-Object` the `… FAILED` names against a
    pristine `dev` run. `consumer_guard` must leave the set; the other sixteen must not move.
@@ -293,3 +296,23 @@ is wrong — its per-test verdict parsing was broken (the suite reports 7 passed
 programs). The `nodes` columns are unaffected, because they come from the probe's own lines; the verdicts are to
 be taken from the suite, never from that script. Recorded here because a wrong verdict column in a baseline is
 exactly the kind of thing a later reader would copy.
+
+### The comparison is single-program, not table-to-table
+
+The before readings were taken on `a4593102`; the after run happens on whatever commit the compute owner names
+(the `fma` slice landed as `c950f1fb`, and between the two commits `dev` also took the scalar-ring rule, the two
+`Verify` rules in `AGENTS.md`, and three notes of mine). So a whole-table before/after would put **other people's
+commits** on A′'s account. Each reading answers its own question, and only in this way:
+
+- **Did A′ move the walk?** `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched`'s
+  per-round `nodes`, the same program on each commit separately. The other eight programs are controls, read one
+  by one — a program whose readings changed is a finding, not a count.
+- **Did `consumer_guard` turn green, and the other sixteen stay?** The `lichen-compute` failure-name set,
+  measured **on each commit as a full run** (`201 passed / 17 failed / 2 ignored` on both, with `consumer_guard`
+  leaving the set). Two full runs are two measurements, not one code's before and after.
+- **Did any refusal text change silently?** The six `(literal, count)` pairs, read from the source's own `assert`
+  blocks, on the after commit.
+
+One non-fault: `crates/lichen-compute-gpu/examples/fma_probe.rs` stays in the tree (the repository allows a probe
+during an investigation and it drives the two device tables), so a detached run compiles one extra example. That
+is a few seconds, not a failure.
