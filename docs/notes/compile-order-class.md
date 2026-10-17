@@ -172,6 +172,17 @@ and that merge *could* disagree, and the machinery has an answer for it — `wri
 `unify_inner`'s `(Some, Some)` arm calls `record_error(ra, rb, …)`, a recorded unify error naming both
 nodes — but with no seeding site reachable that is untested.
 
+**The cells are what is empty, not the values, and that is measured.** A probe at
+`static_function_apply`'s parameter check on `BACK_TO_FRONT` (`dev@c0773e12`, instrumented and reverted)
+printed, for every static apply including `StaticFunctionId(22)`: `arg_value = true`,
+`param_value = true`, `param_op = false` — the argument and the cloned parameter both **hold values**
+at the check, and the parameter carries no operation. So the check does run with both sides in hand;
+what stays empty is the struct term's **element cell**, and the unify's **descent into it** is what
+fails to bind. That narrows candidate (ii) from "make the argument decided" to "make the descent
+bind" — the value is present, the merge is not — and it is why the fix is a lowlevel apply/unify
+question rather than a program spelling or a read-order move alone.
+
+
 So the two honest candidates are both **lowlevel** changes to the carry rule or the apply ordering, and
 neither was chosen: **(i)** carry the parameter binding into the `.element` slot's value position **at
 clone time** in `static_node_apply`, or **(ii)** make the `Buf` application's argument **decided before
