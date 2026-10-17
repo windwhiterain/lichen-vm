@@ -2933,14 +2933,13 @@ const MAX_PARAMETER_DEPTH: usize = 32;
 fn kernel_body_too_deep() -> String {
     format!(
         "a kernel body's expression nests more than {MAX_KERNEL_BODY_DEPTH} levels, so lowering it \
-         would recurse deeper than a compile should spend on its stack — the walk costs about 3 \
-         levels per expanded copy, so this is a trip count in the low hundreds. An unmarked \
-         recursion is **expanded**, and expansion nests every copy inside the last one's else arm, \
-         so the walk's depth is the trip count: it is the expansion that is too big rather than the \
-         program. Mark the recursion `@loop` so it may become a dynamic loop instead of an \
-         expansion (`docs/notes/loop-conversion.md` §1.1) — that form is O(1) in the trip count and \
-         removes this limit by construction — or, if the trip count is small, write the copies out \
-         by hand."
+         would recurse deeper than a compile should spend on its stack — a body-depth budget, not a \
+         stack guarantee. An unmarked recursion is **expanded**, and expansion nests every copy \
+         inside the last one's else arm, so the walk's depth is the trip count: it is the expansion \
+         that is too big rather than the program. Mark the recursion `@loop` so it may become a \
+         dynamic loop instead of an expansion (`docs/notes/loop-conversion.md` §1.1) — that form is \
+         O(1) in the trip count and removes this limit by construction — or, if the trip count is \
+         small, write the copies out by hand."
     )
 }
 
