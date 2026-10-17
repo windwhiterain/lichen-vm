@@ -864,14 +864,50 @@ fn ln_scale(
     (value, track)
 }
 
+/// `numerator / denominator` as a Markstein step: a reciprocal, a fused seed, the residual, and
+/// one correction.
+///
+/// # Invariant
+/// The device does not round `OpFDiv` correctly (floating-point.md §7), so the plain quotient is
+/// only the seed. `ln_value` runs the same four operations in the same order, and that is what
+/// makes the two backends answer the same bits.
+fn compensated_quotient(
+    body: &mut KernelBody,
+    entry: usize,
+    numerator: ValueId,
+    denominator: ValueId,
+) -> ValueId {
+    let one = constant(body, entry, 1.0);
+    let zero = constant(body, entry, 0.0);
+    let reciprocal = float_bin(body, entry, KernelBin::Div, one, denominator);
+    let quotient = body.add_op(
+        entry,
+        KernelInstr::Fma,
+        vec![numerator, reciprocal, zero],
+        vec![ScalarClass::Float],
+    );
+    let negated = float_bin(body, entry, KernelBin::Sub, zero, denominator);
+    let residual = body.add_op(
+        entry,
+        KernelInstr::Fma,
+        vec![negated, quotient, numerator],
+        vec![ScalarClass::Float],
+    );
+    body.add_op(
+        entry,
+        KernelInstr::Fma,
+        vec![residual, reciprocal, quotient],
+        vec![ScalarClass::Float],
+    )
+}
+
 /// The logarithm: a reduction into the band, then the `atanh` series and `k ln 2`.
 ///
 /// # Invariant
 /// Straight line, one block, one parameter and one returned value — the shape
-/// [`KernelBody::expand_transcendentals`] inlines. **The one operation not shared is the
-/// division in `(v-1)/(v+1)`**, and `OpFDiv` does not round correctly on this device
-/// (`floating-point.md` §7), so unlike the others this one carries a cross-backend
-/// divergence of up to a unit in the last place.
+/// [`KernelBody::expand_transcendentals`] inlines. The `(v-1)/(v+1)` division is a compensated
+/// quotient over [`KernelInstr::Fma`] that [`ln_value`] also runs, so device and definition agree
+/// bit for bit; wasm refuses `Fma` by name, and this body with it.
 pub fn ln_body() -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -929,7 +965,7 @@ pub fn ln_body() -> KernelBody {
     let one = constant(&mut body, entry, 1.0);
     let shifted = float_bin(&mut body, entry, KernelBin::Sub, value, one);
     let raised = float_bin(&mut body, entry, KernelBin::Add, value, one);
-    let z = float_bin(&mut body, entry, KernelBin::Div, shifted, raised);
+    let z = compensated_quotient(&mut body, entry, shifted, raised);
     let square = float_bin(&mut body, entry, KernelBin::Mul, z, z);
     let last = LN_COEFFICIENTS.len() - 1;
     let mut series = constant(&mut body, entry, LN_COEFFICIENTS[last]);
@@ -975,7 +1011,13 @@ pub fn ln_value(x: f32) -> f32 {
         return f32::NEG_INFINITY;
     }
     let (value, track) = ln_reduce_value(x);
-    let z = (value - 1.0) / (value + 1.0);
+    // The body's compensated quotient, in the same order: reciprocal, seed, residual, correction.
+    let numerator = value - 1.0;
+    let denominator = value + 1.0;
+    let reciprocal = 1.0 / denominator;
+    let quotient = numerator.mul_add(reciprocal, 0.0);
+    let residual = (-denominator).mul_add(quotient, numerator);
+    let z = residual.mul_add(reciprocal, quotient);
     let square = z * z;
     let last = LN_COEFFICIENTS.len() - 1;
     let mut series = LN_COEFFICIENTS[last];
