@@ -355,7 +355,11 @@ delimiter is a fresh atom — an argument of an application:
   value**, whose type must itself be a TypeStruct kind (the name table lies there,
   in the marker payload at
   `container_ty[0][0][1]`).  It reads the field's *type* as a value — `struct{.a
-  Int, .b string}::a` is `Int : Type`.  The requirement is a unify for **both**
+  Int, .b string}::a` is `Int : Type`.  A decided struct type without the named
+  component is refused at the read as a named-field miss — `S = struct{.a Int,
+  .sub Int}` ; `S::sux` is `no field with this name in the struct type
+  struct{.a Int, .sub Int}`, never a runtime table miss.  The requirement is a
+  unify for **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the

@@ -1,9 +1,10 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and five cases are fixed; one more is measured with its obstacle.** The unclosed-delimiter case is fixed
+> **Status: the property is stated and six cases are fixed.** The unclosed-delimiter case is fixed
 > (`4cb42d3f`), the preprocessor's missing span is fixed (§7), the `NamedField` miss now blames the
-> read (P2), the report's check-level assert now heads its runtime consequences (P3), and an unknown
-> field no longer also reports the gap it explains (P4) — all in the
+> read (P2), the report's check-level assert now heads its runtime consequences (P3), an unknown
+> field no longer also reports the gap it explains (P4), and a type access's miss now names its
+> struct type (P1) — all in the
 > corrections below; the offender list below is
 > **parser-heavy and under-covers the checker and the module
 > layers**, which is the first thing to close before another diagnostics slice — the two cases above are
@@ -109,7 +110,7 @@ load-bearing claims itself** — but *"neither survey ran anything: every claim 
 reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
 reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
-**Six corrections to what the surveys first said, each worth more than the claims they replaced.**
+**Seven corrections to what the surveys first said, each worth more than the claims they replaced.**
 
 * **An unknown field name also reported the gap it explains, and now it does not.** `S = struct{.a Int}`
   ; `S(.b 1)` reported two diagnostics — `no field named b in the struct type struct{.a Int}` and
@@ -125,26 +126,20 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   failure, verbatim. The asserts block now precedes the runtime-failure block: the
   `expected a struct type` line is first (`1:5`), the four consequences follow (`1:10`).
 
-* **A type access's miss has no suggestion, and the guard that would give it one does not reuse.**
-  `S = struct{.a Int, .sub Int}` ; `S::sux` reports `table lookup missed — no entry for key "sux"`
+* **A type access's miss named no struct, and it is fixed with the renderer fallback it needed.**
+  `S = struct{.a Int, .sub Int}` ; `S::sux` reported `table lookup missed — no entry for key "sux"`
   at `1:1` — naming neither the struct type nor a close field — while the instance form `s.sux`
   reports `no field with this name in the struct type struct{…}, did you mean 'sub'?`. That is P1.
-  Reusing `check_named_field`'s guard in `check_named_type_access` was tried and failed for a
-  concrete reason: the struct's name table lies on the **kind** path the runtime already reads
-  (`lazy_index_path(container_ty, STRUCT_KIND_NAMES_PATH)`), not in a `[shape, kind]` term the
-  checker helpers accept. `shape::is_struct_type_any` and `struct_names_any` answer false on the
-  container's value (`is_struct = false`, `names = false`), and the value's own two items are
-  **five-slot pairs**, not the two-item type term (measured: `value = NodeId(24)`, `concrete =
-  true`, `value[0] = 21`, `value[1] = 22`, each an array of five slots sharing a two-item
-  element). The guard must read the same names path the runtime reads; **the fix is not landed**.
-  **Tried that path too, and it fails one step later.** Evaluating the names path at check time,
-  decoding its `LowValue::Table` and testing `name_table_index` *does* detect the miss, and the
-  guard fires with the right kind and place (`NamedField` at `2:1`); but the message then names the
-  container through the **type** printer, and a struct type **value** has no `[shape, kind]` term to
-  print — it rendered `raw[raw[@any, Int, @any, @any, @any], raw[…]]`, which is worse than the miss
-  it replaces. So the remaining step is the renderer: a fallback that prints a struct type *value*
-  (its own `value_label` already does, the `NamedField` arm uses `printer.node`) or records a
-  printable type node with the guard. Not landed.
+  The guard does not reuse `check_named_field`'s shape helpers — the struct's name table lies on the
+  **kind** path the runtime reads (`lazy_index_path(container_ty, STRUCT_KIND_NAMES_PATH)`, and the
+  container's value answers `is_struct = false`, `names = false`). It evaluates that path at check
+  time, decodes its `LowValue::Table`, and refuses a missing name as `NamedField` at the read. The
+  message then needed the renderer fallback: a struct type **value** has no `[shape, kind]` term for
+  the type printer, so the arm prints the container through the value printer with the recorded
+  container type (`Diag::b`), yielding `no field with this name in the struct type
+  struct{.a Int, .sub Int}` at `2:1`. No did-you-mean: the suggestion helper needs the type term the
+  value does not have. The suites hold at their baselines (highlevel 140/0, language 265/11, compute
+  219/2/2, language-server 21/1).
 
 * **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
   with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —

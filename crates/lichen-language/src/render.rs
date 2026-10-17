@@ -2,7 +2,7 @@
 //! See docs/notes/raw-rendering-mark.md.
 use lichen_highlevel::diagnostic::{AssertSpelling, Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
-use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId, ValueExt};
+use lichen_lowlevel::{AnyNodeId, BudgetExhausted, LowValue, Module, NodeId, ValueExt};
 
 use crate::LangProgramShape;
 use crate::diag::Diag;
@@ -207,7 +207,7 @@ pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) 
 /// `printer` is shared across a whole report, so a class keeps one `?a` name.
 pub fn checker_message<P>(printer: &mut TypePrinter<'_, P>, d: &CheckerDiag<P>) -> String
 where
-    P: HighProgram,
+    P: HighProgram + 'static,
     P::Value: ValueType,
 {
     match d.kind {
@@ -244,15 +244,17 @@ where
             "this package's export is not a value — a package must end in a value".to_string()
         }
         DiagKind::NamedField => {
-            let base = format!(
-                "no field with this name in the struct type {}",
-                printer.node(d.a)
-            );
+            let fields = struct_type_named_fields(printer.module(), d.a);
+            let container = match fields {
+                Some(_) => printer.node(d.a),
+                None => container_spelling(printer, d),
+            };
+            let base = format!("no field with this name in the struct type {container}");
             // Append a did-you-mean clause naming the struct's actual fields.
             let Some(name) = d.field.as_deref() else {
                 return base;
             };
-            let Some(fields) = struct_type_named_fields(printer.module(), d.a) else {
+            let Some(fields) = fields else {
                 return base;
             };
             match crate::suggest::did_you_mean(name, fields.into_iter().flatten()) {
@@ -409,6 +411,20 @@ where
                 .to_string()
         }
     }
+}
+
+/// A refused named read's container: the type printer, or a struct type value's value print.
+fn container_spelling<P>(printer: &mut TypePrinter<'_, P>, d: &CheckerDiag<P>) -> String
+where
+    P: HighProgram + 'static,
+    P::Value: ValueType,
+{
+    let module = printer.module();
+    let spelled = module
+        .node_value(AnyNodeId::Dynamic(d.a))
+        .map(|value| (value, d.b))
+        .map(|(value, ty)| print_value(module, value, ty));
+    spelled.unwrap_or_else(|| printer.node(d.a))
 }
 
 /// The missed read's key in the language's spelling; `None` for a non-scalar key

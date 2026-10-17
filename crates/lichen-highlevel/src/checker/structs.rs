@@ -181,6 +181,30 @@ where
         // The struct marker's name table, read from the container's *type*.
         self.read_site = Some(self.loc(e, 0));
         let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
+        // A decided struct type without this component is refused like a named read.
+        self.module
+            .evaluate_node(AnyNodeId::Dynamic(names_node), None);
+        let names = self
+            .module
+            .node_value(AnyNodeId::Dynamic(names_node))
+            .and_then(|value| value.as_enum())
+            .and_then(|value| match value {
+                LowValue::Table(table) => Some(table),
+                _ => None,
+            });
+        if let Some(table) = names {
+            if shape::name_table_index(&self.module, table, name).is_none() {
+                let container_value = self.value_of(container);
+                self.record_guard(
+                    container_value,
+                    container_ty,
+                    self.loc(e, 0),
+                    DiagKind::NamedField,
+                    Some(name),
+                );
+                return self.refused_pair(e);
+            }
+        }
         // key = TableGet(names, name) — the field's positional index.
         let name_node = self.name_node(name);
         let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
