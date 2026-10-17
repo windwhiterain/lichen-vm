@@ -581,6 +581,18 @@ cannot answer at check time either. For the decided case (`S1`), the owner's
 layout work. The syntactic case works because the checker's item for a type
 *expression* is its kind, not because the value was consulted.
 
+**`::` already has the unify-first shape, measured after the `.a` migration.** The
+pin is a `unify` on the container's type, not an assert: `f = x => x::a` applied to
+`S1 = struct{.a Int}` is `Int: Type`, and applied to `[10, 20]` it is refused **at
+the application** with `expected TypeStruct, found array{Int, 2}` — the argument's
+binding fills the requirement's class and the conflict is recorded there. What is
+still open is only the runtime-type-value container: `T = type_of S1` ; `T::a` is
+refused (`expected raw[?a, TypeStruct], found Type`, caret on `T`'s definition),
+while the **inline** `(type_of S1)::a` still reads `raw none: ?a` with no
+diagnostic. The four `defer_pending` tests fail at their `usize_of` (the program
+*checks*, the root is none), not at `report.ok()`, so their shape is
+accepted-and-none rather than refused — the ill-posed read the ruling names.
+
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
 right — and the operation itself is what has no meaning: the author's rule is that
