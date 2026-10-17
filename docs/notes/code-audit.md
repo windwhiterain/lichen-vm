@@ -3,8 +3,11 @@
 > Status: current — this is the audit's live open queue: the items below are the
 > ones still open, and each item's status field is its live state. The audit
 > inventory that produced them was taken at `dev@e4c0bae`; items found later say
-> which `dev` they were seen at in their own evidence. The resolved items were
-> deleted once their fix landed, so this note lists only work still owed.
+> which `dev` they were seen at in their own evidence. Resolved items are
+> normally deleted once their fix landed, so the queue lists only work still
+> owed; a fixed row survives **only** when another note links to its section as
+> the anchor for the record (its status field then says `fixed` and what it
+> became).
 > Points at: the code it names (every claim carries a `file:line`).
 
 This is the one place the audit's open findings live. It exists so the fixes can
@@ -18,7 +21,8 @@ be done one at a time, reviewed, and committed without re-deriving the analysis.
 - `reported` — found by a scoped read-only sweep and *not* independently
   re-verified. Treat the line reference as a lead, confirm before fixing.
 
-**Status legend** — `todo` / `doing` / `blocked:<decision-id>` / `wontfix:<why>`.
+**Status legend** — `todo` / `doing` / `blocked:<decision-id>` / `wontfix:<why>` /
+`fixed:<what it became>` (only for a row another note links to; see the header).
 
 **Decisions** — items that cannot be fixed without a design call are marked
 `blocked:Dn` and listed in [Decisions](#decisions). Do not silently pick an
