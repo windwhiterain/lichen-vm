@@ -665,7 +665,7 @@ where
     // SAFETY: `table` is the payload of the value read from the live node
     // named by the marker payload's name slot.
     for item in unsafe { table.items() } {
-        if let Some((name, index)) = name_table_entry(module, item)
+        if let Some((name, index)) = module.name_table_entry(item)
             && index < field_count
         {
             names[index] = Some(name);
@@ -687,33 +687,7 @@ pub fn name_table_index<P: Program>(
 where
     P::Value: AsEnum<LowValue>,
 {
-    // SAFETY: `table` is the payload of the value read from a live node of
-    // `module`.
-    unsafe { table.items() }
-        .iter()
-        .find_map(|item| match name_table_entry(module, item) {
-            Some((entry, index)) if entry == name => Some(index),
-            _ => None,
-        })
-}
-
-/// One name-table entry as its `(name, position)` pair, or `None` for an entry
-/// still being built.
-fn name_table_entry<P: Program>(
-    module: &Module<P>,
-    item: &TableItem,
-) -> Option<(&'static str, usize)>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    let name = match module.node_value(item.key)?.as_enum()? {
-        LowValue::Str(name) => name,
-        _ => return None,
-    };
-    match module.node_value(item.value)?.as_enum()? {
-        LowValue::USize(index) => Some((name, index)),
-        _ => None,
-    }
+    module.name_table_index(table, name)
 }
 
 // --- low types -----------------------------------------------------------------

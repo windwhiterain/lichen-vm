@@ -308,6 +308,39 @@ impl<P: Program> Module<P> {
         self.nodes[node].assumed_concrete = false;
     }
 
+    /// One name-table entry as its `(name, position)` pair, or `None` for an entry
+    /// still being built.
+    pub fn name_table_entry(&self, item: &TableItem) -> Option<(&'static str, usize)>
+    where
+        P::Value: AsEnum<LowValue>,
+    {
+        let name = match self.node_value(item.key)?.as_enum()? {
+            LowValue::Str(name) => name,
+            _ => return None,
+        };
+        match self.node_value(item.value)?.as_enum()? {
+            LowValue::USize(index) => Some((name, index)),
+            _ => None,
+        }
+    }
+
+    /// Where `name` sits in a name to index table: the fold a named read performs.
+    ///
+    /// # Invariant
+    /// The stored position is returned as it stands: the table is the authority
+    /// here, and a caller holding a field list bounds it against that.
+    pub fn name_table_index(&self, table: AnyHandle<[TableItem]>, name: &str) -> Option<usize>
+    where
+        P::Value: AsEnum<LowValue>,
+    {
+        // SAFETY: `table` is the payload of the value read from a live node of `self`.
+        unsafe { table.items() }
+            .iter()
+            .find_map(|entry| match self.name_table_entry(entry) {
+                Some((entry, index)) if entry == name => Some(index),
+                _ => None,
+            })
+    }
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
         self.nodes[node].runned = 1;
