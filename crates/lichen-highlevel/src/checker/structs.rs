@@ -179,9 +179,20 @@ where
         if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
             return self.refused_pair(e);
         }
-        // The struct marker's name table, read from the container's *type*.
+        // The chains root at the pair's type item: an Index reads its subscript first.
         self.read_site = Some(self.loc(e, 0));
-        let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
+        let ty_source = {
+            let pair = self.state[container]
+                .term
+                .expect("the container must be compiled");
+            let ops = self.array_node(self.current_block, &[pair, self.one()]);
+            self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(ops),
+            )
+        };
+        let names_node = self.lazy_index_path(ty_source, &shape::STRUCT_KIND_NAMES_PATH);
         // A decided struct type without this component is refused like a named read.
         self.module
             .evaluate_node(AnyNodeId::Dynamic(names_node), None);

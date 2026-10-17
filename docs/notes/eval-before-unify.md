@@ -606,17 +606,21 @@ type must read the field type, and today it yields `none`. The `::` chains root 
 container's **type item**; for an instance's `type_of` the type value lives one level
 in (its *value*), which is the shape the `.a` fix resolved by rooting at the pair.
 
-**Probed, and the chain does re-evaluate — one of the two reads resolves.** On the
-first registry program (`v = f.f (_(.x 1, .y 2))` ; `T = type_of v` ; `(v.x, v.y,
-T::x == Int, T::y == Int)`) the read's nodes were printed on every evaluation:
-`container_ty` is concrete from the first pass, and by the third the chain has run
-end to end — `names=Table(static, module 361)`, `key=USize(1)`, `element` and `ty` both
-arrays — which is `T::y`. The tuple then reads **`(1, 2, none, 1)`**: `.y` resolves
-and `.x` still does not, and the first pass saw every cell empty, so the `.x` read's
-*first* evaluation is the one that sticks. Rooting the names path at the term
-(`[TYPE_KIND_SLOT] ++ STRUCT_KIND_NAMES_PATH`) changed nothing, so the path is not the
-lever: the remaining piece is that read's re-resolution after the type value is bound
-— the class-aliasing the `.a` fix relies on (`alias_read`) — not another path.
+**Probed, then fixed by rooting the chains at the pair.** On the first registry
+program (`v = f.f (_(.x 1, .y 2))` ; `T = type_of v` ; `(v.x, v.y, T::x == Int,
+T::y == Int)`) the read's nodes were printed on every evaluation: `container_ty` is
+concrete from the first pass, and by the third the chain had run end to end —
+`names=Table(static, module 361)`, `key=USize(1)`, element and type arrays — which is
+`T::y`; the tuple read **`(1, 2, none, 1)`**, because the `.x` read's *first*
+evaluation stuck. Rooting the names path at the term changed nothing; the lever was
+**what the chain forces**: the runtime `Index` evaluates its subscript first, so a
+names chain rooted at the type **cell** never evaluates the binding that fills it.
+Rooting the `::` chains at the container **pair's type item** (`Index(pair, 1)`, the
+same shape as the `.a` fix) makes that evaluation force the binding: both programs
+now read `(1, 2, 1, 1)`, the two `registry` tests pass, and `S1::a` (a type
+expression) plus `f = x => x::a` applied to `S1` are unchanged at `Int: Type`.
+Language 269/3 — the remaining three are `gc_block` and the two `pipeline`
+recordings.
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is

@@ -228,9 +228,8 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
   **The current baseline, re-measured at `9fad30c7`** (the dynamic apply's result-cell bind; see
   [compute-kernel-struct](compute-kernel-struct.md)): lowlevel **146/13**, highlevel **140/0**,
-  language **267/5** (the known five: `gc_block`, `pipeline` ×2 — the float and zero-divisor
-  recordings — and `registry` ×2; the four `defer_pending` tests were deleted at the author's
-  direction), compute **230/2/2**
+  language **269/3** (the known three: `gc_block` and `pipeline` ×2 — the float and
+  zero-divisor recordings), compute **230/2/2**
   (`graph_jit` and
   `graph_structure`; the latter is the one-read refactor's witness, per
   [compile-order-class](compile-order-class.md) §4.7), language-server **22/0** — its known red
