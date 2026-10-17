@@ -361,6 +361,37 @@ impl<P: Program> Module<P> {
             .is_some_and(|node| node.runned != 0 && node.runned == self.value_epoch)
     }
 
+    /// Re-open every operator under `block` that ran and could not decide.
+    ///
+    /// # Invariant
+    /// Only an operation node whose value slot is **empty** is touched: one that
+    /// answered keeps its answer, and one that never ran is already open. The walk is
+    /// the block tree, so nothing outside `block`'s subtree is disturbed.
+    pub fn reopen_stalled(&mut self, block: BlockId) -> usize {
+        let mut pending = vec![block];
+        let mut candidates = Vec::new();
+        while let Some(id) = pending.pop() {
+            let Some(block) = self.blocks.get(id) else {
+                continue;
+            };
+            pending.extend(block.children.iter().copied());
+            candidates.extend(block.nodes.iter().copied());
+        }
+        let stale: Vec<NodeId> = candidates
+            .into_iter()
+            .filter(|node| {
+                self.nodes.get(*node).is_some_and(|node| {
+                    node.operation.is_some() && node.value.is_none() && node.runned != 0
+                })
+            })
+            .collect();
+        let reopened = stale.len();
+        for node in stale {
+            self.stamp_node_ran_if(node, false);
+        }
+        reopened
+    }
+
     /// Register `node` in `function`'s scope: tag it as owned and append it to
     /// [`Function::nodes`].
     ///

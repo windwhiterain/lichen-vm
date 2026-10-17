@@ -5198,9 +5198,9 @@ where
     // dispatch runs.
 
     // Not forced, and measured: an unread dispatch is not performed.
-    let result = module.evaluate_node_deep(apply, Some(block));
+    let (result, recorded) = evaluate_until_the_return_is_nameable::<P>(module, block, apply);
     // Every path out of the recording closes it, refusals and all.
-    let Some(result) = result else {
+    if result.is_none() {
         let refusals = graph::abandon();
         refuse(
             module,
@@ -5214,7 +5214,6 @@ where
         );
         return None;
     };
-    let recorded = returned_value_ids::<P>(module, &result);
     // An unreadable return is a refusal: a graph with no recorded return answers
     // with its whole value table.
     let Some(values) = recorded else {
@@ -5339,6 +5338,48 @@ where
         return;
     }
     out.push(node);
+}
+
+/// How many rounds one recording's deep pass may be re-driven.
+///
+/// # Invariant
+/// A ceiling, not a schedule: a round re-opens only stalled operators and asks them
+/// again, so a body that cannot decide stops here instead of turning the refusal into
+/// a loop.
+const RECORDING_ROUNDS: usize = 4;
+
+/// Run the recording's deep pass until its return can be named, and hand back both.
+///
+/// # Invariant
+/// The pass drives **its own** bounded re-evaluation instead of waiting for the
+/// module-wide epoch to move: [`returned_value_ids`] reads raw node slots, so a
+/// structural read that stalled once leaves its slot empty and the return unnameable.
+///
+/// A round that re-opens nothing ends the loop, and a dispatch that answered is not
+/// re-opened, so the graph is the one the first round recorded.
+fn evaluate_until_the_return_is_nameable<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    apply: NodeId,
+) -> (Option<P::Value>, Option<Vec<Placed>>)
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+{
+    let mut result = module.evaluate_node_deep(apply, Some(block));
+    let mut recorded = result
+        .as_ref()
+        .and_then(|value| returned_value_ids::<P>(module, value));
+    for _ in 1..RECORDING_ROUNDS {
+        if recorded.is_some() || module.reopen_stalled(block) == 0 {
+            break;
+        }
+        result = module.evaluate_node_deep(apply, Some(block));
+        recorded = result
+            .as_ref()
+            .and_then(|value| returned_value_ids::<P>(module, value));
+    }
+    (result, recorded)
 }
 
 /// The value references a recorded body's result names, if it is a placeholder or
