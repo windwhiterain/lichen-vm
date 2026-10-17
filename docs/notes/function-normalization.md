@@ -116,13 +116,23 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    the annotation is what turns it into a real type — so the fix belongs to the
    checker's body typing (the `if`-join of the two branches must not leave a
    wildcard when one branch is the recursion), not to the loop's bind.
-   **Where the wildcard enters, located**: the language lowers `if c then t else e`
-   to `Index([else, then], c)` (`compile.rs`, no conditional IR kind), so the body's
-   tail type is that `Index` read's type, and the read's branches are `s(1)`'s
-   derived read and the recursive call's result cell — both open at check. The
-   wildcard is therefore produced in the `Index`/array-literal typing of that
-   shape, which is where the next probe should print the read's type node and who
-   writes `Any` into it.
+   **Where the wildcard enters, located — and it is not the array-literal typing.**
+   The language lowers `if c then t else e` to `Index([else, then], c)`
+   (`compile.rs`, no conditional IR kind), and the checker reads that node through
+   **`check_index`** (`checker/indexing.rs`), not `check_field`: the `Index` read's
+   type is the array type's element slot, `ARRAY_TYPE_ELEMENT_SLOT = 0` (`shape.rs`)
+   — i.e. **the `else` branch's type alone**; the branches are never unified, and
+   the `then` branch contributes only the runtime value. For the recursive fold the
+   `else` branch **is** the recursive application, so the body's tail type is the
+   function's own return type — a cycle whose type half is left as a bare,
+   unfilled cell (measured at `Iteration::Exit`: the recorded type half has no
+   value and no operation, and its clone is the blank cell the loop then binds).
+   So the defect is the **`if`'s static type being its `else` arm**, and two fixes
+   are open: (a) a design decision to join the branches' types (would change what a
+   heterogeneous `if` means); or (b) keep the `else`-arm rule and make the loop's
+   **exit carry its own base branch's type** (the conversion records the base's
+   value half today, so the branch's pair type is not reachable) instead of the
+   function's cyclic return type. (b) is the integrity-preserving one.
    **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
    `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ;
    `(f (0, S(.y 3))).y` answers `raw none: ?a`, and so does the identity fold
