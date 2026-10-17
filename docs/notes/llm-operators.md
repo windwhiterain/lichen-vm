@@ -555,9 +555,9 @@ need a node-local producer for `r`.
   **What is still open is GEMV's own program**, and it is not the collision: it refuses at stage `Check`
   with the collect's *"empty value of a failed read"* (span `None`) and *"this value is not a container"*
   at the `collect` line, and it does the same with `x` padded to the count — so neither the short input
-  nor the argument binding is what refuses there. **Neither is the fold**: the same body written as a
-  straight-line sum of three terms, with `.kdim` no longer read from the graph argument at all, refuses
-  the same way (`gemv_no_fold` in the probe). **Nor is it two buffers, or `Float`**: a two-buffer
+  nor the argument binding is what refuses there. **The fold is not measured**: the straight-line
+  variant this note used never parsed — a line-leading `+` where the grammar wants a separator — so its
+  refusal was a `Parse` error and **the earlier "not the fold" reading is retracted**. **Nor is it two buffers, or `Float`**: a two-buffer
   annotated step reads both argument buffers and answers `[11, 22, 33]` in `Int` and `[11.0, 22.0,
   33.0]` in `Float` (`two_buffers_annotated`, `two_buffers_float`). **The computed read address is not
   it either**: the same GEMV body with both reads at the lane index, `Int`/`Float` aside, refuses the
