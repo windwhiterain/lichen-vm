@@ -66,8 +66,13 @@
     **directly** — runs, while binding it first and collecting a field (`out = (compute.graphrun … \
     : OutG)` and then `compute.collect out.y`) refuses with the collect's *empty value* sentence. \
     GEMV's program binds and collects a field, which is why its graph leg had looked refused; the \
-    evidence and the two-buffer control are in `docs/notes/llm-operators.md`. The fusion floor is \
-    still unread: nothing here reaches it yet.\n\n\
+    evidence and the two-buffer control are in `docs/notes/llm-operators.md`. **The fusion floor \
+    now reads this operator, and both of its stages refuse it by name**: the merge reports \
+    `RegionIsNotAPair` (one node is not a producer and a consumer) and the tiling pass reports \
+    `BeyondANode` for the `element` role, with the answer `[14.0, 32.0, 50.0, 68.0]` unchanged \
+    either way. The refusal's sentence does not describe this body — it says the `element` code \
+    reads a value another node produced, and this operator's reads are graph arguments — so the \
+    reading is recorded rather than explained; it is in `docs/notes/llm-operators.md`.\n\n\
     **What a decode step still needs, beyond the walls the KV-cache example names.** The language \
     has no iteration form (`for`, `while`, no loop keyword in any example), `@loop` is a fold \
     *inside* one lane, and a `compute.call` inside a parallel body is refused with a `NodeId` \
