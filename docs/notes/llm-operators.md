@@ -535,7 +535,14 @@ need a node-local producer for `r`.
 
   So **merely passing a buffer is enough** — reading it is not required — and the failing message is a
   unify failure, which is not proof it happens at check time (this language unifies lazily during the
-  run too). The same two-buffer shape passes through the **stub** backend in
+  run too). **One locus is measured, and it is not the table's**: a program whose *root is the graph
+  value* (`built = compute.graph step` and nothing else) is refused at **stage `Check`**, span on the
+  `compute.parallel` line inside the step, *"expected ?, found ?"*, with the two nodes carrying
+  `ComputeValue(GraphValue(1))` and `ComputeValue(GraphValue(0))` — probed from
+  `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs`. So the diagnostic is a
+  check-stage unify of two graph placeholders, not a run-time one, **for that shape**; the collect
+  programs' failure is not localised by it. The same two-buffer shape passes through the **stub**
+  backend in
   `crates/lichen-compute/tests/lichen_compute/graph_argument.rs` (**6 passed, 0 failed** at `dev@0380e8fc`),
   whose programs differ from the probe in the backend and in carrying claims. **Where the split is, is
   open**: the device's `run_batch` (the class it reports for what it produces, and how it binds an

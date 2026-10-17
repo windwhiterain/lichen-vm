@@ -52,3 +52,5 @@ mod trig_domain;
 mod union_ports;
 mod zz_examples_panic_probe;
 mod zz_gc_panic_probe;
+
+mod zz_graph_argument_probe;
