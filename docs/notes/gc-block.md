@@ -1,10 +1,17 @@
 # `@gc e` — an expression in a scope of its own, released when it decides
 
-> Status: **current.** `@gc` marks an expression; the checker compiles it into a
-> **child** lowlevel block and declares the node that ends the scope
-> (`Module::mark_scope_root`). Evaluating that node deep-runs the scope and then
-> `Module::garbage_collect`s it: the reachable subtree moves into the parent
-> block and the rest of the scope is released. The `@`-led keyword list is
+> Status: **current — the scope compiles, but its automatic release is
+> disabled.** `@gc` marks an expression; the checker compiles it into a **child**
+> lowlevel block and declares the node that ends the scope
+> (`Module::mark_scope_root`). The scope's value is `inner`'s and nothing is
+> computed differently. **The release does not happen today**: the maintainer
+> ruled the read path's collection trigger off until the collector's owner
+> repairs it ([gc-trigger-disabled](gc-trigger-disabled.md)), so a marked scope
+> is not compacted automatically and `gc_block::a_gc_block_releases_its_scope` is
+> the known red that names it. The collector itself (`Module::garbage_collect`,
+> `Module::drop_block`, `prune_released_failures`) is untouched and its
+> direct-call tests pass; this note still describes **that** contract, which is
+> what a repaired trigger restores. The `@`-led keyword list is
 > `docs/language-spec.md` §2; the mechanism is
 > [`lowlevel-vm.md`](lowlevel-vm.md) §"Block GC".
 >
@@ -35,7 +42,9 @@ marker adds is the block boundary.
 What it buys is **a lifetime**. Every node the marked expression allocates —
 its cells, its array and table payloads, its apply clones — is homed in one
 block with its own bump arena, and the whole of it goes when the expression has
-decided its value. The place it pays is a scope that runs more than once:
+decided its value **once the trigger is on** (the status line above says it is
+off today; everything below is the contract the trigger restores). The place it
+pays is a scope that runs more than once:
 
 ```lichen
 f = n => @gc { a = n + 1; b = a * 2; b }   -- each call gets its own scope
