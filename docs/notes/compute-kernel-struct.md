@@ -195,10 +195,20 @@ argument (`compute.jit (x : Int => compute.launch (compute.jit (y : Int => y + y
 the body's argument a **literal** (`… (compute.jit (y : Int => y + y)) 3`) both still leave `.O`
 open. A root-level `compute.launch (compute.jit (y : Int => y + y)) 3` prints `6: Int`, but that is
 the *printed value's* type derived from the value at print time, not the checker's cell. So nothing
-about argument availability distinguishes the cases: the apply's result cell is simply never bound
-for a jit'd body's static apply, which points the next probe at the definition pass's run of that
-body — `static_function_apply`'s cell bind (`pair_type_item(applied)`) and what it sees for a
-dependent codomain.
+about argument availability distinguishes the cases.
+
+**The cell bind is not skipped either, and that moves the question to whether the body runs.**
+A probe at `static_function_apply`'s cell bind on the same program printed, for **every** static
+apply that ran: `cell=true`, `codomain=Some(...)`, `codomain_value=true` — the binding path has the
+caller cell and a *decided* codomain every time it executes. So the jit body's launch apply is
+evidently one that does **not run during checking**: the definition pass iterates over `FunctionId`s,
+and a lambda is not a `FunctionId` until it is applied (the jit's own body is cloned at the jit
+application, which the program's root never forces for `k`), while the checker's pre-pass
+deep-evaluates each lambda **value** without running its body against the undecided parameter. The
+next probe is exactly that: does the launch apply inside the jit body execute at check time at all?
+If not, the fix is the [function-normalization](function-normalization.md) contract's first clause
+again — a jit'd lambda's body must be evaluated once at its birth so its apply result cell is
+decided, rather than left for a call that never comes.
 
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
