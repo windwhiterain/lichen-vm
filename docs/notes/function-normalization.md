@@ -62,6 +62,14 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    *read* decided facts instead of creating them. What may legitimately remain
    open is a cell the program itself left open — a `_` hole or a genuinely
    generic position — and that is reported where a reader needs it (ruling 3).
+   **What an un-annotated recursive fold costs, measured**: a fold whose state is
+   the kernel's **buffer** is typed without an annotation (the seed decides it),
+   and one whose state is an **array** keeps its value with an open type (`?a`);
+   but one whose state is a **struct** (`XOut = struct{.y (compute.Buf Float)}`)
+   loses the value outright — `raw none` with type `array{Float, 6}`, and no
+   diagnostic. Annotating the recursive function (`… : tuple{Int, XOut} -> XOut`)
+   restores both the value and the type (`[2.1875, …]: array{Float, 6}`, measured
+   on the same three-step ring, for `@loop` and plain recursion alike).
 2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
