@@ -84,3 +84,23 @@ Two alternatives were considered and are worse:
   (a capture rule that stopped firing) and `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`
   (a test premise: under a plain run gate the host run performs no dispatch, so plain and recorded cannot
   agree). Only the first is fixed by this note's proposal.
+
+## The re-drive's rounds, measured
+
+An env-gated probe printed, at the end of every round, whether the return was nameable and how many dispatches
+the innermost recording held (`graph::probe_node_count`). Over `graph_jit::` the 35 readings fall into two
+patterns:
+
+| reading | what it says |
+| --- | --- |
+| `round=1 recorded=false nodes=0` then `round=2 recorded=true nodes=2` | the first round's deep walk reached **no dispatch at all**; the second produced both of them and named the return |
+| `round=3 recorded=false nodes=2` | the re-drive ran out without naming the return — a genuine recording failure, which A′ changes in no way except to make its refusal text clean |
+
+So on this corpus the last round is stronger than a superset of the earlier ones: the first round is usually
+**empty**, and discarding it loses nothing. That is the measured ground under A′'s justification, and it is why
+the truncate-to-first-round alternative would leave a graph with no dispatch of the body that was named.
+
+`record_refusal` is an acceptance item rather than a detail, and it needs a reading, not a code review: take a
+program whose recording refuses inside the round that gets abandoned, and compare the refusal text
+`build_graph` reports (`refused_because_of(&refusals)`) before and after the change. It must be the same text.
+A refusal that disappears is a lost diagnostic.
