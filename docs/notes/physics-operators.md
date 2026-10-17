@@ -235,17 +235,24 @@ The same probe now carries a second kernel, both lifted verbatim from the exampl
 the difference is a fold and six more reads: the three-read stencil (`examples/stencil.lichen`) and the
 nine-tap convolution (`examples/filter.lichen`), buffer state, median of three runs.
 
-| backend | lanes | stencil (3 reads) | convolution (9-tap fold) |
-|---|---|---|---|
-| `cpu` | 6 | 3.70 ms | 4.07 ms |
-| `gpu` | 6 | 4.88 ms | 5.27 ms |
-| `cpu` | 1024 | 18.16 ms | **82.69 ms** |
-| `gpu` | 1024 | 5.52 ms | **6.71 ms** |
+| backend | lanes | stencil (3 reads) | convolution (9-tap fold) | pooling (9-tap max) |
+|---|---|---|---|---|
+| `cpu` | 6 | 3.60 ms | 3.91 ms | 4.53 ms |
+| `gpu` | 6 | 3.89 ms | 3.88 ms | 4.60 ms |
+| `cpu` | 1024 | 16.16 ms | 68.13 ms | **69.22 ms** |
+| `gpu` | 1024 | 3.79 ms | 3.89 ms | **4.84 ms** |
 
-The fold is nearly free **on the device** (+22%) and expensive **on the host** (+355%): the host
-interprets nine times the element operations while the device runs them in parallel. So the device's
-advantage grows with the work per element — 3.3x for the body at 1024 lanes, 12.3x for the nine-tap
-fold — which is the other side of the six-lane reading, where dispatch overhead is all there is.
+The host pays for the window and the device does not: nine taps cost the host **four times** the body
+(16.16 to 68 or 69) and the device **3%** for a multiply-add fold or **28%** for a window max. So the
+device's advantage grows with the work per element — 4.3x for the body at 1024 lanes, **17.5x** for the
+nine-tap fold, 14.3x for the window max — which is the other side of the six-lane reading, where
+dispatch overhead is all there is.
+
+Two details the table shows and prose alone would not. **The two folds cost the same on the host**
+(68.13 against 69.22): there, the per-element interpretation dominates and the kind of combine does not
+matter. **On the device `max` costs more than a multiply-add** (4.84 against 3.89), and the pooling
+window also reads three rows of a padded buffer rather than one, so part of that gap is the working
+set rather than the operator.
 
 The numbers are machine- and state-dependent: every figure is the **median of five** runs, with the min
 and max printed beside it, and the spread runs from about 5% on the host to about 20% on the device's
