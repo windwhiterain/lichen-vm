@@ -846,8 +846,11 @@ maps every span back to the original file.
   definition's positional order — a later `.b` read sees the
   definition's order, not the call's.  Named and positional arguments mix:
   a positional argument fills the lowest-numbered unclaimed position.  The
-  structural mismatches are their own diagnostics, each pointing at the
-  offending argument: an unknown field (`StructUnknownField`), a duplicate
+  structural mismatches are their own diagnostics **in a named instantiation**
+  (a purely positional call's arity is the field-list unify's — measured:
+  `S(1, "a", 3)` over a two-field `S` reports `expected raw[Int, string], found
+  raw[Int, string, Int]`), each pointing at the offending argument: an unknown
+  field (`StructUnknownField`), a duplicate
   (`StructDuplicateField`), a field left unsupplied (`StructMissingField` —
   not reported when another argument's name is unknown, because that name
   explains the gap; one typo yields one diagnostic),

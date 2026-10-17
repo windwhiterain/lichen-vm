@@ -43,6 +43,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | fixed — the registry's tags are checked at compile time |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | partly fixed — the message names the shared fact and lists the three shapes; the missing apply (a kernel compiled against an applied body) is parked under `compute-jit-low-types.md` |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
+| P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | todo — measured `expected raw[Int, string], found raw[Int, string, Int]`; the structural pass (`StructExcessField`/`StructMissingField`) runs only when an argument is named (`named_instantiate` is gated on `any_named`), so the positional path falls to the field-list unify |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
@@ -620,6 +621,28 @@ than folded into `P1-23` because the *site* is different — that one is the par
 worker, this is a printer — and because anyone measuring render cost needs to know
 the depth is capped by recursion rather than by the guard. If that reasoning is
 wrong for the renderer specifically, this is the item to reopen.
+
+### P4-11 — A positional instantiation's arity error renders raw internal shapes `verified`
+
+Found while auditing the spec's named-instantiation paragraph. Two-field
+`S = struct{.x Int, .y string}` instantiated with three positional arguments:
+
+```
+error: expected raw[Int, string], found raw[Int, string, Int]
+  --> 2:1
+```
+
+The two count-carrying diagnostics exist (`StructExcessField` renders "too many fields
+for the struct type …", `StructMissingField` "missing field … in the struct type …"),
+but `named_instantiate` runs only when `any_named` holds — a purely positional call
+skips the structural pass and its arity falls to the field-list unify, whose two
+sides are internal shape nodes (`raw[…]`). So the actionable sentence exists and is
+not reached on the common spelling. Fix: run the structural pass for a decided
+struct type whatever the argument spelling (its excess/missing guards already record
+before the unify and set `valid = false`, which makes the caller skip it), or carry
+the two counts on the unify's diagnostic. Measured at `8b94e13c`; the spec's
+named-instantiation paragraph now scopes the structural diagnostics to the named case
+and quotes this message.
 
 ## Decisions
 
