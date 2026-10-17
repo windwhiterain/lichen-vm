@@ -362,8 +362,10 @@ delimiter is a fresh atom — an argument of an application:
   struct type expression** — a `struct{…}` literal, a binding to one, or a name
   denoting one.  A **runtime type value** is not one: what `type_of` returns is a
   struct type's *nominal id and name table*, so `(type_of struct{.a Int})::a` states
-  no field type and is **refused**, not evaluated.  The requirement is a unify for
-  **both**
+  no field type and is **refused at the read**, not evaluated — an *application's
+  result* is the syntactic shape that names it (`(f S1)::a` and a binding whose
+  value is a call are refused the same way, `x::a` on a parameter is not: the name
+  is a type expression).  The requirement is a unify for **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the

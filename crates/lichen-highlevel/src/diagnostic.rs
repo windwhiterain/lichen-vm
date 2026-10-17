@@ -89,6 +89,8 @@ pub enum DiagKind {
     /// The lowlevel's `EvalError::IndexTarget` reaches the diagnostics as a fact
     /// about a *value*, with no type to print, so the wording is self-contained.
     RuntimeIndexTarget,
+    /// A `::` read whose container is an application's result: a runtime type value.
+    TypeAccessOnCallResult,
     /// A type access (`X{n}`, `X::a`) whose **element** is not a pair at runtime.
     ///
     /// # Invariant

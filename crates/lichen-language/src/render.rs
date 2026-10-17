@@ -227,6 +227,11 @@ where
         DiagKind::RuntimeIndexTarget => {
             "this value is not a container — it has no element to read".to_string()
         }
+        DiagKind::TypeAccessOnCallResult => "`::` reads a field type from a struct type \
+            expression, and this container is an application's result: a runtime type \
+            value (a struct type's nominal id and name table) has no field type to read. \
+            Write the read on the type expression, where the field is written"
+            .to_string(),
         DiagKind::RuntimeTypeAccessElement => {
             "this type access found an element that is not a value/type pair — \
              `X{n}` and `X::a` read the element's own pair, so the container \

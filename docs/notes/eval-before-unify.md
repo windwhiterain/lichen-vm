@@ -585,13 +585,18 @@ layout work. The syntactic case works because the checker's item for a type
 pin is a `unify` on the container's type, not an assert: `f = x => x::a` applied to
 `S1 = struct{.a Int}` is `Int: Type`, and applied to `[10, 20]` it is refused **at
 the application** with `expected TypeStruct, found array{Int, 2}` — the argument's
-binding fills the requirement's class and the conflict is recorded there. What is
-still open is only the runtime-type-value container: `T = type_of S1` ; `T::a` is
-refused (`expected raw[?a, TypeStruct], found Type`, caret on `T`'s definition),
-while the **inline** `(type_of S1)::a` still reads `raw none: ?a` with no
-diagnostic. The four `defer_pending` tests fail at their `usize_of` (the program
-*checks*, the root is none), not at `report.ok()`, so their shape is
-accepted-and-none rather than refused — the ill-posed read the ruling names.
+binding fills the requirement's class and the conflict is recorded there.
+
+**The runtime-type-value container is now refused at the read, syntactically.** An
+application's result is the shape that names it, so `check_named_type_access`
+refuses an `Apply` container with `DiagKind::TypeAccessOnCallResult`
+(`::` reads a field type from a struct type expression, and this container is an
+application's result…): `(type_of S1)::a` and `(f S1)::a` are refused at the read,
+while `x::a` on a parameter still resolves (`f = x => x::a` applied to `S1` is
+`Int: Type`). A binding whose value is a call is the same expression — a top-level
+name *is* its value's node — so `T = type_of S1` ; `T::a` refuses with that message
+too. The four `defer_pending` tests now fail at their `report.ok()` (the read is
+refused), which is the ill-posed read the ruling names.
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
