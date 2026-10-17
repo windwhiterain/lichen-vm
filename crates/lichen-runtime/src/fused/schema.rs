@@ -445,7 +445,7 @@ pub struct Artifact {
 /// One number for the whole artifact rather than one per type: the fragment, the claim
 /// and the plan travel as one text, so a reader that could read a fragment at one
 /// version and a plan at another would have to decide which to believe.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The artifact's version, read on its own.
 ///

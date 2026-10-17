@@ -131,7 +131,7 @@ fn a_kernel_with_no_claim_and_an_empty_plan_reads_back() {
 fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "tuple": [{ "scalar": "int" }, { "scalar": "int" }] },
         "roles": {
@@ -157,6 +157,7 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
             }
           ],
           "entry": 0,
+          "exact_float_arithmetic": false,
           "barriers": []
         },
         "inputs": 1,
@@ -250,11 +251,11 @@ fn json_missing_a_required_field_is_refused_by_path() {
 fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
-        "body": { "values": [], "blocks": [], "entry": 0, "barriers": [] },
+        "body": { "values": [], "blocks": [], "entry": 0, "exact_float_arithmetic": false, "barriers": [] },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": [],
         "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
@@ -281,7 +282,7 @@ fn an_unknown_enum_spelling_is_refused_by_name_and_path() {
 fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -301,6 +302,7 @@ fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
             { "params": [], "instrs": [], "terminator": { "return": { "values": [2] } } }
           ],
           "entry": 0,
+          "exact_float_arithmetic": false,
           "barriers": []
         },
         "inputs": 0, "outputs": 0,
@@ -353,7 +355,7 @@ fn a_plan_naming_a_mark_the_body_never_published_is_refused() {
 fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
@@ -365,6 +367,7 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
             { "params": [], "instrs": [0], "terminator": { "return": { "values": [7] } } }
           ],
           "entry": 0,
+          "exact_float_arithmetic": false,
           "barriers": []
         },
         "inputs": 0, "outputs": 0,
@@ -393,11 +396,11 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
 fn a_field_the_schema_does_not_have_is_refused_by_path() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "scalar": "int" },
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
-        "body": { "values": [], "blocks": [], "entry": 0, "barriers": [] },
+        "body": { "values": [], "blocks": [], "entry": 0, "exact_float_arithmetic": false, "barriers": [] },
         "inputs": 0, "outputs": 0,
         "input_classes": [], "output_classes": [], "result_classes": [],
         "target": { "int_width": "i64", "lane_width": 64, "lane_height": 1 },
@@ -424,7 +427,7 @@ fn a_field_the_schema_does_not_have_is_refused_by_path() {
 fn every_instruction_the_ir_has_is_expressed_by_the_text() {
     let text = r#"
     {
-      "version": 2,
+      "version": 3,
       "fragment": {
         "param_shape": { "tuple": [
           { "scalar": "int" }, { "scalar": "int" }, { "scalar": "float" }
@@ -459,6 +462,7 @@ fn every_instruction_the_ir_has_is_expressed_by_the_text() {
             }
           ],
           "entry": 0,
+          "exact_float_arithmetic": false,
           "barriers": []
         },
         "inputs": 1, "outputs": 1,
