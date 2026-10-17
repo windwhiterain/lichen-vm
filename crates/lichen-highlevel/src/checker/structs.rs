@@ -171,18 +171,7 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
-        // A call result is a runtime type value, not a type expression.
-        if let ExprKind::Apply { .. } = self.ir[container].kind {
-            let container_value = self.value_of(container);
-            self.record_guard(
-                container_value,
-                container_ty,
-                self.loc(e, 0),
-                DiagKind::TypeAccessOnCallResult,
-                Some(name),
-            );
-            return self.refused_pair(e);
-        }
+
         // The requirement, as a unify: the container's type must be a struct
         // kind — its `TypeStruct` tag, not a payload shape.
         let kind = self.struct_kind_requirement();

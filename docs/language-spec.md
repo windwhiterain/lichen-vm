@@ -359,13 +359,13 @@ delimiter is a fresh atom — an argument of an application:
   component is refused at the read as a named-field miss — `S = struct{.a Int,
   .sub Int}` ; `S::sux` is `no field with this name in the struct type
   struct{.a Int, .sub Int}`, never a runtime table miss.  **The left side must be a
-  struct type expression** — a `struct{…}` literal, a binding to one, or a name
-  denoting one.  A **runtime type value** is not one: what `type_of` returns is a
-  struct type's *nominal id and name table*, so `(type_of struct{.a Int})::a` states
-  no field type and is **refused at the read**, not evaluated — an *application's
-  result* is the syntactic shape that names it (`(f S1)::a` and a binding whose
-  value is a call are refused the same way, `x::a` on a parameter is not: the name
-  is a type expression).  The requirement is a unify for **both**
+  struct type value**: a `struct{…}` literal, a binding to one, a name denoting one,
+  or a value whose *type* is a struct — an instance's `type_of` is such a value
+  (`v.x`/`v.y` of `v : struct{.x Int, .y Int}` makes `type_of v` the struct type,
+  so `(type_of v)::x` is meaningful).  What has no field type to read is the type of
+  a *type*: `type_of struct{.a Int}` is that struct type's nominal id and name
+  table, so `(type_of struct{.a Int})::a` states no field type and is refused by the
+  requirement's unify.  The requirement is a unify for **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the

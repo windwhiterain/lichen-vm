@@ -587,16 +587,24 @@ pin is a `unify` on the container's type, not an assert: `f = x => x::a` applied
 the application** with `expected TypeStruct, found array{Int, 2}` — the argument's
 binding fills the requirement's class and the conflict is recorded there.
 
-**The runtime-type-value container is now refused at the read, syntactically.** An
-application's result is the shape that names it, so `check_named_type_access`
-refuses an `Apply` container with `DiagKind::TypeAccessOnCallResult`
-(`::` reads a field type from a struct type expression, and this container is an
-application's result…): `(type_of S1)::a` and `(f S1)::a` are refused at the read,
-while `x::a` on a parameter still resolves (`f = x => x::a` applied to `S1` is
-`Int: Type`). A binding whose value is a call is the same expression — a top-level
-name *is* its value's node — so `T = type_of S1` ; `T::a` refuses with that message
-too. The four `defer_pending` tests encoded that ill-posed read and were **deleted
-at the author's direction**; the module keeps `the_type_constant_is_the_universe_marker`.
+**The syntactic refusal was over-broad and is withdrawn, measured.** Refusing an
+`Apply` container (`DiagKind::TypeAccessOnCallResult`) also refused the *meaningful*
+read: an instance's `type_of` is the struct type (the author: *"这是有意义的啊，v 的类型
+不是正好是 struct 吗"*), so the two `registry` tests (`T = type_of v` then `T::x`) were
+refused by a shape test that could not tell the two apart. Removed; with it gone both
+programs check and print `(1, 2, none, none)` — the values resolve and `T::x == Int`
+is `none`, which is the *deferred type access* those two tests witness, not a
+meaningless read. What is meaningless is the type of a **type**: `type_of S1` for
+`S1 = struct{.a Int}` is that type's nominal id and name table, and `(type_of S1)::a`
+is refused by the requirement's unify (`expected raw[?a, TypeStruct], found Type`) —
+the pre-guard behaviour, opaque message and all. The four `defer_pending` tests were a
+different read (`T::I` on a *type* built by a partially applied type function) and
+were deleted at the author's direction.
+
+**The open piece is the deferred access itself**: `T::x` where `T`'s value is a struct
+type must read the field type, and today it yields `none`. The `::` chains root at the
+container's **type item**; for an instance's `type_of` the type value lives one level
+in (its *value*), which is the shape the `.a` fix resolved by rooting at the pair.
 
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
