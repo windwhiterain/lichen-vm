@@ -1,6 +1,6 @@
 # The operators' bodies, swept rather than sampled
 
-> Status: **current** — every figure below is from an RTX 3060 Laptop GPU on this branch, off
+> Status: **current — every figure below is from an RTX 3060 Laptop GPU on this branch, off
 > `dev@fe23041b`, read with the same three steps [device-operator-sweep](device-operator-sweep.md)
 > used: compile the body, run it on `cpu`, run it on `gpu`, and read each lane's `to_bits()` from
 > both. **What is new is the axis.** That note ran **one example per operator**; this one runs
@@ -8,6 +8,15 @@
 > case. The rules the runs meet are [device-leg-of-the-ladder](device-leg-of-the-ladder.md)'s and
 > are **referenced, not restated**; the arithmetic is [floating-point](floating-point.md)'s.
 > **Nothing here changed production code, and no test was added.**
+>
+> **Every figure below is the undecorated path, and
+> [operator-reverification](operator-reverification.md) re-ran this table's rows through the
+> shipped emitter.** Four of them moved and four did not: `silu` **181 → 190 of 256**, `exp`
+> **255 → 256** and **244 → 256**, `rmsnorm`'s divisor **141 → 165**, `softmax`'s gathered divisor
+> **170 → 178**, while `matmul`, `gemv`, `layernorm`'s exact divisors and this note's own
+> seventeen-magnitude reductions held. **The rows that held are the division ones**, and the note
+> that re-ran them is where the rule below is either confirmed or narrowed. Nothing on this page
+> is retracted: it is the record of the path the decoration was measured against.
 
 [device-operator-sweep](device-operator-sweep.md) left its own hole in its own words, and this note
 is the sweep it asked for: *"Eight examples of 4–8 hand-chosen elements cannot rank the

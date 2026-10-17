@@ -149,12 +149,8 @@ fn a_spliced_ln_is_the_definition_the_cpu_runs() {
     println!("ran on {}", context.device_name());
 }
 
-/// `sin` is asked over all four residues of the reduction and over a negative.
-///
-/// # Invariant
-/// The bound is **zero**, and it was 5 before `NoContraction` was emitted: the
-/// decoration is what made the device reproduce `sin_value` here rather than
-/// within five of it. See `docs/notes/operator-reverification.md`.
+/// `sin` over all four reduction residues and a negative.
+/// Bound was 5; see `operator-reverification.md`.
 #[test]
 fn a_spliced_sin_is_the_definition_the_cpu_runs() {
     let Some(context) = common::context("a_spliced_sin_is_the_definition_the_cpu_runs") else {
@@ -171,11 +167,8 @@ fn a_spliced_sin_is_the_definition_the_cpu_runs() {
     println!("ran on {}", context.device_name());
 }
 
-/// `cos` is asked over the same arguments, so the pair reads beside each other.
-///
-/// # Invariant
-/// The bound is **zero**, and it was 6 before `NoContraction` was emitted — the
-/// same change as `sin`'s above, on the same six arguments.
+/// `cos` over the same arguments, so the pair reads beside them.
+/// Bound was 6; same change and same note.
 #[test]
 fn a_spliced_cos_is_the_definition_the_cpu_runs() {
     let Some(context) = common::context("a_spliced_cos_is_the_definition_the_cpu_runs") else {

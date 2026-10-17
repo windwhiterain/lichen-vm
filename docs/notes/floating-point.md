@@ -612,6 +612,19 @@ multiplies by a constant instead of dividing by one.
 > numbers move is a measurement this slice did not take, and §4.4's "a kernel's float division is
 > unspecified" is **unchanged** and remains the position. What §8's correction does *not* reach is
 > stated here rather than left to be inferred.
+>
+> **Now measured, through the operator bodies rather than this section's own probe.**
+> [operator-reverification](operator-reverification.md) §3 re-ran the division rows under the
+> shipped emitter and **both numbers stood**: `rmsnorm`'s divisor sweep is **165 of 256 with a
+> 2-ulp worst**, where [device-body-sweep](device-body-sweep.md) §2.2 measured **141 of 256 at
+> 2 ulp** on the undecorated path — better, and bounded by the same figure — and `softmax`'s
+> gathered-divisor row is **1 ulp**, not the **118** that row's `exp` tail put there. The Newton
+> `sqrt` beside them moved, which is the decoration: **184 → 220 of 256** on an RTX 3060 and
+> **230 of 256** on an Iris Xe, at a 1-ulp worst either way. **And the live instance is `ln`**:
+> on an Intel Iris Xe it answers `1.5` at **1 ulp** against the definition while an RTX 3060
+> answers it bit for bit, with the one `OpFDiv` this section names as the reason. **So the
+> paragraph above still holds and is now load-bearing rather than unexamined**: a kernel's float
+> division is still unspecified, **and the decoration has been shown not to change that.**
 
 **`ln` reached the kernel vocabulary after all, and on this device its one division did
 not bite.** `ln` is now `KernelInstr::Ln` with `ln_body` in `TRANSCENDENTALS`, a
@@ -723,6 +736,18 @@ because these two definitions contain none.
 > **"what the operation is remains open" is answered: contraction, on both vendors.**
 > **What is still not proven below is unchanged** — the sampling against `f64` and the §4.4
 > division hazard are still what they were.
+
+> **The two bounds are now the test's own, and the change is the user's decision.**
+> [operator-reverification](operator-reverification.md) §4 tightened `spliced_transcendentals` from
+> those figures to **`0` and `0`**, and the test passes there on both an RTX 3060 Laptop GPU and an
+> Intel Iris Xe — every one of the six angles printed at 0 ulp on each. **The `ln` test beside it
+> was already at `0` and is the one that still moves**: on the Iris Xe, `ln(1.5)` answers
+> `0x3ecf9921` against the definition's `0x3ecf9920`, **1 ulp**, and that is the §4.4 division
+> hazard this section's own block above declines to claim is fixed. `ln`'s body holds **one
+> `OpFDiv`**, `(m−1)/(m+1)`, with denominators `1.75`, `2.25` and `1.9765625`; `NoContraction`
+> forbids a driver's fusion and reassociation and does not make a division correctly rounded.
+> **So §7's "not re-measured, and deliberately not claimed fixed" stands, and this is the
+> measurement that says so rather than a probe's silence** — one argument, on one device, at 1 ulp.
 
 **What is still not proven.** Accuracy against `f64` was **sampled, not swept** — and now
 sampled only at the six angles the test dispatches, which is a reading of the divergence

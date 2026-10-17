@@ -409,6 +409,14 @@ one line each, and what it decided:
   6 for `cos` because the device diverges; with the decoration the divergence is zero and those
   numbers would be `0`. **No test was changed** — a tolerance is the user's to move, and the
   suite's counts are unmoved either way (§9.6).
+  > **Moved, and this change is the user's decision.** The tolerances are now **`0` for `sin` and
+  > `0` for `cos`**, taken on §9.3's zero rather than on anything measured here. **The test was
+  > changed**, the clause above recording that it had not, and
+  > [operator-reverification](operator-reverification.md) §4 carries the change, its per-device
+  > output, and the one test it did not move: `ln` on an Intel Iris Xe, **which fails at 1 ulp and
+  > failed at 1 ulp before it**. The counts this section's §9.6 records are unmoved by it —
+  > **88/0/0 on an RTX 3060 and 87/1/0 on an Iris Xe, before and after.**
+
 - **No `wontfix:D<n>` is involved.** [code-audit](code-audit.md) carries no decision over the
   transcendentals, the emitter or the polynomial; the nearest is `wontfix:D9` via `P4-10`, the
   type printer's nesting bound, which this slice does not touch. **Re-checked on this branch and
@@ -628,6 +636,15 @@ match is a refusal rather than a mis-parse"* — so an artifact written by the p
 **No test was added and no tolerance was changed.** `spliced_transcendentals` still holds `sin`
 to 5 ulp and `cos` to 6; §9.3 says the divergence is now zero, and **a tolerance is the user's
 to move**, so the number stayed and the suite's counts are unmoved either way.
+
+> **Both clauses of that paragraph are now history.** **The tolerance was moved — by the user's
+> decision, on this measurement** — to `0` and `0`, and
+> [operator-reverification](operator-reverification.md) §4 quotes the change and its per-device
+> output. The suite's counts stayed unmoved, which is what the paragraph claimed they would be:
+> **88 passed / 0 failed on an RTX 3060 before and after**, and **87 / 1 on an Intel Iris Xe
+> before and after**, the one failure being `ln` at 1 ulp, which this change did not touch.
+> The GPU counts in §9.6 above were measured on the RTX 3060 alone, which is why the Iris Xe's
+> `ln` is not in them.
 
 **No `Invariant` or `Safety` sentence was added or changed.** The new field's own documentation
 states what it means and points at this note; §9 is where the contract lives.

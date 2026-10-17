@@ -51,6 +51,31 @@ correction to the brief itself.**
 | `gemv` | `gemv.lichen` | **refused by name** — the **known** rule | — | 1 module, **1 ACCEPT** |
 | `matmul` | `matmul.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 1 module, **1 ACCEPT** |
 
+> **Every row of that table was measured on a device with no `NoContraction`, and two of them
+> have since moved. [operator-reverification](operator-reverification.md) §2 re-ran each of these
+> eight examples through the shipped emitter on two devices. What changed is recorded in that
+> note; what did not is recorded here, because the rows below are the record of how each figure
+> was first reached and their histories are worth keeping.**
+>
+> | operator | here, undecorated (RTX 3060) | re-measured, decorated (RTX 3060 / Iris Xe) |
+> |---|---|---|
+> | `rope` | 5 of 8 differ, worst **3** | **2 of 8 / 1 of 8**, worst **1** |
+> | `silu` | 1 of 4 differ, worst **1** | **1 of 4 / 0 of 4**, worst **1** |
+> | `attention` | 6 of 8 differ, worst **1** | **6 of 8 / 6 of 8**, worst **1** — **unmoved** |
+> | `softmax` | 0 | **0 / 0** — unmoved |
+> | `rmsnorm` | 0 | **0 / 0** — unmoved |
+> | `layernorm` | 0 | **0 / 0** — unmoved |
+> | `matmul` | 0 | **0 / 0** — unmoved |
+> | `gemv` | refused by name | **still refused**, and **4 of 4 exact on both** once the short vector is padded |
+>
+> **Only `rope` moved, and the rows that held are the informative ones.** `attention`'s six
+> differing elements are all **1 ulp** and all sit past a division by a denominator that is a sum
+> of `exp` over the keys rather than a power of two — [floating-point](floating-point.md) §2.1's
+> rule — and `NoContraction` does not reach a division. §3's `silu` element is the same shape: §3
+> itself named the split as *"the `exp (0.0 − g)` **and** the division by `1 + exp (0.0 − g)`"*,
+> and it is the division half that is still there. §2's `rope` element is the one row where the
+> transcendental alone was the whole story, and it moved.
+
 The evidence, quoted whole, is [§2](#2-rope--the-transcendental-in-an-operators-own-answer) through
 [§9](#9-matmul--the-same-family-with-a-long-enough-input). **A third correction, and it is a path
 correction: the brief's `examples/attend.lichen` does not exist in this repository.** The operator is
@@ -118,6 +143,15 @@ expression appended, so the root is a buffer rather than the rotation — reads:
 (`3.0`, over `[0.25, 1.0, 3.0, 4.0, 7.0, -1.5]`) — so **the operator reproduces the standalone
 measurement rather than exceeding it**, and the composition *absorbs* part of it: the rotation's own
 worst is **3** ulp, below the 5 of the sine it multiplies in.
+
+> **Both halves of that are now zero, and the measurement that says so is
+> [operator-reverification](operator-reverification.md).** `sin(3.0)` is **0 ulp** on both an RTX
+> 3060 and an Intel Iris Xe through the shipped emitter, and the rotation's own worst is **1**.
+> What this paragraph found — that the operator reproduces the standalone figure rather than
+> exceeding it, and absorbs part of it — still holds; it is the size that moved, and it moved
+> because [contraction-control](contraction-control.md) §9's `NoContraction` decoration is what the
+> standalone figures were measuring the absence of. The paragraphs below are the record of how
+> each of those figures was reached.
 
 **Measured: `cos`'s standalone worst is not in this table.** §8's `cos` worst of 6 ulp is at `-1.5`;
 `rope`'s angles are `0, 1, 2, 3`, all non-negative, so its worst `cos` is **1** ulp. The two numbers
