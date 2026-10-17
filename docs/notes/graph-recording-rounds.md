@@ -407,11 +407,20 @@ the recording lifecycle only, never a `refuse` call.
 | `a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one` | `r1 false/0 → r2 false/2 → r3 false/2 → r4 false/2` | `r1 false/0 → r2 false/2 → **r3 false/0 → r4 false/0**` |
 | `what_a_recorded_body_may_not_reach_for_is_refused_by_name` | three recordings, `false/1` runs then `false/0` | three recordings, `false/0, false/1, false/0, false/0` and one all-`false/0` |
 
+**This is A′'s only evidence on the multi-round path.** The nine controls are otherwise line-for-line unchanged;
+the three rows above are the whole of what the change moved.
 The other six are line-for-line unchanged, including both that still fail (`a_buffer_…capture` and
 `a_graph_dispatches_…`).
 
-**The risk this exposes, for the owner to decide**: `a_count_…` ends with the kept round holding **zero**
-dispatches, because every earlier round is abandoned and the last one produced nothing. A graph kept from such a
-round is empty. For a test that asserts a refusal that is harmless, and it is why the suite's names do not move;
-for a program that needs several rounds and then returns a value, "one graph per round" can keep the wrong
-round.
+**The fifth acceptance item, and it is narrower than "an empty graph".** A kept round with zero dispatches is not
+itself a defect: `a_function_that_dispatches_nothing_…` is a supported, tested outcome, and `abandon()` putting an
+abandoned round's dispatches into no graph is the definition of one graph per round rather than a cost of it. The
+failure to watch for is this: **a program that is not meant to be refused names its return, yet all of its
+dispatches sit in the abandoned round** — the kept graph then lacks them, while the name and the return are still
+there and can keep the test green. So the reading is "the kept round's dispatch set is non-empty, or the program
+genuinely dispatches nothing".
+
+**What the change fixes, stated causally.** `one_backend_…` went from *never naming* to *naming on the third
+round*, which means the graph shared across rounds was **blocking the naming**. That is what A′ repaired. The two
+zeroed readings are the same fact seen from the other side: those rounds produced nothing, so keeping only the
+last one keeps nothing — and their tests assert refusals, which is why the name set does not move.
