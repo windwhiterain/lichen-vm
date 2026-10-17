@@ -151,14 +151,28 @@ undecided cell costs a host read is
 **Measured exception: a kernel whose body launches another kernel leaves `.O` undecided.**
 `examples/compute_jit.lichen`'s `k_outer = compute.jit (x : Int => compute.launch k_double x)`
 renders `(raw Kernel, Int, raw none)` with type
-`struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}` — `.I` is decided and `.O` is not. The
-reason is the lambda's codomain: it is the launch's result, and the launch rule types that result as
-an open cell (`ComputeOperator::Launch`'s `low_type` states only a scalar class, never the kernel's
-codomain, `compute.rs:1714`), so the jit's `O` placeholder never receives a type value. The LSP test
+`struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}` — `.I` is decided and `.O` is not. The path:
+the lambda's codomain is the launch apply's result cell, and `check_app` gives every apply a
+**fresh** result-type cell (`self.state[e].ty = Some(c)`, `checker/lambda.rs`) that the *runtime*
+apply binds to the returned pair; `jit`'s `f: I -> O` then unifies that cell with the cloned `O`
+placeholder. Three readings narrow it:
+
+* a direct launch of a decided kernel types: `compute.jit (y : Int => y + y)` then
+  `compute.launch k 3` is `6: Int`;
+* the launch result itself is raw when the kernel's `.O` is open:
+  `compute.launch kout 3` is `raw 6: raw[?a, raw[?b, ?c]]`;
+* **`.O` stays open even after the kernel is launched** — `compute.launch kout 3` and then `kout`
+  still prints `(raw Kernel, Int, raw none)`.
+
+So this is not "not run yet": the runtime bind of the result cell does not reach the jit clone's `O`
+member. A kernel whose body is self-contained is decided because its body's type is computed while
+checking. The fix is therefore the result-type bind reaching the cells the checker unified with the
+apply's `c` — the same class-value propagation family as
+[compile-order-class](compile-order-class.md), not the launch operator table.
+
+The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
 over both statements and is red for this reason alone — it is the witness, not a stale assertion.
-The fix belongs to the launch extension rule: when the kernel operand's `.O` field is decided, the
-result type is that field's value.
 
 ## Kernel bodies are SSA, and a body may compute its own state and branch back
 
