@@ -205,6 +205,13 @@ per dispatch` — and a negative one — because both timed runs paid only compi
 failed to build. A per-dispatch figure at or below zero means nothing ran: print the **answer** beside
 the clock in every timing reading, so a refusal cannot pass for a fast dispatch.
 
+**A check script's own conclusion is a reading too, so validate it on a known-good sample first.** Three
+of this line's checks reported defects that were not there: a verdict parser keyed on a `> ` prefix that
+the output did not have (it read an entire green run as empty), a path check that called a `%20`-encoded
+reference missing, and a quote check whose span ran past the `doc` literal into `output = "…"` and
+counted four quotes where the file had two. Each time the fix started by running the check against
+something known to pass — one example, one link, one file — and watching what it said about that.
+
 **A refusal is the reading.** The device backend refuses rather than guesses (`the block parameter is
 read as one class … [Int, Float]`), the floor refuses with a named sentence (`NotClaimed`,
 `RegionIsNotAPair`), and the language refuses a spelling it cannot lower (`an if inside a fold body`).
