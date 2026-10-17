@@ -97,7 +97,7 @@ authority, and this table only names the state.
 | [Kernels as `.native`/`.I`/`.O` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`language`) | current — includes the SSA body model |
 | [A buffer is a struct wrapper, and a parallel result is the parameter's `.out`](notes/compute-buffer-wrapper.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`tests`) | current — the host read's result class is open |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
-| [The kernel parameter's class](notes/kernel-parameter-class.md) | `lichen-highlevel`, `lichen-lowlevel`, `lichen-compute`, `lichen-render` | current — both original defects fixed; residue open |
+| [The kernel parameter's class](notes/kernel-parameter-class.md) | `lichen-highlevel`, `lichen-lowlevel`, `lichen-compute`, `lichen-render` | current — both original defects fixed; the `replace_kernel` guard measured; one compute-side residue open (§4) |
 | [Per-value class semantics](notes/kernel-class-crossing-fixes.md) | `lichen-compute`, `lichen-compute-gpu`, `lichen-compute` (`tests`) | current |
 | [Runtime scalars in a parallel kernel](notes/compute-runtime-scalars.md) | `lichen-compute`, `lichen-compute-gpu` | current — the device path is refused until built |
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current — a whole graph in one submission, per backend |

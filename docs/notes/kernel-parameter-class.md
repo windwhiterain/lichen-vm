@@ -188,12 +188,20 @@ Gating it was what left a frozen function type decoding as
    tree reaches it, so the arm stays as the documented limit rather than becoming a
    fix. The reading replaces the earlier "unmeasured; no caller is known to reach
    it" with a measurement of exactly that.
-4. Two silent compute failures recorded elsewhere are **not** this note's and are
+4. One silent compute failure recorded elsewhere is **not** this note's and is
    still open: a bare `plrun` whose body reads a runtime scalar on a device
    answers `none` with no diagnostic
-   ([compute-runtime-scalars](compute-runtime-scalars.md)), and the `graph`
-   chain's `flat_arity` guard was read but never measured
-   ([compute-graph-jit](compute-graph-jit.md)).
+   ([compute-runtime-scalars](compute-runtime-scalars.md)).
+5. **The `graph` chain's `flat_arity` guard — measured.** It is
+   `Graph::replace_kernel`'s comparison of `FragmentShape { inputs, outputs,
+   flat_arity }` against the node it would replace (`lichen-graph-ir`). A probe
+   over the graph tests' own fragment measured: the identical replacement
+   accepted; each fact refused when alone one larger
+   (`ShapeDisagrees { had: 1 input, 1 output and 2 parameter leaf/leaves, got: … }`,
+   with both sides named); an absent node refused as `NoSuchNode`; and the graph
+   still at one node after every refusal. The `Runner::run` check
+   [compute-graph-jit](compute-graph-jit.md) records is a different one, already
+   replaced by `KernelFragment::inputs`.
 
 ## Recovered measurements
 
