@@ -62,97 +62,13 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    *read* decided facts instead of creating them. What may legitimately remain
    open is a cell the program itself left open — a `_` hole or a genuinely
    generic position — and that is reported where a reader needs it (ruling 3).
-   **What an un-annotated recursive fold costs, measured**: a fold whose state is
-   the kernel's **buffer** is typed without an annotation (the seed decides it),
-   and one whose state is an **array** keeps its value with an open type (`?a`);
-   but one whose state is a **struct** (`XOut = struct{.y (compute.Buf Float)}`)
-   loses the value outright — `raw none` with type `array{Float, 6}`, and no
-   diagnostic. Annotating the recursive function (`… : tuple{Int, XOut} -> XOut`)
-   restores both the value and the type (`[2.1875, …]: array{Float, 6}`, measured
-   on the same three-step ring, for `@loop` and plain recursion alike).
-   **The value is right; the *type* is what stays open** (measured on the same
-   ring, distance 0 so the body returns its own argument): `@loop m = (s => s(1))` ;
-   `m (0, seed)` collects the seed's numbers, a plain lambda and `s(0)` do too, and
-   so does pure-language recursion over a struct state (`@loop f = (n => if n == 0
-   then S(.y 7) else f (n - 1))` ; `(f 2).y` is `7: Int`) — but the recursive body
-   `s => if s(0) == 0 then s(1) else march (…)` loses only the **named read**:
-   `settled` is the XOut's own positional value (`raw[raw[raw Buffer, raw Float]]`,
-   the one-field struct's `[buf]` — `settled(1)` is out of bounds because the field
-   is item 0, not item 1), and `settled.y` is `none` because `.y` needs the
-   container's *type* for its name table while the type is still `?a`. Annotating
-   the **result** makes the read work without touching the function:
-   `compute.collect (settled : XOut).y` answers `raw[3.0, 1.0, …]`. A probe at
-   `wire_apply_result` (`apply.rs`) fires for both programs with the identical
-   shape — the return pair's value slot `none`, its type slot a pair — so the apply
-   wiring is not the origin; **the gap is the un-annotated recursive function's
-   return type never receiving the argument's type**, and the fix belongs to the
-   checker's template inference, not to the apply or to the fold.
-   **Which annotation fixes it, measured**: annotating the **parameter**
-   (`@loop march = ((s : tuple{Int, XOut}) => …)`) is enough — the fold collects its
-   numbers — and so are the return annotation (`… : tuple{Int, XOut} -> XOut`) and
-   annotating only the read's result (`(settled : XOut).y`). So the missing piece is
-   the *body's named read*'s resolution once the parameter's type is known: the
-   un-annotated case leaves `s`'s type open at check, the `.y` key becomes the lazy
-   `TableGet(names, name)` — and that chain does not resolve at the first apply even
-   though the parameter pair is unified there. A fix must make the body's read
-   resolve when the parameter's type is bound (the apply's own unify is the place
-   that has it), not rely on the reader.
-   **The failing path is the converted loop, and its own bind is where to look.**
-   `@loop` calls take `apply_loop` (`loop_run.rs`), and `loop_body`'s exit already
-   resolves the return type and unifies the result cell with it — but it reads that
-   type from `pair_type_half(template_return)` through `instantiation.node_of`, and
-   the clone walk never enters the return pair's **type half** (the pair's items are
-   not operation operands), so `node_of` answers the template node, whose derived
-   read still points at the template's parameter cell. **The candidate tried and
-   measured — make the walk enter the type half too** (`node_apply(pair_type_half(return))`
-   right after the return pair): the fold still reads `raw none`, so the type half
-   was already referenced in place or the operand chain breaks elsewhere.
-   **The probe answer: the return type is a wildcard.** At `Iteration::Exit`,
-   `node_of(type_half)` *is* a fresh clone (`origin` = the template node), but the
-   clone has **no operation and no value** — the clone walk mints a blank cell for a
-   `LowValue::Any` node (its own rule: "each reach mints its own undecided cell"),
-   so the exit's `unify(cell, r#type)` merges the result cell with a blank. The
-   un-annotated recursive body's **tail type is a wildcard hole** nothing fills, and
-   the annotation is what turns it into a real type — so the fix belongs to the
-   checker's body typing (the `if`-join of the two branches must not leave a
-   wildcard when one branch is the recursion), not to the loop's bind.
-   **The mechanism, corrected and located.** The language lowers `if c then t else e`
-   to `Index([else, then], c)` (`compile.rs`, no conditional IR kind); the author's
-   ruling is *"既然是脱糖，那么 checker 就不应该有 if 这个分支，直接就都是 array 分支"* —
-   no `if`-specific typing exists or should exist. The desugared `[else, then]` is an
-   **array literal**, and `check_array_term` (`checker/indexing.rs`) **does** unify every
-   element against one shared `element_ty` (`DiagKind::ArrayElement`): a heterogeneous
-   `if` is **refused**, measured — `x = if 1 == 1 then 1 else "a"` answers *"expected
-   string, found Int"*. So the `Index` read's type is that shared `element_ty` (a bare
-   cell), and for the recursive fold — whose two arms are both *open* at check, so the
-   unify succeeds — the `else` arm is the recursive application, and `element_ty`'s
-   class holds the arms' type nodes, one of which is the function's own return type.
-   **Why it stays open — the last mile, measured**: a per-call clone of a bare cell
-   shares the *template's* class, and the class's deciding member is the *template's*
-   derived read (of the template's parameter type), because the clone walk does not
-   traverse class members. Deep-evaluating the exit's type cell changes nothing
-   (tried): the clone's class still answers the template's read, whose operand is
-   unbound. So the fold's silent `none` is a **clone-walk limitation on class
-   members**, not the array-literal typing; the workaround stays the annotation, and
-   the engine-side fix (carry a cloned cell's deciding members per call) is the
-   owner's call — the two local routes tried (runtime-index element type, deep exit
-   evaluation) are recorded below as measured negatives.
-   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
-   `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ;
-   `(f (0, S(.y 3))).y` answers `raw none: ?a`, and so does the identity fold
-   `… then s(1) else f (s(0) - 1, s(1))` over an `S`-typed state. The control is a
-   **tuple-of-Ints** state with the same shape, which answers its value (`raw 7: ?a`):
-   the loss needs the base branch to be a **parameter-derived read** whose type is a
-   struct. The typing path is `check_tuple_term` (`tuples.rs`), which builds one
-   element slot per position and **unifies no element type**, so `[else, then]` is a
-   heterogeneous tuple type and the `if`'s type is a runtime-indexed read of either
-   branch's type; with both branches open, that read stays open. Which exact node
-   the loop then binds (the wildcard clone observed at `Iteration::Exit`) is the
-   remaining question for the owner, and the repro above is the whole test surface
-   it needs.
-   The collect's own type stays `?a` in all three annotated variants — a separate,
-   cosmetic open cell.
-2. **Once, at birth.** A function is normalized exactly once, at its first
+   **What an un-annotated recursive fold costs, measured**: see
+   [recursive-fold-typing](recursive-fold-typing.md) — the value survives, the
+   **type** stays open, and the mechanism, the author's ruling and the handover
+   live there. Nothing in that defect is a normalize defect: the fold's type is
+   open because a clone of the bare element cell keeps the template's class, which
+   ruling 5 below already covers ("a read may rely on a cell only after the pass
+   that decides it").2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
 3. **A checking-time function normalizes at checking.** A function that exists in
