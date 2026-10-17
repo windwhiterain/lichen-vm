@@ -350,7 +350,7 @@ A′ therefore changes nothing on this program: it is a no-op there by measureme
   suite's name set. It is **not** required to turn `consumer_guard` green, and a green `consumer_guard` would not
   be A′'s evidence.
 - `consumer_guard`'s own defect is **open** with an unknown shape. Its next step is the role collection point the
-  test asserts on, `consumer_guard.rs:240-260`: the roles must be found there from a single round's dispatches,
+  test asserts on, `the test's kernel attribution — see "The `consumer_guard` shape, measured" below, which refutes the role-collection-point reading`: the roles must be found there from a single round's dispatches,
   which is a different question from which recording they land in.
 
 **The `consumer_guard` before reading** stands as recorded below (`r1 false/0 | r2 true/2`); what was wrong was
@@ -358,7 +358,7 @@ the cause attached to it, not the reading.
 
 ## The `consumer_guard` shape, measured: it is the test's kernel order, not a collection point
 
-The section above names `consumer_guard.rs:240-260`'s role collection point as the next step. There is no such
+The section above names `the test's kernel attribution — see "The `consumer_guard` shape, measured" below, which refutes the role-collection-point reading`'s role collection point as the next step. There is no such
 point in the source, and the shape is now measured.
 
 **The role names are the annotation's own words.** `"combine"`, `"identity"` and `"element"` appear nowhere as
@@ -384,3 +384,34 @@ The parallel kernel's own `parallel_roles` (`compute.rs:1932`) is the other plac
 **What this changes:** the next step is not a collection point but the test's identification of its two kernels —
 by name, or by the roles each declares, instead of by id. That is a **test** change, and it is the compute
 owner's decision rather than an unattributed fix. Recorded here because this note is where the attribution lives.
+
+## The after readings, taken on `e659607e`
+
+A detached checkout of the A′ commit, its own `CARGO_TARGET_DIR`, the probe re-applied and reverted, each program
+run alone. The four readings the acceptance asks for:
+
+**`consumer_guard` is unchanged**: `r1 false/0 → r2 true/2`, still failing. A′ cannot help it, and the note's
+earlier expectation that it would is corrected above.
+
+**The name set is unchanged**: `lichen-compute` 201 passed / 17 failed / 2 ignored, the seventeen names identical
+to the before reading, `consumer_guard` still among them; the unit suite 19/0.
+
+**The six refusal fragments are unchanged**: the three tests that assert them all pass, and A′'s six lines touch
+the recording lifecycle only, never a `refuse` call.
+
+**Three of the nine controls changed**, so A′ is not a no-op on the multi-round path:
+
+| program | before | after |
+| --- | --- | --- |
+| `one_backend_for_the_whole_graph_is_checked_while_it_is_built` | `r1 false/0 → r2 false/1 → r3 false/1 → r4 false/1` (never named) | `r1 false/0 → r2 false/1 → **r3 true/1**` |
+| `a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one` | `r1 false/0 → r2 false/2 → r3 false/2 → r4 false/2` | `r1 false/0 → r2 false/2 → **r3 false/0 → r4 false/0**` |
+| `what_a_recorded_body_may_not_reach_for_is_refused_by_name` | three recordings, `false/1` runs then `false/0` | three recordings, `false/0, false/1, false/0, false/0` and one all-`false/0` |
+
+The other six are line-for-line unchanged, including both that still fail (`a_buffer_…capture` and
+`a_graph_dispatches_…`).
+
+**The risk this exposes, for the owner to decide**: `a_count_…` ends with the kept round holding **zero**
+dispatches, because every earlier round is abandoned and the last one produced nothing. A graph kept from such a
+round is empty. For a test that asserts a refusal that is harmless, and it is why the suite's names do not move;
+for a program that needs several rounds and then returns a value, "one graph per round" can keep the wrong
+round.
