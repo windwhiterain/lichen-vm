@@ -126,6 +126,8 @@ mod decoration {
     pub const OFFSET: u32 = 35;
     pub const BINDING: u32 = 33;
     pub const DESCRIPTOR_SET: u32 = 34;
+    /// `NoContraction`, core SPIR-V since 1.0 under capability `Shader`.
+    pub const NO_CONTRACTION: u32 = 42;
 }
 
 /// `SpvBuiltInGlobalInvocationId`.
@@ -1002,6 +1004,11 @@ pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
 
 /// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, position
 /// `0` being the entry point.
+///
+/// A fragment whose body inlined a transcendental definition has its float results
+/// decorated `NoContraction`, so the module rounds where the language's definition does.
+/// The decision is read from the body, not from a flag: `dispatch`'s pipeline cache keys on
+/// the fragment digest, and a body field is in that digest by construction.
 pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
     let ordered = launch.ordered();
     let root = launch.root();
@@ -1142,6 +1149,8 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     // The first function-local id: everything above is module-scope.
     let mut next = taken;
     let mut bodies = Vec::with_capacity(ordered.len());
+    // Every float result this module's arithmetic rounds once at, and so must keep.
+    let mut exact_results: Vec<u32> = Vec::new();
     for (position, fragment) in ordered.iter().copied().enumerate() {
         bodies.push(emit_function(
             Function {
@@ -1156,6 +1165,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
             launch,
             &mut literals,
             &mut next,
+            &mut exact_results,
         )?);
     }
 
@@ -1169,6 +1179,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         needs_int64(launch)?,
         &literals.declarations,
         &bodies,
+        &exact_results,
         next,
     ))
 }
@@ -1195,12 +1206,17 @@ struct Function<'a> {
 /// run to a cursor the next function starts above, so nothing two functions emit
 /// can be one value — and a module-scope id is never reissued as a local one,
 /// which is what would make a constant and a local the same id.
+///
+/// `exact_results` collects the float results this function's body owes a
+/// `NoContraction`, and is left empty unless `fragment.body` says the arithmetic
+/// is exact by the language's definition (`docs/notes/contraction-control.md`).
 fn emit_function(
     function: Function<'_>,
     ids: &Ids,
     launch: &LaunchSet<'_>,
     mut literals: &mut Literals,
     cursor: &mut u32,
+    exact_results: &mut Vec<u32>,
 ) -> Result<Vec<Inst>, SpirvRefusal> {
     // This function's own cursor, above every module-scope id and above every
     // earlier function's.
@@ -1213,6 +1229,9 @@ fn emit_function(
         binding,
         shared,
     } = function;
+    // **The IR's own decision**: a flag here would not be in the fragment digest,
+    // and the pipeline cache keys on the digest.
+    let exact = fragment.body.exact_float_arithmetic;
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
     }
@@ -1404,6 +1423,9 @@ fn emit_function(
                                     rhs.id,
                                 ],
                             ));
+                            if exact && operand_class == ScalarClass::Float {
+                                exact_results.push(result);
+                            }
                             slots.insert(definition, scalar(result, operand_class));
                         }
                         KernelInstr::Bin(class, operator) => {
@@ -1582,6 +1604,10 @@ fn emit_function(
                                     kind: result_kind,
                                 },
                             );
+                            // Every float result, not a narrower set a reading blamed.
+                            if exact && matches!(result_kind, Kind::Scalar(ScalarClass::Float)) {
+                                exact_results.push(result);
+                            }
                         }
                         // **Not a no-op here**: this target's `select` takes a bool, so this
                         // is where a condition becomes one.
@@ -3113,6 +3139,7 @@ fn assemble(
     needs_int64: bool,
     literals: &[Inst],
     bodies: &[Vec<Inst>],
+    exact_results: &[u32],
     bound: u32,
 ) -> Vec<u32> {
     let root = launch.root();
@@ -3220,6 +3247,13 @@ fn assemble(
         op::DECORATE,
         vec![ids.gid, decoration::BUILT_IN, BUILT_IN_GLOBAL_INVOCATION_ID],
     ));
+    // **One decoration per float result, and no operand**: three words each.
+    for &result in exact_results {
+        annotations.push(Inst::new(
+            op::DECORATE,
+            vec![result, decoration::NO_CONTRACTION],
+        ));
+    }
     emit_all(&mut out, &annotations);
 
     // 5. Types, then the constants (module-scope, so the body's literals belong here),

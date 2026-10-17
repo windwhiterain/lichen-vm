@@ -552,6 +552,7 @@ impl From<ir::KernelBody> for schema::Body {
             values: body.values.into_iter().map(Into::into).collect(),
             blocks: body.blocks.into_iter().map(Into::into).collect(),
             entry: body.entry as u64,
+            exact_float_arithmetic: body.exact_float_arithmetic,
             barriers: body.barriers.into_iter().map(Into::into).collect(),
         }
     }
@@ -702,6 +703,7 @@ pub(crate) fn fragment(text: schema::Fragment) -> Result<ir::KernelFragment, Fus
             values,
             blocks,
             entry: wide("fragment.body.entry", text.body.entry)?,
+            exact_float_arithmetic: text.body.exact_float_arithmetic,
             barriers,
         },
         inputs: wide("fragment.inputs", text.inputs)?,

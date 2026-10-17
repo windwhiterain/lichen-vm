@@ -273,6 +273,8 @@ pub struct Body {
     pub blocks: Vec<BasicBlock>,
     /// Which block control starts in.
     pub entry: u64,
+    /// Whether the body inlined a transcendental definition, so its float arithmetic is exact.
+    pub exact_float_arithmetic: bool,
     /// The pairs a barrier is owed for.
     pub barriers: Vec<Barrier>,
 }

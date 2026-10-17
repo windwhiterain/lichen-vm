@@ -100,6 +100,9 @@ pub struct KernelBody {
     pub blocks: Vec<BasicBlock>,
     /// Which block control starts in.
     pub entry: usize,
+    /// Whether this body inlined a transcendental definition, so its float arithmetic is exact.
+    // `docs/notes/contraction-control.md`; on the body, so `fragment_digest` carries it.
+    pub exact_float_arithmetic: bool,
     /// The pairs a barrier is owed for, in no order that matters.
     ///
     /// # Invariant
@@ -489,6 +492,8 @@ impl KernelBody {
         self.blocks[block]
             .instrs
             .splice(position..=position, sequence);
+        // The spliced sequence's rounding points are the definition's, not a target's.
+        self.exact_float_arithmetic = true;
         Ok(())
     }
 
