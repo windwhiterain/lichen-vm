@@ -68,3 +68,29 @@ path. Both are correct, both are local, and both are what a normalize pass would
 make unnecessary for compute specifically — they are a **temporary measure pending
 this proposal**, not the shape of the final fix. The two defects it repairs are
 recorded in `compute-kernel-struct.md`.
+
+## What implementing it requires, measured
+
+Three facts narrow the work, and the first one changes the proposal's own wording.
+
+**The fold cannot rewrite the node.** `Module`'s operation setter asserts that a node's computation is
+defined once (`module.rs:296-300`), and the value slot's invariant forbids replacing a value a slot already
+holds. So "normalize the read into an index" is not literally an edit of the `TableGet` node: the fold
+**re-points the consumer's key operand** at a freshly minted constant (`alloc_node(block, None,
+Some(USize(position)))`, the shape the checker already builds at `structs.rs:290-294`), and the `TableGet`
+node is left as an orphan the collector owns. Nothing in the operation invariant is touched.
+
+**The consumer is `slot_read`, not a bare `Index`.** `check_named_field` hands the key to
+`slot_read(container_ty, container_value, key, position)` (`structs.rs:311`), so the swap has to find the node
+that consumes this key rather than assume its shape.
+
+**The entry decode already has exactly one implementation.** `shape::name_table_index`
+(`structs.rs:327-330`, documented as shared with the lowering's reader "so the two cannot decode an entry
+differently") is that implementation, and it lives in `lichen-highlevel` while the fold must run in
+`lichen-lowlevel` at the clone. So the primitive **sinks into the lowlevel** and `shape::name_table_index`
+becomes its caller — one decode, two callers, in the direction the dependency already runs. Writing a second
+walk over `TableItem` in the lowlevel would be the duplication that doc comment exists to prevent.
+
+The order of work is therefore: sink the decode, add the fold after `function.rs`'s clone pass and before
+anything walks the clones, then verify with a probe that the read's key is a constant and that the three
+suites are unchanged (146/13, 140/0, 201/17/2 on today's `dev`).
