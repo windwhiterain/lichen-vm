@@ -102,8 +102,8 @@ instead of the furthest no longer produces that union.
 The offender list is parser-heavy, and the checker and module layers were first claimed from a grep of
 their sources. Two surveys have since gone over them, and **the slice that wrote this note verified their
 load-bearing claims itself** — but *"neither survey ran anything: every claim is read-verified, not
-reproduction-verified"*. So this section records **reads with quoted strings**, not measurements, and the
-gap is **narrowed, not closed**.
+reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
+reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
 **Two corrections to what the surveys first said, both worth more than the claims they replaced.**
 
@@ -112,14 +112,58 @@ gap is **narrowed, not closed**.
   `diagnostic.rs:469-472`, and made `render.rs:261-264` answer *"table lookup missed — no entry for key
   {key}"*, with the old literal kept as the fall-back for an unreadable key. P2 already held — the caret
   lands on the key — so the message now names the key as well, which is the whole of P1.
-* **`DiagKind::IndexTarget` is dead code, and its message was already written.** It is defined
-  (`diagnostic.rs:33`), rendered with the right words (`render.rs:173`: *"expected a tuple, array, or
-  struct type, found {}"*), and **produced nowhere** — the other `IndexTarget` hits are
-  `RuntimeIndexTarget` (a distinct runtime variant) and `EvalError::IndexTarget` (a different type in
-  another crate). So the correct message for `expected TypeArray, found Type` exists and was **never
-  wired**. Wiring it is a **semantic** change to which diagnostic exists, on a path whose test
-  (`crates/lichen-highlevel/tests/highlevel/checker.rs:738`, named
-  `indexing_a_function_reports_expected_tuple_or_array`) was not read.
+* **`DiagKind::IndexTarget` is dead code, and its message is *obsolete*, not merely unwired.** It is
+  defined (`diagnostic.rs:33`), rendered with words that no longer hold (`render.rs:173`: *"expected a
+  tuple, array, or struct type, found {}"*), and **produced nowhere** — the other `IndexTarget` hits
+  are `RuntimeIndexTarget` (a distinct runtime variant) and `EvalError::IndexTarget` (a different type
+  in another crate). **Measured, not read**: the wiring was applied, run through the language front end
+  and reverted. `check_index` (`checker/indexing.rs:49`) refuses a concrete non-array target with
+  `DiagKind::Guard`, so `render.rs`'s `Guard` arm prints the **kind it requires**; flipping that one
+  call site to `IndexTarget` swaps the kind and nothing else, and the spans are unchanged:
+
+  | program | `Guard` (today) | `IndexTarget` (wired, reverted) |
+  |---|---|---|
+  | `a = x => (1, Int)(x); a[0]` | `expected TypeArray, found ?a -> ?b` | `expected a tuple, array, or struct type, found ?a -> ?b` |
+  | `f = (x => x); f[0]` | `expected TypeArray, found ?a -> ?a` | `expected a tuple, array, or struct type, found ?a -> ?a` |
+  | `5[0]` | `expected TypeArray, found Type` | `expected a tuple, array, or struct type, found Type` |
+  | `t = (1, 2); t[0]` | `expected TypeArray, found TypeTuple` | **`expected a tuple, array, or struct type, found TypeTuple`** |
+  | `s = [1, 2]; s[0]` | *(checks)* | *(checks)* |
+  | `r = "ab"; r[0]` | `expected TypeArray, found Type` | `expected a tuple, array, or struct type, found Type` |
+
+  **The bold row is why the wording is obsolete rather than ready.** `t[0]` reads an index of a
+  **tuple**, and this path refuses it — so the wired sentence names a tuple as an acceptable target
+  while a tuple is exactly what was found. That is P1 failing with a *false* fix, which is worse than
+  the sentence it replaces, and it is the language's stated rule rather than an accident of this
+  check: `docs/language-spec.md:665-666` calls a **concretely** non-indexable type — *"a tuple, a
+  struct, a function, a table or an atomic type"* — a refusal, and `:649-654` says each read form
+  *"states the container kind it accepts"*, so `e[i]` accepts an **array** only (`a(k)` is the tuple
+  read, `.name` the struct read). `render.rs:173` is a fossil of the design before those reads split:
+  one operator that dispatched on the container's kind, and a union of shapes was then the honest
+  sentence. **Two of its three named shapes are refused by this path today.**
+
+  **And the pin is three tests, not one.** The wording was worth checking against, because wiring it
+  changes the kind at three sites: `crates/lichen-highlevel/tests/highlevel/checker.rs:738`
+  (`indexing_a_function_reports_expected_tuple_or_array`, asserting `DiagKind::Guard`),
+  `crates/lichen-highlevel/tests/highlevel/checker.rs:766`
+  (`indexing_an_int_reports_expected_tuple_or_array`, the same assertion for `5[0]`), and
+  `crates/lichen-language/tests/language/pipeline.rs:2180`
+  (`indexing_a_function_is_an_index_target_error`). Measured with the wiring applied:
+  `lichen-highlevel` goes 0 → 2 failures and `lichen-language` 11 → 12, each new failure one of those
+  three and nothing else.
+
+  **The baseline those counts are against, measured `2026-10-17` on `dev` (`0dbcbcdc`)** — both
+  crates' suites were run before any edit, so a reader can tell a regression from a pre-existing red.
+  `cargo test -p lichen-highlevel -j 1`: **140 passed, 0 failed**. `cargo test -p lichen-language -j 1
+  --no-fail-fast`: **261 passed, 11 failed**, and none of the eleven is an index-target read
+  (`defer_pending` ×4, `gc_block::a_gc_block_releases_its_scope`, `pipeline` ×4, `registry` ×2 — all
+  *"the program's root value is undecided"* or a deferred-import/apply fact). `indexing_a_function_is_an_
+  index_target_error` **passes** on that baseline, so it is a clean signal for the wiring.
+
+  **The measurement method, so it is cheap to redo**: the language front end, one
+  `lichen_language::compile(&source)` call per program, reading `report.diagnostics` — the `message`
+  is `render::checker_message`'s own output and `check.kind` the highlevel's kind, so the probe needs
+  no harness of its own. `diags("…")` in `tests/language/pipeline.rs` is that call in test form; the
+  `.lichen` CLI renders the same sentence through the same function.
 
 **And one claim confirmed verbatim, now fixed**: `crates/lichen-preprocess/src/lib.rs:429-432` used to
 build `PreprocessDiag::unattributed`, so a preprocessor diagnostic carried **no span** even though the
@@ -136,8 +180,8 @@ error: expected ?a -> ?b, found Int
 so the guard's expected side is the function the guard built, and it prints as an arrow with two undecided
 slots — the test at `tests/highlevel/checker.rs:713-736` pins the value structure and this is the string it
 produces. And `checker.rs:738` does **not** pin the `IndexTarget` wording: that test asserts the diagnostic's
-kind, location and the requirement's `TypeArray` kind, never a rendered sentence, so `render.rs`'s
-"expected a tuple, array, or struct type, found {}" is unpinned.
+kind, location and the requirement's `TypeArray` kind, never a rendered sentence — and neither does any other
+test, so nothing in the tree would catch the obsolete wording changing.
 
 **Still open, and it no longer has a home**: the positional-struct `raw[Int, Int]` offender. This section
 pointed at [type-rendering-inconsistent](type-rendering-inconsistent.md), which has since **closed as
@@ -168,14 +212,20 @@ keys** are rendered: a non-scalar key needs the key's *type* node, and value and
 `ExprState` nodes rather than offsets, so there is no O(1) derivation for it — the spelling is missing
 there, not the reachability.
 
-**`DiagKind::IndexTarget` is settled by the pin, and stays unwired.** `tests/highlevel/checker.rs:738` is *named* for
-`IndexTarget` but pins a different kind — `assert_eq!(diags[0].kind, DiagKind::Guard)` — with the expected
-side pinned as the **array kind**. So the contract is *"a statically non-indexable read is a `Guard` whose
-expected side is the array kind"*. For `(\x. x)[0]` the two spellings are `expected Array, found (Int ->
-Int)` today and `expected a tuple, array, or struct type, found (Int -> Int)` if wired — and wiring would
-both rewrite the pin **and** state a **weaker** requirement (a union of three shapes where the guard names
-one), changing every statically non-indexable read (`5[0]`, `(\x. x)[0]`, `"s"[0]`) with no bug reported.
-Not taken; pin and wiring both left alone.
+**`DiagKind::IndexTarget` is settled by the pin, and stays unwired — confirmed by measurement, and for a
+stronger reason than the pin.** `tests/highlevel/checker.rs:738` is *named* for `IndexTarget` but pins a
+different kind — `assert_eq!(diags[0].kind, DiagKind::Guard)` — with the expected side pinned as the **array
+kind**. So the contract is *"a statically non-indexable read is a `Guard` whose expected side is the array
+kind"*. Wiring would both rewrite the pin **and** state a **weaker** requirement (a union of three shapes
+where the guard names one), changing every statically non-indexable read (`5[0]`, `(\x. x)[0]`, `"s"[0]`)
+with no bug reported. Not taken; pin and wiring both left alone.
+
+**What the measurement adds** (§6's table): the weaker requirement is not merely weaker, it is **false on
+this path**. `(\x. x)[0]` gets a longer sentence that still names the fix; `t[0]` over a **tuple** gets
+*"expected a tuple, array, or struct type, found TypeTuple"* — a sentence naming a tuple as acceptable while
+a tuple is what this path refuses, which `docs/language-spec.md:665-666` settles the other way. So the pin
+rests on more than three assertions, and the pin is **three** tests rather than the one `:738` names:
+`checker.rs:738`, `checker.rs:766` and `crates/lichen-language/tests/language/pipeline.rs:2180`.
 
 **The preprocessor's missing span is fixed, by the user's decision rather than by a reinterpretation.**
 The offset was available and discarded one layer up: `parse::parse` returns `LocatedDirective`, and
