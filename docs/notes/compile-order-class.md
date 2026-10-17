@@ -200,6 +200,25 @@ pattern reference? If it leaves them open, the fix candidate is a **type-positio
 type argument** — a type value is a decided fact and never a lazy runtime value — which is neither
 the carry change (i) nor the read reorder (ii) but a third, narrower lowlevel site.
 
+**Measured, and it refutes that candidate as stated.** The probe was run at
+`apply_parameter_check` for `StaticFunctionId(22)` on `BACK_TO_FRONT` (`dev@cc064aa3`, instrumented
+and reverted): after `evaluate_pattern_argument`, the pattern and the argument are both two-item
+terms whose items are **open cells with no value** —
+
+```
+param=[2] (671 None shallow=false) (672 None shallow=false)
+arg  =[2] (602 None shallow=false) (603 None shallow=false)
+errors=0
+```
+
+so there is nothing for the walk to evaluate and nothing for the unify to write: the argument's own
+term is open at the apply. The type value the checker knows and the term the VM materializes are
+still different nodes (this note's §3), which is why "evaluate the type argument at the apply" cannot
+work. What remains is the site that *does* know the class — the checker's type application
+(`checker/lambda.rs:316`) — and forcing **that** application at check time, the way a call-result
+callee is already force-evaluated there: ruling 1 asks exactly for determinable facts to be decided
+during checking, and this is the one place both the class and the application node are in hand.
+
 ## 4. One half of that did land: an undecided class is refused, not guessed
 
 `compile_parallel_fragment` now returns `RoleUnread::Refusal` naming what it could not read
