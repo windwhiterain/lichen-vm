@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock};
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{HighPackageMeta, PackageSource, TypeOperator, ValueType};
-use lichen_lowlevel::{LocalNodeId, ModuleKey, NodeId, Registry, StaticModule, StaticNodeId};
+use lichen_lowlevel::{
+    AnyNodeId, LocalNodeId, ModuleKey, NodeId, Registry, StaticModule, StaticNodeId,
+};
 use lichen_preprocess::{ImportResolver, PreprocessDiag, ResolvedPackage};
 
 use crate::LangProgramShape;
@@ -85,6 +87,32 @@ where
                 template,
                 crate::render::assert_spelling_text(&mut printer, spelling)?,
             ))
+        })
+        .collect()
+}
+
+/// The exported bindings' rendered types, rendered where their nodes are readable.
+///
+/// # Invariant
+///
+/// Keyed by the binding's **pair**: a hover resolves the name to that frozen node, so
+/// the type must be the one this build checked (`docs/notes/core-prelude.md` §5). The
+/// printer carries the vocabulary's leaf names; the prelude's exports hold no element
+/// attribute slot for the registry to spell.
+fn rendered_export_types<P>(build: &Build<P>, terms: &[(String, NodeId)]) -> Vec<(NodeId, String)>
+where
+    P: LangProgramShape,
+    P::Value: ValueType,
+{
+    let mut printer = crate::render::TypePrinter::new_with_ext(
+        &build.module,
+        Some(crate::render::lang_render_ext::<P>()),
+    );
+    terms
+        .iter()
+        .filter_map(|(_, term)| {
+            let ty = lichen_highlevel::shape::slot_type(&build.module, AnyNodeId::Dynamic(*term))?;
+            Some((*term, printer.any_node(ty)))
         })
         .collect()
 }
@@ -461,14 +489,15 @@ where
         path
     }
 
-    /// The source record of a built-in the store just froze: its file, node spans and
-    /// assert spellings.
+    /// The source record of a built-in the store just froze: its file, node spans,
+    /// assert spellings and export types.
     fn builtin_source(
         &self,
         name: &str,
         source: &str,
         located: &[(NodeId, (u32, u32))],
         spellings: &[(NodeId, String)],
+        types: &[(NodeId, String)],
         node_map: &HashMap<NodeId, LocalNodeId>,
     ) -> PackageSource {
         let path = self.materialize_builtin(name, source);
@@ -486,11 +515,18 @@ where
             .collect();
         assert_spellings.sort_unstable_by_key(|(index, _)| *index);
         assert_spellings.dedup_by_key(|(index, _)| *index);
+        let mut export_types: Vec<(usize, String)> = types
+            .iter()
+            .filter_map(|(node, text)| Some((node_map.get(node)?.index, text.clone())))
+            .collect();
+        export_types.sort_unstable_by_key(|(index, _)| *index);
+        export_types.dedup_by_key(|(index, _)| *index);
         PackageSource {
             path,
             code: std::sync::Arc::from(source),
             spans,
             assert_spellings,
+            export_types,
         }
     }
 
@@ -572,6 +608,7 @@ where
         let terms = core_terms(&build)?;
         let located = located_nodes(&build, report.span_index.as_ref());
         let spellings = rendered_assert_spellings(&build);
+        let types = rendered_export_types(&build, &terms);
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
@@ -588,8 +625,14 @@ where
             index: freeze.node_map[&build.root_term],
         };
         let direct = core_direct(terms, freeze.key, &freeze.node_map)?;
-        let package_source =
-            self.builtin_source(CORE_PATH, source, &located, &spellings, &freeze.node_map);
+        let package_source = self.builtin_source(
+            CORE_PATH,
+            source,
+            &located,
+            &spellings,
+            &types,
+            &freeze.node_map,
+        );
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1000,8 +1043,14 @@ where
             module: freeze.key,
             index: freeze.node_map[&build.root_term],
         };
-        let package_source =
-            self.builtin_source(virtual_path, source, &located, &spellings, &freeze.node_map);
+        let package_source = self.builtin_source(
+            virtual_path,
+            source,
+            &located,
+            &spellings,
+            &[],
+            &freeze.node_map,
+        );
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

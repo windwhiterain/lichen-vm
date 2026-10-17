@@ -155,12 +155,14 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   `add ["a", "b"]` reports `core.lichen:3:39` / `3:56` **and** `1:5` (the array
   argument). The dynamic walk's clone still records only its template, so a
   prelude body cloned at run time would have no related use.
-- **The built-in's names are not hovered with a type.** A jump and a completion
-  item for a prelude name name the built-in's file; the hover shows the definition
-  line in it (`defined at line 3 of core.lichen`). It does not render
-  `value : type`, because that snapshot is the *built-in's* build — the record
-  keeps positions and text, not checker facts — and the compiler is not this
-  layer's to re-run.
+- **The built-in's names are hovered with their type — closed.** A jump and a
+  completion item for a prelude name name the built-in's file, and the hover now
+  renders the export's type beside its definition line. The type is not recomputed by
+  the editor: the built-in's build renders each exported binding's type with its own
+  module's printer, `PackageSource` carries it keyed by the frozen export pair (beside
+  the positions and the assert spellings), and the analysis resolves a name through
+  the import's `direct` list to that pair. Measured: hovering `add` reads
+  `` `add` — `array{raw[?b, ?c], 2} -> raw[?b, ?c]` — defined at line `3` of `core.lichen` ``.
 - **What the jump and the publish are verified against.** `Doc`'s unit tests hold
   the in-memory case; the integration test runs the real binary, so the file path
   the store materializes under the cache root is the one the server names and the

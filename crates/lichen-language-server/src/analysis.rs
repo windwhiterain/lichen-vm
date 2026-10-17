@@ -61,6 +61,12 @@ pub struct BuiltinName {
     pub name: String,
     /// The definition site: the built-in's file and the export's position in it.
     pub def: Definition,
+    /// The export's rendered type, carried from the build that checked it.
+    ///
+    /// # Invariant
+    /// `None` when that build rendered no type for the pair; the hover then names the
+    /// definition alone (`docs/notes/core-prelude.md` §5).
+    pub ty: Option<String>,
 }
 
 /// One *other* file's diagnostics, rendered for the protocol.
@@ -693,7 +699,7 @@ where
         // The built-in's own top-level bindings: the record's `spans`
         // hold only the frozen nodes a failure can name.
         let positions = definition_spans(&source.code);
-        for (name, _export) in &import.direct {
+        for (name, export) in &import.direct {
             let Some(span) = positions.iter().find(|(n, _)| n == name).map(|(_, s)| *s) else {
                 continue;
             };
@@ -704,6 +710,7 @@ where
                     span,
                     file: Some(Arc::clone(&source)),
                 },
+                ty: source.export_type_of(export.index).map(str::to_string),
             });
         }
     }
@@ -876,14 +883,14 @@ impl DocIndex {
                 .resolve
                 .get(&token.span)
                 .and_then(|def| def.builtin())
-                .map(|i| &self.builtin_names[i].def);
+                .map(|i| &self.builtin_names[i]);
             let def_idx = self
                 .resolve
                 .get(&token.span)
                 .and_then(|def| def.document())
                 .or_else(|| self.def_index.get(&token.span).copied());
             let msg = match (builtin, def_idx) {
-                (Some(def), _) => builtin_hover(name, def),
+                (Some(builtin), _) => builtin_hover(builtin),
                 (None, Some(i)) => {
                     let def = &self.defs[i];
                     // An imported module: the use resolves to its `@import`
@@ -1351,14 +1358,26 @@ fn import_hover(name: &str, imp: &ImportBinding) -> String {
 /// # Invariant
 /// No `value : type` is rendered: the statement snapshot is that module's build,
 /// which this analysis does not hold (`docs/notes/core-prelude.md` §5).
-fn builtin_hover(name: &str, def: &Definition) -> String {
+/// The hover text for a name resolving to a **built-in** module's file: the
+/// export's type, when the build carried one, and the line in *that* file.
+///
+/// # Invariant
+/// The type is the built-in's own build's, rendered there and carried in the record;
+/// this analysis never re-checks that module (`docs/notes/core-prelude.md` §5).
+fn builtin_hover(builtin: &BuiltinName) -> String {
+    let name = builtin.name.as_str();
+    let def = &builtin.def;
+    let typed = match &builtin.ty {
+        Some(ty) => format!("`{ty}` — "),
+        None => String::new(),
+    };
     match &def.file {
         Some(file) => format!(
-            "`{name}` — defined at line `{}` of `{}`",
+            "`{name}` — {typed}defined at line `{}` of `{}`",
             def.span.0,
             source_name(file)
         ),
-        None => format!("`{name}` — defined at line `{}`", def.span.0),
+        None => format!("`{name}` — {typed}defined at line `{}`", def.span.0),
     }
 }
 

@@ -79,6 +79,14 @@ pub struct PackageSource {
     /// nodes: a refinement's domain names a node of **that** module, so the reading
     /// build keeps the text rather than the node (`docs/notes/core-prelude.md`).
     pub assert_spellings: Vec<(usize, String)>,
+    /// `(frozen export-pair index, the binding's rendered type)`, sorted by index so
+    /// a lookup is a binary search.
+    ///
+    /// # Invariant
+    /// The *type* is rendered where the build that checked it could read its nodes,
+    /// for the same reason [`Self::assert_spellings`] are; it is what a hover over an
+    /// exported name shows (`docs/notes/core-prelude.md` §5).
+    pub export_types: Vec<(usize, String)>,
 }
 
 impl PackageSource {
@@ -97,6 +105,15 @@ impl PackageSource {
             .binary_search_by_key(&index.index, |(node, _)| *node)
             .ok()
             .map(|at| self.assert_spellings[at].1.as_str())
+    }
+
+    /// The rendered type of the export pair frozen at `index`, when the build
+    /// rendered one.
+    pub fn export_type_of(&self, index: lichen_lowlevel::LocalNodeId) -> Option<&str> {
+        self.export_types
+            .binary_search_by_key(&index.index, |(node, _)| *node)
+            .ok()
+            .map(|at| self.export_types[at].1.as_str())
     }
 }
 
