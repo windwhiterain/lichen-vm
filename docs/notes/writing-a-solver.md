@@ -2,8 +2,8 @@
 
 A recipe for somebody who wants to write a GPU operator or a time-stepping solver in lichen and has
 not read the research. [physics-operators](physics-operators.md) is the record of *how* each rule was
-found; this is the order to do things in. The two acceptance samples are
-`examples/stencil.lichen` (one dimension) and `examples/torus.lichen` (two), and every claim below is
+found; this is the order to do things in. The three acceptance samples are
+`examples/stencil.lichen` (one dimension), `examples/torus.lichen` (two) and `examples/filter.lichen` (a moving window), and every claim below is
 taken from one of them or from a measurement those notes cite.
 
 ## 1. Fix the launch shape first: one lane per element
@@ -30,7 +30,9 @@ The scalar leaves of the parameter struct are positional:
   coordinates, the second leaf is free (put a stride here only when the body *does* use them, and
   then the stride must be exactly this);
 - every further leaf is carried at its own class, so a **`Float` leaf is a runtime argument**: `alpha`,
-  `lo`, `hi`, `t`. A caller varies it without a new kernel.
+  `lo`, `hi`, `t`. A caller varies it without a new kernel. **The constants may also be a buffer**: a
+convolution's taps are an input buffer plus a `.taps` leaf, so the same kernel is a smoothing filter or
+a difference (`examples/filter.lichen`).
 
 ```text
 Par  = struct{.n Int, .cols Int, .alpha Float, .in In, .out Out}   # cols is the coordinate divisor
@@ -157,4 +159,4 @@ kernel-speed arithmetic either way: these are interpreter numbers, and no spelli
   not expressible yet.
 - [device-operator-sweep](device-operator-sweep.md) — the device verdict for every operator example,
   with the method (`operators_on_device`) that reproduces it.
-- `examples/stencil.lichen`, `examples/torus.lichen` — the two samples this recipe is written from.
+- `examples/stencil.lichen`, `examples/torus.lichen`, `examples/filter.lichen` — the three samples this recipe is written from.

@@ -1,0 +1,54 @@
+---
+  order = "32"
+  compute = import "compute.lichen"
+  doc = "A convolution whose **coefficients are data**: `y[i] = Sigma_k w[k] * x[i - k]`, one lane per \
+    output element, with the tap count as a scalar leaf and the weights as an input buffer. Every \
+    operator below it carries its constants as leaves; this one carries them as a **buffer**, so the \
+    same kernel is a smoothing filter or a difference and a caller changes the filter without a new \
+    kernel and without a new leaf.\n\n\
+    **The taps are a leaf and the weights are a buffer.** The first scalar leaf is the extent and the \
+    **second** is the divisor `compute.row`/`compute.col` use \
+    (`crates/lichen-compute/src/compute/body.rs:788-815`) — this body reads no coordinates, so the \
+    second is free — and `.taps` sits after it. The loop counts down over the taps, reading `w` at \
+    `s(0) - 1` and `x` at `i - (s(0) - 1)`, so the **read set is a window** `[i - taps + 1, i]` rather \
+    than a prefix: the first operator here whose read window moves with a runtime value.\n\n\
+    **The left edge is the padding, which makes the filter causal.** At `i < k` the address `i - k` is \
+    below zero and an out-of-buffer read answers `0` — the same rule `examples/stencil.lichen` states \
+    and `examples/gemv.lichen` first measured. So the filter has **zero prehistory** with no branch, \
+    no `Select` and no clamp: a causal FIR, deterministic and free. A centred filter would need \
+    `(0.0 - 1.0)`-style taps instead, and its left half would discard the same way.\n\n\
+    **The write address is still the lane's own index**, so the answer does not depend on a schedule, \
+    and the **arithmetic is exact**: integers below `2^24`, multiply and add, no division. `x` is \
+    `1 2 3 4 5 6` and the two chains are the same kernel with two coefficient buffers — the smoothing \
+    `1 2 1`, which answers `1 4 8 12 16 20` (`1*1`, `1*2 + 2*1`, `1*3 + 2*2 + 1*1 = 8`, and so on), \
+    and the difference `1 -1 0`, which answers `1 1 1 1 1 1`. The declared output is that arithmetic, \
+    worked out by hand rather than transcribed from a run.\n\n\
+    **The reduction is marked the same way as the library's folds.** `claim:Reduction(combine, \
+    identity,element)` and the `combine`/`element` marks are what the fusion floor reads when a graph \
+    records the kernel (`docs/notes/llm-operators.md`); on the `cpu` path they are carried and not \
+    consulted. The identity is `0.0`, which for a sum of products is honest — unlike a maximum, whose \
+    identity has to be a caller's leaf (`examples/mathlib.lichen` says why).\n\n\
+    **Six lanes leave 58 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated coordinates \
+    would put its write inside `[0, 6)` if nothing guarded it — the class of silent wrong answer \
+    measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 12 of 12 element(s)` on \
+    the RTX 3060 for both chains, so the window read, the tap-count leaf and the guard are all right \
+    on the device."
+  output = "([1.0, 4.0, 8.0, 12.0, 16.0, 20.0], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]): tuple{array{Float, 6}, array{Float, 6}}"
+---
+FIn  = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+FOut = struct{.y (compute.Buf Float)}
+FPar = struct{.n Int, .taps Int, .in FIn, .out FOut}
+FArg = struct{.n Int, .taps Int, .I FIn}
+filter_raw = (c : FPar) => {
+  i = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+}
+filter = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
+smooth = (compute.buffer ([1.0, 2.0, 1.0] : array{Float, 3}) : (compute.Buf Float))
+difference = (compute.buffer ([1.0, (0.0 - 1.0), 0.0] : array{Float, 3}) : (compute.Buf Float))
+smoothed = (compute.plrun filter ((FArg)(.n 6, .taps 3, .I FIn(.x x, .w smooth))) : FOut)
+differenced = (compute.plrun filter ((FArg)(.n 6, .taps 3, .I FIn(.x x, .w difference))) : FOut)
+(compute.collect smoothed.y : array{Float, 6}, compute.collect differenced.y : array{Float, 6})
