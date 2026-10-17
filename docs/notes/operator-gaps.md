@@ -2,8 +2,12 @@
 
 Every entry below was measured by the operator line, and each names the probe that prints it, so an
 entry is current until somebody re-runs that probe and sees it change. The owner column names the side
-that decides the reading — most of these are not the operator line's to fix. The two entries that could
-have moved with recent language work were re-measured at `dev@4b60622f` and had not.
+that decides the reading — most of these are not the operator line's to fix.
+
+**Verification points.** The entries were measured while their features were built, re-measured at
+`dev@4b60622f`, and every open one re-checked at `dev@7ccb2480`: nothing moved. The commits in between
+are the `::` chain's notes and this line's own, so that is the expected answer; the next time something
+does move, the commit that moved it belongs in the entry.
 
 ## Gaps: not expressible, or broken
 
