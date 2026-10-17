@@ -542,6 +542,12 @@ Two things the author still writes, and one defect the empty group exposed:
   and the checker has no field position to write as a constant. Writing the read
   as `(inbuf : Out).z` — the author's own type, stated — prints the right values,
   and so does annotating the **binding** instead, which is the recipe above.
+  **Re-measured after `9fad30c7`** (the dynamic apply's result-cell bind): the
+  field spellings are still refused — `zz_graph_argument_probe.rs`'s
+  `two_buffers_field` and `gemv_p_a` report their refusal, and `two_buffers_float`
+  runs with the right values but an **open type** (`raw[raw 11, …]: ?a`). So the
+  result-cell bind does not reach the graphrun's field-read container cell, and
+  this item is unchanged by it.
 - **The empty group's and the split's own coverage.** The empty `.in` group is
   measured end to end on both backends, but no test exercises it; whether the
   fillers the tests and examples carry should migrate to it is a maintainer's
