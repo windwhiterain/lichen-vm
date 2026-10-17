@@ -7,7 +7,9 @@
 > container keeps its kind unify, and an **undecided one carries nothing at all**
 > (no `IsStructType` condition, no requirement node): the application's own
 > parameter unify binds the container's type, and the read evaluates on it, which
-> is the shape `_(.a 1, .b 2)` shows. A wrong-kind argument therefore fails at the
+> is the shape `f = (x : _) => x.a` ; `f (struct{.a Int, .b Int}(.a 1, .b 2))` shows
+> (`1 : Int`: the apply's unify binds the hole before the body's read evaluates).
+> A wrong-kind argument therefore fails at the
 > read the body built (`this value is not a container`, caret on `.a`). The
 > requirement node had to be **dropped rather than unified**: merging it into the
 > container's kind class made the empty requirement template the class's value, and
