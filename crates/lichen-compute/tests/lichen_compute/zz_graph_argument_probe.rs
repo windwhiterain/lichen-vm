@@ -204,12 +204,56 @@ x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 out = (compute.graphrun built (4, w, x) : OutG)
 compute.collect out.y : array{Float, 4}
 "#;
+const TWO_BUFFERS_ANNOTATED: &str = r#"
+--- compute = import "compute.lichen" ---
+In2  = struct{.b (compute.Buf Int), .c (compute.Buf Int)}
+Out2 = struct{.w (compute.Buf Int)}
+Par2 = compute.P (compute.KT Int)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  x = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  y = compute.read ((compute.Read _)(.from k.in.c, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value x + y))
+}
+k2 = compute.parallel f2 "gpu"
+GArg = struct{.n Int, .in In2}
+step = (s : GArg) => {
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b, .c s.in.c))) : Out2
+}
+built = compute.graph step
+p = (compute.buffer ([1, 2, 3] : array{Int, 3}) : (compute.Buf Int))
+q = (compute.buffer ([10, 20, 30] : array{Int, 3}) : (compute.Buf Int))
+compute.collect (compute.graphrun built (3, p, q))
+"#;
+const TWO_BUFFERS_FLOAT: &str = r#"
+--- compute = import "compute.lichen" ---
+In2  = struct{.b (compute.Buf Float), .c (compute.Buf Float)}
+Out2 = struct{.w (compute.Buf Float)}
+Par2 = compute.P (compute.KT Float)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  x = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  y = compute.read ((compute.Read _)(.from k.in.c, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value x + y))
+}
+k2 = compute.parallel f2 "gpu"
+GArg = struct{.n Int, .in In2}
+step = (s : GArg) => {
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b, .c s.in.c))) : Out2
+}
+built = compute.graph step
+p = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+q = (compute.buffer ([10.0, 20.0, 30.0] : array{Float, 3}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (3, p, q))
+"#;
 #[test]
 fn probe_graph_argument_buffer() {
     let Some((_context, _guard)) = common::device("zz_graph_argument_probe") else {
         return;
     };
     for (name, source) in [
+        ("two_buffers_float", TWO_BUFFERS_FLOAT),
+        ("two_buffers_annotated", TWO_BUFFERS_ANNOTATED),
         ("gemv_no_fold", GEMV_NO_FOLD),
         ("gemv_graph", GEMV),
         ("one_buffer_annotated", ONE_BUFFER_ANNOTATED),
@@ -233,3 +277,5 @@ fn probe_graph_argument_buffer() {
         }
     }
 }
+
+
