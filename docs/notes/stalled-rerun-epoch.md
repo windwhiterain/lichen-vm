@@ -295,7 +295,7 @@ node's value changes") and the part that survives is that it is the one value-sl
 every caller's contract is stated against; `run_stamp_is_current`'s was the retired gate's
 soundness argument — "the epoch moves on every value write, so equality is proof that every
 read this operator made would answer the same now" — and what it says now is the fact the gate
-rests on, that the stamp is written the once an operator runs and cleared only by the walks
+rests on, that the stamp is written once, when the operator runs, and cleared only by the walks
 that re-open a stalled subtree.
 
 `Node::runned` stays a `u32` and `stamp_node_ran` writes a non-zero constant, so every `!= 0`

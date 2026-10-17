@@ -331,7 +331,7 @@ impl<P: Program> Module<P> {
     ///
     /// # Invariant
     ///
-    /// The stamp is written the once an operator runs and cleared only by the walks that
+    /// The stamp is written once, when the operator runs, and cleared only by the walks that
     /// re-open a stalled subtree, so a node reading true has had its one attempt.
     pub(crate) fn run_stamp_is_set(&self, node: NodeId) -> bool {
         self.nodes.get(node).is_some_and(|node| node.runned != 0)
