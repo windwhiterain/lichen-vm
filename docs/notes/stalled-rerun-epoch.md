@@ -1,16 +1,10 @@
 # A stalled operator re-runs only when a value changed
 
-> Status: **retired**, measured. The gate §5 landed is superseded by the decision
-> that a node is evaluated and decided exactly once: the run stamp is read as "this
-> operator has run", and the epoch it recorded is compared with nothing. **§8**
-> records the retirement, what it costs, and who owns the three tests that pin it.
-> **§9** records that the recording no longer depends on the gate, which takes the
-> cost §8.6 names from sixty-five programs to three.
-> §1–§7 are kept as the record of the design as it stood — §2 the measurement
-> behind it, §3 why the order of evaluation and unification is not the fix, §5 the
-> landed form, §6 the two dependency-edge designs that were rejected. The ordering
-> conclusion of §3 survives the retirement; the memoization it names does not.
-
+> Status: **current, with its retirement measured and held.** The gate §5 landed is still in force: the run
+> stamp is compared with the value epoch, so a stalled operator re-runs when a value changed. §8 measures what
+> retiring it would cost. After the recording fix ([late-writes-map](late-writes-map.md) §14) the plain gate
+> adds **three** failures to the pristine set instead of sixty-five, and those three are named there. Retiring
+> it is a decision the maintainer has not taken, and the tests that pin it stand until they do.
 >
 > Points at: `crates/lichen-lowlevel/src/evaluation.rs` (`evaluate_node_body`'s
 > run gate, `evaluate_node_operation`'s stall postlude, `ran_undecided`),
@@ -192,7 +186,11 @@ re-descent of already-decided subgraphs is
 measured headroom (34–72% of deep-pass visits) is an order of magnitude larger
 than this note's. The gate is orthogonal to it, and both can land.
 
-## 8. Retired: the stamp no longer compares against the epoch
+## 8. Held, not retired: what the retirement would cost
+
+The stamp still compares against the epoch. This section measures what removing the comparison would cost; the
+decision to remove it has not been taken, and [incremental-evaluation](incremental-evaluation.md) §7 records it
+as held rather than done.
 
 **Status: retired, not landed.** [incremental-evaluation](incremental-evaluation.md)
 §5's step 1 puts the other half of this note's question: `evaluate` and

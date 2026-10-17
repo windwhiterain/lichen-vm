@@ -545,7 +545,7 @@ should go first" — was measured and closed. A node that stalls on an undecided
 class is not re-asked too soon: it is re-asked **without knowing whether anything
 changed**, and a schedule (a second pass, a later phase) does not give it that
 fact. What does is one number per node — the value epoch it ran at
-([stalled-rerun-epoch](stalled-rerun-epoch.md)), which has since been retired:
+([stalled-rerun-epoch](stalled-rerun-epoch.md)), whose retirement is measured and held, not taken:
 measured, dropping the epoch's part of the gate costs 65 `lichen-compute` programs
 their build (that note's §8). **The conclusion this section closes is the ordering
 one, and it stands** — reordering evaluation against unification is not the fix.
