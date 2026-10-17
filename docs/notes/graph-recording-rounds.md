@@ -355,3 +355,32 @@ A′ therefore changes nothing on this program: it is a no-op there by measureme
 
 **The `consumer_guard` before reading** stands as recorded below (`r1 false/0 | r2 true/2`); what was wrong was
 the cause attached to it, not the reading.
+
+## The `consumer_guard` shape, measured: it is the test's kernel order, not a collection point
+
+The section above names `consumer_guard.rs:240-260`'s role collection point as the next step. There is no such
+point in the source, and the shape is now measured.
+
+**The role names are the annotation's own words.** `"combine"`, `"identity"` and `"element"` appear nowhere as
+literals in `crates/lichen-compute/src`; they are what a source writes in
+`~ "claim:Reduction(combine,identity)"`. This test's producer declares `Reduction(combine,identity)` and its
+consumer declares `Reduction(combine,identity,element)`, so **both claims are read correctly** — the failing
+assertion is not about a claim's content.
+
+**The test identifies its kernels by id order.** `run` (`consumer_guard.rs:162-178`) collects every kernel id
+its module names, then `ids.sort_unstable(); ids.dedup();`, and builds `kernels` in that order. So `kernels[0]`
+is the **lowest id**, not the source's first kernel, while the assertions at `:256` and `:261` treat `[0]` as the
+producer and `[1]` as the consumer.
+
+**The defect appears when registration order and source order disagree.** Then the producer's expected
+`["combine","identity"]` is compared against the **consumer's** actual `["combine","identity","element"]` — the
+failure this note opens with. The test's own invariant says the registry is **global** and that a program's
+kernels are read from its own module "rather than from what the registry gained"; it did not go on to say that
+**id order is source order**, which is the assumption that broke.
+
+The parallel kernel's own `parallel_roles` (`compute.rs:1932`) is the other place roles are read and it is
+**not** involved: it walks the parameter's **type**, and its `LeafRole` has no `element` at all.
+
+**What this changes:** the next step is not a collection point but the test's identification of its two kernels —
+by name, or by the roles each declares, instead of by id. That is a **test** change, and it is the compute
+owner's decision rather than an unattributed fix. Recorded here because this note is where the attribution lives.
