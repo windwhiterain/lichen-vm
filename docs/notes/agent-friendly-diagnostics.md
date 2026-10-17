@@ -187,11 +187,16 @@ produces. And `checker.rs:738` does **not** pin the `IndexTarget` wording: that 
 kind, location and the requirement's `TypeArray` kind, never a rendered sentence — and neither does any other
 test, so nothing in the tree would catch the obsolete wording changing.
 
-**Still open, and it no longer has a home**: the positional-struct `raw[Int, Int]` offender. This section
-pointed at [type-rendering-inconsistent](type-rendering-inconsistent.md), which has since **closed as
-unreachable** — its own finding is that the written type cannot be reached where the diagnostic renders. The
-residual here is narrower and different: a *positional* struct spelling reaching the printer as `raw[…]`. No
-note owns it now, so it is recorded here rather than left pointing at a closed one.
+**Closed as unreachable from source**: the positional-struct `raw[Int, Int]` residual. This section pointed at
+[type-rendering-inconsistent](type-rendering-inconsistent.md), which has since **closed as unreachable**, so
+the residual was measured instead of inherited. **The language refuses the spelling**: `S = struct{Int, Int}`
+answers `error: a struct field must be named — write `struct{.name T}`` at the field (`1:12`), for the type
+expression, for a naked use and for an instance alike — the same three programs, the same message. And the
+printer's positional handling is **intentional, not a fallback**: `struct_field_names` returns `None` per
+unnamed field (`render.rs:368-370`) and the struct arm renders `None` entries positionally and `Some` entries
+`.name Ty` (`:443`). So the offending observation has neither a source spelling nor a printer bug behind it,
+and what this section records is the measurement that closed it. A hand-built IR can still build an unnamed
+field, so this is "unreachable from source", which is the stronger claim a front end can settle.
 
 **Superseded here**: the two facts the main report carried are no longer the state of `dev`. The examples no
 longer panic with `invalid SlotMap key used` — the read path's collection is disabled while its trigger is
