@@ -55,27 +55,19 @@
     device from this source**: 4 of 4 elements bit-exact against `cpu`, the same \
     `[14.0, 32.0, 50.0, 68.0]` the padded measurement predicted. This file still declares `cpu`, \
     the backend the example suite runs.\n\n\
-    **The graph path refuses this operator twice, and the first refusal is its own shape.** From \
+    **The graph leg carries this operator once the step's result is collected directly.** From \
     the CLI there is no graph leg at all — *compute.graph: this graph dispatches to a device, but \
-    no compute backend is installed* — so the rest is measured through a host program with the \
-    GPU backend installed. (a) The graph argument's buffers must sit **in `.in`**: *a parallel \
-    kernel's parameter holds a buffer outside `.in`/`.out` at position 2.0, and the ABI has no \
-    place for it*. (b) With that fixed the graph **records**, and the **run** is refused before any \
-    dispatch by `RaggedInputs` (`crates/lichen-graph-ir/src/run.rs:273`, `ragged_host` at \
-    `:520-529`): *node 0's inputs are not all the same length: 48 and 12*. Those are **payload \
-    bytes**, and **a GEMV's two inputs are never the same length** — `M · kdim` against `kdim`, \
-    equal only at `M = 1` — so this operator meets that check by construction. The check's own \
-    sentence, *a dispatch over `[0, count)` reads every input to `count`, so a lane would read past \
-    the shorter one*, is **false of this body**: it reads `x` at `[0, kdim)` and `W` at \
-    `[i · kdim, (i + 1) · kdim)`, both inside their own buffers. (c) Equalise the two lengths and \
-    the run reaches submit and is refused by the **class** arm instead: *the backend failed \
-    submitting a kernel node: instruction 0 mixed an integer and a float in one operation ... \
-    this is a malformed fragment rather than an unsupported shape*. That is the compile-order \
-    element-class defect `docs/notes/llm-operators.md` traces for attention's `attend` \
-    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`), and **a real operator hits it**. It \
-    is also why the eight-byte count `examples/kvcache.lichen` measured — *holds 4 element(s) but \
-    the run covers 8* — is not this operator's: **this one refuses earlier, on the class**, so a \
-    GEMV never reaches the payload-length count at all.\n\n\
+    no compute backend is installed* — so this was measured through the probe \
+    `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs` with the GPU backend \
+    installed. The two checks that used to refuse it are gone: the graph argument's buffers must \
+    sit in `.in` (that refusal was a spelling, and this file's `.in` already does it), and \
+    `RaggedInputs` was removed with the length rule. What the graph leg still refuses is **the \
+    collect spelling**: `compute.collect (compute.graphrun built (…))` — collecting the run \
+    **directly** — runs, while binding it first and collecting a field (`out = (compute.graphrun … \
+    : OutG)` and then `compute.collect out.y`) refuses with the collect's *empty value* sentence. \
+    GEMV's program binds and collects a field, which is why its graph leg had looked refused; the \
+    evidence and the two-buffer control are in `docs/notes/llm-operators.md`. The fusion floor is \
+    still unread: nothing here reaches it yet.\n\n\
     **What a decode step still needs, beyond the walls the KV-cache example names.** The language \
     has no iteration form (`for`, `while`, no loop keyword in any example), `@loop` is a fold \
     *inside* one lane, and a `compute.call` inside a parallel body is refused with a `NodeId` \
