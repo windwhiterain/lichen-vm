@@ -88,10 +88,13 @@ not.
   same `102 102 102 103 104 104` over `i = 0..5`; the `* 10 + 1` variant answers `21 21 21 31 41 41`,
   the clamp's own values, so the arithmetic tail stays outside.
 - **`min`/`max` may sit anywhere, including inside a fold**, and a clamped address therefore is
-  expressible: `clamp(row + 1, 0, 4) * 5 + clamp(col + 1, 0, 4)` answers exactly the hand-computed
-  `6 7 8 9 9 / 11 12 13 14 14 / 16 17 18 19 19 / 21 22 23 24 24 / 21 22 23 24 24` over a 5x5 grid.
-  That is the boundary you can build without a `Select`: the window replicates its edge instead of
-  masking.
+  expressible — but **the index arithmetic is unsigned**, so `i - 1` at `i = 0` wraps to a huge value
+  and `max (i - 1) 0` never takes its lower bound. Measured: `min (max (col - 1) 0) 4` answers
+  `4, 0, 1, 2, 3` for `col = 0..4`, the *upper* bound leaking through. Spell the lower clamp shifted,
+  `(max i 1) - 1`, which is `max (i - 1, 0)` with no negative intermediate; then
+  `min ((max i 1) - 1) (dim - 1)` is the whole clamp, and `examples/convolution2d.lichen`'s second
+  chain builds a replicate boundary from it. The upper clamp alone was verified earlier by an address
+  probe and the lower one silently was not, which is the mistake this bullet exists to record.
 - **An `Int` result cannot join a `Float` fold accumulator.** A fold whose arm is
   `s(1) + (min (max (s(0) - 1) 0) 4)` is refused by the *device* backend, not the parser: *"the block
   parameter is read as one class in one place and another ([Int, Float]). A block parameter is one

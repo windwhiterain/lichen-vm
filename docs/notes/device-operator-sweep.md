@@ -62,7 +62,7 @@ correction to the brief itself.**
 | a 1D stencil, a ring and a three-step solver loop | `stencil.lichen` | **runs, bit-exact** | **0** (of 18 elements) | not checked in this note's run |
 | a 2D masked grid, a 3x3 torus and a two-step solver loop | `torus.lichen` | **runs, bit-exact** | **0** (of 18 elements) | not checked in this note's run |
 | a convolution whose coefficients are a buffer, as a smoothing filter and as a difference | `filter.lichen` | **runs, bit-exact** | **0** (of 12 elements) |
-| a 2D convolution under a 3x3 coefficient buffer, over a zero-bordered grid | `convolution2d.lichen` | **runs, bit-exact** | **0** (of 25 elements) | not checked in this note's run | not checked in this note's run |
+| a 2D convolution under a 3x3 coefficient buffer, over a zero-bordered grid and again with clamped (replicate) taps | `convolution2d.lichen` | **runs, bit-exact** | **0** (of 50 elements) | not checked in this note's run | not checked in this note's run |
 
 > **Every row of that table was measured on a device with no `NoContraction`, and two of them
 > have since moved. [operator-reverification](operator-reverification.md) §2 re-ran each of these
