@@ -215,6 +215,14 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   *"the program's root value is undecided"* or a deferred-import/apply fact). `indexing_a_function_is_an_
   index_target_error` **passes** on that baseline, so it is a clean signal for the wiring.
 
+  **The current baseline, re-measured at `9fad30c7`** (the dynamic apply's result-cell bind; see
+  [compute-kernel-struct](compute-kernel-struct.md)): lowlevel **146/13**, highlevel **140/0**,
+  language **265/11** (the same eleven names), compute **223/2/2** (`graph_jit` and
+  `graph_structure`; the latter is the one-read refactor's witness, per
+  [compile-order-class](compile-order-class.md) §4.7), language-server **22/0** — its known red
+  (`compute_kernel_bindings_render_by_name_not_raw_layout`) is **fixed**. A future red is a
+  regression against *this* line.
+
   **The measurement method, so it is cheap to redo**: the language front end, one
   `lichen_language::compile(&source)` call per program, reading `report.diagnostics` — the `message`
   is `render::checker_message`'s own output and `check.kind` the highlevel's kind, so the probe needs
