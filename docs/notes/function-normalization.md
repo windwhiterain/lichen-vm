@@ -70,24 +70,23 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    diagnostic. Annotating the recursive function (`… : tuple{Int, XOut} -> XOut`)
    restores both the value and the type (`[2.1875, …]: array{Float, 6}`, measured
    on the same three-step ring, for `@loop` and plain recursion alike).
-   **The lost value is a slot, and the recursion's *presence* is the trigger**
-   (measured on the same ring, distance 0 so the body returns its own argument):
-   `@loop m = (s => s(1))` ; `m (0, seed)` collects the seed's numbers, and so do
-   a plain lambda and `s(0)`; but the recursive body
-   `s => if s(0) == 0 then s(1) else march (…)` returns
-   `raw[raw[raw Buffer, raw Float]]` — a **one-element array**, the return pair's
-   value slot, not the struct — so `settled(1)` reports `index 1 out of bounds
-   (array length 1)` and `settled.y` is `none`. The annotated form returns the
-   struct itself. So the apply of a function whose type is cyclic (the
-   un-annotated recursive case) hands the caller a **slot** instead of the body's
-   value. **Where it is *not* created, measured**: a probe at
+   **The value is right; the *type* is what stays open** (measured on the same
+   ring, distance 0 so the body returns its own argument): `@loop m = (s => s(1))` ;
+   `m (0, seed)` collects the seed's numbers, a plain lambda and `s(0)` do too, and
+   so does pure-language recursion over a struct state (`@loop f = (n => if n == 0
+   then S(.y 7) else f (n - 1))` ; `(f 2).y` is `7: Int`) — but the recursive body
+   `s => if s(0) == 0 then s(1) else march (…)` loses only the **named read**:
+   `settled` is the XOut's own positional value (`raw[raw[raw Buffer, raw Float]]`,
+   the one-field struct's `[buf]` — `settled(1)` is out of bounds because the field
+   is item 0, not item 1), and `settled.y` is `none` because `.y` needs the
+   container's *type* for its name table while the type is still `?a`. Annotating
+   the **result** makes the read work without touching the function:
+   `compute.collect (settled : XOut).y` answers `raw[3.0, 1.0, …]`. A probe at
    `wire_apply_result` (`apply.rs`) fires for both programs with the identical
-   shape — the return pair is `Array(len 2)` whose value slot is `none` and whose
-   type slot is a pair — so that call does not create the wrapper, and unwrapping
-   there would be the wrong fix. The difference appears **after** the pair is
-   wired, in the caller's read of it; the next probe should print only the fold's
-   own apply (the compute internals fire the same line) and follow the pair from
-   the read side.
+   shape — the return pair's value slot `none`, its type slot a pair — so the apply
+   wiring is not the origin; **the gap is the un-annotated recursive function's
+   return type never receiving the argument's type**, and the fix belongs to the
+   checker's template inference, not to the apply or to the fold.
 2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
