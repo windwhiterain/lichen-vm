@@ -521,3 +521,18 @@ layer down.
 
 The diagnostic then reads the recording's dispatch list once, at build time, and reports the first dispatch whose
 flag is set; the recording side already has that list, so nothing crosses layers.
+
+### Two corrections to the placement, measured after it was written
+
+**The flag is computed one layer below where it is stored.** `graph::record_dispatch` (`graph.rs:448`) takes
+`inputs: &[Placed]` — placements, not operand nodes — while `is_a_graph_placeholder` needs an `AnyNodeId`. So the
+boolean is computed where the operand nodes are visible (the operator arms in `compute.rs`: `Read` at `:509`,
+`BufferCollect` at `:516`, and the `plrun` launch path), then passed into `record_dispatch` as a new parameter
+and stored on `RecordedNode`. "The location is `record_dispatch`" holds for the **storage**, not for the
+computation.
+
+**Adding the field is not a format change.** `RecordedNode` appears in exactly three places in the workspace: its
+definition (`graph.rs:139`), the **recording**'s `nodes` field (`graph.rs:111`), and the push at `graph.rs:515`.
+The `Graph` type never holds it — there is no `pub struct Graph` in that file and `RecordedNode` never enters a
+`Graph`'s construction, since `finish` consumes the recording. The field is therefore process-internal and leaves
+`FORMAT_VERSION` alone, which stays the owner's decision for real format changes only.
