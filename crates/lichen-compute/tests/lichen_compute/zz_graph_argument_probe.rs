@@ -242,6 +242,46 @@ p = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 q = (compute.buffer ([10.0, 20.0, 30.0] : array{Float, 3}) : (compute.Buf Float))
 compute.collect (compute.graphrun built (3, p, q))
 "#;
+const GEMV_P_A: &str = r#"
+--- compute = import "compute.lichen" ---
+InG  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+OutG = struct{.y (compute.Buf Float)}
+Par  = compute.P (compute.KT Float)(.I InG, .O OutG)
+f = (k : Par) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  b = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value a + b))
+}
+kg = compute.parallel f "gpu"
+GArg = struct{.n Int, .in InG}
+step = (g : GArg) => (compute.plrun kg ((compute.A InG)(.n g.n, .I InG(.w g.in.w, .x g.in.x))) : OutG)
+built = compute.graph step
+w = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+out = (compute.graphrun built (4, w, x) : OutG)
+compute.collect out.y : array{Float, 4}
+"#;
+const TWO_BUFFERS_FIELD: &str = r#"
+--- compute = import "compute.lichen" ---
+In2  = struct{.b (compute.Buf Float), .c (compute.Buf Float)}
+Out2 = struct{.w (compute.Buf Float)}
+Par2 = compute.P (compute.KT Float)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  x = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  y = compute.read ((compute.Read _)(.from k.in.c, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value x + y))
+}
+k2 = compute.parallel f2 "gpu"
+GArg = struct{.n Int, .in In2}
+step = (s : GArg) => (compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b, .c s.in.c))) : Out2)
+built = compute.graph step
+p = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+q = (compute.buffer ([10.0, 20.0, 30.0] : array{Float, 3}) : (compute.Buf Float))
+out = (compute.graphrun built (3, p, q) : Out2)
+compute.collect out.w
+"#;
 #[test]
 fn probe_graph_argument_buffer() {
     let Some((_context, _guard)) = common::device("zz_graph_argument_probe") else {
@@ -256,6 +296,8 @@ fn probe_graph_argument_buffer() {
         ("arg_buffer_twice", ARG_BUFFER_TWICE),
         ("one_buffer_claim", ONE_BUFFER_CLAIM),
         ("example_single", EXAMPLE_SINGLE),
+        ("gemv_p_a", GEMV_P_A),
+        ("two_buffers_field", TWO_BUFFERS_FIELD),
         ("single", SINGLE),
         ("single_collect", SINGLE_COLLECT),
         ("one_buffer", ONE_BUFFER),
@@ -273,3 +315,5 @@ fn probe_graph_argument_buffer() {
         }
     }
 }
+
+
