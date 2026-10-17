@@ -120,6 +120,11 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   The unknown-field message now also appends the struct's did-you-mean clause —
   `S(.sbu 1)` is `no field named sbu in the struct type struct{.a Int, .sub Int}#11, did you mean
   'sub'?` — the clause the field read already carried, so an instantiation typo names its fix too.
+  The three other instantiation mismatches now name the struct as well:
+  `missing field y in the struct type struct{.a Int, .y Type}#11`,
+  `duplicate field a in the struct type …`, and
+  `too many fields for the struct type struct{.a Int}#11`; before, a reader had to
+  find the instantiation to learn which struct was meant.
 
 * **The check-level assert was printed after the runtime consequences, and it now heads the report.**
   `f = x => x.a` ; `f [10, 20]` reported five diagnostics: four runtime read failures

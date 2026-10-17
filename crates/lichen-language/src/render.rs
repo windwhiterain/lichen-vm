@@ -270,14 +270,22 @@ where
             with_field_suggestion(d, base, fields)
         }
         DiagKind::StructDuplicateField => match &d.field {
-            Some(name) => format!("duplicate field {name} in struct instantiation"),
-            None => "duplicate field in struct instantiation".to_string(),
+            Some(name) => format!(
+                "duplicate field {name} in the struct type {}",
+                printer.node(d.a)
+            ),
+            None => format!("duplicate field in the struct type {}", printer.node(d.a)),
         },
         DiagKind::StructMissingField => match &d.field {
-            Some(name) => format!("missing field {name} in struct instantiation"),
-            None => "missing a field in struct instantiation".to_string(),
+            Some(name) => format!(
+                "missing field {name} in the struct type {}",
+                printer.node(d.a)
+            ),
+            None => format!("missing a field in the struct type {}", printer.node(d.a)),
         },
-        DiagKind::StructExcessField => "too many fields in struct instantiation".to_string(),
+        DiagKind::StructExcessField => {
+            format!("too many fields for the struct type {}", printer.node(d.a))
+        }
         DiagKind::StructAnonymousField => {
             "cannot name a field — the struct has no named fields".to_string()
         }
