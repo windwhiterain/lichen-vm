@@ -85,6 +85,30 @@ One reading trap, since the probe prints it: it does not force the program's typ
 case there prints `raw[…]: ?a`, including the ones known to be good. The numbers are the reading;
 the type is not.
 
+### The claim is the gate, and a claimed reduction still cannot be a node
+
+The same probe now carries four operators that have nothing else in common, and the pattern is the
+floor's model rather than any one spelling:
+
+| operator | claim | refusal |
+|---|---|---|
+| the 1D stencil (a step, no reduction) | none | `NotClaimed` |
+| `filter.lichen`'s convolution (`y[i] = Σ_k w[k]·x[i−k]`, runtime weights) | `Reduction(combine,identity,element)` | `RegionIsNotAPair` **and** `BeyondANode` |
+| `mathlib.lichen`'s `rowsum` (`r * kdim + k`) | same | `RegionIsNotAPair` **and** `BeyondANode` |
+| `mathlib.lichen`'s `scale` (elementwise) | none | `NotClaimed` |
+
+So the **claim** is exactly the gate between "the floor refuses before asking anything" and "the floor
+asks and refuses", and **every claimed reduction lands on the same two sentences**: the region holds
+one instance (`a merge is one producer and one consumer`), and then the instance's `element` role is
+read as consuming *"the value another node produced"* — while in all three programs it consumes a
+**parameter**, and the node is the graph's first and only producer. That is the classification
+question first raised for `gemv`, now measured on three operators with nothing in common beyond the
+claim, so it is the floor's model of a reduction and not one program's spelling.
+
+The floor's accepted shape is still a producer→consumer **pair**. A single operator is outside it
+whether or not it is claimed: without a claim it does not get in, and with one it gets in only as half
+of a pair it does not have.
+
 ## What the family needs next
 
 - **Iteration is measured, and the three shapes do not agree.** On the ring's own data, three

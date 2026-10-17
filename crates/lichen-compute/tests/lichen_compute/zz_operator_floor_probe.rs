@@ -192,6 +192,64 @@ q  = (compute.buffer ([{query}] : array{{Float, {dim}}}) : (compute.Buf Float))
     )
 }
 
+/// The convolution whose coefficients are a buffer: a **claimed** reduction with a window read.
+const FIR_SMOOTH: &str = r#"
+--- compute = import "compute.lichen" ---
+FIn  = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+FOut = struct{.y (compute.Buf Float)}
+FPar = struct{.n Int, .taps Int, .in FIn, .out FOut}
+FArg = struct{.n Int, .taps Int, .I FIn}
+filter_raw = (c : FPar) => {
+  i = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+}
+kf = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+smooth = (s : FPar) => (compute.plrun kf ((FArg)(.n s.n, .taps s.taps, .I FIn(.x s.in.x, .w s.in.w))) : FOut)
+built = compute.graph smooth
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
+w = (compute.buffer ([1.0, 2.0, 1.0] : array{Float, 3}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (6, 3, x, w))
+"#;
+
+/// The library's `rowsum`: a **claimed** reduction reading `r * kdim + k`, one lane per row.
+const ROWSUM_LIBRARY: &str = r#"
+--- compute = import "compute.lichen" ---
+RIn  = struct{.x (compute.Buf Float)}
+ROut = struct{.y (compute.Buf Float)}
+RPar = struct{.n Int, .kdim Int, .in RIn, .out ROut}
+RArg = struct{.n Int, .kdim Int, .I RIn}
+rowsum_raw = (c : RPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+}
+kr = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+sums = (s : RPar) => (compute.plrun kr ((RArg)(.n s.n, .kdim s.kdim, .I RIn(.x s.in.x))) : ROut)
+built = compute.graph sums
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (2, 4, x))
+"#;
+
+/// The library's `scale`: elementwise, so there is **no claim** to register — the control.
+const SCALE_ELEMENTWISE: &str = r#"
+--- compute = import "compute.lichen" ---
+SIn  = struct{.x (compute.Buf Float)}
+SOut = struct{.y (compute.Buf Float)}
+SPar = struct{.n Int, .k Float, .in SIn, .out SOut}
+SArg = struct{.n Int, .k Float, .I SIn}
+scale_raw = (c : SPar) => {
+  i = compute.range c.n
+  x = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (x * c.k)))
+}
+ks = compute.parallel scale_raw "gpu"
+twice = (s : SPar) => (compute.plrun ks ((SArg)(.n s.n, .k s.k, .I SIn(.x s.in.x))) : SOut)
+built = compute.graph twice
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (4, 2.0, x))
+"#;
+
 /// Run `source` once with no pass installed and once with the floor installed for the run.
 fn measure(label: &str, source: &str) {
     clear_graph_pass();
@@ -261,4 +319,7 @@ fn probe_the_floor_on_a_real_operator() {
     measure("stencil_dirichlet", STENCIL_DIRICHLET);
     measure("stencil_ring", STENCIL_RING);
     measure("stencil_grid", STENCIL_GRID);
+    measure("fir_smooth", FIR_SMOOTH);
+    measure("rowsum_library", ROWSUM_LIBRARY);
+    measure("scale_elementwise", SCALE_ELEMENTWISE);
 }
