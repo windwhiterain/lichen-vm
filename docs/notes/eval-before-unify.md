@@ -396,9 +396,13 @@ clones are an `Index` op with no value, whose origin (32) is the checker's
 origin (37) is the checker's **name node**. Neither origin is in the attribution
 map (`node_edges` plus the slot layout), so `node_loc` stops there. Registering
 the container type and the name node at the named read was tried and measured to
-change nothing — the runtime blames these derived nodes, and the read's own edge
-(the template's key) is not on their chain; the two registrations were reverted.
-`X::a` was already
+change nothing; a probe on the checker path shows why — `check_named_field`'s
+lazy branch creates **fresh** derived nodes per check (measured at `e=125`:
+`names=757`, `name=204`, `key=759`), while the runtime blames other derived
+nodes (`84`/`88`), minted by a different evaluation, so no single call-site
+registration covers them. A real fix has to attribute each derived node where it
+is **created** (the helpers, or a read-local "current position" the helpers
+stamp), and both attempted registrations were reverted. `X::a` was already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
 
