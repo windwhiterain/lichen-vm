@@ -48,7 +48,8 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 
 **Status: `blocked:D6`** — the first half of `D6` (cache the extracted indexes and
 reuse one `PackageStore`/registry handle across requests; cancellation plus a
-debounce) has landed; the remainder below has not.
+debounce) has landed, and so has **client-version tracking** on the diagnostic
+publish; the remainder below has not.
 
 - **(b) `BufferSession` — untouched, blocked on T3.** It avoids the lex and parse
   on the keystroke path, and T3 — the memoized check — does not exist, so skipping
@@ -59,11 +60,12 @@ debounce) has landed; the remainder below has not.
   is why the dependency half of the cache key is load-bearing rather than a
   belt-and-braces extra, and it leaves the server to notice a change only by
   hashing, on the next request.
-- **No document-version tracking.** `server.rs:161-168` still discards
-  `text_document.version` and `publish_diagnostics` always passes `version: None`,
-  so a client cannot reject a stale diagnostic set. The text hash is what makes
-  the *cache* sound, and it is not the same thing as a version the client can
-  compare against.
+- **Document-version tracking landed.** `did_open`/`did_change` record
+  `text_document.version` with the text, and the document's own diagnostic set now
+  publishes with it (`Some(version)`), so a client can reject a set a newer edit
+  superseded. An imported file's set stays `version: None` — it is not the
+  document. The text hash remains the *cache* key; the version is what the client
+  compares.
 
 ### P1-23 — The parser's 16 MiB worker overflows at 175 nesting levels `verified`
 

@@ -353,6 +353,9 @@ struct Document {
     /// only as injective as the client that sends it.
     hash: Hash,
     generation: u64,
+    /// The client's version of this text, published with its diagnostics so a
+    /// client can reject a stale set.
+    version: i32,
 }
 
 /// The analysis of one document's current text.
@@ -382,7 +385,7 @@ where
 
     /// Record `text` as the document's current text and return the generation
     /// that text is, superseding every older one.
-    fn set_text(&self, uri: Url, text: String) -> u64 {
+    fn set_text(&self, uri: Url, text: String, version: i32) -> u64 {
         let generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
         let hash = sha256(text.as_bytes());
         self.documents.lock().unwrap().insert(
@@ -391,9 +394,19 @@ where
                 text,
                 hash,
                 generation,
+                version,
             },
         );
         generation
+    }
+
+    /// The client's version of the document's current text.
+    fn version(&self, uri: &Url) -> Option<i32> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(uri)
+            .map(|document| document.version)
     }
 
     /// Whether `generation` is still the document's current one.
@@ -487,8 +500,11 @@ where
         if !self.is_current(&uri, generation) {
             return;
         }
+        // The version of the text this analysis was launched for, so a client can
+        // reject a set that a newer edit superseded.
+        let version = self.version(&uri);
         self.client
-            .publish_diagnostics(uri.clone(), index.lsp_diagnostics(), None)
+            .publish_diagnostics(uri.clone(), index.lsp_diagnostics(), version)
             .await;
         // Published against the built-in's own file, not the document:
         // the store's file (`docs/notes/core-prelude.md` §4).
@@ -567,9 +583,9 @@ where
     /// The debounce is a **spawned** task, never a wait inside the handler: under
     /// `concurrency_level(1)` a wait would serialize the queued edits and
     /// collapse nothing.
-    fn schedule_analysis(&self, uri: Url, text: String, delay: Duration) {
+    fn schedule_analysis(&self, uri: Url, text: String, version: i32, delay: Duration) {
         let inner = Arc::clone(&self.inner);
-        let generation = inner.set_text(uri.clone(), text);
+        let generation = inner.set_text(uri.clone(), text, version);
         tokio::spawn(async move {
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
@@ -703,7 +719,7 @@ where
         // A fresh document: its previous text's analysis is not this
         // document's. The spawn is immediate (no edit delay).
         self.inner.indexes.lock().unwrap().remove(&uri);
-        self.schedule_analysis(uri, text, Duration::ZERO);
+        self.schedule_analysis(uri, text, params.text_document.version, Duration::ZERO);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -712,7 +728,7 @@ where
         let Some(last) = params.content_changes.into_iter().last() else {
             return;
         };
-        self.schedule_analysis(uri, last.text, EDIT_DEBOUNCE);
+        self.schedule_analysis(uri, last.text, params.text_document.version, EDIT_DEBOUNCE);
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
