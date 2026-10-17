@@ -6,6 +6,10 @@
 > runs meet are [device-leg-of-the-ladder](device-leg-of-the-ladder.md)'s and are **referenced, not
 > restated**; the arithmetic is [floating-point](floating-point.md)'s and [llm-operators](llm-operators.md)'s.
 > **Nothing in this note changed production code, and no test was added.**
+> **The method is a program now**:
+> `crates/lichen-compute/examples/operators_on_device.rs`, and
+> [§ The sweep, as a program](#the-sweep-as-a-program) re-measures every example that
+> dispatches a kernel at `dev@602480ed`.
 
 [device-leg-of-the-ladder](device-leg-of-the-ladder.md) reached a device for the append, the row
 maximum, the sampler, `topk` and the generation loop. It left open, in its own closing **Unknown**,
@@ -553,6 +557,62 @@ process at a time.
 **No example file was edited.** The examples in `examples/` are byte-for-byte as `dev` has them:
 `git diff dev...HEAD -- examples/` is empty, and no `output =` line moved. The `"cpu"` → `"gpu"` switch
 is made in memory, in the probe, and never written back.
+
+## The sweep, as a program
+
+The method above was a scratch program **deleted before its commit**, which is why its readings could not
+be retaken without rewriting it. It is committed now:
+`crates/lichen-compute/examples/operators_on_device.rs`.
+
+```
+cargo run -p lichen-compute --example operators_on_device
+```
+
+It keeps the two rules the prose above states. **One example per process**: the kernel registry and the
+installed backend are process-global, so the parent re-executes itself once per program (`--one <path>`)
+and never installs a device in its own process. **One edit per run**: the child runs the example unchanged
+as the `cpu` control and then the same source with only `"cpu"` replaced by `"gpu"`.
+
+The comparison is on the **rendered** answers, and that is exact for a finite float: the printer is
+`f32`'s own shortest round-trip (`crates/lichen-render/src/render.rs:237-256`, stated in
+[floating-point](floating-point.md)), so two equal renderings are equal bits. When they are not, the tool
+prints the per-element distance in ulp, read off the two renderings.
+
+Re-measured at `dev@602480ed` on the RTX 3060, every example that dispatches a kernel:
+
+| example | device verdict |
+|---|---|
+| `attention.lichen` | **differs**, 6 of 8, worst **1** |
+| `decode.lichen` | **refused** — *input buffer 2 holds 2 element(s) but the run covers 8 index/indices* |
+| `decode_loop.lichen` | **refused** — the same sentence |
+| `gemv.lichen` | **refused** — *input buffer 1 holds 3 element(s) but the run covers 4* |
+| `generate.lichen` | **agrees**, 10 of 10 |
+| `kvcache.lichen` | **refused** — the append's 2-of-8 sentence |
+| `layernorm.lichen` | **agrees**, 4 of 4 |
+| `matmul.lichen` | **agrees**, 4 of 4 |
+| `rmsnorm.lichen` | **agrees**, 4 of 4 |
+| `rope.lichen` | **differs**, 2 of 8, worst **1** |
+| `sample.lichen` | **agrees**, 5 of 5 |
+| `silu.lichen` | **differs**, 1 of 4, worst **1** |
+| `softmax.lichen` | **agrees**, 4 of 4 |
+| `topk.lichen` | **agrees**, 30 of 30 |
+
+**It reproduces [operator-reverification](operator-reverification.md) §2's after-table exactly.** The
+eight operators that note re-ran read the same verdicts and the same element counts here — `rope` 2 of 8,
+`silu` 1 of 4, `attention` 6 of 8, all at **1 ulp**; `softmax`, `rmsnorm`, `layernorm` and `matmul`
+bit-exact; `gemv` refused — now off one command instead of a deleted program. That agreement is the tool's
+own control: a re-run that disagreed with it would mean the tool is wrong, not the note.
+
+**The six programs §1's table does not reach read the way
+[device-leg-of-the-ladder](device-leg-of-the-ladder.md) recorded them.** `generate`, `sample` and `topk`
+agree, and the three programs whose **first** kernel appends a short incoming row (`decode`,
+`decode_loop`, `kvcache`) are refused by the same `InputShorterThanCount` sentence, on that first kernel
+rather than on a later stage.
+
+**What the program does not do, so it is not read as covering more than it does.** It does not emit the
+modules, so §1's `spirv-val` column remains [operator-reverification](operator-reverification.md)'s and is
+not re-derived here; and its ulp distance is read off the renderings, which cannot separate two `NaN`s
+that render alike.
 
 ## What was measured, inferred and unknown
 
