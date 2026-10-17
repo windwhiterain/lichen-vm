@@ -229,6 +229,24 @@ Three readings, and the third is the one that matters:
   is the shape that fails, not the buffer. A capability claim about a spelling is a hypothesis until
   that spelling is run.
 
+### What the fold costs
+
+The same probe now carries a second kernel, both lifted verbatim from the examples that compile them, so
+the difference is a fold and six more reads: the three-read stencil (`examples/stencil.lichen`) and the
+nine-tap convolution (`examples/filter.lichen`), buffer state, median of three runs.
+
+| backend | lanes | stencil (3 reads) | convolution (9-tap fold) |
+|---|---|---|---|
+| `cpu` | 6 | 3.70 ms | 4.07 ms |
+| `gpu` | 6 | 4.88 ms | 5.27 ms |
+| `cpu` | 1024 | 18.16 ms | **82.69 ms** |
+| `gpu` | 1024 | 5.52 ms | **6.71 ms** |
+
+The fold is nearly free **on the device** (+22%) and expensive **on the host** (+355%): the host
+interprets nine times the element operations while the device runs them in parallel. So the device's
+advantage grows with the work per element — 3.3x for the body at 1024 lanes, 12.3x for the nine-tap
+fold — which is the other side of the six-lane reading, where dispatch overhead is all there is.
+
 The numbers are machine- and state-dependent: every figure is the **median of five** runs, with the min
 and max printed beside it, and the spread runs from about 5% on the host to about 20% on the device's
 six-lane case. They are readings of a shape, not benchmarks.
