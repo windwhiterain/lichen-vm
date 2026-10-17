@@ -1084,16 +1084,21 @@ happens to sit.
 
 The good news the audit found, and it removes what looked like the sharpest new
 hang risk. `LOCAL_SIZE_X` is 64 and "a run of `count` indices is
-`ceil(count / LOCAL_SIZE_X)` workgroups, and the surplus lanes of the last one are
-a caller obligation, not the shader's" (`spirv.rs:145`) — and the caller discharges
-it by **padding the buffers**, not by masking the lanes: "Round up so the last
-workgroup's surplus lanes address padding rather than memory past the end"
-(`dispatch.rs:624`). So every lane of every workgroup runs the whole shader.
+`ceil(count / LOCAL_SIZE_X)` workgroups, and the entry point's body branches on
+`index < extent` before any instruction of it, so a surplus lane runs none"
+(`spirv.rs`), with the buffers padded as well: "Round up so the last workgroup's
+surplus lanes address padding rather than memory past the end" (`dispatch.rs`).
 
-Therefore **every lane reaches every barrier**, and a `count` that is not a
-multiple of 64 does not hang. The padding that exists for an unrelated reason is
-exactly what a convergent barrier needs. What remains is the divergence case
-above, which is a refusal and not a padding question.
+**A staged launch still runs the whole shader on every lane, and that is the case
+this section is about**: `launch_workgroups` refuses a staged count that is not a
+whole number of workgroups, so no surplus lane exists, the guard is uniformly true
+and the branch never diverges — so **every lane reaches every barrier**, and a
+`count` that is not a multiple of 64 does not hang. The padding that exists for an
+unrelated reason is exactly what a convergent barrier needs. What remains is the
+divergence case above, which is a refusal and not a padding question. Without
+staging the guard does mask a surplus lane, and that is what now keeps it from
+writing into a real slot — see
+[lichen-compute-gpu](lichen-compute-gpu.md#a-computed-write-address-is-not-protected-by-the-padding-and-the-clobber-is-a-race).
 
 **The section this replaces claimed more than that, and the surplus lane's *write*
 is what it missed.** Its second half read "a slice ... is written before it is
