@@ -74,7 +74,7 @@ is its identity.
 | masked in one axis of a row-major grid | `if col == 0 then 0.0 else read (i - 1)`, mirrored | one `Select` per axis |
 | anything the caller *chooses at run time* | **not expressible**: the condition would have to be data | — |
 
-A `Select` is accepted when **both arms are `Float`**. The refusal you may have seen quoted is about
+A `Select` is accepted when **both arms are `Float`** — **at the body's top level.** Inside a fold body it is refused: the fold is compiled into a template before any apply, and a conditional there has no value to emit (`zz_masked_conv_probe.rs` measures it with a read in the arm and with a bare `0.0`/`1.0`, so the cause is the conditional and not the read). That is why every masked boundary in the samples sits at the top level, and why a masked window has to be a caller's zero border or a different encoding. The refusal you may have seen quoted is about
 arms computed in *different* classes (`examples/attention`'s `scores`), which a physics body never
 needs. In a row-major grid the **vertical** taps are the padding and the **horizontal** ones are not —
 `i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask and a 1D body does

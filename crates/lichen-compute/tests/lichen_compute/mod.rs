@@ -61,5 +61,6 @@ mod zz_fold_buffer_probe;
 mod zz_fold_struct_probe;
 mod zz_fold_type_probe;
 mod zz_graph_argument_probe;
+mod zz_masked_conv_probe;
 mod zz_operator_floor_probe;
 mod zz_plain_leg_probe;

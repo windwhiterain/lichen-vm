@@ -18,10 +18,14 @@
     `col = 0` the tap address `base - 1` is the *previous row's last cell*, not the padding, and a \
     measured reading says so — with a value at `(1, 4)`, cell `(2, 0)` picks up an extra `1.0` through \
     exactly that tap (`crates/lichen-compute/tests/lichen_compute/zz_conv2d_probe.rs`). A masked \
-    variant would need a `Select` per tap whose condition depends on the column offset; this operator \
-    does not carry one, so it is a **convolution over a field the caller has already zero-extended**, \
-    which is what the `5x5` grid below is. Saying that in the contract is the point: a boundary that \
-    is neither a wrap nor the padding has to be somebody's decision, and here it is the caller's.\n\n\
+    variant would need a `Select` per tap whose condition depends on the column offset, and **that \
+    spelling does not compile**: an `if` inside a fold body is refused, because the fold is compiled \
+    into a template before any apply and a conditional there has no value to emit — measured both with \
+    a read in the arm and with a bare `0.0`/`1.0` \
+    (`crates/lichen-compute/tests/lichen_compute/zz_masked_conv_probe.rs`). So this operator does not \
+    carry one, and it is a **convolution over a field the caller has already zero-extended**, which is \
+    what the `5x5` grid below is. Saying that in the contract is the point: a boundary that is neither \
+    a wrap nor the padding has to be somebody's decision, and here it is the caller's.\n\n\
     **The arithmetic is exact and the answer is a block.** `x` is `0.0` everywhere except `8.0` at the \
     centre `(2, 2)`, and the nine taps are `0.125` each, so a cell answers `0.125 * 8.0 = 1.0` exactly \
     when its window contains the centre and `0.0` otherwise. The window is `3x3`, so the cells that \
