@@ -8,8 +8,8 @@
 > This note supersedes the clone-walk reading of
 > [`block-vs-lambda-struct-field-inference.md`](block-vs-lambda-struct-field-inference.md),
 > which looked for the cause of the same disappearance in the checker's field-list
-> check; that note's field-list divergence is a separate, still-open question, and
-> it now points here for the clone rules.
+> check; that note is **closed** now (its named disagreement no longer reproduces),
+> and it points here for the clone rules.
 >
 > Points at: `crates/lichen-lowlevel/src/function.rs` (`node_apply`, the dynamic
 > clone rule), `crates/lichen-lowlevel/src/static_module/apply.rs`
@@ -163,18 +163,20 @@ own entry point, not the language. Before the rule both printed `parameterized`,
 so the value loss was real on both paths; only the *type name* is resolved by the
 registry path alone.
 
-## 4. What it does not fix
+## 4. What it does not fix, and what closed underneath it
 
-The rule removes one generation of re-computed cells, and the field-list
-divergence of
-[`block-vs-lambda-struct-field-inference.md`](block-vs-lambda-struct-field-inference.md)
-still stands underneath it. A callee that **is** re-run per call — a program that
-binds its argument before the instantiate, say — still mints a fresh generation of
-field cells, and the checker's field-list constraint does not follow it: the
-constraint is part of the *check*, not part of the *expansion*, while macro
-expansion re-runs the callee's body per call but never re-checks the fields
-against the call's arguments. Making the constraint part of the per-call expansion
-is that note's open direction (a).
+The rule removes one generation of re-computed cells. A callee that **is** re-run
+per call — a program that binds its argument before the instantiate, say — still
+mints a fresh generation of field cells, and the checker's field-list constraint
+does not follow it: the constraint is part of the *check*, not part of the
+*expansion*. That was the field-list divergence of
+[`block-vs-lambda-struct-field-inference.md`](block-vs-lambda-struct-field-inference.md),
+which is now **closed**: the disagreement it named no longer reproduces
+(re-measured on `dev@1afc7d93`, its two programs both print `(Int,):
+struct{.x Type}`), the hole-field examples are expected by the maintainer's
+ruling, and its per-call-expansion direction (a) was carried to an `Instantiate`
+operator and then withdrawn, the operator gone. What remains here is the
+generation rule, not a checker constraint that follows it.
 
 ## Recovered measurements
 

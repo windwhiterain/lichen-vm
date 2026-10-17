@@ -278,7 +278,7 @@ Two measurements close this item, and one ruling settles what is left.
 
 The disagreement the note is named for no longer reproduces. Re-measured on `dev@83c817ca`, both programs
 print `(Int,): struct{.x Type}` — the block and the applied lambda agree — so the wrong batch is no longer
-what the printer reads.
+what the printer reads. Re-measured again on `dev@1afc7d93`: same answer, both `(Int,): struct{.x Type}`.
 
 The two smaller programs stay as they are, and the maintainer ruled that this is expected: in
 `h = X => struct{.x _}` the field's type is a **hole**, which is never unified with the parameter `X`, so
