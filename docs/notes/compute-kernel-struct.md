@@ -205,16 +205,25 @@ about argument availability distinguishes the cases.
 *does* run at check time — an `@assert (1 == 2)` inside it fires, so the "never checked" reading is
 wrong; the launch apply runs, and its result cell is what stays open.)
 
-**Two experiments pin the shape of the missing bind.** Adding the static path's bind
+**Three experiments pin the shape of the missing bind.** Adding the static path's bind
 (`unify(cell, codomain)` after evaluating the codomain) to `function_apply` **decides the jit `.O`**
 — `k` renders `(raw Kernel, Int, Int)` with `.O Type` — but it breaks
 `a_call_result_annotation_is_checked_against_the_return_type`: the annotation conflict is reported
 **twice** (the explicit unify and the pair sync each record it). Guarding the unify to a still-open
 cell keeps the diagnostic count but **loses the `.O` fix**, so the merge is needed even when the cell
-already holds a value: the run's cell and the template's are different nodes, and the unify is what
-merges their classes into one. The missing piece is therefore a **class merge that does not re-harvest
-a value conflict** — the pair sync owns the verdict, the merge owns the sharing — not the static
-path's `unify` copied over.
+already holds a value.
+
+**The quiet structural unify is the working shape, and one case limits it.** `Module::try_unify`
+returns the range of `unify_errors` its call produced and its own doc allows the caller to truncate
+that range to suppress them, so `function_apply` can merge the cell with the codomain structurally and
+then `unify_errors.truncate(recorded.start)` — the pair sync still owns the verdict. Measured with
+that: the jit `.O` is decided (`(raw Kernel, Int, Int)`), the annotation-conflict test keeps its one
+diagnostic, and the **whole language-server suite goes 22/0** — the LSP witness is green. But it
+breaks `a_nested_function_value_captures_the_applied_outer_parameter` (highlevel and language both):
+the merge ties the closure's per-call result cell to the template's class, so `f1 3 4` reads the
+first call's capture instead of rebuilding it — the leak [apply-clone-ownership](apply-clone-ownership.md)
+§1 warns about. So the merge needs the per-call exclusion the clone rule already states, which is the
+remaining refinement.
 
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
