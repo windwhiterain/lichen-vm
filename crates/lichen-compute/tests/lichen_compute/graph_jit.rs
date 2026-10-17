@@ -235,19 +235,18 @@ compute.collect (compute.graphrun built ({count},))
 #[test]
 fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
     let (_guard, _stub) = stub();
-    // `held` is a live buffer the body reaches as a free variable.
+    // `captured` is a live host buffer the body reaches as a free variable.
     let messages = fail(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
 {KERNELS}
-held = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
+captured = (compute.buffer ([1, 1, 1] : array{{Int, 3}}) : (compute.Buf Int))
 InS  = struct{{.a Int}}
 OutS = struct{{.unused (compute.Buf _)}}
 ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 step = (s : ParS) => {{
-  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
-  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b held.z)))
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b captured)))
 }}
 built = compute.graph step
 compute.collect (compute.graphrun built 3)
@@ -265,6 +264,46 @@ compute.collect (compute.graphrun built 3)
             .iter()
             .any(|message| message.contains("hold") && message.contains("parameter")),
         "and it names the cause and the way out: {joined}"
+    );
+}
+
+/// A dispatch the body performs while forcing a free variable is part of its walk.
+///
+/// # Invariant
+/// The run is lazy, so `held` is forced inside the recording window and its dispatch becomes
+/// a node of the graph; `held.z` is then an edge and not a live buffer. Nothing references a
+/// block, so the graph recomputes `held` on each run instead of reading one.
+#[test]
+fn a_launch_the_body_closed_over_is_recorded_into_the_graph() {
+    let (_guard, stub) = stub();
+    let (module, out, _) = run(&format!(
+        r#"---
+  compute = import "compute.lichen"
+---
+{KERNELS}
+held = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
+InS  = struct{{.a Int}}
+OutS = struct{{.unused (compute.Buf _)}}
+ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+step = (s : ParS) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b held.z)))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built 3)
+"#
+    ));
+    assert_eq!(
+        common::usize_array(&module, &out),
+        vec![2, 2, 2],
+        "the graph answers what the two recorded dispatches compute"
+    );
+    assert_eq!(
+        stub.saw().len(),
+        2,
+        "and it dispatches exactly the two the walk performs: the closed-over launch and the \
+         dispatch that reads it: {:?}",
+        stub.saw()
     );
 }
 

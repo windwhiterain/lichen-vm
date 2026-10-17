@@ -7,7 +7,9 @@
 > nine `graph_jit` controls moved, one of them from *never naming* its return to naming it on the third round,
 > which is the change being proved. `consumer_guard`'s extra role is **not** this defect and was re-attributed to
 > the test's kernel order. The sections below are the before readings, the after readings, the acceptance, and
-> both corrections.
+> the corrections. One more correction follows them: the capture diagnosis this note then settled was refuted by
+> measurement — that program closed over a launch, not a live buffer — and its test was corrected instead of a
+> rule repaired (last section).
 
 ## The symptom
 
@@ -67,10 +69,9 @@ Two alternatives were considered and are worse:
 ## Acceptance
 
 - `cargo test -p lichen-compute -j 1 --no-fail-fast`: 201 passed / 17 failed / 2 ignored today (see
-  [late-writes-map](late-writes-map.md) §15). After the fix: **`consumer_guard` and
-  `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` should be re-examined** — the second one
-  is the same class of defect, a rule that stopped firing because of the wider walk — and the other sixteen
-  must not change name.
+  [late-writes-map](late-writes-map.md) §15). After the fix: **`consumer_guard` should be re-examined** — it is
+  not this defect, as the correction below measures — and the other sixteen must not change name.
+  (`a_buffer_…capture` was re-examined later and has no capture behind it; see the last section.)
 - `cargo test -p lichen-lowlevel -j 1 --no-fail-fast`: 146 passed / 13 failed, the reds the project carries
   deliberately. The lowlevel is untouched by the fix, so this is a control.
 - `comments-check --config comments-test.toml . --max-violations 0` before every commit.
@@ -86,9 +87,9 @@ Two alternatives were considered and are worse:
 - `reopen_stalled` is lowlevel and is **not** the thing to change: it is what makes a re-drive possible at all,
   and its stamp discipline is pinned by the lowlevel's own tests.
 - The other two compute reds of this class are `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture`
-  (a capture rule that stopped firing) and `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`
-  (a test premise: under a plain run gate the host run performs no dispatch, so plain and recorded cannot
-  agree). Only the first is fixed by this note's proposal.
+  (later measured to have no capture behind it — see the last section) and
+  `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` (a test premise: under a plain run gate the
+  host run performs no dispatch, so plain and recorded cannot agree).
 
 ## The re-drive's rounds, measured
 
@@ -160,9 +161,10 @@ the host-read half of the same test. A reason that changes is a lost diagnostic;
 test that turns green, which is also a failure of the acceptance.
 
 **`a_buffer_the_body_closed_over_is_refused_by_the_capture` is not A′'s.** It names its return on round two
-(`r1 false/0 → r2 true/2`), so its red is not a recording failure: the program is **accepted** where the capture
-rule should refuse it, which is a different defect with a different shape (the wider walk stops a rule firing).
-**A′ does not promise to fix it**, and its fix must not be booked against this proposal.
+(`r1 false/0 → r2 true/2`), so its red is not a recording failure: the program is **accepted**. That is not a
+capture rule that stopped firing either — measured later, the recording contains the closed-over launch's own
+dispatch, so there is no live buffer for the rule to see (last section). **A′ does not promise to fix it**, and
+its fix must not be booked against this proposal.
 
 ## Replicating the table
 
@@ -427,147 +429,112 @@ round*, which means the graph shared across rounds was **blocking the naming**. 
 zeroed readings are the same fact seen from the other side: those rounds produced nothing, so keeping only the
 last one keeps nothing — and their tests assert refusals, which is why the name set does not move.
 
-## `a_buffer_the_body_closed_over_is_refused_by_the_capture`: the determination
+## `a_buffer_the_body_closed_over_is_refused_by_the_capture`: the determination, refuted
 
-Three things, and the first two are why this is **not** "a rule was lost".
+The sections that stood here settled a conjunction diagnostic for this test and handed five
+implementation steps to a new session. **Measurement refuted the premise before any of it landed**,
+so the material is replaced rather than kept with a "superseded" label: the readings it rested on are
+real, the conclusion drawn from them was not, and a reader who followed the old text would build a
+guard that can never fire. What follows is the refutation, the corrected reading, and what landed.
 
-**1. The rule is intact.** The capture test expects a message containing both `hold` and `parameter`. That is
-`role_refusal` (`compute.rs:2105-2112`), emitted from `walk_role`'s only refusing arm — `LeafRole::Scalar`
-(`:2040`, *"a buffer outside `.in`/`.out`"*) — and every role is decoded from the parameter's **type slot**
-(`parallel_roles`, `:1932` onward). Nothing on this path depends on the walk's width.
+### The premise, and the reading it came from
 
-**2. Undecided is decided earlier than the leaf.** `parallel_roles` returns `RoleUnread::Undecided` at four
-points — `:1940`, `:1943`, `:1951`, `:1960` — before any role is assigned. The two callers then differ:
+The probe printed, at the recording path's role match, **how many input roles** the decoded table
+held and nothing else. Over the suite, on `dev@c9ba66ac`: 144 `Ok`, 4 `Undecided`; of the `Ok` ones
+133 carried at least one input role and **11 carried none**, and the capture program was one of the
+eleven. That was read as "the role table is empty", then as "the parameter's names hold neither `in`
+nor `out`", and the settled fix became a conjunction: fire when the names hold neither group **and**
+a dispatch in this round's recording read a live buffer.
 
-- the **kernel compile** path propagates it (`:2394`, `let roles = parallel_roles(module, cfg_pair)?;`), so a
-  later compilation sees the type once it resolves;
-- the **recording** path matches on it (`:5076`), records a diagnostic for a `Refusal` (`:5079`), and for
-  `Undecided` runs this, verbatim, the only physical evidence in the chain:
+**The input count is not the table.** The capture program's decode names both groups —
+`names=[Some("n"), Some("in"), Some("out")]`, `inputs: []`, `outputs: [[2, 0]]`,
+`scalars: [[0], [1, 0]]` — and `inputs` is empty only because `InS.a` is a runtime scalar, not a
+buffer. The same reading takes away the second half: the recording contains **no dispatch that read a
+live buffer at all**. `roles=0` also never meant "the walk did not run": two of the three `roles=0`
+programs attributed by order are passing tests that record and run normally
+(`a_graph_recorded_for_one_backend_runs_on_another`,
+`a_graph_runs_at_whichever_extent_its_argument_names`), which is what made the reading suspect. The
+four `Undecided` readings are a separate decoding failure (`type_slot_value=true`,
+`struct_fields=None`), not evidence about this one.
 
-```rust
-// A "not yet", and only that: the flat tuple below is the honest reading.
-Err(RoleUnread::Undecided) => {}
+### The measurement that refutes it
+
+The old program, run alone with an env-gated probe (re-applied and reverted, nothing committed), on
+`dev@f5991ce6`:
+
+```text
+ROLESPROBE names=[Some("n"), Some("in"), Some("out")] in=Some(1) out=Some(2)
+           roles=KernelRoles { scalars: [[0], [1, 0]], inputs: [], outputs: [[2, 0]], … }
+DECODEPROBE named_abi=Some(true) roles_in=0 roles_out=1 roles_scalars=2
+ROUNDPROBE round=1 recorded=false nodes=0
+DISPATCHPROBE at=0 outputs=1 inputs=0 live=false
+INPUTPROBE position=0 path=[1, 0] placeholder=true value=a placeholder for a value the graph has produced
+DISPATCHPROBE at=1 outputs=1 inputs=1 live=false
+ROUNDPROBE round=2 recorded=true nodes=2
+CAPTUREPROBE named_abi=Some(true) live_dispatch=None
 ```
 
-  It then falls back to the flat tuple — the older `cfg = (n, (buffers…))` shape — so **the role walk never
-  runs**, `role_refusal` never speaks, and the program is accepted.
+Three facts, each measured rather than inferred:
 
-**3. (Superseded by the measurement below.) The fix is two halves, and they are bound.** The recording path is a **commit**: once the graph exists it
-stores the roles, so "record now, decide later" has nothing to mean — a recording *is* the collection. That is
-why the fix is to say "cannot record", not to wait: `:5092` must record a **new** refusal sentence — *this
-parameter's type is undecided when the graph is built, so the graph cannot record its roles* — because reusing
-`role_refusal`'s sentence would say "the position is wrong" about a program whose problem is "the type is not
-known yet", and would mislead whoever reads the log next.
+- **`named_abi` is never `Some(false)` in the nine `graph_jit` programs**, and `live_dispatch` is
+  never `Some`: the conjunction's two halves are both false.
+- **Node 0 is `held`'s own `plrun`** (`at=0`, no input operands), so the second dispatch's buffer
+  operand arrives as a `placeholder=true` `GraphValue`: `place` is reached and correctly sees an
+  edge, which is why the old sentence never fires.
+- **The program is accepted and the graph answers `2,2,2`**: the `fail()` panic reads
+  `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` — the false acceptance the test was
+  written to catch, with no capture behind it.
 
-But the new sentence is **not** the one the test asserts, so the test would still fail — correctly, since it
-asserts the old shape. The complete change is therefore `:5092` records the refusal **and** the test asserts the
-new sentence, and the second half is a **test change that needs the owner's sign-off** (still pending). **Doing
-only the first half moves the program from a false acceptance to a true refusal with a mismatched assertion —
-still red — so both halves land together or neither does.**
+### What is true instead: the run is lazy, so the walk contains the closure
 
-**What this is not**: a lost rule, or a stale test with a live rule behind it. The rule is intact; its
-precondition is undecided at the one point where the recording cannot wait for it.
+`graph::begin` opens before the apply and the language's blocks are lazy, so a free variable the body
+reads is forced **inside the recording window**; its dispatch is recorded as part of the walk and its
+result reaches the body as an edge. The graph then recomputes the closed-over launch on every run —
+the same numbers for a pure kernel — and it holds no block, arena or device lifetime, so nothing is
+captured and there is no use-after-free. The refusal's precondition is a **live** buffer — host memory,
+or a result that already ran — and `place` refuses exactly that. So
+[compute-graph-jit](compute-graph-jit.md)'s "a buffer the body reads as a free variable is refused" is
+a statement about that case; a launch the body reaches as a free variable is not a buffer.
 
-### Measured, and the fix settled: the fallback is design, the silence is not
+The rule was intact. The **test's premise** was wrong: its program was never a capture, and it
+asserted a refusal for a program the language legitimately records.
 
-A temporary probe (env-gated, reverted, nothing committed) printed at the recording path's role match whether it
-saw `Ok` or `Undecided`, and for `Ok` how many input roles the table held. The readings, on `dev@c9ba66ac`:
+### The resolution, and what landed
 
-- the capture test's program: **`Ok roles=0 inputs=0`** — `parallel_roles` **succeeds** with an empty role table,
-  so `walk_role` never refuses and `:5092`'s `Undecided` branch is not even reached;
-- the whole suite: **144 `Ok`, 4 `Undecided`**; of the `Ok` ones, **133 carry at least one input role**
-  (`roles=1` 108, `roles=2` 23, `roles=3` 2) and **11 have `roles=0`**;
-- the four `Undecided` readings are `type_slot_value=true struct_fields=None` — a readable type slot the decoder
-  still cannot read, which is a second, separate decoding failure;
-- **`roles=0` is legitimate for some programs**: three were attributed by order (`--test-threads=1`; the method is
-  noisy and the other eight are not attributed), and two of the three are **passing tests that record and run
-  normally** (`a_graph_recorded_for_one_backend_runs_on_another`, `a_graph_runs_at_whichever_extent_its_argument_names`).
+- The capture test now closes over a real host buffer —
+  `captured = (compute.buffer ([1, 1, 1] : array{Int, 3}) : (compute.Buf Int))` — so `place` refuses
+  it through the recorded dispatch, the diagnostic is filed under `compute.graph`, and the test passes
+  **with its original sentence**, which still contains `hold` and `parameter`.
+- A new test, `a_launch_the_body_closed_over_is_recorded_into_the_graph`, pins the other half: the
+  program answers `2,2,2`, and the backend sees exactly the two dispatches the walk performs —
+  `held`'s and the one that reads it.
+- **No production code changed.** The per-dispatch live-buffer boolean, `named_abi` and the
+  conjunction were implemented, measured to be unreachable, and reverted before commit; a flag with
+  no consumer is not worth its field.
+- The test change carries the compute owner's sign-off. The old program's stated premise ("`held` is
+  a live buffer") is not what the language does.
 
-So the rule was never lost, the test is not stale, and the parameter type is not "normally undecided" — most
-programs decode roles. What the capture program does is decode to **zero roles**, after which nothing is said.
+### The readings
 
-**The fix the compute owner settled on: a conjunction diagnostic, keeping the fallback.** Alarm on `roles=0`
-alone would shout about the eleven, at least two of which are legitimate. The discriminator has to use what the
-recording side can see and the decoder cannot: the legitimate zero-role programs report **`inputs=0`** — they
-never read a buffer — while the capture program reads a live buffer from outside the body. So the diagnostic
-fires when **the decoded names hold neither `in` nor `out`** *and* **this round's recording contains at least one
-dispatch that read an input buffer**. The fallback stays; the silence goes.
+`cargo test -p lichen-compute -j 3 --no-fail-fast`, before and after, both on `dev@f5991ce6` with
+only the test file differing (a private `CARGO_TARGET_DIR` inside this checkout):
 
-**What this supersedes:** the earlier reading that `:5092`'s empty branch must record a new refusal, and the
-claim that the fix is bound in two halves. The empty branch may stay as it is; the fix is the conjunction, and
-the only remaining change is a test that asserts the new sentence — a **test change, still awaiting the owner's
-sign-off**.
+| | passed | failed | ignored |
+| --- | --- | --- | --- |
+| before | 200 | 17 | 2 |
+| after | **202** | **16** | 2 |
 
-### Where the capture flag lives, and why there
+The failure-name set differs by exactly one name:
+`graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` leaves it, and nothing else
+moves. The unit suite is 19/0 in both. The note's older `201/17/2` baseline was taken on `b3554f76`;
+the two `ln` commits landed in between, which is why the before count here is 200. Rebased onto
+`01f5a6ac` — which carries `consumer_guard`'s own fix — the suite reads **203/15/2**: this table plus
+that commit's one pass. The isolated comparison stays the f5991ce6 one, because only it can attribute
+a difference to this change.
 
-The fix's two halves are settled: a conjunction diagnostic and the fallback kept. This records where its
-boolean goes, because a wrong home makes the diagnostic either unable to name the dispatch or unable to be
-cheap.
-
-**The predicate is `is_a_graph_placeholder`** (`compute.rs:425-450`): a buffer the graph owns is a `Buf` wrapper
-around a placeholder, and a live buffer from outside the body is not. It is universal. `handed_a_placeholder`
-(`:468`) is **not** — it is called only by `Real` and `BufferCollect` (`:509`, `:516`), so a `plrun` capture
-never reaches it. It is the reference for "this fact is wanted here too", never the signal.
-
-**The position is `graph::record_dispatch`** (`graph.rs:448`), the single entry a dispatch has into a recording
-(`recording.nodes.push(...)`, `:515`).
-
-**The boolean belongs on `RecordedNode`, not on the recording.** The diagnostic must name **which** dispatch
-read the live buffer, and an accumulator on the recording can only say that one did. A per-dispatch field costs
-one byte per recorded dispatch and makes the sentence's "and a dispatch in this recording read a buffer from
-outside the body" a fact about a named node rather than about a count. A second reason is that the flag is
-already a property of that dispatch's operands — putting it anywhere else would recompute a decision made one
-layer down.
-
-The diagnostic then reads the recording's dispatch list once, at build time, and reports the first dispatch whose
-flag is set; the recording side already has that list, so nothing crosses layers.
-
-### Two corrections to the placement, measured after it was written
-
-**The flag is computed one layer below where it is stored.** `graph::record_dispatch` (`graph.rs:448`) takes
-`inputs: &[Placed]` — placements, not operand nodes — while `is_a_graph_placeholder` needs an `AnyNodeId`. So the
-boolean is computed where the operand nodes are visible (the operator arms in `compute.rs`: `Read` at `:509`,
-`BufferCollect` at `:516`, and the `plrun` launch path), then passed into `record_dispatch` as a new parameter
-and stored on `RecordedNode`. "The location is `record_dispatch`" holds for the **storage**, not for the
-computation.
-
-**Adding the field is not a format change.** `RecordedNode` appears in exactly three places in the workspace: its
-definition (`graph.rs:139`), the **recording**'s `nodes` field (`graph.rs:111`), and the push at `graph.rs:515`.
-The `Graph` type never holds it — there is no `pub struct Graph` in that file and `RecordedNode` never enters a
-`Graph`'s construction, since `finish` consumes the recording. The field is therefore process-internal and leaves
-`FORMAT_VERSION` alone, which stays the owner's decision for real format changes only.
-
-### Handing this to a new session
-
-The five steps are approved and **unstarted**; this section is what a fresh session needs to begin without
-re-deriving anything.
-
-**Step 3 has a constraint**: `named_abi` adds **one boolean** to `KernelRoles` or to what `parallel_roles` returns,
-computed from the existing `inputs_at` / `outputs_at` (`compute.rs:1956-1957`). **The walk is not to be touched.**
-
-**Step 5's third reading is printed on its own line.** The two legitimate zero-role programs —
-`a_graph_recorded_for_one_backend_runs_on_another` and `a_graph_runs_at_whichever_extent_its_argument_names` — must
-show a **false** flag, reported **separately from any diagnostic count**. It is the only reverse evidence that the
-boolean is computed correctly; folding it into a count hides it.
-
-**The state to start from**: `dev` at `b3554f76` or later; baselines `lichen-lowlevel` 146/13, `lichen-highlevel`
-140/0, `lichen-language` 265/11, `lichen-compute` 201/17/2. The five steps, with their anchors:
-
-1. a boolean per dispatch, in the argument loop immediately before the single recording call site
-   (`compute.rs:4975`; the operands are in the loop at `:4950-4974`), predicate `is_a_graph_placeholder`;
-2. a new `record_dispatch` parameter (`graph.rs:448`) carrying it, stored in a new `RecordedNode` field
-   (`graph.rs:139`); the field never reaches the artifact, so **no `FORMAT_VERSION` change**;
-3. `named_abi` reported from `parallel_roles` — one boolean, walk untouched;
-4. the conjunction in `build_graph`: the decoded names hold neither `in` nor `out`, **and** a dispatch in this
-   recording read a live buffer; the sentence names the kernel and the dispatch and contains **no `hold` and no
-   `parameter`** (the old words would let the old test satisfy it by accident);
-5. the three readings: the capture test sees the diagnostic; `recorded` is **item-for-item unchanged** (the
-   fallback is kept); the two legitimate programs' flags are **false**, on their own line.
-
-**Two traps that cost this session time**, both now in `AGENTS.md`: `--exact` needs the **full** test path (a bare
-name filters to zero tests and prints `ok`), and PowerShell's `-match` is **case-insensitive** (a passing line's
-`0 failed` matched `FAILED`).
-
-**What not to redo**: the determination is settled — the rule is intact, `roles=0` is legitimate for some programs,
-and the defect is the silence on a capture, not the fallback. Do not reopen "is the test stale" or "should the
-empty branch refuse"; both were measured and rejected.
+**Reproducing.** The probe is not an artefact: `graph::probe_node_count`, an `eprintln!` at each
+round's end in `evaluate_until_the_return_is_nameable`, a per-input print in `record_launch`'s
+argument loop, a per-dispatch print in `graph::record_dispatch`, and the `named_abi`/live-dispatch
+print at the conjunction point in `build_graph`, all gated on one environment variable and reverted
+before the commit. Each program was run alone with the full path and `--exact`, so no line belongs to
+another program.

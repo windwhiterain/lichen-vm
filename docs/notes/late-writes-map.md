@@ -354,14 +354,20 @@ The observable consequence is a **diagnostic change**, not a wrong number:
 | **141v1** | 1510 | the same path | **apply** (site 3) |
 | **1104v1** | 2065 | `wire_apply_result` (`src/apply.rs:137`) → `write_node_value` (`equality.rs:257`) → `propagate_class_value` (**`:345` → `:348`**) → `set_node_value` — reached from `static_function_apply` (`static_module/apply.rs:92`) | **apply** (site 3) |
 
-**Why the message changed.** The body closes over `held`, a live buffer. The
-checker's lambda-value deep pass (`checker.rs:537-539`) already decided the body's
-verdict; the *capture's* value only arrives when the apply's parameter check merges
-it into the call's class, i.e. **after** the verdict the graph lowering reads. The
-gate then hands the lowering a decided node whose value is the one the merge wrote,
-and `place()` (`lichen-compute/src/compute/graph.rs:388`) no longer sees a
-`ComputeValue::Buffer` to refuse by name — so the "would have to hold it … rather
-than closing over it" sentence (`graph.rs:392-398`) never fires.
+**Why the message changed.** The body closes over `held`. The checker's lambda-value deep pass
+(`checker.rs:537-539`) already decided the body's verdict; the *capture's* value only arrives when
+the apply's parameter check merges it into the call's class, i.e. **after** the verdict the graph
+lowering reads. The gate then hands the lowering a decided node whose value is the one the merge
+wrote, and `place()` (`lichen-compute/src/compute/graph.rs:388`) no longer sees a
+`ComputeValue::Buffer` to refuse by name — so the "would have to hold it … rather than closing over
+it" sentence (`graph.rs:392-398`) never fires.
+
+**Corrected later:** "a live buffer" is not what the build sees, and the write paths above are a
+record of this gate experiment rather than of that question. The lazy run forces `held` **inside** the
+recording window, so its own dispatch becomes the recording's first node and `held.z` reaches the body
+as a `GraphValue` — `place` receives an edge, not a buffer, and the program is legitimately accepted
+([graph-recording-rounds](graph-recording-rounds.md), last section). The test now closes over a
+genuine host buffer (`compute.buffer`), which is the case that sentence refuses.
 
 ### 6.2 `graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`
 
@@ -1180,7 +1186,7 @@ remain are the 14 of `base-compute-names.txt` — which fail identically on a pr
 | name | why it remains |
 |---|---|
 | `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | the extra round reads one algebra name further than the first (`["combine","identity","element"]` against `["combine","identity"]`): re-driving a pass forces operand edges the first pass did not reach |
-| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | the capture rule now does **not** fire where it must (`expected this program to fail`) — of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves |
+| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | the program is **accepted** (`expected this program to fail`) — of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves. The cause was measured later as *no capture in the program at all*: the lazy run records the closed-over launch, so the refusal's precondition never occurs (`graph-recording-rounds.md`, last section) |
 | `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | the **host** run is the broken half: under the plain gate the program itself performs no dispatch (`right: []`), so recording and running cannot agree however the recording is driven |
 
 The last one is not a recording failure at all — it is the plain gate breaking
@@ -1238,7 +1244,7 @@ in either direction — no name stops failing, and no name starts.
 | name | assertion site and observation | what it is |
 |---|---|---|
 | `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | `consumer_guard.rs:256` — the **producer's** claim reads `left: ["combine","identity","element"]` against `right: ["combine","identity"]` | **the recording, reading one algebra name further.** §14.4's reading holds: re-driving a pass (`Module::reopen_stalled`) forces operand edges the first pass did not reach, so the role the producer is not supposed to claim is now in its claim |
-| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | `graph_jit.rs:135` — `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` | **the capture rule stops firing where it must.** Of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves: the program is accepted, so the refusal the test is about is not issued |
+| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | `graph_jit.rs:135` — `expected this program to fail: "raw[raw 2, raw 2, raw 2]: ?a"` | **the program is accepted, with no capture behind it.** Of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves; the rule's precondition is a live buffer, and the lazy run forces the closed-over launch inside the recording window, so `held.z` arrives as an edge (`graph-recording-rounds.md`, last section) |
 | `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | `graph_jit.rs:514` — `left` is the recorded graph's two dispatch lines, `right` is `[]` | **a premise mismatch, not a recording failure.** `right` is the trace of the **host** run, and the plain gate makes the program itself perform no dispatch at all — so the premise "a graph is a transcript of the run" has nothing to be a transcript of. No way of driving the recording repairs this |
 
 ### 15.3 What is no longer true of §13 and §14

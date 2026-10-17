@@ -35,8 +35,10 @@
 >
 > A graph function's inputs are its **parameter**, and nowhere else: the
 > placeholder tuple is one cell per role path, and reading `ins(i)` yields the
-> `i`-th. A buffer the body reads as a **free variable** is refused, naming the
-> capture.
+> `i`-th. A **live** buffer the body reads as a **free variable** is refused, naming
+> the capture; a launch it reaches as a free variable is part of the walk and is
+> recorded, because the lazy run forces it inside the recording window
+> ([graph-recording-rounds](graph-recording-rounds.md), last section).
 
 ## The decision the whole design rests on
 
