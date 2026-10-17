@@ -104,3 +104,32 @@ the truncate-to-first-round alternative would leave a graph with no dispatch of 
 program whose recording refuses inside the round that gets abandoned, and compare the refusal text
 `build_graph` reports (`refused_because_of(&refusals)`) before and after the change. It must be the same text.
 A refusal that disappears is a lost diagnostic.
+
+## Per-program readings, for the third acceptance item
+
+Each `graph_jit` test was run alone (`--exact`) with the probe, so every line below belongs to the named
+program; a program that opens more than one recording shows it twice. `recorded` is `returned_value_ids`
+succeeding, `nodes` is the recording's dispatch count at the end of the round.
+
+| program | rounds |
+| --- | --- |
+| `a_buffer_the_body_closed_over_is_refused_by_the_capture` | `r1 false/0` → `r2 true/2` |
+| `a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one` | `r1 false/0` → `r2 false/2` → `r3 false/2` → `r4 false/2` |
+| `a_function_that_dispatches_nothing_has_no_backend_to_run_on` | `r1 true/0` (no re-drive) |
+| `a_graph_dispatches_exactly_what_the_program_dispatches` | `r1 false/0` → `r2 true/2` |
+| `a_graph_recorded_for_one_backend_runs_on_another` | twice: `r1 false/0` → `r2 true/2` |
+| `a_graph_runs_at_whichever_extent_its_argument_names` | twice: `r1 false/0` → `r2 true/2` |
+| `a_recording_produces_the_same_numbers_as_running_the_dispatches` | `r1 false/0` → `r2 true/2` |
+| `one_backend_for_the_whole_graph_is_checked_while_it_is_built` | `r1 false/0` → `r2 false/1` → `r3 false/1` → `r4 false/1` |
+| `what_a_recorded_body_may_not_reach_for_is_refused_by_name` | three recordings, all unnamed: `false/1` lines and one `false/0` line |
+
+**The programs whose recording never names its return must stay exactly as they are.** They are
+`a_count_…count_filter…`, `one_backend_…is_built` and `what_a_recorded_body_may_not_reach_for…`, and each is a
+test that **asserts a refusal** — the unnamed return is the refusal working, not a defect. A′ must not turn any
+of them green, and must not change the reason they name. That is the "these stay red with the same reason"
+clause of the acceptance.
+
+The first round is empty in seven of the nine programs (`nodes=0`), and the one program that names its return
+without a second round does so with **zero** dispatches (`a_function_that_dispatches_nothing…`). So the
+"one graph, one walk" proposal loses nothing measurable on this corpus: the first round's dispatch count is
+**0** everywhere the re-drive runs at all.
