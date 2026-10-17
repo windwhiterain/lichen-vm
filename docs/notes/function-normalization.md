@@ -133,7 +133,15 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    **exit carry its own base branch's type** (the conversion records the base's
    value half today, so the branch's pair type is not reachable) instead of the
    function's cyclic return type. (b) is the integrity-preserving one.
-   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
+   **The `check_index` route was tried and reverted, measured**: reading the element
+   type from the **chosen** slot for a non-constant subscript — the chain
+   `Index(Index(Index(array_ty, shape), index_value), type)` — makes even the
+   *working* tuple-of-Ints fold fail with two *"this value is not a container — it has
+   no element to read"* errors (the chain reads the container's shape before the
+   condition is decided), so a read's type cannot follow a runtime index at check.
+   (a) is therefore not avoidable by a local read change: either the branches' types
+   join at check, or the loop's exit carries the base branch's own type — and (b)
+   needs the branch's pair, which the conversion does not record today.   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
    `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ;
    `(f (0, S(.y 3))).y` answers `raw none: ?a`, and so does the identity fold
    `… then s(1) else f (s(0) - 1, s(1))` over an `S`-typed state. The control is a
