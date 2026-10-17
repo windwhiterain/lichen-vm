@@ -679,6 +679,14 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   cycle token `hash_inner` uses must then agree with `key_eq`'s coinduction
   rather than counting depth. Expect the pair to be the hardest item in the
   queue: the unfolding has to be well-defined for a cyclic graph.
+  **Re-verified at `8b94e13c`, and the equality side measured**: `key_eq`'s own
+  contract is "a table keys by identity, a function by its id" (`table.rs:395-397`)
+  and the measurements agree — content-equal tuples (`(1, 2)` bound or literal) and
+  arrays (`[1, 2]`) hit, the same table value as key and lookup hits, a
+  content-equal but **distinct** table misses, and two distinct lambdas with one body
+  miss. The spec had said every key read is "deep-content-equal", which was wrong for
+  tables and functions; it now states the equality the code implements, with this
+  record as the measurement.
 - **D6 — How far to wire incrementality. — DECIDED: (a) and (c) first, then (b).**
   Order: cache the extracted indexes per `(uri, version)` and reuse one
   `PackageStore` across requests, and add cancellation plus a debounce; wire

@@ -89,7 +89,7 @@ postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
 element  := '@shallow' glued '(' n ')' expr           -- shallow marker, bare or with a depth (inside array literals only)
-pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
+pair     := expr '==>' expr                         -- table entry: key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
            | expr                                   -- a bare expression statement: never a struct field
 fields   := (farg (sep farg)* sep?)?             -- instantiation/field-read paren content
@@ -253,10 +253,15 @@ farg     := '.' name expr                         -- named instantiation argumen
   one element type (a disagreement is an `ArrayElement` mismatch, e.g. `if c then
   1 else "a"` is refused), and the expression's checked type is that element type.
 - **Tables.**  `table(k1 ==> v1, k2 ==> v2, …)` is a constant table value;
-  each entry is a deep-equal `key ==> value` pair (the table arrow is not part
-  of the expression grammar, so it unambiguously separates the pair).
-  `table()` is the empty table.  `t <== k` is the table read
-  returning the entry whose stored key is deep-content-equal to `k`.  The
+  each entry is a `key ==> value` pair (the table arrow is not part of the expression
+  grammar, so it unambiguously separates the pair).
+  `table()` is the empty table.  `t <== k` is the table read returning the entry
+  whose stored key **equals** `k`: scalars, tuples and arrays compare by content
+  (tuples and nested arrays element-wise), while a **table** key compares by
+  identity and a **function** key by its id — the stored-key hash is a content
+  pre-filter, never the decision (`D5`, `docs/notes/code-audit.md`), so two
+  content-equal but distinct table values are different keys (measured; see
+  `code-audit.md`'s `D5`).  The
   **table type** is the braced `table{K, V}` — the key slot and the value slot,
   the same shape the value form builds, so a table value checks against a
   `table{Int, string}` annotation exactly as it did against the printer's old
@@ -391,8 +396,8 @@ delimiter is a fresh atom — an argument of an application:
   comma discipline (`a()` / `a(,)` carry no fields).  A fresh atom may itself open with a glued delimiter,
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
   `Int` and `Type` (a tuple type is `x : tuple{Int, Type}`).
-- `t <== k` is a **table read**: the entry whose stored key is deep-content-equal
-  to `k`.  It is an **infix operator**, not a postfix form: it is the loosest
+- `t <== k` is a **table read**: the entry whose stored key equals `k` (the
+  Tables rule below states the equality).  It is an **infix operator**, not a postfix form: it is the loosest
   binary level and left-associative, so its key is a whole comparison expression
   (`t <== k + 1` reads the key `k + 1`) and `t <== a <== b` reads `(t <== a) <== b`.
   A table value (`table(…)`), a set value (`set(…)`), a table type
@@ -958,7 +963,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `set{E}` | `TypeSet(range)` — the one child is the element **slot**; the shape is that slot alone, so a `set{…}` type and its `set(…)` members pair one slot to every member |
 | `table{K, V}` | `TypeTable(range)` — the two children are the key and value **slots**, exactly what `Table(range)` writes, so a table type and a table value are one type |
 | `table(k1 ==> v1, …)` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
-| `t <== k` | `Find { container, key }` — the infix table read; the entry whose stored key is deep-content-equal to `k` |
+| `t <== k` | `Find { container, key }` — the infix table read; the entry whose stored key equals `k` (the Tables rule: content for scalars, tuples and arrays; identity for tables and functions) |
 | `X{n}` | `TypeAccess { container, index }` — a type access of a **tuple type value**'s component: the container's type is unified against the tuple kind, so a non-tuple container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
 | a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
