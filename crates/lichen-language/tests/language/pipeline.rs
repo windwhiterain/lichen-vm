@@ -495,14 +495,15 @@ fn an_int_is_unsigned_where_the_two_readings_differ() {
 #[test]
 fn a_zero_divisor_is_recorded_rather_than_answered() {
     for source in ["1 / 0", "1 % 0", "f = x => x / 0; f 5"] {
-        let Err(diagnostics) = lichen_language::run::evaluate(source) else {
-            panic!("{source:?} has no value");
-        };
+        let run = lichen_language::run::evaluate_reporting(source)
+            .expect("a zero divisor answers the lazy marker, not a refusal");
+        assert_eq!(run.output, "none: Int", "{source:?} has no value");
         assert!(
-            diagnostics
+            run.refusals
                 .iter()
-                .any(|diag| diag.message.contains("operator.divide_by_zero")),
-            "{source:?} should name its cause, got {diagnostics:?}"
+                .any(|line| line.contains("operator.divide_by_zero")),
+            "{source:?} should name its cause, got {:?}",
+            run.refusals
         );
     }
     // A divisor that is merely *able* to be zero is fine: nothing is refused
@@ -605,14 +606,18 @@ fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
         "float2int (1.0 / 0.0)",
         "float2int (0.0 - 3.7)",
     ] {
-        let Err(diagnostics) = lichen_language::run::evaluate(source) else {
-            panic!("{source:?} has no Int to truncate toward");
-        };
+        let run = lichen_language::run::evaluate_reporting(source)
+            .expect("a refused conversion answers the lazy marker, not a refusal");
+        assert_eq!(
+            run.output, "none: Int",
+            "{source:?} has no Int to truncate toward"
+        );
         assert!(
-            diagnostics
+            run.refusals
                 .iter()
-                .any(|diag| diag.message.contains("operator.out_of_range")),
-            "{source:?} should name its cause, got {diagnostics:?}"
+                .any(|line| line.contains("operator.out_of_range")),
+            "{source:?} should name its cause, got {:?}",
+            run.refusals
         );
     }
     // A float that merely *could* be out of range is fine: nothing is refused

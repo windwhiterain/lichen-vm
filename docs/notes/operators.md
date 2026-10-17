@@ -190,8 +190,12 @@ and above — the values where a signed reading would take the other branch.
 so: `TypeOperator::run` records `operator.divide_by_zero` on the lowlevel's
 general extension channel and answers the lazy marker, exactly as every other
 refused computation in this language does — so the program reports an undecided
-result and the recorded reason explains it. Checked by
-`a_zero_divisor_is_recorded_rather_than_answered`.
+result and the recorded reason explains it. **The reason is carried, not lost**:
+`RunOutput` has a `refusals` field (`category: message` lines) filled when the root
+has no value from `REFUSAL_CATEGORIES`, the CLI prints them to stderr beside the
+`none` answer, and `run::evaluate_reporting` exposes them to a caller. Checked by
+`a_zero_divisor_is_recorded_rather_than_answered` and its `float2int` sibling, which
+assert both the `none: Int` answer and the named reason.
 
 A jitted kernel does **not** guard it, and that is a decision rather than an
 oversight:

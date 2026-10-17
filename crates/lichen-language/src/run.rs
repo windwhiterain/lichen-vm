@@ -51,6 +51,8 @@ pub struct RunOutput {
     /// The passes' stage lines, verbatim and in the order they were recorded; empty unless the run
     /// reported.
     pub pass_lines: Vec<String>,
+    /// Why an undecided root has no value (`category: message` lines); empty when it answered.
+    pub refusals: Vec<String>,
 }
 
 /// The stage lines a run's passes recorded, verbatim, under the named categories.
@@ -89,6 +91,17 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
+    // An undecided root's reasons, so `none` is never the whole report.
+    let refusals = if value.is_none() {
+        module
+            .extension_diagnostics
+            .iter()
+            .filter(|entry| lichen_highlevel::program::REFUSAL_CATEGORIES.contains(&entry.category))
+            .map(|entry| format!("{}: {}", entry.category, entry.message))
+            .collect()
+    } else {
+        Vec::new()
+    };
     if module.has_extension_failures() {
         // The refusing layer's own text; no span. See docs/notes/compiler-plugin.md.
         return Err(module
@@ -132,7 +145,11 @@ where
             print_type_lang::<P>(&module, build.root_ty)
         )
     };
-    Ok(RunOutput { output, pass_lines })
+    Ok(RunOutput {
+        output,
+        pass_lines,
+        refusals,
+    })
 }
 
 /// Compile, check, and run `source`; the rendered output value and its type.
@@ -143,11 +160,16 @@ where
 /// [`BudgetExhausted`] failure and turned into a `NonTerminating` diagnostic
 /// rather than an abort.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
+    evaluate_reporting(source).map(|run| run.output)
+}
+
+/// [`evaluate`], with the run's report carried beside its value.
+pub fn evaluate_reporting(source: &str) -> Result<RunOutput, Vec<Diag<LangProgram>>> {
     let report = compile(source);
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    render_build(report.build.unwrap(), PassReport::Silent).map(|run| run.output)
+    render_build(report.build.unwrap(), PassReport::Silent)
 }
 
 /// Compile, check, and run a preprocessed source file; the store is the caller's.

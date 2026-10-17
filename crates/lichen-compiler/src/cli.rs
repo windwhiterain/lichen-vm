@@ -142,14 +142,17 @@ where
     }
 }
 
-/// The stage lines a run's passes recorded, on **stderr**.
+/// The run's recorded reasons and stage lines, on **stderr**.
 ///
 /// # Invariant
 /// **stderr, because stdout is the program's own output**: a host reads a value off stdout, and a
 /// report written there would be read as part of the value. Each line is the pass's own sentence,
 /// verbatim and unprefixed — it already names its node and its pack — so what a machine parses is
-/// what the pass wrote.
+/// what the pass wrote. A refusal line explains an undecided value and precedes the value.
 fn report_passes(run: &RunOutput) {
+    for line in &run.refusals {
+        eprintln!("{line}");
+    }
     for line in &run.pass_lines {
         eprintln!("{line}");
     }

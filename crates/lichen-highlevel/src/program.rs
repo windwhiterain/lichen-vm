@@ -701,6 +701,9 @@ pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
 /// this is the [`DIVIDE_BY_ZERO`] answer.
 pub const OUT_OF_RANGE: &str = "operator.out_of_range";
 
+/// The categories that explain an undecided value; a run carries them in its report.
+pub const REFUSAL_CATEGORIES: &[&str] = &[DIVIDE_BY_ZERO, OUT_OF_RANGE];
+
 // --- the highlevel leaves' per-leaf artifact codec --------------------------
 
 // `TypeValue` and `TypeOperator` have no arena payload, so their codecs are the
@@ -1244,7 +1247,9 @@ where
     module.record_extension_diagnostic(ExtensionDiagnostic::note(
         OUT_OF_RANGE,
         None,
-        format!("this float2int operand evaluated to {value}, which is {reason}, and there is no Int for it to truncate toward"),
+        format!(
+            "this float2int operand is {reason}, and there is no Int for it to truncate toward"
+        ),
     ));
     None
 }
