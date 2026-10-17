@@ -398,7 +398,12 @@ attributed at **creation**. `Checker::read_site` is set by `check_field`,
 unattributed. The earlier reading recorded here — each check minting fresh derived
 nodes (measured at `e=125`: `names=757`, `name=204`, `key=759`) against the
 runtime's blamed `84`/`88`, so that no single call-site registration reached them
-— is why the stamp lives at creation: one site covers every check. `X::a` was
+— is why the stamp lives at creation: one site covers every check. Re-checked
+across read forms on `dev@e5307306`: eight failing programs — the named read on
+an array and on a tuple, `x[0]` on a tuple, `x(0)` on an array, `x[9]` out of
+bounds, a table miss and an index on a table, and `S::b` on a struct — each print
+as many `-->` lines as `error:` lines (five and five for the named read, one and
+one for each of the others). `X::a` was
 already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
