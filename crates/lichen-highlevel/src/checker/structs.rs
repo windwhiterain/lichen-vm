@@ -247,13 +247,10 @@ where
         // The lookup is the **structural** reader, asked whether the cell is
         // decided: a type through a class is readable.
         let position = self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name);
-        // The requirement is the container's **kind**, so the refusal names both
-        // kinds (eval-before-unify.md §6.3).
+        // Decided containers are refused here; the undecided tier carries no requirement.
         if concrete {
             let kind = self.struct_kind_requirement();
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
-            // The kind read runs first: an unevaluated `Index` holds no value,
-            // so a unify writes into its class and asks nothing.
             self.module
                 .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
             self.check_unify(
@@ -261,23 +258,6 @@ where
                 kind,
                 self.loc(container, 1),
                 DiagKind::Guard,
-            );
-        } else {
-            // An undecided container is registered as an assert condition, re-checked
-            // per apply clone (eval-before-unify.md §6.2).
-            let operands = self.array_node(self.current_block, &[container_ty, self.type_expr]);
-            let condition = self.op_node(
-                self.current_block,
-                P::Operator::from(TypeOperator::IsStructType),
-                Some(operands),
-            );
-            self.register_assert(
-                condition,
-                self.loc(container, 1),
-                true,
-                AssertSpelling::StructKind {
-                    container: container_ty,
-                },
             );
         }
         // The lazy name-table read keeps an undecided container's read

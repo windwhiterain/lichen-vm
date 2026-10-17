@@ -370,13 +370,13 @@ delimiter is a fresh atom — an argument of an application:
   named sibling of `X{n}`; `.` (`.a`) is the named field read over a struct
   *instance*, whose kind (not type) must be TypeStruct.  **Neither `.a` nor `::`
   defers**: the container's requirement is unified *first* and the read
-  is evaluated on the result — the shape `f _{.a 1, .b 2}` shows, where the
-  placeholder's type is bound by the unify before the body evaluates, so a read
-  inside the body sees a decided struct type.  An undecided parameter is bound by
-  the application's unify and the body then runs against it; that is why
-  `f = x => x.a; f [10, 20]` is refused with `expected a struct type, found
-  array{Int, 2}` (the refused body still records the runtime table read it fails).
-  A spaced `::` is not a
+  is evaluated on the result — the shape `_(.a 1, .b 2)` shows, where a struct
+  literal's fields bind the placeholder's type by the unify before the body
+  evaluates, so a read inside the body sees a decided struct type.  An undecided
+  parameter is bound by the application's unify and the body then runs against it;
+  a wrong-kind argument therefore fails at the read the body built:
+  `f = x => x.a; f [10, 20]` reports `this value is not a container — it has no
+  element to read` with the caret on `.a`.  A spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced

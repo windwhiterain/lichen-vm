@@ -3,15 +3,18 @@
 > Status: **current.** §2.1 is fixed and the container reads with it: unification
 > merges a class and carries the class's decided value to the members it adds, the
 > paren read `a(k)` is the tuple read. **The author's ruling supersedes the
-> deferral tier**: `.a` and `::` do **not** defer — the container's requirement is
-> unified *first* and the read is evaluated on the result, the shape
-> `f _{.a 1, .b 2}` shows (*"`a.b` 和 `a::b` 都不延迟，靠先 unify 再求值实现
-> `f _{.a 1, .b 2}` 这种效果"*). What that means for the landed `IsStructType`
-> per-apply condition (the named read's undecided tier) is the open migration: the
-> condition stays until the unify-first form replaces it, and the spec states the
-> target semantics. The class-attached blocked list remains a sketch; §5.2's
-> re-checkable assert landed for the named read and the paren read's unify for
-> `a(k)`. The **ordering** half of the question is settled
+> deferral tier, and it has landed**: `.a` does **not** defer — a decided
+> container keeps its kind unify, and an **undecided one carries nothing at all**
+> (no `IsStructType` condition, no requirement node): the application's own
+> parameter unify binds the container's type, and the read evaluates on it, which
+> is the shape `_(.a 1, .b 2)` shows. A wrong-kind argument therefore fails at the
+> read the body built (`this value is not a container`, caret on `.a`). The
+> requirement node had to be **dropped rather than unified**: merging it into the
+> container's kind class made the empty requirement template the class's value, and
+> `examples/decode_loop.lichen` and `examples/generate.lichen` lost their arrays
+> to `raw none` (measured). The class-attached blocked list remains a sketch; the
+> two `field_read_kinds` tests that pinned the assert were updated to the read's
+> runtime failure. The **ordering** half of the question is settled
 > and measured: reordering evaluation against unification cannot be the fix, and
 > the runtime's own answer was a memoization on the stalled node
 > ([stalled-rerun-epoch](stalled-rerun-epoch.md)), now retired.

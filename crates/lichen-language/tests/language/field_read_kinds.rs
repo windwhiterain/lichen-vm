@@ -159,17 +159,16 @@ fn a_named_type_access_of_a_deferred_array_is_refused_at_the_application() {
 /// The requirement is an assert-channel condition, re-checked per apply.
 /// See eval-before-unify.md §6.2.
 #[test]
-fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
+fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
+    // No requirement node: the read evaluates on the bound argument and fails there.
     let report = compile("f = x => x.a\nf [10, 20]");
     assert!(!report.ok(), "the deferred read is refused");
     let diag = report
         .diagnostics
         .iter()
-        .find(|d| matches!(d.check.as_ref().map(|c| c.kind), Some(DiagKind::Assert)))
-        .expect("the requirement is a check diagnostic");
-    assert_eq!(diag.stage, Stage::Check);
-    assert_eq!(diag.message, "expected a struct type, found array{Int, 2}");
-    assert_eq!(diag.span, Some((1, 5)), "the caret is the container");
+        .find(|d| d.message.contains("not a container"))
+        .expect("the read's runtime failure is reported");
+    assert_eq!(diag.span, Some((1, 10)), "the caret is the read");
 }
 
 /// A decided container registers no condition at all, so nothing the decided
@@ -190,20 +189,14 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
 /// failing.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
-    for (source, found) in [
-        ("f = x => x.a\nf (1, 2)", "tuple{Int, Int}"),
-        ("f = x => x.a\nf 5", "Int"),
-    ] {
+    for source in ["f = x => x.a\nf (1, 2)", "f = x => x.a\nf 5"] {
         let report = compile(source);
         assert!(!report.ok(), "{source:?} is refused");
         let diag = report
             .diagnostics
             .iter()
-            .find(|d| matches!(d.check.as_ref().map(|c| c.kind), Some(DiagKind::Assert)))
-            .unwrap_or_else(|| panic!("{source:?} carries the requirement's diagnostic"));
-        assert_eq!(
-            diag.message,
-            format!("expected a struct type, found {found}")
-        );
+            .find(|d| d.message.contains("not a container"))
+            .unwrap_or_else(|| panic!("{source:?} carries the read's diagnostic"));
+        assert_eq!(diag.span, Some((1, 10)), "the caret is the read");
     }
 }
