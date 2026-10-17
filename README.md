@@ -1873,10 +1873,29 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
     conditional.\n\n\
     **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
     `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
-    kernel twice, on both backends, and this one answers `agrees, 4 of 4 element(s)` on the RTX \
-    3060. Exact arithmetic is what that should say: every value is a quarter or a half, there is \
-    no transcendental and no division, so there is no ulp for the two backends to disagree about."
-  output = "[2.0, 2.5, 3.75, 5.0]: array{Float, 4}"
+    kernel twice, on both backends, and this one answers `agrees, 6 of 6 element(s)` on the RTX \
+    3060 — both chains, the fold included. Exact arithmetic is what that should say: every value is \
+    a quarter or a half, there is no transcendental and no division, so there is no ulp for the two \
+    backends to disagree about.\n\n\
+    **The reduction layer: `rowsum`, one lane per row.** A fold cannot be elementwise and cannot be \
+    faked by one — `@loop fold = s => ...` counts down **inside a single lane**, so `rowsum` \
+    launches over the **rows** (`r = compute.range c.n`) and walks `kdim` elements itself: \
+    `y[r] = Sigma_k x[r * kdim + k]`. Its read address is therefore **computed** (`r * kdim + s(0) \
+    - 1`) while its write address is still the lane's own index, which is the same split \
+    `examples/gemv.lichen` has and the reason that operator needs no coordinates either. The \
+    `combine` and `element` marks and the `claim:Reduction(combine,identity,element)` are \
+    what the fusion floor reads when a graph records the kernel (`docs/notes/llm-operators.md`); \
+    on the `cpu` path they are carried and not consulted. `mean` is then `scale` with \
+    `k = 0.25` over the sums and `clamp` bounds the result, because a buffer is a buffer: the \
+    reduction layer composes with the elementwise one and neither knows about the other.\n\n\
+    **The second chain, worked out by hand.** `grid` is `1` through `8`, `scale` with `k = 2.0` \
+    answers `2 4 6 8 10 12 14 16`, `rowsum` over two rows of four gives `2 + 4 + 6 + 8 = 20` and \
+    `10 + 12 + 14 + 16 = 52`, `scale` with `0.25` gives `5` and `13`, and `clamp` with `lo 6.0`, \
+    `hi 12.0` lifts `5` to `6` and brings `13` down to `12`. Every value is exact for the reason \
+    above — quarters and halves, no division — and the two chains are the root as a **tuple**, so \
+    both are performed: an unread chain would not be, which is the plain-run gate \
+    `docs/notes/graph-recording-rounds.md` records."
+  output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0]): tuple{array{Float, 4}, array{Float, 2}}"
 ---
 SIn  = struct{.x (compute.Buf Float)}
 SOut = struct{.y (compute.Buf Float)}
@@ -1909,12 +1928,27 @@ clamp_raw = (c : CPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (max c.lo (min c.hi x))))
 }
 clamp = compute.parallel clamp_raw "cpu"
+RIn  = struct{.x (compute.Buf Float)}
+ROut = struct{.y (compute.Buf Float)}
+RPar = struct{.n Int, .kdim Int, .in RIn, .out ROut}
+RArg = struct{.n Int, .kdim Int, .I RIn}
+rowsum_raw = (c : RPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+}
+rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
 down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
 mixed = (compute.plrun lerp ((LArg)(.n 4, .t 0.25, .I LIn(.a up.y, .b down.y))) : LOut)
 bounded = (compute.plrun clamp ((CArg)(.n 4, .lo 2.0, .hi 5.0, .I CIn(.x mixed.y))) : COut)
-compute.collect bounded.y : array{Float, 4}
+grid = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
+doubled = (compute.plrun scale ((SArg)(.n 8, .k 2.0, .I SIn(.x grid))) : SOut)
+rows = (compute.plrun rowsum ((RArg)(.n 2, .kdim 4, .I RIn(.x doubled.y))) : ROut)
+means = (compute.plrun scale ((SArg)(.n 2, .k 0.25, .I SIn(.x rows.y))) : SOut)
+bounded_rows = (compute.plrun clamp ((CArg)(.n 2, .lo 6.0, .hi 12.0, .I CIn(.x means.y))) : COut)
+(compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2})
 ```
 
 ### `sample.lichen`
