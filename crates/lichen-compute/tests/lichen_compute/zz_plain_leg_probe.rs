@@ -1,6 +1,13 @@
 //! Probe: a `compute.plrun` inside a plain-applied function, and where its forcing goes.
+//!
+//! # Invariant
+//!
+//! A plain host run is one pass, and a run stamp is written once: an operator asked before
+//! its operand is decided never dispatches. Only a recording re-drives, through
+//! `reopen_stalled`. See docs/notes/graph-recording-rounds.md, which already calls the
+//! matching test's premise a test premise.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, take_hook, set_hook};
+use std::panic::{AssertUnwindSafe, catch_unwind, set_hook, take_hook};
 
 use lichen_compute::ComputeOperator;
 use lichen_compute::language::{LangProgram, LangValue, new_store};
@@ -178,12 +185,61 @@ fn compute_nodes(module: &Module<LangProgram>) -> Vec<(ComputeOperator, NodeId)>
     found
 }
 
-/// Compile and run `source` the way `common::run` does, without its two assertions, so a
-/// run whose root is undecided is a reading rather than a panic.
+/// The forcing path from `node`: its operand elements and its value elements, one level on.
+fn tree(module: &Module<LangProgram>, node: NodeId, indent: &str, left: usize) {
+    println!("{indent}{}", node_line(module, node));
+    if left == 0 {
+        return;
+    }
+    let Some(operation) = module.node_operation(node) else {
+        return;
+    };
+    let Some(operand) = operation.operand else {
+        return;
+    };
+    let Some(LowValue::Array(array)) = module
+        .node_value(AnyNodeId::Dynamic(operand))
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+    else {
+        return;
+    };
+    // SAFETY: `array` is the live operand value read from a node of a live module.
+    for entry in unsafe { array.items() } {
+        let AnyNodeId::Dynamic(element) = entry.node else {
+            println!("{indent}  static element");
+            continue;
+        };
+        println!(
+            "{indent}  element{} {}",
+            if entry.shallow { " (shallow)" } else { "" },
+            node_line(module, element)
+        );
+        tree(module, element, &format!("{indent}    "), left - 1);
+    }
+    // A value that is itself an array is walked the same way the deep pass walks it.
+    if let Some(LowValue::Array(array)) = module
+        .node_value(AnyNodeId::Dynamic(node))
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+    {
+        // SAFETY: as above.
+        for entry in unsafe { array.items() } {
+            let AnyNodeId::Dynamic(element) = entry.node else {
+                continue;
+            };
+            println!(
+                "{indent}  value-element{} {}",
+                if entry.shallow { " (shallow)" } else { "" },
+                node_line(module, element)
+            );
+            tree(module, element, &format!("{indent}    "), left - 1);
+        }
+    }
+}
+
+/// `common::run`'s own steps, without its two assertions: an undecided root is a reading.
 fn build_and_run(source: &str) -> (Module<LangProgram>, Option<LangValue>, NodeId, NodeId) {
     let mut store = new_store(None).expect("the embedded compute package registers");
-    let (preprocessed, diags) =
-        lichen_language::preprocess::preprocess(source, None, &mut store);
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
     assert!(diags.is_empty(), "expected imports to resolve: {diags:?}");
     let line_starts = lichen_language::lex::line_starts(source);
     let report = lichen_language::compile_with_imports_at::<LangProgram>(
@@ -194,7 +250,11 @@ fn build_and_run(source: &str) -> (Module<LangProgram>, Option<LangValue>, NodeI
         &line_starts,
         lichen_highlevel::no_native_ops(),
     );
-    assert!(report.ok(), "expected a clean check: {:?}", report.diagnostics);
+    assert!(
+        report.ok(),
+        "expected a clean check: {:?}",
+        report.diagnostics
+    );
     let build = report.build.unwrap();
     let (root_val, root_ty) = (build.root_val, build.root_ty);
     let mut module = build.module;
@@ -202,8 +262,7 @@ fn build_and_run(source: &str) -> (Module<LangProgram>, Option<LangValue>, NodeI
     (module, value, root_val, root_ty)
 }
 
-/// Run one program and print every reading about it: what it renders, what the harness
-/// itself does with it, what its root holds, and what each of its compute nodes answers.
+/// Run one program and print every reading about it, one line per fact.
 fn report(name: &str, source: &str) {
     println!("=== [{name}] ===");
     let mut store = new_store(None).expect("the embedded compute package registers");
@@ -238,10 +297,15 @@ fn report(name: &str, source: &str) {
     let (module, value, root_val, root_ty) = build_and_run(source);
     println!("  root value decided: {}", value.is_some());
     if let Some(value) = &value {
-        println!("  root renders as: {}", print_value_lang(&module, *value, root_ty));
+        println!(
+            "  root renders as: {}",
+            print_value_lang(&module, *value, root_ty)
+        );
     }
     println!("  root node: {}", node_line(&module, root_val));
     println!("  root operand items: {}", operand_items(&module, root_val));
+    println!("  forcing path from the root:");
+    tree(&module, root_val, "    ", 3);
     println!(
         "  extension diagnostics: {} recorded, has_failures={}",
         module.extension_diagnostics.len(),
@@ -262,11 +326,7 @@ fn probe_the_plain_leg() {
     };
     report(
         "plain_unread",
-        &program(
-            KERNELS_OPEN,
-            STEP_OPEN,
-            &format!("out = step {ARGUMENT}"),
-        ),
+        &program(KERNELS_OPEN, STEP_OPEN, &format!("out = step {ARGUMENT}")),
     );
     report(
         "plain_collected",
