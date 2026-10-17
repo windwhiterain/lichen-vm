@@ -80,6 +80,24 @@ needs. In a row-major grid the **vertical** taps are the padding and the **horiz
 `i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask and a 1D body does
 not.
 
+**What may sit where, measured** (all three in `zz_clamp_grouping_probe.rs` and
+`zz_masked_conv_probe.rs`):
+
+- **An application binds tighter than `+` and `*`**, so `min (max i lo) hi * cols` is
+  `(min (max i lo) hi) * cols`. Three spellings of one clamp, only the first parenthesised, answer the
+  same `102 102 102 103 104 104` over `i = 0..5`; the `* 10 + 1` variant answers `21 21 21 31 41 41`,
+  the clamp's own values, so the arithmetic tail stays outside.
+- **`min`/`max` may sit anywhere, including inside a fold**, and a clamped address therefore is
+  expressible: `clamp(row + 1, 0, 4) * 5 + clamp(col + 1, 0, 4)` answers exactly the hand-computed
+  `6 7 8 9 9 / 11 12 13 14 14 / 16 17 18 19 19 / 21 22 23 24 24 / 21 22 23 24 24` over a 5x5 grid.
+  That is the boundary you can build without a `Select`: the window replicates its edge instead of
+  masking.
+- **An `Int` result cannot join a `Float` fold accumulator.** A fold whose arm is
+  `s(1) + (min (max (s(0) - 1) 0) 4)` is refused by the *device* backend, not the parser: *"the block
+  parameter is read as one class in one place and another ([Int, Float]). A block parameter is one
+  `OpPhi` and has one type"*. The accumulator is one phi, so the integer needs `int2float` before it
+  joins. Addresses are exempt because they never enter the accumulator — they live inside `.at`.
+
 ## 5. Iterate: thread the kernel's buffer
 
 A time step is one dispatch; a solver is the same dispatch repeated. A plain host run is **one pass**
