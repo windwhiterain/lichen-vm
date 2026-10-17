@@ -8,7 +8,6 @@
 //! language layer derives the wording and the caret from those facts through
 //! its own source↔IR record.
 
-use std::collections::HashSet;
 use std::ops::Range;
 
 use lichen_lowlevel::{AnyNodeId, BudgetExhausted, EvalError, LowValue, NodeId, Program};
@@ -469,24 +468,27 @@ where
                 });
             }
         }
-        // Runtime evaluation failures, deduplicated by kind and blamed node.
-        let mut seen = HashSet::new();
+        // Runtime failures, deduplicated by kind and blame; an apply's two nodes share a site.
+        let mut seen = Vec::new();
         for err in &self.module.eval_errors {
             let key = match err {
                 EvalError::Index {
                     index,
                     index_value,
                     length,
-                } => (0, Some(*index), Some(*index_value), Some(*length)),
-                EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
-                EvalError::TableKeyUndecided { key } => (2, Some(*key), None, None),
-                EvalError::IndexTarget { target } => (3, Some(*target), None, None),
-                EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None),
-                EvalError::ApplyTarget { function } => (5, Some(*function), None, None),
+                } => (0, Some(*index), Some(*index_value), Some(*length), None),
+                EvalError::TableMiss { key, .. } => (1, Some(*key), None, None, None),
+                EvalError::TableKeyUndecided { key } => (2, Some(*key), None, None, None),
+                EvalError::IndexTarget { target } => (3, Some(*target), None, None, None),
+                EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None, None),
+                EvalError::ApplyTarget { function } => {
+                    (5, None, None, None, self.node_loc(*function))
+                }
             };
-            if !seen.insert(key) {
+            if seen.contains(&key) {
                 continue;
             }
+            seen.push(key);
             match err {
                 EvalError::Index {
                     index,

@@ -1,6 +1,6 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and six cases are fixed.** The unclosed-delimiter case is fixed
+> **Status: the property is stated and seven cases are fixed.** The unclosed-delimiter case is fixed
 > (`4cb42d3f`), the preprocessor's missing span is fixed (§7), the `NamedField` miss now blames the
 > read (P2), the report's check-level assert now heads its runtime consequences (P3), an unknown
 > field no longer also reports the gap it explains (P4), and a type access's miss now names its
@@ -110,7 +110,7 @@ load-bearing claims itself** — but *"neither survey ran anything: every claim 
 reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
 reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
-**Seven corrections to what the surveys first said, each worth more than the claims they replaced.**
+**Eight corrections to what the surveys first said, each worth more than the claims they replaced.**
 
 * **An unknown field name also reported the gap it explains, and now it does not.** `S = struct{.a Int}`
   ; `S(.b 1)` reported two diagnostics — `no field named b in the struct type struct{.a Int}` and
@@ -126,13 +126,24 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   `too many fields for the struct type struct{.a Int}#11`; before, a reader had to
   find the instantiation to learn which struct was meant.
 
-* **The check-level assert was printed after the runtime consequences, and it now heads the report.**
-  `f = x => x.a` ; `f [10, 20]` reported five diagnostics: four runtime read failures
-  (`this value is not a container`, `table lookup missed`, twice each) and the actionable
-  `expected a struct type, found array{Int, 2}`. `Build::diagnostics` pushed `assert_errors` after
-  `eval_errors`, so the head of the report was about consequences and the cause came last — the P3
-  failure, verbatim. The asserts block now precedes the runtime-failure block: the
-  `expected a struct type` line is first (`1:5`), the four consequences follow (`1:10`).
+* **The check-level assert was printed after the runtime consequences, and the assert
+  channel is now gone from the named read.** `f = x => x.a` ; `f [10, 20]` reported five
+  diagnostics: four runtime read failures (`this value is not a container`, `table lookup
+  missed`, twice each) and the actionable `expected a struct type, found array{Int, 2}`.
+  `Build::diagnostics` pushed `assert_errors` after `eval_errors`, so the head of the
+  report was about consequences and the cause came last — the P3 failure, verbatim, and
+  the asserts block then preceded the runtime block. The author's unify-first ruling
+  removed the assert tier for the named read (see [eval-before-unify](eval-before-unify.md)),
+  so the program now reports **one** diagnostic, at the read's own site — `this value is
+  not a container — it has no element to read` at `1:10` — and the ordering rule holds
+  wherever asserts remain.
+
+* **An apply of a deferred non-function was reported twice, and it now reports once.**
+  `f = g => g 1` ; `f 5` printed `this value is not a function — it cannot be applied`
+  at `1:5` **twice**: `check_app` builds a value apply and a type apply at one site, and
+  the runtime-failure dedup keyed by the blamed **node** kept both. That kind is now
+  keyed by the error's resolved **location**, so one mistake is one diagnostic — the
+  two `an_apply_of_a_deferred_*` tests pass, and the language suite went 7 red to 5.
 
 * **A type access's miss named no struct, and it is fixed with the renderer fallback it needed.**
   `S = struct{.a Int, .sub Int}` ; `S::sux` reported `table lookup missed — no entry for key "sux"`
@@ -217,8 +228,9 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
   **The current baseline, re-measured at `9fad30c7`** (the dynamic apply's result-cell bind; see
   [compute-kernel-struct](compute-kernel-struct.md)): lowlevel **146/13**, highlevel **140/0**,
-  language **265/7** (the known seven: `gc_block`, `pipeline` ×4, `registry` ×2 — the
-  four `defer_pending` tests were deleted at the author's direction), compute **229/2/2**
+  language **267/5** (the known five: `gc_block`, `pipeline` ×2 — the float and zero-divisor
+  recordings — and `registry` ×2; the four `defer_pending` tests were deleted at the author's
+  direction), compute **230/2/2**
   (`graph_jit` and
   `graph_structure`; the latter is the one-read refactor's witness, per
   [compile-order-class](compile-order-class.md) §4.7), language-server **22/0** — its known red
