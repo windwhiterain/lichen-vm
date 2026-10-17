@@ -1,7 +1,9 @@
 # Specialize-then-normalize: a named access should become a tuple index once the type is known
 
-**Status: proposal.** Nothing implements this. It records the shape of the missing
-work and why the fix that exists today is a stand-in for it.
+**Status: measured as unimplementable under the current graph invariants.** Nothing implements this, and the
+measurement below says nothing can at the clone either: the name table is readable there in 20 of the 46
+observed cases and a position resolves in none of them, while every later point is closed by the invariants.
+The compute-side fold is therefore not a stand-in for this work; it is the only shape this engine allows.
 
 ## The claim
 
@@ -65,8 +67,8 @@ The proposal normalizes after specialization, not before.
 `lichen-compute` folds the read itself, at kernel-compile time, and
 `scalar_leaf_classes` reads a scalar leaf's class from the type at the leaf's own
 path. Both are correct, both are local, and both are what a normalize pass would
-make unnecessary for compute specifically — they are a **temporary measure pending
-this proposal**, not the shape of the final fix. The two defects it repairs are
+make unnecessary for compute specifically — and **they are the only shape these invariants allow**, measured
+below: there is no later point at which a fold could be made. The two defects it repairs are
 recorded in `compute-kernel-struct.md`.
 
 ## What implementing it requires, measured
@@ -108,3 +110,25 @@ the clone walk builds its nodes** — `node_apply` copying a `TableGet` key can 
 which is a construction, not a rewrite, and touches no invariant. Everything else in the section above stands:
 the decode stays the one sunk primitive, an unreadable name table or an absent name keeps the lazy form, and no
 answer may change.
+
+## Measured: why the fold cannot happen at the clone
+
+A probe at the clone pass's return (`function.rs:282`, after the parameter unify and the class regrouping)
+printed, for every cloned node whose operation is a `TableGet`, whether its `names` operand's value is a
+readable `Table` and whether `Module::name_table_index` resolves the name to a position. Over the
+`lichen-language` suite, which does exercise a field read inside an applied function:
+
+| observed | 46 |
+| --- | --- |
+| `names` readable | **20** |
+| a position resolved | **0** |
+
+So at the clone the table is often readable and the *name* side never resolves: matching by name there fails
+even in the twenty readable cases, which is the earlier of the two timelines the design assumed away. The later
+point is closed by the invariants — the operand array already holds a value, and the operation setter asserts a
+computation is defined once — so a fold after the clone cannot be written either. Both ends are measured; the
+consumer-side fold is the only shape left.
+
+The lowlevel's own `basic` suite printed nothing at all, which is the other half of the measurement: it does not
+apply a function whose body reads a field, so the clone path's `TableGet` traffic is a language-front-end
+phenomenon.
