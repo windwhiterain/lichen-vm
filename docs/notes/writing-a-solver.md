@@ -184,6 +184,33 @@ the two states *is* the loop's readback — 3.9 ms of the array state's 7.21 ms 
 device. So thread the buffer (§5) unless the step needs the numbers on the host, and do not expect
 kernel-speed arithmetic either way: these are interpreter numbers, and no spelling changes that.
 
+## 9. Verify, and build the program from something that compiles
+
+**A long kernel line should be lifted, not retyped.** Three failures in this family's rounds were
+transcription, not measurement: a fold line retyped by hand was one paren short twice, and a generated
+kernel used struct names that did not exist (`KArg` where the declarations said `XArg`). What works is
+to take the line from an example the suite already compiles — `examples/filter.lichen` for a nine-tap
+fold, `examples/pooling.lichen` for a window max — change only the part under test, and count parens
+before running:
+
+```text
+(the kernel block's "(" count) - (its ")" count) must be 0
+```
+
+The parser reports `unclosed '(' opened on line N` with *N* where the group **opened**, which is rarely
+the line that is wrong; the count is what localises it.
+
+**When a timing reading looks impossible, suspect the program.** Two refusals once read as `~0.00 ms
+per dispatch` — and a negative one — because both timed runs paid only compile cost after the program
+failed to build. A per-dispatch figure at or below zero means nothing ran: print the **answer** beside
+the clock in every timing reading, so a refusal cannot pass for a fast dispatch.
+
+**A refusal is the reading.** The device backend refuses rather than guesses (`the block parameter is
+read as one class … [Int, Float]`), the floor refuses with a named sentence (`NotClaimed`,
+`RegionIsNotAPair`), and the language refuses a spelling it cannot lower (`an if inside a fold body`).
+Those sentences are the evidence; copy them into the note rather than paraphrasing, because the next
+attempt is usually decided by the exact words.
+
 ## Where to read more
 
 - [physics-operators](physics-operators.md) — the stencil family, every reading above, and what is
