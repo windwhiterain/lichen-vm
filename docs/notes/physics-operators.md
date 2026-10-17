@@ -149,3 +149,37 @@ the type is not.
   a physical invariant, which means a solver's correctness rests on the output a caller chose to
   declare. That is honest rather than convenient, and it is what anybody writing a solver in this
   language has to live with.
+
+## What a step costs
+
+The ladder has had correctness readings only; this is the first cost reading it records. A print-only
+probe, `crates/lichen-compute/tests/lichen_compute/zz_dispatch_timing_probe.rs`, dispatches the same
+stencil kernel 1 and 101 times through the annotated loop and takes the difference, so the compile and
+the seed are paid by both runs and what is left is 100 dispatches. Wall clock around the whole run, on
+this machine's RTX 3060 and its host:
+
+| backend | lanes | `steps = 1` | `steps = 101` | per extra dispatch |
+|---|---|---|---|---|
+| `cpu` | 6 | 33.1 ms | 368.0 ms | **3.35 ms** |
+| `gpu` | 6 | 34.9 ms | 413.0 ms | **3.78 ms** |
+| `cpu` | 1024 | 86.5 ms | 1995.2 ms | **19.09 ms** |
+| `gpu` | 1024 | 64.4 ms | 815.2 ms | **7.51 ms** |
+
+Three readings, and the third is the one that matters:
+
+- **At six lanes the device is slower**: 3.78 ms against 3.35 ms, because at six lanes there is
+  nothing but dispatch overhead and the device path pays more of it.
+- **At 1024 lanes it is 2.5 times faster**: 7.51 ms against 19.09 ms, because the host interprets
+  element by element while the device runs sixteen workgroups. Per element that is 0.0073 ms against
+  0.0186 ms — both of them enormous next to a hand-written kernel, which is what an interpreter
+  costs.
+- **Both columns are dominated by the loop's per-step `compute.collect`**, not by the arithmetic. The
+  array-state loop must round-trip the answer through the host every iteration, because threading the
+  buffer itself is the shape that does not resolve (a fold carrying the struct prints `raw none`).
+  So a solver written this way pays a readback per step, and the milliseconds are readback plus the
+  interpreter's bookkeeping. **A buffer-threading loop is the measurement that would separate them,
+  and it does not exist yet** — that is the performance wall this family is against, and it is a
+  language question (how a fold carries a resident buffer) rather than a kernel one.
+
+The numbers are machine- and state-dependent: they are one run each, no repetitions, no warm-up beyond
+one dispatch. They are readings of a shape, not benchmarks.
