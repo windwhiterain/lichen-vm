@@ -1,6 +1,7 @@
 # A self-referential block-wide binding: the crash, the ruling, and what is left open
 
-> Status: **the refusal has landed; one crash is closed and one is not.** The user's ruling, in
+> Status: **the refusals have landed; the crash it found is closed on every measured shape.** The
+> user's ruling, in
 > their words: *"准确来说，这在图语义中并不合法，相当于自指，应当用 let 表示重绑定，但前端可能还未支持自指的重绑定"* — *"accurately, this is not legal in the graph semantics; it is equivalent to
 > self-reference; it should be written with `let` as a rebinding, though the front end may not yet
 > support a self-referential rebinding."* **Both halves of the uncertainty are now measured, and
@@ -14,10 +15,12 @@
 > refusal. **The user's "may not yet support" is measured false**, and the record of it is §11.2.
 >
 > **What the refusal closed**: `rc = rc * 2.0` in a kernel body was `0xC00000FD`; it is now a
-> named resolve refusal, exit `0` (§11.1). **What it did not close**: a **mutual** value cycle
-> — `a = b; b = qb * a`, which the language permits and the spec still promises — still overflows
-> at a 1 MiB stack and reaches the 512-level refusal at 2 MiB (§11.3). **That second finding is
-> the more important one, and it is the user's to decide.**
+> named resolve refusal, exit `0` (§11.1). **The mutual value cycle it left open** — `a = b;
+> b = qb * a` — was closed by the user's commit `5a9b97da`, which extends the refusal to a cycle
+> among **scalar** block bindings; measured, it is a named resolve refusal now and no longer
+> overflows (§11.6 has the before/after). **What remains open is not a crash**: §11.4's two
+> `# Invariant` statements are still false (`emit_node` does not exist, nothing in `lichen-compute`
+> is `#[stacksafe]`, and `stacksafe` is an unused dependency), and that is the owner's to decide.
 >
 > Everything below §1–§10 is the diagnosis as it was measured at `dev@12425166`, kept as it was
 > written. **Where §5 read the spec and concluded the program is legal, §5 now records that the
@@ -480,10 +483,16 @@ correctly.
 for this. The restrictive form is the spec's §Bindings *"compiles the value before the name enters
 scope"*, and it answers a self-referential rebinding correctly today.
 
-### 11.3 The second finding — **a legal program still overflows**
+### 11.3 The second finding — **a legal program still overflowed** (closed by `5a9b97da`)
 
-**`a = b` and `b = qb * a` in a `compute.parallel` body is legal, and it still dies with
-`0xC00000FD`.** This is the finding that matters more than the one the ruling closed, because the
+> The readings below are the state **before** the user's commit `5a9b97da`; §11.6 has the after
+> state. That commit refuses a cycle among **scalar** block bindings and keeps a cycle among
+> **struct or type** bindings legal, because the checker's skeleton pair and the deep pass each cut
+> their own cycle.
+
+**`a = b` and `b = qb * a` in a `compute.parallel` body used to die with `0xC00000FD`; `5a9b97da`
+now refuses it at resolve, and this paragraph is the state before that commit.** This was the
+finding that mattered more than the one the ruling closed, because the
 ruling does not touch it: a **mutual** value cycle is a *different* binding naming the other, the
 spec still promises it (`"any other binding of the block"`, and
 [`compile_scope_statements`](../../crates/lichen-language/src/compile.rs)'s own `# Invariant`:
@@ -573,6 +582,14 @@ strength of a §11.3 measurement taken on this machine only, and **editing an `#
 the user's permission** — which this slice does not have. **If the user wants option 1, it is one
 annotation and two sentences, and this note names all three places.**
 
+**After `5a9b97da` the recommendation is narrower.** The resolver refuses both cycle shapes, so
+restoring the annotation no longer closes a crash: what is left is that the two sentences are
+**false** — the walk is `Lower::value`, `emit_node` does not exist, and nothing in the crate is
+`#[stacksafe]` — plus the dependency the crate declares and never uses and the `512` defined twice
+(`compute.rs:2927` for the refusal message, `compute/body.rs:161` for the walk). Correcting a
+`# Invariant` still needs the owner's permission, and it is now a truth-of-the-comment change
+rather than a fix.
+
 ### 11.5 What this slice changed, what it deleted, and what the suites say
 
 **Changed**: `crates/lichen-language/src/resolve.rs` (the refusal, the `Apply` head-position
@@ -599,3 +616,31 @@ drivers; neither is referenced by anything in the tree.**
 **No `# Invariant` or `# Safety` sentence was added or changed anywhere.** The spec correction is
 not one of those sections, and §11.4 names the two that are still wrong rather than editing them.
 `crates/lichen-lowlevel/src/evaluation.rs` and `gc.rs` were not touched.
+
+### 11.6 The mutual cycle, closed by the user's commit
+
+**`5a9b97da` — "resolve: refuse a cycle among scalar block bindings, where the group is its own
+input" — extends the resolver's rule from a name to a cycle.** The commit message keeps a cycle
+among **struct or type** bindings legal, because the checker's skeleton pair and the deep pass each
+cut their own cycle, as the mutually-recursive-structs tests measure.
+
+**Measured on `dev@602480ed`**, the same `cpu`-backend driver as §11.3, one program per process:
+
+| kernel body | before (`dev@72b765aa`) | after (`dev@602480ed`) |
+|---|---|---|
+| `a = b; b = qb * a; rc = a` | **`0xC00000FD`** at 1 MiB | **refused by name**, exit 1: `` `a` closes a cycle among the block's bindings: … a group that depends on itself is its own input …`` |
+| `rc = rc * 2.0` | refused by name (§11.1) | refused by name, unchanged |
+| `rc = 1.0/qb; let rc = rc * 2.0` | runs `0.6666667` | runs `[0.6666667, …]: array{Float, 4}` |
+| `rc = qb * 2.0` | runs `6.0` | runs `[6.0, …]: array{Float, 4}` |
+| `f = n => … f (n - 1); rc = f 400` | runs `400.0` (§6) | runs `[400.0, …]: array{Float, 4}` |
+| the same at `f 500` | not measured | **the checker's work-budget refusal** (*"applied a function more than 2000 times"*), exit 1 — not the kernel depth budget, and not a crash |
+
+**So the crash this note opened is closed without the `#[stacksafe]` annotation**, because the shapes
+that reached the 512-level walk were cycles and both cycle shapes are now refused at resolve, before
+any lowering. The trip-500 row is §8's first unknown, partly answered: at that trip count the
+checker's own budget stops the program before the walk's depth is reached, so the depth budget's
+value still has no measurement behind it and no measured program reaches it.
+
+**What is not closed, and is the owner's**: §11.4's two `# Invariant` statements are still false, and
+the crate still declares the `stacksafe` dependency it never uses. Both are named there; neither
+blocks a program now.
