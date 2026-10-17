@@ -904,6 +904,13 @@ pub struct Module<P: Program> {
     /// Append-only and never cleared, so a second pass sees the first pass's records.
     /// Recording the same fact twice is declined: a node is deep-evaluated more than once.
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
+    /// The operator whose run is in progress, for a record that names no node.
+    ///
+    /// # Invariant
+    /// Set only around an extension operator's call and restored after it, so a plugin's
+    /// unnamed record is about the operator that made it
+    /// (`docs/notes/compiler-plugin.md`).
+    operator_for_diagnostics: Option<NodeId>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     /// The **mark anchors** each lowered marked expression reached, keyed by the

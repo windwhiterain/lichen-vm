@@ -203,6 +203,17 @@ deep-evaluated several times, and refusing twice is not two findings. That dedup
 both kinds, which is only safe because **no record appears in both**: measured across the
 suite, the two old vectors held **zero** entries sharing a `(category, node, message)`.
 
+**An unnamed record is about the operator that made it.** A plugin's `run`/`run_deferred`
+is handed the operand, the block and the module — not the operator's node — so a refusal
+that wanted to point at the call site recorded `node: None`, and a host rendered it with
+no span at all. The module now remembers the operator whose run is in progress and stamps
+an unnamed entry with it, restoring the previous one when the call returns, so a nested
+operator's records keep their own site. Stamping also makes the dedup per-site: two
+operators recording one sentence are two findings, while one operator re-evaluated is
+still one. Measured on the GEMV graph program the operator sweep reported: `compute.collect`'s
+"empty value of a failed read" went from `span: None` to `span: Some((18, 17))`, and the
+graph-build refusals (`compute.graph`) now name the `compute.graph` call site too.
+
 ### A refusal or a stage observation, and the flag that carries it
 
 `fails_build` is a question about **what the program may do next**, and the test is one

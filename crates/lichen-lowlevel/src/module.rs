@@ -36,6 +36,7 @@ impl<P: Program> Module<P> {
             apply_errors: Vec::new(),
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
+            operator_for_diagnostics: None,
             global_ext: P::GlobalExt::default(),
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
@@ -430,7 +431,11 @@ impl<P: Program> Module<P> {
     /// across **both** kinds, because a node is deep-evaluated more than once. The
     /// linear scan is right because this channel holds only the handful of things a
     /// layer declined to do, unlike `apply_errors`.
-    pub fn record_extension_diagnostic(&mut self, entry: ExtensionDiagnostic) {
+    pub fn record_extension_diagnostic(&mut self, mut entry: ExtensionDiagnostic) {
+        // An unnamed record made while an operator runs is about that operator.
+        if entry.node.is_none() {
+            entry.node = self.operator_for_diagnostics;
+        }
         let duplicate = self.extension_diagnostics.iter().any(|e| {
             e.category == entry.category && e.node == entry.node && e.message == entry.message
         });

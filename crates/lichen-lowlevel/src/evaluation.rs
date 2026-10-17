@@ -288,7 +288,12 @@ impl<P: Program> Module<P> {
                 }
             }
             // An extension operator reports undecided as `None`, which is what this answers.
-            None => operator.run_deferred(operation.operand, block, self),
+            None => {
+                let previous = self.operator_for_diagnostics.replace(node);
+                let value = operator.run_deferred(operation.operand, block, self);
+                self.operator_for_diagnostics = previous;
+                value
+            }
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
