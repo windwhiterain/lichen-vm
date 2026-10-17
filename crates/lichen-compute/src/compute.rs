@@ -5374,6 +5374,12 @@ where
         if recorded.is_some() || module.reopen_stalled(block) == 0 {
             break;
         }
+        // Each round opens its own graph; the abandoned round's refusals carry over with it.
+        let refusals = graph::abandon();
+        graph::begin();
+        for reason in &refusals {
+            graph::record_refusal(reason);
+        }
         result = module.evaluate_node_deep(apply, Some(block));
         recorded = result
             .as_ref()
