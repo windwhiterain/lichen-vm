@@ -5,6 +5,11 @@
 > **§11 records what has since landed** — the concrete-only deep gate, the suites it
 > was measured on, and the correction §11.3 makes to this map's own §8. Where §8
 > names a first target, read §11.3 with it.
+>
+> **§13 measures the plain gates and §14 records the one behavioural change this note
+> holds**: `compute.graph`'s recording pass no longer waits for a stalled structural
+> read to be re-asked by the run gate. It is a local, bounded retry; the gate itself
+> stays where §13 left it.
 > **§13 runs §1's goal on both gates and does not land it**: the deep gate alone
 > costs 4 `lichen-compute` tests, the run gate alone 65, and §13.2 corrects §4.1's
 > and §4.4's silence about the run axis. Where §4 or §11 is quoted as the map's
@@ -1055,6 +1060,147 @@ the elimination path is not only cheap — the re-run it would remove is load-be
 The lever §12.7 named is unchanged and is still a maintainer's decision: the
 checker's evaluate-before-unify order ([eval-before-unify](eval-before-unify.md)
 §2.1).
+
+**§14 revises the second of those two sentences, and only for the recording.** The
+re-run is load-bearing *because the recording was waiting on it*, and the recording
+no longer is; §14.5 measures that as 62 of these 65 going away without the gate
+moving. Read this section with §14 beside it: the "sixty-five" in §13.5 and in
+§13.7 is the count **before** the recording was made independent of the re-run.
+
+## 14. Graph recording, and the operator it had to wait for
+
+> Worktree `.worktrees/grec`, branch `feature/graph-recording`. Every number below is
+> from a probe-free run: the probe that located the stalls was removed before any of
+> them was taken, as §12.5 warns.
+>
+> **This is the one behavioural change this note records**, and it is the answer to
+> §13's sixty-five — not a removal of the run gate, which §8 of
+> [stalled-rerun-epoch](stalled-rerun-epoch.md) measures separately.
+
+### 14.1 The cause
+
+`compute.graph` records a body by **applying it to its own input placeholders**
+(`build_graph`, `crates/lichen-compute/src/compute.rs:5038`) and then reads the
+body's returned value tree. That read is `place_of_node` → `Module::node_value`, and
+`node_value` is the **raw slot** — it evaluates nothing
+(`crates/lichen-lowlevel/src/static_module.rs:169`). So the tree is readable only
+if every operator along it **has already run**: a position the recording's deep pass
+did not manage to run is an empty slot, not a lazy one.
+
+The operators it did not manage to run are structural reads, and only structural
+reads. Measured with a `TRACE-STALL` line per stall (the probe, removed before any
+reported number): **204 `Index` and 31 `TableGet`, and nothing else** under the
+plain run gate; **889 and 142** under the epoch gate. That is the whole population,
+not a sample.
+
+A stall is not the defect. Under the **landed** gate the recording works, because a
+write elsewhere in the same pass moves the epoch and the stalled read is asked again.
+That is an accident of ordering: the recording did not ask for a second attempt, it
+received one. Under a plain run gate — `runned != 0` with no epoch comparison — the
+second attempt never comes, and §13's sixty-five is what that costs.
+
+Traced on `graph_argument::a_second_buffer_records_under_the_in_group_and_does_not_beside_it`,
+the returned value is an array of **two** items and under the plain gate the **first
+one's slot is empty**; under the epoch gate both hold values. The stall chain above it
+is an `Index` whose target is another stalled `Index`, whose target is a `TableGet`,
+and so on — each link re-asked, each re-refused by the run gate.
+
+### 14.2 The two shapes that were not available
+
+**Making the placeholders concrete enough.** Measured and unavailable. The chain
+bottoms in cells that are **value-free *and* class-free** — `equality_representative`
+is the node itself and its class has no parent — so no placeholder and no
+unification ever reaches them. Decisively, `is_a_graph_placeholder`
+(`compute.rs:425`) asks whether the node **holds** a `GraphInput`/`GraphValue`, so an
+empty cell is not a placeholder by that rule at all: the two existing placeholder
+rules (`ComputeOperator::Read`, `compute.rs:509`, and `ComputeOperator::BufferCollect`,
+`compute.rs:516`) cannot see the thing that stalls, let alone refuse it. The stall is
+a value nobody has written yet, not a placeholder that is too coarse.
+
+**Recording where the callee's types are known.** Measured, and already the case.
+`build_graph` reads the parameter's declared type at `compute.rs:5076`
+(`parallel_roles`) and builds the placeholder from the paths it decodes, falling back
+to a flat tuple at a ceiling only when the roles come back `RoleUnread::Undecided`.
+The recording is not short of a type; it is short of a **slot write**.
+
+### 14.3 The landed shape, and what it costs
+
+`build_graph` now drives its own bounded re-evaluation
+(`evaluate_until_the_return_is_nameable`, `compute.rs:5351`). When the return cannot
+be named, `Module::reopen_stalled` (`crates/lichen-lowlevel/src/module.rs:367`)
+clears the run stamp of the operators under the recording's block that have an
+operation, an **empty** value slot and a stamp, and the pass is re-driven — at most
+`RECORDING_ROUNDS` (4) times, and a round that re-opens nothing ends the loop, so a
+body that can never decide still refuses after one wasted round.
+
+Three properties are what make the retry sound rather than merely effective:
+
+- **A dispatch that answered is not re-opened**, so a retry records no second
+  dispatch: the graph a body ends with is the graph its first round recorded.
+- **The retry is the recording's, not the module's.** It asks for one subtree, so it
+  moves no epoch for anyone else. The epoch run gate, `Module::value_epoch` and
+  §11.1's concrete-only deep gate are all untouched — §14.5 measures a plain gate
+  *over* the fix, which is the only way this can be told apart from §13.
+- **A round re-opens only what stalled**, so the cost is bounded by the recording's
+  own graph and not by the program's.
+
+Two narrowings were tried and **rejected by measurement**:
+
+| narrowing | arm result | why it does not work |
+|---|---|---|
+| re-open only operators whose deep verdict is `undecided` | 139 / 79 / 2 — the arm unchanged | an operator an `Index` forces through its **operand** edge is evaluated *shallowly* and never gets a deep verdict at all |
+| re-open only nodes in child blocks, not the scope's own | 139 / 79 / 2 — the arm unchanged | the chains live in the recording's **own** scope, not in a child block |
+
+The landed numbers are also a trap worth naming: **the gated suites do not tell the two
+narrowings apart.** Both read 147 / 13, 140 / 0 and 204 / 14 / 2. Only the plain-gate
+arm distinguishes them, which is the whole reason §8.2's arms exist.
+
+### 14.4 The experiment arm, by name
+
+The gate was temporarily plain (`LICHEN_PLAIN_RUN_GATE=1` on `run_stamp_is_current`,
+making it `runned != 0` with no epoch comparison), reverted before the commit, on top
+of the landed fix.
+
+| run | `lichen_compute` integration binary |
+|---|---|
+| plain gate, no fix (§13's arm) | 139 passed / **79** failed / 2 ignored |
+| plain gate, **with the fix** | **201** passed / **17** failed / 2 ignored |
+| epoch gate (landed), with the fix | 220 passed / 14 failed / 2 ignored |
+
+`Compare-Object` on names, never counts: **62 fixed, 0 newly failing**. The 17 that
+remain are the 14 of `base-compute-names.txt` — which fail identically on a pristine
+`dev` — plus three:
+
+| name | why it remains |
+|---|---|
+| `consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched` | the extra round reads one algebra name further than the first (`["combine","identity","element"]` against `["combine","identity"]`): re-driving a pass forces operand edges the first pass did not reach |
+| `graph_jit::a_buffer_the_body_closed_over_is_refused_by_the_capture` | the capture rule now does **not** fire where it must (`expected this program to fail`) — of §13's six "diagnostic-only" tests this is the one the retry changes rather than merely preserves |
+| `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` | the **host** run is the broken half: under the plain gate the program itself performs no dispatch (`right: []`), so recording and running cannot agree however the recording is driven |
+
+The last one is not a recording failure at all — it is the plain gate breaking
+`lichen-compute` outside the recording.
+
+### 14.5 The suites, probe-free
+
+Gates untouched, against the pristine `dev` measured in this same worktree
+(`base-compute-names.txt`, `base-lowlevel-names.txt`), name sets compared with
+`Compare-Object`:
+
+| suite | pristine `dev` | this branch | name-set delta |
+|---|---|---|---|
+| `cargo test -p lichen-lowlevel -j 1 --no-fail-fast` | 147 / 13 | **147 / 13** | **empty** |
+| `cargo test -p lichen-highlevel -j 1` | 140 / 0 | **140 / 0** | **empty** |
+| `cargo test -p lichen-compute -j 1 --no-fail-fast` | 204 / 14 / 2 | **204 / 14 / 2** | **empty** |
+
+### 14.6 What this leaves for the gate
+
+The recording was the run gate's last **recorded** dependent, and it no longer is:
+the dependency was an accident of the epoch happening to move, and it is now an
+explicit, bounded, local retry. What remains is §8.5's three lowlevel tests plus the
+three above — and §14.4 attributes two of those three to the plain gate's reach
+outside the recording. The epoch comparison itself is untouched and
+[stalled-rerun-epoch](stalled-rerun-epoch.md) §9 records the same finding from that
+side.
 
 
 

@@ -4,6 +4,8 @@
 > that a node is evaluated and decided exactly once: the run stamp is read as "this
 > operator has run", and the epoch it recorded is compared with nothing. **§8**
 > records the retirement, what it costs, and who owns the three tests that pin it.
+> **§9** records that the recording no longer depends on the gate, which takes the
+> cost §8.6 names from sixty-five programs to three.
 > §1–§7 are kept as the record of the design as it stood — §2 the measurement
 > behind it, §3 why the order of evaluation and unification is not the fix, §5 the
 > landed form, §6 the two dependency-edge designs that were rejected. The ordering
@@ -309,4 +311,30 @@ as a question: the 6 268 late writes are all at sanctioned sites, and the checke
 evaluate-before-unify order is a landed decision
 ([eval-before-unify](eval-before-unify.md) §2.1). Until that order is re-decided,
 the plain run gate is not free — it is sixty-five programs that stop building.
+
+**§9 revises the last sentence of §8.6, and only for the recording.**
+
+## 9. The recording stopped waiting for it
+
+`compute.graph`'s recording pass was the one caller that **depended** on the epoch
+moving rather than on asking again: it applied a body to its own input placeholders
+and read the body's returned value tree out of **raw node slots**
+(`Module::node_value` evaluates nothing), so a structural read that stalled once
+during the recording left its slot empty and the recording refused. It worked only
+because some other write in the same pass moved the epoch — an accident of ordering,
+not a second attempt it asked for.
+
+That dependency is gone. The recording now drives its own bounded retry
+(`evaluate_until_the_return_is_nameable` in `lichen-compute`'s `compute.rs`, over
+`Module::reopen_stalled`), and a plain run gate — `runned != 0` with no epoch
+comparison — is **62 `lichen-compute` failures lighter** with it and **zero**
+failures heavier. §14.4 of [late-writes-map](late-writes-map.md) gives the arms by
+name, the two narrowings that were tried and rejected, and the three that remain.
+
+So §8.6's "sixty-five programs that stop building" is now **three**, and the gate is
+still not free — but the reason has moved. Of the three, one is the recording reading
+an algebra name further than §8.3's refusal implies it should, and two are the plain
+gate breaking `lichen-compute` outside the recording altogether: in one of them the
+*host* run performs no dispatch at all. The latter two need their own answer before
+the epoch comparison can go, and they are not the recording's.
 
