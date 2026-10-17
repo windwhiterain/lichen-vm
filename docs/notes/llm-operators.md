@@ -597,12 +597,19 @@ need a node-local producer for `r`.
   - **And the append loses one cache slot on the device at `capacity = 8, dim = 1`** — a silent
     device/host divergence this probe found by accident, and the reason the pair above is pinned at
     `(4, 2)`. The device answers `[1.0, 100.0, 3.0, 4.0, 5.0, 0.0, 7.0, 8.0]` where `cpu` answers
-    `[1.0, 100.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]`, **in both cache halves** (the `K` collect and the `V`
-    collect, `106.0` becoming `0.0` as well), with no refusal and no report line. The graph leg reproduces
-    the direct chain exactly, so the graph is not implicated, and `(4, 2)` agrees on both backends. The
-    mechanism is **not diagnosed**: `6.0` appears nowhere in the device's answer, so that lane's write is
-    either dropped or aimed outside the span, and the value it writes is the copy arm of
-    `if position == t`.
+    `[1.0, 100.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]`, in both cache halves, with no refusal and no report
+    line. The graph leg reproduces the direct chain exactly, so the graph is not implicated. **The
+    mechanism is now diagnosed and it is the tail-lane obligation, not this operator**
+    (`zz_append_slot_probe.rs`, and `lichen-compute-gpu.md` §"A computed write address is not protected
+    by the padding"): a surplus lane runs the whole body unguarded, its fabricated `(column, position)`
+    puts its write at `position · dim + column`, which is **inside `[0, count)`**, and when its
+    `position` equals `t` it takes the fresh arm and writes `nk[column]` there. A `nk` with eight
+    elements makes it visible as the wrong value: the device answers `47 = nk[4]` where the host
+    answers `60`. The zeroes are the same write with a one-element `nk` (the padded input answers `0`),
+    and the outcome is a **race**: three identical runs clobbered `K`'s slot 5 every time and `V`'s
+    once out of three. So `(4, 2)` agreeing is the race lost, **not** a safe configuration, and the
+    committed KV-cache example's "agrees element for element" holds of the runs taken and is not a
+    guarantee.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same

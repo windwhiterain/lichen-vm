@@ -503,14 +503,67 @@ guard indices the host already knows.
 Instead every buffer is allocated rounded up to a whole number of workgroups and
 the padding is zeroed — inputs so the surplus lanes' reads are in bounds and
 return `0`, outputs so their writes land in padding rather than past the end.
-Inputs are zeroed **on the device**, by a `cmdFillBuffer` recorded next to the
-upload: only the `count` real elements cross the bus, and the tail is cleared
-where it already lives rather than uploaded as zeroes the host had copies of
-anyway. Only the first `count` elements are read back. Out-of-range access is
-impossible by construction rather than by a runtime test, and the shader stays
-branch-free. The tests pin **both** ends of that: a count that is not a multiple
-of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
-not).
+**That second half holds only while the write address is the lane's own index**
+(see the counterexample below). Inputs are zeroed **on the device**, by a
+`cmdFillBuffer` recorded next to the upload: only the `count` real elements cross
+the bus, and the tail is cleared where it already lives rather than uploaded as
+zeroes the host had copies of anyway. Only the first `count` elements are read
+back. Out-of-range access is impossible by construction rather than by a runtime
+test, and the shader stays branch-free. The tests pin **both** ends of that: a
+count that is not a multiple of 64 (so the padding is exercised) and one that is
+exactly a multiple (so it is not).
+
+### A computed write address is not protected by the padding, and the clobber is a race
+
+**Measured (`zz_append_slot_probe.rs`), and it falsifies the sentence above for a
+kernel whose write address is data**: `examples/kvcache.lichen`'s append writes at
+`slot = position · dim + column`, where `position` and `column` come from
+`compute.row`/`compute.col`. A surplus lane runs the whole body with no guard, so
+its fabricated coordinates are `(column, position) = (i / cap, i % cap)` for an `i`
+past `count`, and its write lands at `position · dim + column` — which is **inside
+`[0, count)`** whenever `i / cap < count / dim`, i.e. for most surplus lanes. If
+`position` happens to equal the kernel's `t`, that lane takes the *fresh* arm and
+writes `nk[column]`/`nv[column]` there instead of the copy.
+
+The readings, over `capacity` positions of `dim` elements with the cache
+`10, 20, …, 10·count`:
+
+| shape | host | device |
+|---|---|---|
+| `cap 8, dim 1, t 1`, `nk = [100]` | `[10, 100, 30, 40, 50, 60, 70, 80]` | `[10, 100, 30, 40, 50, 0, 70, 80]` |
+| `cap 8, dim 1, t 3` | `[10, 20, 30, 100, 50, 60, 70, 80]` | `[10, 20, 30, 100, 50, 60, 70, 0]` |
+| `cap 16, dim 1, t 1` | `[10, …, 160]` | slot `3` is `0` |
+| `cap 8, dim 1, t 1`, `nk = [7, 17, …, 77]` | slot `5` is `60` | slot `5` is **`47` = `nk[4]`** |
+
+The last row is the mechanism in one number: a surplus lane with `i = 33` has
+`(column, position) = (4, 1)`, and `position == t`, so it writes `nk[4]` at
+`slot = 1 · 1 + 4 = 5`. The zeroes in the other rows are the same write with
+`nk` one element long: the padded input answers `0`.
+
+**It is a race, not a fixed address.** Three identical runs of the `cap 8, dim 1,
+t 1` case gave the same `K` slot `5` clobbered each time and a `V` slot `5` that
+was `0` once and `1060` twice; `(cap 4, dim 2)` and `(cap 2, dim 4)` agreed with
+the host in the runs taken, which is the race lost, **not** a configuration that is
+safe. So the committed KV-cache example's "agrees with `cpu` element for element"
+is true of the runs taken and is not a guarantee, and `StagedLaunchNotAWholeWorkgroup`
+does not cover this: it refuses a **staged** launch whose count is not a whole
+number of workgroups, and a plain body with a computed address is dispatched
+whatever its count is.
+
+What the padding does buy, and what it does not: it makes a surplus lane's *reads*
+defined (`0` past `len`) and keeps a write past `count` out of the answer. It does
+**not** confine a computed write address to `[count, padded)`. Nothing checks that
+today — `dispatch.rs`'s own invariant says "every invocation reaches its write, so
+only the `count` real elements are ever read back", and that argument assumes the
+address is the invocation's index.
+
+Three shapes a fix could take, none of them taken here because each changes an
+invariant the backend states: (a) a body guard `if lane < count` (a branch every
+lane takes, which the note above deliberately avoids); (b) refusing a launch whose
+count is not a whole number of workgroups **whenever the body's write address is
+not the lane index** — the staged refusal generalised, but it needs a rule for
+"is the address the index"; (c) bounding the emitted write to `[0, count)` — one
+`Select` per write, on the path the branch-free rule exists to protect.
 
 **What an author has to know, and what this note did not say.** The sentence a kernel
 writer needs is not "the padding is zeroed" but **how much of a host input is real**: a

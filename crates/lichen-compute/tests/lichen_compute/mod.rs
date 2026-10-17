@@ -53,5 +53,6 @@ mod union_ports;
 mod zz_examples_panic_probe;
 mod zz_gc_panic_probe;
 
+mod zz_append_slot_probe;
 mod zz_graph_argument_probe;
 mod zz_operator_floor_probe;
