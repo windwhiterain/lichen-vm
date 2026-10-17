@@ -53,7 +53,7 @@ r = compute.range c.n
 compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 ```
 
-The read address becomes computed and the write stays the lane's index — the split `examples/gemv`
+The read address becomes computed and the write stays the lane's index — the split `examples/gemv.lichen`
 has. Mark the body `claim:Reduction(combine,identity,element)` if you want the fusion floor to see it
 at all; without a claim the floor refuses the graph with `NotClaimed`, before it asks anything about
 addresses.
@@ -84,7 +84,7 @@ intermediate.
 | anything the caller *chooses at run time* | **not expressible**: the condition would have to be data | — |
 
 A `Select` is accepted when **both arms are `Float`** — **at the body's top level.** Inside a fold body it is refused: the fold is compiled into a template before any apply, and a conditional there has no value to emit (`zz_masked_conv_probe.rs` measures it with a read in the arm and with a bare `0.0`/`1.0`, so the cause is the conditional and not the read). That is why every masked boundary in the samples sits at the top level, and why a masked *window* has to be a caller's zero border or the clamp below. The refusal you may have seen quoted is about
-arms computed in *different* classes (`examples/attention`'s `scores`), which a physics body never
+arms computed in *different* classes (`examples/attention.lichen`'s `scores`), which a physics body never
 needs. In a row-major grid the **vertical** taps are the padding and the **horizontal** ones are not —
 `i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask, a clamp, or a
 caller-supplied border, and a 1D body needs none of them.
