@@ -123,12 +123,13 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   at `1:1` — naming neither the struct type nor a close field — while the instance form `s.sux`
   reports `no field with this name in the struct type struct{…}, did you mean 'sub'?`. That is P1.
   Reusing `check_named_field`'s guard in `check_named_type_access` was tried and failed for a
-  concrete reason: the container's **value** is the struct-type value, and both
-  `shape::is_struct_type_any` and `shape::struct_names_any` answer false on it — `array_items` wants
-  the two-item `[shape, kind]` term, while the value's array is the marker payload (measured:
-  `value = NodeId(24)`, `concrete = true`, `is_struct = false`, `names = false`). The guard needs a
-  payload reader (or a direct name-table read off the value), not the type-term helper; **the fix is
-  not landed**.
+  concrete reason: the struct's name table lies on the **kind** path the runtime already reads
+  (`lazy_index_path(container_ty, STRUCT_KIND_NAMES_PATH)`), not in a `[shape, kind]` term the
+  checker helpers accept. `shape::is_struct_type_any` and `struct_names_any` answer false on the
+  container's value (`is_struct = false`, `names = false`), and the value's own two items are
+  **five-slot pairs**, not the two-item type term (measured: `value = NodeId(24)`, `concrete =
+  true`, `value[0] = 21`, `value[1] = 22`, each an array of five slots sharing a two-item
+  element). The guard must read the same names path the runtime reads; **the fix is not landed**.
 
 * **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
   with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —
