@@ -606,6 +606,18 @@ type must read the field type, and today it yields `none`. The `::` chains root 
 container's **type item**; for an instance's `type_of` the type value lives one level
 in (its *value*), which is the shape the `.a` fix resolved by rooting at the pair.
 
+**Probed, and the chain does re-evaluate — one of the two reads resolves.** On the
+first registry program (`v = f.f (_(.x 1, .y 2))` ; `T = type_of v` ; `(v.x, v.y,
+T::x == Int, T::y == Int)`) the read's nodes were printed on every evaluation:
+`container_ty` is concrete from the first pass, and by the third the chain has run
+end to end — `names=Table(static, module 361)`, `key=USize(1)`, `element` and `ty` both
+arrays — which is `T::y`. The tuple then reads **`(1, 2, none, 1)`**: `.y` resolves
+and `.x` still does not, and the first pass saw every cell empty, so the `.x` read's
+*first* evaluation is the one that sticks. Rooting the names path at the term
+(`[TYPE_KIND_SLOT] ++ STRUCT_KIND_NAMES_PATH`) changed nothing, so the path is not the
+lever: the remaining piece is that read's re-resolution after the type value is bound
+— the class-aliasing the `.a` fix relies on (`alias_read`) — not another path.
+
 **The candidate the ruling withdraws:** filling the kind into the result item when
 the returned value is a type. The type of a struct type is `Type`, so the item is
 right — and the operation itself is what has no meaning: the author's rule is that
