@@ -547,7 +547,9 @@ Two things the author still writes, and one defect the empty group exposed:
   `two_buffers_field` and `gemv_p_a` report their refusal, and `two_buffers_float`
   runs with the right values but an **open type** (`raw[raw 11, …]: ?a`). So the
   result-cell bind does not reach the graphrun's field-read container cell, and
-  this item is unchanged by it.
+  this item is unchanged by it. **Re-measured again after the call-result named read fix**
+  ([eval-before-unify](eval-before-unify.md) §2.4's "fix is the chain's root"): the two field
+  spellings are still refused, so they are a different item from that read.
 - **The empty group's and the split's own coverage.** The empty `.in` group is
   measured end to end on both backends, but no test exercises it; whether the
   fillers the tests and examples carry should migrate to it is a maintainer's

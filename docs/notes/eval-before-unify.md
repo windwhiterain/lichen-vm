@@ -532,20 +532,29 @@ the whole-term pin refuses at the apply, and it still costs the extension. Optio
 1's assert is the route that landed for `.a`; the whole-term pin stays the
 rejected one.
 
-**A call result's named read resolves nothing — measured.** `st = struct{.a Int}` ;
-`f = x => st(.a 7)` ; `(f 1).a` prints `raw none: ?a`, while the same read through a
-binding (`z = f 1` ; `z.a`) is `1: Int`, and a positional read of an apply result
-works (`f = x => (x, 2)` ; `(f 1)(0)` is `1: Int`). The field's own value does not
-matter (`.a 7` above), so this is not about the argument being undecided: the read's
-key chain — `TableGet(names(container_ty), name)`, and the shape/field-type chain
-behind it — hangs off the apply's **result-type cell**, and nothing in the read's own
-evaluation forces the apply to run before that chain is read. The container's *value*
-read would force it, but the key is a sibling operand, and the lazy `TableGet` built
-at check time holds the still-open cell. The binding form works because its top-level
-evaluation runs the apply first. This is the same shape as compute's `graphrun` field
-spellings (`two_buffers_field` and `gemv_p_a` refused; see
-[compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item) and as a fold whose
-read sits inline on the recursion's apply rather than on a binding.
+**A call result's named read resolved nothing, and the fix is the chain's root.**
+`st = struct{.a Int}` ; `f = x => st(.a 7)` ; `(f 1).a` used to print `raw none: ?a`,
+while the same read through a binding (`z = f 1` ; `z.a`) was `1: Int` and a
+positional read of an apply result worked (`f = x => (x, 2)` ; `(f 1)(0)` is
+`1: Int`). The field's own value did not matter (`.a 7` above), so the argument was
+not the issue: the read's key chain — `TableGet(names(container_ty), name)` and the
+shape/field-type chain behind it — hung off the apply's **result-type cell**, and
+nothing in the read's own evaluation forced the apply to run first, because the
+runtime `Index` evaluates its **subscript before its target**
+(`crates/lichen-lowlevel/src/evaluation.rs`). The binding form worked only because
+its top-level evaluation ran the apply first.
+
+**Landed**: the read's lazy chains now root at the container **pair's type item**
+(`Index(pair, 1)`, so evaluating them runs the apply, which decides the cell). The
+readings after the change: `(f 1).a` is `7: Int`, `(f 1).a` with the field taken
+from the argument is `1: Int`, `(f 1).b` on a two-field struct is `2.5: Float`, and
+`(f 1).b` where the field is missing reports the runtime table miss instead of
+silence. The suites hold — highlevel 140/0, language 265/11 (the same eleven),
+compute **225/2/2** (the same two), language-server 22/0. The compute `graphrun`
+field spellings are **still refused** after this fix, so they are a different item
+(see [compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item).
+
+### 6.3 The message/predicate disagreement
 
 ### 6.3 The message/predicate disagreement
 

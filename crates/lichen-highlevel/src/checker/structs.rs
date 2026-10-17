@@ -314,6 +314,18 @@ where
         // A constant is not an optimisation: a kernel body is walked by
         // operands, and a `TableGet` is no value to resolve.
         self.read_site = Some(self.loc(e, 0));
+        // Index reads its subscript first: root the chains at the pair.
+        let ty_source = {
+            let pair = self.state[container]
+                .term
+                .expect("the container must be compiled");
+            let ops = self.array_node(self.current_block, &[pair, self.one()]);
+            self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(ops),
+            )
+        };
         let key = match position {
             Some(at) => self.alloc_node(
                 self.current_block,
@@ -323,7 +335,7 @@ where
             None => {
                 // The struct marker's name table, read through the container
                 // type's kind.
-                let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
+                let names_node = self.lazy_index_path(ty_source, &shape::STRUCT_TYPE_NAMES_PATH);
                 // key = TableGet(names, name) — the field index.
                 let name_node = self.name_node(name);
                 let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
@@ -336,7 +348,12 @@ where
         };
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key, position);
+        let ty_root = if position.is_some() {
+            container_ty
+        } else {
+            ty_source
+        };
+        let (value_node, ty_node) = self.slot_read(ty_root, container_value, key, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);

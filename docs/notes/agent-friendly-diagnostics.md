@@ -217,7 +217,7 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
   **The current baseline, re-measured at `9fad30c7`** (the dynamic apply's result-cell bind; see
   [compute-kernel-struct](compute-kernel-struct.md)): lowlevel **146/13**, highlevel **140/0**,
-  language **265/11** (the same eleven names), compute **223/2/2** (`graph_jit` and
+  language **265/11** (the same eleven names), compute **225/2/2** (`graph_jit` and
   `graph_structure`; the latter is the one-read refactor's witness, per
   [compile-order-class](compile-order-class.md) §4.7), language-server **22/0** — its known red
   (`compute_kernel_bindings_render_by_name_not_raw_layout`) is **fixed**. A future red is a
