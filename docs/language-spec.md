@@ -358,18 +358,25 @@ delimiter is a fresh atom — an argument of an application:
   Int, .b string}::a` is `Int : Type`.  A decided struct type without the named
   component is refused at the read as a named-field miss — `S = struct{.a Int,
   .sub Int}` ; `S::sux` is `no field with this name in the struct type
-  struct{.a Int, .sub Int}`, never a runtime table miss.  The requirement is a
-  unify for **both**
+  struct{.a Int, .sub Int}`, never a runtime table miss.  **The left side must be a
+  struct type expression** — a `struct{…}` literal, a binding to one, or a name
+  denoting one.  A **runtime type value** is not one: what `type_of` returns is a
+  struct type's *nominal id and name table*, so `(type_of struct{.a Int})::a` states
+  no field type and is **refused**, not evaluated.  The requirement is a unify for
+  **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the
   named sibling of `X{n}`; `.` (`.a`) is the named field read over a struct
-  *instance*, whose kind (not type) must be TypeStruct — a unify on the kind slot
-  where the container's type is decided, and a **condition on the assert
-  channel** where it is not: an undecided container (a parameter, a call result)
-  is re-checked per application, so `f = x => x.a; f [10, 20]` is refused with
-  `expected a struct type, found array{Int, 2}` (the refused body still records
-  the runtime table read it fails).  A spaced `::` is not a
+  *instance*, whose kind (not type) must be TypeStruct.  **Neither `.a` nor `::`
+  defers**: the container's requirement is unified *first* and the read
+  is evaluated on the result — the shape `f _{.a 1, .b 2}` shows, where the
+  placeholder's type is bound by the unify before the body evaluates, so a read
+  inside the body sees a decided struct type.  An undecided parameter is bound by
+  the application's unify and the body then runs against it; that is why
+  `f = x => x.a; f [10, 20]` is refused with `expected a struct type, found
+  array{Int, 2}` (the refused body still records the runtime table read it fails).
+  A spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
