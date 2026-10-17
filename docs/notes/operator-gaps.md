@@ -61,3 +61,16 @@ Read it against the tables above: `?a` for row two, `raw none` for row three, `r
 reached a node …` for row one, `NotClaimed` and `RegionIsNotAPair` for the fusion row, and
 `4, 0, 1, 2, 3` for the unsigned trap. The notes that carry the readings
 (`physics-operators.md`, `writing-a-solver.md`) say what each one means for the operator library.
+
+The resolved row is not a probe — it is an example — so it is checked by the suite that runs it:
+
+```text
+cargo test -p lichen-compute --test lichen_compute -j 3 -- \
+  --exact lichen_compute::examples::every_example_runs_and_prints_what_it_declares
+```
+
+**A check is only worth running when the tip moved.** While `git log <baseline>..dev` is empty,
+neither command can say anything the baseline does not already say: the same binaries over the same
+commit. So the protocol is two steps — look at the log first, run the commands only when it is not
+empty — and a maintenance round with no movement is a round with nothing to do, which is the honest
+answer rather than a re-measurement of the same build.
