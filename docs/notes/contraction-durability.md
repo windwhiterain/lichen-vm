@@ -65,14 +65,29 @@ measured:
 So the two layers the toolchain controls are **measured** to discriminate; the
 layer it does not control — the driver's — is **argued**.
 
+## What is measured: a rebuilt emitter emits the same decorations
+
+A probe against the public `spirv::compile` builds `out[i] = operator (in[i])` for
+`sin`, `cos` and `ln`, forces a rebuild of `crates/lichen-compute-gpu` (the
+`Compiling` line names the worktree), and emits again. `spirv-dis` then counts, in
+the second build:
+
+| module | words | `NoContraction` | FMul | FAdd | FSub | FDiv |
+|---|---|---|---|---|---|---|
+| `sin` | **683** | **35** | 17 | 11 | 7 | 0 |
+| `cos` | **664** | **34** | 17 | 11 | 6 | 0 |
+| `ln` | **1912** | **110** | 55 | 53 | 1 | **1** |
+
+Every figure [the control](contraction-control.md) §9 recorded reproduces — the word
+counts `578 → 683` and `562 → 664`, and the decoration counts 35 and 34 — so the
+emitter still produces the decorations after a rebuild, not merely in the slice that
+measured them. `ln` is new here and worth its own line: **110 decorations and the
+family's only `OpFDiv`**, which is the division `ln` is still 1 ulp wrong about on
+the Iris Xe ([the re-verification](operator-reverification.md) §2).
+
 ## What is still unmeasured
 
 - **A cold driver cache**, as above: no Vulkan-level control has been found.
-- **The decoration count after a rebuild.** The counts above are from the modules
-  the slices emitted; re-emitting after a clean rebuild and counting the
-  decorations with `spirv-dis` would show the emitter still produces them, and that
-  needs a probe against `spirv::compile` — [the control](contraction-control.md)
-  §9 already does this for 26 modules, so the gap is narrow rather than wide.
 - **A third device.** Every number here is one RTX 3060 Laptop and one Intel Iris
   Xe.
 
