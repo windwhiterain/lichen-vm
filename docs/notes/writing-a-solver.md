@@ -71,29 +71,36 @@ needs. In a row-major grid the **vertical** taps are the padding and the **horiz
 `i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask and a 1D body does
 not.
 
-## 5. Iterate: array state, and annotate the recursive function
+## 5. Iterate: thread the kernel's buffer
 
 A time step is one dispatch; a solver is the same dispatch repeated. A plain host run is **one pass**
-and an operator asked before its operand is decided is never asked again, so the loop's state must be
-a value the next iteration can rebuild from:
+and an operator asked before its operand is decided is never asked again, so the loop has to be a
+`@loop` whose step dispatches. The state should be **the kernel's own buffer**:
 
 ```
-seed = (compute.collect (compute.plrun k (…) : Out).y : array{Float, N})
+seed = (compute.plrun k ((Arg)(…)) : Out).y
 @loop march = ((s => if s(0) == 0 then s(1) else
-    march (s(0) - 1, (compute.collect (compute.plrun k ((Arg)(… .I In(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : Out).y : array{Float, N})))
-  : tuple{Int, array{Float, N}} -> array{Float, N})
+    march (s(0) - 1, (compute.plrun k ((Arg)(… .I In(.x s(1)))) : Out).y))
+  : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (steps, seed)
+answer = (compute.collect solved : array{Float, N})
 ```
 
-Two rules, both measured:
+Three rules, all measured:
 
-- **The state is an array, not the kernel's output struct.** A fold carrying the struct never
-  resolves — one iteration or three, it prints `raw none`. Rebuilding with `compute.buffer (s(1))`
-  is what works.
-- **Annotate the recursive function** (`tuple{Int, array{Float, N}} -> array{Float, N}`). A recursive
-  function's type follows from its annotation (`language-spec` §3's `f : f` rule); without it the
-  answer prints `raw[…] : ?a` — the numbers are right, the type is missing, and nothing downstream can
-  use them. Annotating the *root* also works, but it states the type away from the function.
+- **A buffer threads through and is the cheapest state.** No `collect` inside the step, so the loop
+  pays one readback for the whole run instead of one per step — at 1024 lanes on the device that is
+  4.32 ms per dispatch against 9.81 ms for an array state. It also needs **no annotation**: the
+  state's type comes from the seed.
+- **A fold carrying the kernel's output *struct* never resolves** — one iteration or three, it prints
+  `raw none`. Thread `.y`, not the struct, and do not try to build a seed with `(Out)(.y x)`; it yields
+  a value nothing can read.
+- **If the state must be an array** (because the step needs the numbers on the host), rebuild with
+  `compute.buffer (s(1))` and **annotate the recursive function**
+  (`tuple{Int, array{Float, N}} -> array{Float, N}`). A recursive function's type follows from its
+  annotation (`language-spec` §3's `f : f` rule); unannotated, the answer prints `raw[…] : ?a` — the
+  numbers are right, the type is missing, and nothing downstream can use them. Annotating the *root*
+  also works, but it states the type away from the function.
 
 The loop **does dispatch**: iteration composes with kernels, on both backends, with the numbers the
 unrolled form gives.
@@ -123,18 +130,18 @@ language has no way to *state* an invariant — only a value a caller can check.
 
 Per extra dispatch of a stencil, measured on this machine (RTX 3060 and its host):
 
-| backend | lanes | per dispatch |
-|---|---|---|
-| `cpu` | 6 | 3.35 ms |
-| `gpu` | 6 | 3.78 ms |
-| `cpu` | 1024 | 19.09 ms |
-| `gpu` | 1024 | 7.51 ms |
+| backend | lanes | per dispatch, buffer state | per dispatch, array state |
+|---|---|---|---|
+| `cpu` | 6 | 4.79 ms | 4.55 ms |
+| `gpu` | 6 | 4.66 ms | 5.21 ms |
+| `cpu` | 1024 | 27.25 ms | 27.72 ms |
+| `gpu` | 1024 | **4.32 ms** | **9.81 ms** |
 
-The device loses below a few hundred elements (overhead only) and wins 2.5× at 1024. **Both columns
-are dominated by the loop's per-step `compute.collect`**: the array-state loop round-trips the answer
-through the host every iteration, because threading a resident buffer is the shape that does not
-resolve. So a looped solver pays a readback per step — write it if the answer matters, unroll it if
-the cost does, and do not expect kernel-speed arithmetic either way: these are interpreter numbers.
+Three readings: the device loses at six lanes, where there is nothing but dispatch overhead; it wins
+at 1024, and by **6.3×** rather than the 2.5× an array state makes it look; and the difference between
+the two states *is* the loop's readback — 5.5 ms of the array state's 9.81 ms at 1024 lanes on the
+device. So thread the buffer (§5) unless the step needs the numbers on the host, and do not expect
+kernel-speed arithmetic either way: these are interpreter numbers, and no spelling changes that.
 
 ## Where to read more
 

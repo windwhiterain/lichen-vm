@@ -37,13 +37,16 @@
     That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
     conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
     in the declared output but not stated as an invariant.\n\n\
-    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is an \
-    `array{Float, 9}` and each iteration rebuilds the kernel's input with `compute.buffer (s(1))`, \
-    because a plain run is one pass and an operator asked before its operand is decided is never \
-    asked again (`docs/notes/graph-recording-rounds.md`); a fold carrying the `GOut` struct never \
-    resolves at all. The recursion annotation `tuple{Int, array{Float, 9}} -> array{Float, 9}` is \
-    what makes the answer typed: without it the loop prints `raw[raw …]: ?a`, because a recursive \
-    function's type follows from its annotation (`language-spec.md` §3's `f : f` rule).\n\n\
+    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is the \
+    kernel's **buffer**: `seed = wrapped.y`, and each iteration hands `s(1)` straight to `.x`, because \
+    a plain run is one pass and an operator asked before its operand is decided is never asked again \
+    (`docs/notes/graph-recording-rounds.md`). A fold carrying the `GOut` **struct** never resolves at \
+    all (`raw none`); a buffer threads through and needs no `collect` inside the step, so the loop \
+    pays one readback for the whole run instead of one per step. `march` still carries \
+    `tuple{Int, compute.Buf Float} -> compute.Buf Float`: a recursive function's type follows from its \
+    annotation (`language-spec.md` §3's `f : f` rule), and stating it is what an example should do — \
+    though a buffer state is the one shape that also resolves without it, unlike an array state, which \
+    prints `raw[raw …]: ?a` unannotated.\n\n\
     **Nine lanes leave 55 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
     coordinates would put its write inside `[0, 9)` if nothing guarded it — the class of silent \
     wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
@@ -84,7 +87,7 @@ torus = compute.parallel torus_raw "cpu"
 plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
-seed = (compute.collect wrapped.y : array{Float, 9})
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
+seed = wrapped.y
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (1, seed)
-(compute.collect stepped.y : array{Float, 9}, solved)
+(compute.collect stepped.y : array{Float, 9}, (compute.collect solved : array{Float, 9}))

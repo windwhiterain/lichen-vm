@@ -1,27 +1,48 @@
-//! Probe: what one stencil step costs per dispatch, host against device.
+//! Probe: what one stencil step costs per dispatch, and what the loop's state costs.
 //!
 //! # Invariant
 //!
 //! Print-only. One annotated loop dispatches the same kernel `steps` times, so `steps = 1` against
-//! `steps = 101` leaves a hundred dispatches with the compile paid by both. The wall clock around the
-//! whole run is the reading: the model is dispatch-and-collect, so readback is part of the cost.
-
-use std::time::Instant;
+//! `steps = 101` leaves a hundred dispatches with the compile paid by both. Two states are timed: the
+//! kernel's own buffer, which needs no `collect` inside the step, and an `array{Float, N}` rebuilt
+//! with `compute.buffer`, which collects every iteration. Their difference is the readback.
 
 use super::common;
 
+use std::time::Instant;
+
 use lichen_compute::language::new_store;
 
-/// One program: `steps` dispatches of a stencil over `lanes` elements on `backend`.
+/// One program: `steps` dispatches of a stencil over `lanes` elements on `backend`, threading `shape`.
 ///
 /// # Invariant
-/// The first dispatch seeds the loop and every further one comes from the loop's body, so the trace
-/// is `1 + steps` dispatches and the seed is counted in both measurements.
-fn program(backend: &str, lanes: usize, steps: usize) -> String {
+/// The first dispatch seeds the loop and every further one comes from the loop's body, so the trace is
+/// `1 + steps` dispatches in both shapes and the seed is counted in both measurements.
+fn program(backend: &str, lanes: usize, steps: usize, shape: &str) -> String {
     let data = (0..lanes)
         .map(|index| if index % 17 == 0 { "4.0" } else { "0.0" })
         .collect::<Vec<_>>()
         .join(", ");
+    let (seed, looping, answer) = match shape {
+        "buffer" => (
+            format!(
+                "seed = (compute.plrun one ((XArg)(.n {lanes}, .alpha 0.25, .I XIn(.x x))) : XOut).y"
+            ),
+            format!(
+                "@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun one ((XArg)(.n {lanes}, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{{Int, compute.Buf Float}} -> compute.Buf Float)"
+            ),
+            format!("compute.collect (march ({steps}, seed)) : array{{Float, {lanes}}}"),
+        ),
+        _ => (
+            format!(
+                "seed = (compute.collect (compute.plrun one ((XArg)(.n {lanes}, .alpha 0.25, .I XIn(.x x))) : XOut).y : array{{Float, {lanes}}})"
+            ),
+            format!(
+                "@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun one ((XArg)(.n {lanes}, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{{Float, {lanes}}}))) : tuple{{Int, array{{Float, {lanes}}}}} -> array{{Float, {lanes}}})"
+            ),
+            format!("march ({steps}, seed)"),
+        ),
+    };
     let template = r#"
 --- compute = import "compute.lichen" ---
 XIn  = struct{.x (compute.Buf Float)}
@@ -37,16 +58,17 @@ step_raw = (c : XPar) => {
 }
 one = compute.parallel step_raw "@BACKEND@"
 x = (compute.buffer ([@DATA@] : array{Float, @LANES@}) : (compute.Buf Float))
-seed = (compute.collect (compute.plrun one ((XArg)(.n @LANES@, .alpha 0.25, .I XIn(.x x))) : XOut).y : array{Float, @LANES@})
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun one ((XArg)(.n @LANES@, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, @LANES@}))) : tuple{Int, array{Float, @LANES@}} -> array{Float, @LANES@})
-out = march (@STEPS@, seed)
-out
+@SEED@
+@LOOP@
+@ANSWER@
 "#;
     template
         .replace("@BACKEND@", backend)
         .replace("@DATA@", &data)
         .replace("@LANES@", &lanes.to_string())
-        .replace("@STEPS@", &steps.to_string())
+        .replace("@SEED@", &seed)
+        .replace("@LOOP@", &looping)
+        .replace("@ANSWER@", &answer)
 }
 
 /// One run's wall clock in milliseconds, and what it answered.
@@ -74,19 +96,21 @@ fn probe_the_dispatch_cost() {
         return;
     };
     // One warm-up run, so the first measurement is not the driver's first.
-    let _ = timed(&program("gpu", 6, 1));
+    let _ = timed(&program("gpu", 6, 1, "buffer"));
     for backend in ["cpu", "gpu"] {
         for lanes in [6usize, 1024] {
-            let (once, _) = timed(&program(backend, lanes, 1));
-            let (hundred, answer) = timed(&program(backend, lanes, 101));
-            println!(
-                "[{backend}/lanes={lanes}] steps=1 {once:.3} ms, steps=101 {hundred:.3} ms, \
-                 per extra dispatch {:.4} ms, answer {}",
-                (hundred - once) / 100.0,
-                answer
-                    .rsplit_once(": ")
-                    .map_or(answer.as_str(), |(value, _)| value)
-            );
+            for shape in ["buffer", "array"] {
+                let (once, _) = timed(&program(backend, lanes, 1, shape));
+                let (hundred, answer) = timed(&program(backend, lanes, 101, shape));
+                println!(
+                    "[{backend}/lanes={lanes}/state={shape}] steps=1 {once:.3} ms, steps=101 \
+                     {hundred:.3} ms, per extra dispatch {:.4} ms, answer {}",
+                    (hundred - once) / 100.0,
+                    answer
+                        .rsplit_once(": ")
+                        .map_or(answer.as_str(), |(value, _)| value)
+                );
+            }
         }
     }
 }

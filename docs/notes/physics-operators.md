@@ -92,6 +92,10 @@ the type is not.
   the total is **`8` at every step** — the unrolled solver works and its conservative property is
   visible in the declared output, which is the form an example can pin.
   A top-level `@loop` around the same dispatch behaves differently depending on what it carries:
+  - **state is the kernel's buffer** (`seed = looped.y`, each iteration handing `s(1)` to `.x`): the
+    loop dispatches, answers the same six numbers, prints `array{Float, 6}`, and needs **no
+    annotation** — the state's type comes from the seed. It is the spelling both examples use, and the
+    cheapest one: no `collect` inside the step (§What a step costs).
   - **state is a plain `array{Float, 6}` and each step builds its input with `compute.buffer (s(1))`**:
     the loop **dispatches and answers the same six numbers**, and its type is **undecided** —
     the printer shows `raw[raw 2.1875, …]: ?a` — until the recursive function is annotated, when it
@@ -101,11 +105,11 @@ the type is not.
     typed) and `[loop_recursion_annotated]`
     (`((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`, typed).
   - **state is the `XOut` struct** (seed a real kernel result, or hand-build `(XOut)(.y x)`): the
-    fold never resolves — one iteration, two or three all print `raw none: array{Float, 6}`, and the
-    same fold with the dispatch removed *fails* the harness outright. So the struct-carrying fold is
-    the broken part there, not the dispatch.
-  - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read,
-    which is why the array-state form above exists at all.
+    fold never resolves — one iteration, two or three all print `raw none: array{Float, 6}` — while
+    the buffer state above answers correctly. So **the struct is the shape that fails, not the
+    dispatch**, and a fold carrying a resident buffer is the one to write.
+  - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read.
+    Seed the loop with a real kernel result's `.y` instead.
 
   **Answered: the `?a` is the recursion-annotation rule, not the dispatch.** A loop whose body
   contains no dispatch at all prints the same shape — unannotated `@loop r = s => … r (s(0) - 1, 7)`
@@ -173,13 +177,29 @@ Three readings, and the third is the one that matters:
   element by element while the device runs sixteen workgroups. Per element that is 0.0073 ms against
   0.0186 ms — both of them enormous next to a hand-written kernel, which is what an interpreter
   costs.
-- **Both columns are dominated by the loop's per-step `compute.collect`**, not by the arithmetic. The
-  array-state loop must round-trip the answer through the host every iteration, because threading the
-  buffer itself is the shape that does not resolve (a fold carrying the struct prints `raw none`).
-  So a solver written this way pays a readback per step, and the milliseconds are readback plus the
-  interpreter's bookkeeping. **A buffer-threading loop is the measurement that would separate them,
-  and it does not exist yet** — that is the performance wall this family is against, and it is a
-  language question (how a fold carries a resident buffer) rather than a kernel one.
+- **The array-state loop's cost is its per-step `compute.collect`**, which round-trips the answer
+  through the host every iteration. That is measurable, because the **buffer** state exists and does
+  not collect: `zz_fold_buffer_probe.rs` shows a fold threading the kernel's buffer answers the same
+  three steps, typed, and `zz_dispatch_timing_probe.rs` times both states. Per extra dispatch:
+
+  | backend | lanes | buffer state | array state |
+  |---|---|---|---|
+  | `cpu` | 6 | 4.79 ms | 4.55 ms |
+  | `cpu` | 1024 | 27.25 ms | 27.72 ms |
+  | `gpu` | 6 | 4.66 ms | 5.21 ms |
+  | `gpu` | 1024 | **4.32 ms** | **9.81 ms** |
+
+  At 1024 lanes on the device the readback is **more than half the array-state cost** (5.5 ms of
+  9.81), and it is the reason the device's advantage looked like 2.5× when it is really 6.3×: the
+  same kernel against the same host is `27.25 / 4.32`. At six lanes the two states are within noise,
+  because there is nothing to read back that the dispatch did not already cost.
+
+  **This note said earlier that a buffer-threading loop did not exist and was the measurement to
+  make.** That was wrong, and the error is worth keeping visible: round 36 tried a fold carrying the
+  kernel's *struct* (which prints `raw none`), concluded that threading the buffer failed too, and
+  wrote the conclusion down as measured. Round 43 tried `s(1)` as a buffer and it works — the struct
+  is the shape that fails, not the buffer. A capability claim about a spelling is a hypothesis until
+  that spelling is run.
 
 The numbers are machine- and state-dependent: they are one run each, no repetitions, no warm-up beyond
 one dispatch. They are readings of a shape, not benchmarks.
