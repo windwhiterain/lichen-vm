@@ -55,6 +55,7 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         open_bindings: Vec::new(),
         lambda_depth: 0,
         call_head: None,
+        binding_edges: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
     // The program is one scope, never popped, so every later statement (and the
@@ -95,6 +96,8 @@ struct Resolver {
     lambda_depth: u32,
     /// The lambda depth the innermost apply's function was entered at, `None` outside one.
     call_head: Option<u32>,
+    /// One edge per value read: the binding whose value is being resolved, then the binding it reads.
+    binding_edges: Vec<(BinderId, BinderId)>,
 }
 
 /// A block-wide binding whose value is being resolved right now.
@@ -104,6 +107,8 @@ struct OpenBinding {
     depth: u32,
     /// Whether this binding has already been refused, so it speaks once.
     refused: bool,
+    /// Whether the value being resolved is a struct or type tree, whose cycles the deep pass cuts.
+    tree_valued: bool,
 }
 
 impl Resolver {
@@ -175,14 +180,69 @@ impl Resolver {
     }
 
     /// Enter a block-wide binding's value, where a name that resolves back to it is its own input.
-    fn open_binding(&mut self, binder: Option<BinderId>) {
+    fn open_binding(&mut self, binder: Option<BinderId>, tree_valued: bool) {
         if let Some(binder) = binder {
             self.open_bindings.push(OpenBinding {
                 binder,
                 depth: self.lambda_depth,
                 refused: false,
+                tree_valued,
             });
         }
+    }
+
+    /// Refuse a name whose reference would close a cycle among the block's scalar bindings.
+    fn refuse_binding_cycle(&mut self, name: &str, span: Span, binder: &mut Option<BinderId>) {
+        let Some(target) = *binder else { return };
+        let depth = self.lambda_depth;
+        let head = self.call_head;
+        // A call head or a struct/type tree's reference is not a scalar value read.
+        let read: Vec<BinderId> = self
+            .open_bindings
+            .iter()
+            .filter(|open| !open.tree_valued && !(depth > open.depth && head == Some(depth)))
+            .map(|open| open.binder)
+            .collect();
+        if read.is_empty() {
+            return;
+        }
+        // The cycle closes when the name's own value already reaches one of the values being read.
+        let closing = read
+            .iter()
+            .copied()
+            .find(|&from| from != target && self.reaches(target, from));
+        let Some(from) = closing else {
+            for from in read {
+                self.binding_edges.push((from, target));
+            }
+            return;
+        };
+        // The use is left unresolved and lowers inert; one edge removed makes the block acyclic.
+        *binder = None;
+        self.binding_edges.push((from, target));
+        self.diagnostics
+            .push(Diag::new(Stage::Resolve, span, binding_cycle(name)));
+    }
+
+    /// Whether `from` reaches `to` through the value reads recorded so far.
+    fn reaches(&self, from: BinderId, to: BinderId) -> bool {
+        let mut stack = vec![from];
+        let mut seen: Vec<BinderId> = Vec::new();
+        while let Some(node) = stack.pop() {
+            if node == to {
+                return true;
+            }
+            if seen.contains(&node) {
+                continue;
+            }
+            seen.push(node);
+            for &(a, b) in &self.binding_edges {
+                if a == node {
+                    stack.push(b);
+                }
+            }
+        }
+        false
     }
 
     /// Refuse a name that resolves to the block-wide binding whose value is being resolved.
@@ -222,7 +282,7 @@ impl Resolver {
                     .push(HashMap::from([(binding.name.clone(), id)]));
             }
             Stmt::Binding(binding) => {
-                self.open_binding(binding.binder);
+                self.open_binding(binding.binder, is_tree_expr(&binding.value));
                 self.resolve_expr(&mut binding.value);
                 self.open_bindings.pop();
             }
@@ -250,7 +310,7 @@ impl Resolver {
             let name = f.name.clone();
             match (&name, f.field) {
                 (Some(_), true) => {
-                    self.open_binding(f.binder);
+                    self.open_binding(f.binder, is_tree_expr(&f.value));
                     self.resolve_expr(&mut f.value);
                     self.open_bindings.pop();
                 }
@@ -294,6 +354,7 @@ impl Resolver {
                     }
                 };
                 self.refuse_self_reference(name, *span, binder);
+                self.refuse_binding_cycle(name, *span, binder);
             }
             Expr::Lambda {
                 parameter,
@@ -481,6 +542,32 @@ const UNRESOLVED: u64 = u64::MAX;
 
 /// The `@shallow(0)` refusal; docs/language-spec.md §"Shallow markers" states the bound.
 const SHALLOW_ZERO_DEPTH: &str = "a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely";
+
+/// Whether `e` is a struct or type tree, whose cycles the deep pass cuts.
+fn is_tree_expr(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::StructType(..)
+            | Expr::StructInst { .. }
+            | Expr::TypeTuple(..)
+            | Expr::TypeSet(..)
+            | Expr::TypeTable { .. }
+            | Expr::TypeArray { .. }
+            | Expr::TypeAccess { .. }
+            | Expr::TypeConst(..)
+            | Expr::Arrow { .. }
+    )
+}
+
+/// The scalar-cycle refusal; the same note's §11 records the rule and its limits.
+fn binding_cycle(name: &str) -> String {
+    format!(
+        "`{name}` closes a cycle among the block's bindings: a block-wide binding's name is its \
+         value's own node in the IR graph, so a group that depends on itself is its own input. Write \
+         the rebinding with `let`, which compiles a value before its name enters scope, and spell \
+         recursion as a call, with the name as the head of an apply inside a `=>` body."
+    )
+}
 
 /// The self-reference refusal, measured in docs/notes/self-referential-binding-overflow.md §11.
 fn self_referential_binding(name: &str) -> String {

@@ -287,10 +287,11 @@ impl Compiler {
     ///
     /// # Invariant
     ///
-    /// Every block-wide binding's name is entered before any value compiles, so
-    /// a value may forward- or mutually reference the block's bindings; a
-    /// restrictive `let` is entered during the pass, so its name is visible only
-    /// to later statements.
+    /// Every block-wide binding's name is entered before any value compiles, so a
+    /// value may forward-reference the block's bindings; a cycle among scalar values
+    /// is refused by the resolver, while a struct or type tree's cycle is cut by the
+    /// deep pass. A restrictive `let` is entered during the pass, so its name is
+    /// visible only to later statements.
     fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Vec<ExprId> {
         // Pre-pass: reserve a `Placeholder` per block-wide binding, under its id.
         for stmt in statements {

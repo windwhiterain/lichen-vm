@@ -482,12 +482,16 @@ maps every span back to the original file.
   a value read.  The
   frontend reserves a placeholder id per block-wide binding, enters all the
   names before compiling any value, then fills each placeholder with its
-  value's node — so a *mutual* reference makes the IR a cycle there (the
-  graph contains a back-edge), which the checker totalizes by pre-registering
-  a skeleton pair and binding the skeleton's cells to the finished pair (no
-  recursion, no overflow **in the checker**; what a kernel-body lowering walk
-  does with such a cycle is a separate question, measured in
-  [self-referential-binding-overflow](notes/self-referential-binding-overflow.md)).
+  value's node — so a *mutual* reference makes the IR a cycle there (the graph
+  contains a back-edge), which the checker totalizes by pre-registering a
+  skeleton pair and binding the skeleton's cells to the finished pair (no
+  recursion, no overflow **in the checker**).  A cycle among **scalar values** is
+  refused before that: a block-wide binding's name is its value's own node, so a
+  group of scalars that depends on itself is its own input, and the resolver
+  leaves the edge that closes it unresolved so the block lowers inert.  What a
+  kernel-body lowering walk did with such a cycle before that refusal — a stack
+  overflow — is measured in
+  [self-referential-binding-overflow](notes/self-referential-binding-overflow.md).
   `let name = expr` is the *restrictive* form: the
   value compiles before the name enters scope, so the name is visible only to
   later statements (`let a = a` resolves `a` to the outer binding — the
@@ -934,10 +938,11 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 
 There is no desugar step: bindings are graph sharing, and a block-wide
 binding reserves a placeholder id, compiles its value, then fills the id with
-the value's node — so a mutual reference makes the IR a cycle there,
-which the checker totalizes with a skeleton pair.  A use of a binding's *own*
-name inside its own value never reaches that: the resolver refuses it and the
-use lowers to an inert `ErrorBlock`, as an unresolved name's does.
+the value's node — so a mutual reference makes the IR a cycle there, which the
+checker totalizes with a skeleton pair; a cycle among **scalar values** is refused
+by the resolver instead, since a group of scalars that depends on itself is its
+own input, and the edge that closes it is left unresolved so the use lowers to an
+inert `ErrorBlock`, as an unresolved name's does.
 
 ### Name resolution
 

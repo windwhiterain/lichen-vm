@@ -956,6 +956,58 @@ fn assert_self_reference_is_refused(source: &str) {
 }
 
 #[test]
+fn a_mutual_pair_is_refused() {
+    // `a = b; b = a` is a cycle among scalars: a binding's name is its value's own node.
+    assert_cycle_is_refused("a = b\nb = a\na");
+}
+
+#[test]
+fn a_three_name_cycle_is_refused() {
+    // The chain aliasing used to collapse, now refused by the rule rather than by the walk.
+    assert_cycle_is_refused("a = b\nb = c\nc = a\na");
+}
+
+#[test]
+fn a_forward_reference_is_not_a_cycle() {
+    assert_not_refused("a = b\nb = 2.0\na");
+}
+
+#[test]
+fn mutual_recursion_through_calls_is_not_a_cycle() {
+    // A name as the head of an apply inside a `=>` body is a call edge, not a value read.
+    assert_not_refused("f = x => [g (x - 1), x][x <= 0]\ng = x => [f (x - 1), x][x <= 0]\nf 3");
+}
+
+#[test]
+fn a_let_rebinding_is_not_a_cycle() {
+    assert_not_refused("a = 1.0\nlet a = a + 1.0\na");
+}
+
+/// The resolver refuses `source` for closing a cycle among the block's scalar bindings.
+fn assert_cycle_is_refused(source: &str) {
+    let report = compile(source);
+    let d = &report.diagnostics;
+    assert_eq!(d.len(), 1, "{source:?}: expected one diagnostic, got {d:?}");
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert!(
+        d[0].message
+            .contains("closes a cycle among the block's bindings"),
+        "{source:?}: the head must name the rule, got {:?}",
+        d[0].message
+    );
+}
+
+/// `source` checks with no diagnostic at all, so no refusal of any kind fired.
+fn assert_not_refused(source: &str) {
+    let report = compile(source);
+    assert!(
+        report.ok(),
+        "{source:?}: expected it to check, got: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn a_deep_operator_chain_compiles_without_an_overflow() {
     // `1+1+…` is flat in the token stream but left-nested in the AST, so
     // the frontend's walks recurse once per term.
