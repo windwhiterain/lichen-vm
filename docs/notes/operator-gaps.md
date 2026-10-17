@@ -5,9 +5,12 @@ entry is current until somebody re-runs that probe and sees it change. The owner
 that decides the reading — most of these are not the operator line's to fix.
 
 **Verification points.** The entries were measured while their features were built, re-measured at
-`dev@4b60622f`, and every open one re-checked at `dev@7ccb2480`: nothing moved. The commits in between
-are the `::` chain's notes and this line's own, so that is the expected answer; the next time something
-does move, the commit that moved it belongs in the entry.
+`dev@4b60622f`, re-checked at `dev@7ccb2480`, and again at `dev@fe21eaa4` after the `::` chain landed
+`the :: chains root at the pair, so a deferred type access resolves`. **Nothing moved**, and the reason
+is worth keeping: that fix resolves a **type access** through a deferred chain, while rows two and
+three are an unannotated recursion's own cells and row one is the kernel template. Two mechanisms that
+look adjacent from the outside and are not. The next time something does move, the commit that moved it
+belongs in the entry.
 
 ## Gaps: not expressible, or broken
 
@@ -37,7 +40,17 @@ does move, the commit that moved it belongs in the entry.
 
 ## Keeping this current
 
-Each row names a probe; a row is stale the moment that probe prints something else. Re-running one is
-one command — `cargo test -p lichen-compute --test lichen_compute -- --exact
-lichen_compute::<probe>::<case> --nocapture` — and the notes that carry the readings
-(`physics-operators.md`, `writing-a-solver.md`) say what each one means for the operator library.
+Each row names a probe; a row is stale the moment that probe prints something else. Four of the six rows
+are covered by one command, and a libtest run takes several `--exact` filters and ORs them:
+
+```text
+cargo test -p lichen-compute --test lichen_compute -j 3 -- --exact \
+  lichen_compute::zz_fold_struct_probe::probe_the_struct_annotation \
+  lichen_compute::zz_fold_type_probe::probe_the_fold_type \
+  lichen_compute::zz_fold_buffer_probe::probe_the_fold_state \
+  lichen_compute::zz_masked_conv_probe::probe_the_masked_window --nocapture
+```
+
+`zz_operator_floor_probe` covers the fusion row and `zz_replicate_address_probe` the unsigned trap, on
+the same pattern. The notes that carry the readings (`physics-operators.md`,
+`writing-a-solver.md`) say what each one means for the operator library.
