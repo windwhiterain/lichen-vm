@@ -536,3 +536,38 @@ definition (`graph.rs:139`), the **recording**'s `nodes` field (`graph.rs:111`),
 The `Graph` type never holds it — there is no `pub struct Graph` in that file and `RecordedNode` never enters a
 `Graph`'s construction, since `finish` consumes the recording. The field is therefore process-internal and leaves
 `FORMAT_VERSION` alone, which stays the owner's decision for real format changes only.
+
+### Handing this to a new session
+
+The five steps are approved and **unstarted**; this section is what a fresh session needs to begin without
+re-deriving anything.
+
+**Step 3 has a constraint**: `named_abi` adds **one boolean** to `KernelRoles` or to what `parallel_roles` returns,
+computed from the existing `inputs_at` / `outputs_at` (`compute.rs:1956-1957`). **The walk is not to be touched.**
+
+**Step 5's third reading is printed on its own line.** The two legitimate zero-role programs —
+`a_graph_recorded_for_one_backend_runs_on_another` and `a_graph_runs_at_whichever_extent_its_argument_names` — must
+show a **false** flag, reported **separately from any diagnostic count**. It is the only reverse evidence that the
+boolean is computed correctly; folding it into a count hides it.
+
+**The state to start from**: `dev` at `b3554f76` or later; baselines `lichen-lowlevel` 146/13, `lichen-highlevel`
+140/0, `lichen-language` 265/11, `lichen-compute` 201/17/2. The five steps, with their anchors:
+
+1. a boolean per dispatch, in the argument loop immediately before the single recording call site
+   (`compute.rs:4975`; the operands are in the loop at `:4950-4974`), predicate `is_a_graph_placeholder`;
+2. a new `record_dispatch` parameter (`graph.rs:448`) carrying it, stored in a new `RecordedNode` field
+   (`graph.rs:139`); the field never reaches the artifact, so **no `FORMAT_VERSION` change**;
+3. `named_abi` reported from `parallel_roles` — one boolean, walk untouched;
+4. the conjunction in `build_graph`: the decoded names hold neither `in` nor `out`, **and** a dispatch in this
+   recording read a live buffer; the sentence names the kernel and the dispatch and contains **no `hold` and no
+   `parameter`** (the old words would let the old test satisfy it by accident);
+5. the three readings: the capture test sees the diagnostic; `recorded` is **item-for-item unchanged** (the
+   fallback is kept); the two legitimate programs' flags are **false**, on their own line.
+
+**Two traps that cost this session time**, both now in `AGENTS.md`: `--exact` needs the **full** test path (a bare
+name filters to zero tests and prints `ok`), and PowerShell's `-match` is **case-insensitive** (a passing line's
+`0 failed` matched `FAILED`).
+
+**What not to redo**: the determination is settled — the rule is intact, `roles=0` is legitimate for some programs,
+and the defect is the silence on a capture, not the fallback. Do not reopen "is the test stale" or "should the
+empty branch refuse"; both were measured and rejected.
