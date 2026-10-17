@@ -174,3 +174,29 @@ tests and looks like a pass). Running alone is not a convenience: `eprintln!` wr
 does not buffer, so a whole-module run interleaves one program's readings into another's and attribution becomes
 guesswork — the first attempt at this table did exactly that. With one test per process, every line belongs to
 the named program.
+
+### The refusal literals, verbatim
+
+`what_a_recorded_body_may_not_reach_for_is_refused_by_name` is **one** test that pins **six** message fragments
+across three programs it refuses, not four. These are the anchors a comparison must use — copied from
+`crates/lichen-compute/tests/lichen_compute/graph_jit.rs`, with the line each `contains` call sits on:
+
+| # | literal | line | which program |
+| --- | --- | --- | --- |
+| 1 | `"a collect is asked here"` | `:345` | `compute.collect` inside a recorded body |
+| 2 | `"after the graph has run"` | `:346` | the same message's other half |
+| 3 | `"a host read is asked here"` | `:369` | `compute.read` inside a recorded body |
+| 4 | `"a graph has no node for one"` | `:393` | a scalar kernel: no node to be |
+| 5 | `"nowhere for what it computes"` | `:394` | the same message's other half |
+| 6 | `"compute.graph"` | `:401`, `:402`, `:405` | all three: the fault is filed under the graph |
+
+A comparison that finds the same six fragments has found the same reasons. One missing fragment is a lost
+diagnostic; the test file itself is the authority, so this table is a pointer with line numbers, not a summary.
+
+### The acceptance is two-way
+
+- **A reason that changes fails the acceptance even if the test still fails**, because the failure would be
+  about a different defect.
+- **A reason that disappears fails the acceptance even though the test turns green**, because the test asserts
+  that the refusal is issued — a silent refusal is a lost diagnostic that looks like success. This is the
+  failure mode that a "does it pass?" check cannot see, and it is the reason this clause is written separately.
