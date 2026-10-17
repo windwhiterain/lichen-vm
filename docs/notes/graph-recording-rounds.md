@@ -133,3 +133,44 @@ The first round is empty in seven of the nine programs (`nodes=0`), and the one 
 without a second round does so with **zero** dispatches (`a_function_that_dispatches_nothing…`). So the
 "one graph, one walk" proposal loses nothing measurable on this corpus: the first round's dispatch count is
 **0** everywhere the re-drive runs at all.
+
+## Acceptance, settled with the compute owner
+
+Three corrections were settled in the exchange, and one of them corrects this note's own earlier wording.
+
+**Item 3 is per recording, in order.** A program may open more than one recording
+(`a_graph_recorded_for_one_backend_runs_on_another` and `a_graph_runs_at_whichever_extent_its_argument_names`
+open two each, `what_a_recorded_body_may_not_reach_for_is_refused_by_name` opens three), so "each program's
+count is the same" is the wrong sentence. The baseline is the table above read as `(program, which recording,
+nodes)`: the same programs, in the same order, with the same counts. One recording fewer or more is a change.
+
+**The never-naming programs are green, and that is the point.** This note's earlier sentence and the exchange's
+first draft both said those programs "stay red". That is wrong: they **pass today**, because each of them
+asserts that a refusal is issued, and an unnamed return is that refusal working. Corrected, the acceptance is
+about the **refusal text**, not about a red status: after the change, each of those programs must fail to name
+its return **for the same reason**, and the assertion that pins the reason is the literal in the test —
+`"a collect is asked here"` and `"after the graph has run"` in
+`what_a_recorded_body_may_not_reach_for_is_refused_by_name` (`graph_jit.rs:342-348`), and the matching pair in
+the host-read half of the same test. A reason that changes is a lost diagnostic; a reason that disappears is a
+test that turns green, which is also a failure of the acceptance.
+
+**`a_buffer_the_body_closed_over_is_refused_by_the_capture` is not A′'s.** It names its return on round two
+(`r1 false/0 → r2 true/2`), so its red is not a recording failure: the program is **accepted** where the capture
+rule should refuse it, which is a different defect with a different shape (the wider walk stops a rule firing).
+**A′ does not promise to fix it**, and its fix must not be booked against this proposal.
+
+## Replicating the table
+
+The probe is not an artefact and was reverted; the readings are reproduced by re-applying it — `graph::probe_node_count`
+returning the innermost recording's `nodes.len()`, and an `eprintln!` at each round's end in `reenter_recording`
+(`compute.rs:5369-5382`) — and running each test **alone**:
+
+```text
+cargo test -p lichen-compute --test lichen_compute <full::test::path> -- --exact --nocapture
+```
+
+The `--exact` flag needs the **full** path (`lichen_compute::graph_jit::<name>`; a bare name filters to zero
+tests and looks like a pass). Running alone is not a convenience: `eprintln!` writes to stderr, which libtest
+does not buffer, so a whole-module run interleaves one program's readings into another's and attribution becomes
+guesswork — the first attempt at this table did exactly that. With one test per process, every line belongs to
+the named program.
