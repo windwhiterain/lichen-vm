@@ -109,8 +109,9 @@ the type is not.
     it prints `raw none: array{Float, 6}` and records **no diagnostic at all**, which is worse than the
     array state's unannotated `?a`: an array loses only its type, a struct loses the value itself. So
     the rule is the recursion annotation again, and every state works once it is stated. **Re-measured
-    at `dev@deda78cb`, after `function-normalization`'s quiet structural unify (`4b832f58`): still
-    `raw none`**, so that fix does not reach this path.
+    at `dev@9f2f63f6`, which contains `function-normalization`'s structural fix (`9fad30c7`): still
+    `raw none`**, so that fix does not reach this path. (`4b832f58` is the record of the experiments,
+    not the fix, and the first re-measurement was taken before the fix landed.)
   - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read.
     Seed the loop with a real kernel result's `.y` instead.
 
