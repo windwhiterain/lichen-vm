@@ -1370,6 +1370,9 @@ fn emit_function(
         };
         slots.insert(value, scalar(id, read_as));
     }
+    // The prologue reads the block's own inputs and nothing of the body, so it stays above a
+    // guard built on two of those leaves; [`function_body`] splits the entry block here.
+    let prologue_len = prologue.len();
     let first_label = next;
 
     // The structure the emitter adds: loop headers and one merge block per merge
@@ -2125,10 +2128,93 @@ fn emit_function(
         });
     }
     let mut body = parameters;
-    body.extend(function_body(&plan, &mut blocks, &ids));
+    let guard = tail_guard(
+        fragment,
+        TailInputs {
+            entry,
+            index,
+            leaves: &leaves,
+            slots: &slots,
+            prologue: prologue_len,
+        },
+        &mut next,
+    );
+    body.extend(function_body(&plan, &mut blocks, &ids, guard.as_ref()));
     // The next function starts above everything this one handed out.
     *cursor = next;
     Ok(body)
+}
+
+/// What the tail guard is decided from: the entry point's own place in the launch, the leaves the
+/// prologue bound, and the slot each bound leaf reads through.
+struct TailInputs<'a> {
+    entry: bool,
+    index: u32,
+    leaves: &'a [ScalarClass],
+    slots: &'a HashMap<ValueId, Slot>,
+    prologue: usize,
+}
+
+/// The `index < extent` guard the entry point's body is wrapped in, or `None` where there is no
+/// extent member to compare the index against.
+///
+/// # Invariant
+/// **Member `0` is the extent and is declared `Int`**, which is the one a run whose first leaf is
+/// not `Int` is refused for (`RunError::ExtentNotAnInteger`), and the index is the last leaf — so
+/// the two compared below share one integer type. The index is `gl_GlobalInvocationID.x` widened
+/// to the module's own integer width, exactly as the prologue loaded it.
+///
+/// A fragment whose only leaf is its index has no member `0` left to name an extent, and a first
+/// leaf of another class names none the guard could compare as an unsigned integer; either way
+/// the body is emitted unguarded rather than against a member that is not a count.
+///
+/// The condition is **uniformly true for every lane of a staged launch**: a staged launch is
+/// refused unless its count is a whole number of workgroups, so its rounding leaves no surplus
+/// lane and no lane leaves the body early to skip a barrier.
+fn tail_guard(
+    fragment: &KernelFragment,
+    inputs: TailInputs<'_>,
+    cursor: &mut u32,
+) -> Option<TailGuard> {
+    let TailInputs {
+        entry,
+        index,
+        leaves,
+        slots,
+        prologue,
+    } = inputs;
+    if !entry || index == 0 || leaves.first() != Some(&ScalarClass::Int) {
+        return None;
+    }
+    let lane = slots[&fragment.body.parameters()[index as usize]];
+    let extent = slots[&fragment.body.parameters()[0]];
+    let condition = *cursor;
+    *cursor += 1;
+    let merge = *cursor;
+    *cursor += 1;
+    let body = *cursor;
+    *cursor += 1;
+    Some(TailGuard {
+        condition,
+        less_than: vec![lane.id, extent.id],
+        merge,
+        body,
+        prologue,
+    })
+}
+
+/// The two blocks the tail guard adds to the entry point, and where its entry block splits.
+struct TailGuard {
+    /// The `%bool` holding `index < extent`.
+    condition: u32,
+    /// `OpULessThan`'s operands after its result: the index, then the extent.
+    less_than: Vec<u32>,
+    /// The selection's merge block, which a surplus lane returns from.
+    merge: u32,
+    /// The label the guarded body starts at.
+    body: u32,
+    /// How much of the entry block's own code reads its inputs and stays above the branch.
+    prologue: usize,
 }
 
 /// The slot a value reads through, or the body's own refusal for a value nothing
@@ -3230,12 +3316,45 @@ impl Emitter<'_> {
 
 /// Every block of the emitted function in the plan's order: an `OpLabel`, the
 /// block's `OpPhi`s, then its code.
-fn function_body(plan: &Plan, blocks: &mut [Block], ids: &Ids) -> Vec<Inst> {
+///
+/// # Invariant
+/// **A guarded entry block is still the function's first block and still owns the prologue**: the
+/// branch that skips a surplus lane is a selection whose merge block returns, so the body's own
+/// instructions and terminator move whole into the block the branch falls into. Nothing of the
+/// body is executed above the branch, which is the whole of what the guard promises.
+fn function_body(
+    plan: &Plan,
+    blocks: &mut [Block],
+    ids: &Ids,
+    guard: Option<&TailGuard>,
+) -> Vec<Inst> {
     let mut function = Vec::new();
     for &node in &plan.order {
+        let Some(guard) = guard.filter(|_| node == plan.entry) else {
+            function.push(Inst::new(op::LABEL, vec![plan.labels[node]]));
+            function.extend(blocks[node].phis(ids));
+            function.append(&mut blocks[node].code);
+            continue;
+        };
+        let mut body = blocks[node].code.split_off(guard.prologue);
+        let mut less_than = vec![ids.boolean, guard.condition];
+        less_than.extend_from_slice(&guard.less_than);
         function.push(Inst::new(op::LABEL, vec![plan.labels[node]]));
         function.extend(blocks[node].phis(ids));
         function.append(&mut blocks[node].code);
+        function.push(Inst::new(op::U_LESS_THAN, less_than));
+        function.push(Inst::new(
+            op::SELECTION_MERGE,
+            vec![guard.merge, CONTROL_NONE],
+        ));
+        function.push(Inst::new(
+            op::BRANCH_CONDITIONAL,
+            vec![guard.condition, guard.body, guard.merge],
+        ));
+        function.push(Inst::new(op::LABEL, vec![guard.body]));
+        function.append(&mut body);
+        function.push(Inst::new(op::LABEL, vec![guard.merge]));
+        function.push(Inst::new(op::RETURN, vec![]));
     }
     function
 }

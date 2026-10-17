@@ -989,7 +989,7 @@ impl GpuContext {
     ) -> Result<(Dispatched, vk::DeviceSize), RunError> {
         let fragment = launch.root();
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
-        // The number the extent leaf is pushed with; a device-held extent has none.
+        // The host-held count the extent leaf carries, and the device-held buffer behind one.
         let (leaf, held) = match extent {
             Extent::Host(count) => (count, None),
             Extent::Device {
@@ -1002,8 +1002,10 @@ impl GpuContext {
             None => leaf,
             Some((_, _, capacity)) => capacity,
         };
-        // The block the entry point reads the launch's leaves out of.
-        let scalars = self.scalar_block(launch, class, leaf)?;
+        // The block the entry point reads the launch's leaves out of, carrying **the count this
+        // run dispatches over**: a device-held extent reads its own count from a buffer, so what
+        // member `0` names for it is the capacity that bounds it.
+        let scalars = self.scalar_block(launch, class, count)?;
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
