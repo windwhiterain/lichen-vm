@@ -148,6 +148,18 @@ undecided cell costs a host read is
   TypeTuple, .O Type}`: a tuple of element types is itself a tuple, so its type is the tuple
   universe. Only a *tuple* codomain dumps nested.
 
+**Measured exception: a kernel whose body launches another kernel leaves `.O` undecided.**
+`examples/compute_jit.lichen`'s `k_outer = compute.jit (x : Int => compute.launch k_double x)`
+renders `(raw Kernel, Int, raw none)` with type
+`struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}` — `.I` is decided and `.O` is not. The
+reason is the lambda's codomain: it is the launch's result, and the launch rule types that result as
+an open cell (`ComputeOperator::Launch`'s `low_type` states only a scalar class, never the kernel's
+codomain, `compute.rs:1714`), so the jit's `O` placeholder never receives a type value. The LSP test
+`language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
+over both statements and is red for this reason alone — it is the witness, not a stale assertion.
+The fix belongs to the launch extension rule: when the kernel operand's `.O` field is decided, the
+result type is that field's value.
+
 ## Kernel bodies are SSA, and a body may compute its own state and branch back
 
 The body of a kernel is `lichen-kernel-ir`'s SSA form: a value is a `ValueId`, an
