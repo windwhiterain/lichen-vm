@@ -703,6 +703,8 @@ where
         // `assign[pos]` = the argument index supplying position `pos`.
         let mut assign: Vec<Option<usize>> = Vec::new();
         let mut valid = true;
+        // An unknown name explains a gap, so it is the one diagnostic there.
+        let mut unknown_field = false;
         // Named arguments claim their name's positional index.
         for (i, name) in arg_names.iter().enumerate() {
             if let Some(name) = name {
@@ -733,6 +735,7 @@ where
                             Some(name),
                         );
                         valid = false;
+                        unknown_field = true;
                     }
                 }
             }
@@ -765,7 +768,7 @@ where
             }
         }
         // Missing fields — only when the definition's field count is known.
-        if let Some(def_len) = def_len {
+        if let Some(def_len) = def_len.filter(|_| !unknown_field) {
             if assign.len() < def_len {
                 assign.resize(def_len, None);
             }

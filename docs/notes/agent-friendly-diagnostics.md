@@ -1,8 +1,9 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and four cases are fixed; one more is measured with its obstacle.** The unclosed-delimiter case is fixed
+> **Status: the property is stated and five cases are fixed; one more is measured with its obstacle.** The unclosed-delimiter case is fixed
 > (`4cb42d3f`), the preprocessor's missing span is fixed (§7), the `NamedField` miss now blames the
-> read (P2), and the report's check-level assert now heads its runtime consequences (P3) — both in the
+> read (P2), the report's check-level assert now heads its runtime consequences (P3), and an unknown
+> field no longer also reports the gap it explains (P4) — all in the
 > corrections below; the offender list below is
 > **parser-heavy and under-covers the checker and the module
 > layers**, which is the first thing to close before another diagnostics slice — the two cases above are
@@ -108,7 +109,13 @@ load-bearing claims itself** — but *"neither survey ran anything: every claim 
 reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
 reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
-**Five corrections to what the surveys first said, each worth more than the claims they replaced.**
+**Six corrections to what the surveys first said, each worth more than the claims they replaced.**
+
+* **An unknown field name also reported the gap it explains, and now it does not.** `S = struct{.a Int}`
+  ; `S(.b 1)` reported two diagnostics — `no field named b in the struct type struct{.a Int}` and
+  `missing field a in struct instantiation` — for one typo. The unknown name explains the gap, so the
+  missing-field pass now skips an instantiation that has an unknown name: one typo is one diagnostic
+  (P4), and a genuine omission (`S(.a 1)` on a two-field struct) still reports the missing field.
 
 * **The check-level assert was printed after the runtime consequences, and it now heads the report.**
   `f = x => x.a` ; `f [10, 20]` reported five diagnostics: four runtime read failures

@@ -817,7 +817,9 @@ maps every span back to the original file.
   a positional argument fills the lowest-numbered unclaimed position.  The
   structural mismatches are their own diagnostics, each pointing at the
   offending argument: an unknown field (`StructUnknownField`), a duplicate
-  (`StructDuplicateField`), a field left unsupplied (`StructMissingField`),
+  (`StructDuplicateField`), a field left unsupplied (`StructMissingField` —
+  not reported when another argument's name is unknown, because that name
+  explains the gap; one typo yields one diagnostic),
   an excess positional argument (`StructExcessField`), and a `.name`
   argument against a struct type with no names (`StructAnonymousField` — no
   longer reachable from source, since every definition is named, and kept for
