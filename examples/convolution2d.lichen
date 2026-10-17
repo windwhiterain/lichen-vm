@@ -1,0 +1,55 @@
+---
+  order = "33"
+  compute = import "compute.lichen"
+  doc = "A two-dimensional convolution with a 3x3 coefficient buffer: `y[r,c] = Sigma_(j,k) w[j,k] * \
+    x[r-1+j, c-1+k]`, one lane per output cell of a row-major grid. It is the composition of \
+    everything the signal and physics samples measured — a two-dimensional layout, **runtime \
+    coefficients**, a moving window and a boundary — in one kernel, and its contract names the boundary \
+    rather than hiding it.\n\n\
+    **Nine taps are one fold, and the tap index splits into the two offsets.** `@loop` counts down \
+    over the nine weights; `(s(0) - 1) / 3` is the row offset and `(s(0) - 1) % 3` the column offset, \
+    so the window address is `base + j * cols + k` with `base = (row - 1) * cols + (col - 1)` \
+    precomputed **outside** the fold — it does not depend on the tap, and computing it once keeps the \
+    fold body one line. `cols` must be the **second** scalar leaf, because that is what \
+    `compute.row`/`compute.col` divide by \
+    (`crates/lichen-compute/src/compute/body.rs:788-815`); the tap count follows it. The write address \
+    stays the lane's own index, so the answer does not depend on a schedule.\n\n\
+    **The contract is that the caller supplies a zero border.** The flat address does not mask: at \
+    `col = 0` the tap address `base - 1` is the *previous row's last cell*, not the padding, and a \
+    measured reading says so — with a value at `(1, 4)`, cell `(2, 0)` picks up an extra `1.0` through \
+    exactly that tap (`crates/lichen-compute/tests/lichen_compute/zz_conv2d_probe.rs`). A masked \
+    variant would need a `Select` per tap whose condition depends on the column offset; this operator \
+    does not carry one, so it is a **convolution over a field the caller has already zero-extended**, \
+    which is what the `5x5` grid below is. Saying that in the contract is the point: a boundary that \
+    is neither a wrap nor the padding has to be somebody's decision, and here it is the caller's.\n\n\
+    **The arithmetic is exact and the answer is a block.** `x` is `0.0` everywhere except `8.0` at the \
+    centre `(2, 2)`, and the nine taps are `0.125` each, so a cell answers `0.125 * 8.0 = 1.0` exactly \
+    when its window contains the centre and `0.0` otherwise. The window is `3x3`, so the cells that \
+    contain it are rows `1..3` by columns `1..3` — the declared output is that block of `1.0`s. Note \
+    the taps sum to `1.125`, not `1.0`: this is a box, not a normalized average, and a uniform field \
+    would come back scaled by `1.125`. The output is hand-computed from that, not transcribed.\n\n\
+    **Twenty-five lanes leave 39 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
+    coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
+    answer measured on `examples/kvcache.lichen`'s append before the guard landed, and the reason a \
+    window read needs the guard as much as a flat one does. The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
+    the RTX 3060: the window arithmetic, the coefficient buffer and the guard are all right there."
+  output = "[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]: array{Float, 25}"
+---
+CIn  = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+COut = struct{.y (compute.Buf Float)}
+CPar = struct{.n Int, .cols Int, .taps Int, .in CIn, .out COut}
+CArg = struct{.n Int, .cols Int, .taps Int, .I CIn}
+convolve_raw = (c : CPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  base = ((row - 1) * c.cols + (col - 1))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
+}
+convolve = compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 25}) : (compute.Buf Float))
+weights = (compute.buffer ([0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125] : array{Float, 9}) : (compute.Buf Float))
+blurred = (compute.plrun convolve ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x x, .w weights))) : COut)
+compute.collect blurred.y : array{Float, 25}

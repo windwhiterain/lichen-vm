@@ -2,8 +2,8 @@
 
 A recipe for somebody who wants to write a GPU operator or a time-stepping solver in lichen and has
 not read the research. [physics-operators](physics-operators.md) is the record of *how* each rule was
-found; this is the order to do things in. The three acceptance samples are
-`examples/stencil.lichen` (one dimension), `examples/torus.lichen` (two) and `examples/filter.lichen` (a moving window), and every claim below is
+found; this is the order to do things in. The four acceptance samples are
+`examples/stencil.lichen` (one dimension), `examples/torus.lichen` (two), `examples/filter.lichen` (a moving window) and `examples/convolution2d.lichen` (a two-dimensional one), and every claim below is
 taken from one of them or from a measurement those notes cite.
 
 ## 1. Fix the launch shape first: one lane per element
@@ -159,4 +159,4 @@ kernel-speed arithmetic either way: these are interpreter numbers, and no spelli
   not expressible yet.
 - [device-operator-sweep](device-operator-sweep.md) — the device verdict for every operator example,
   with the method (`operators_on_device`) that reproduces it.
-- `examples/stencil.lichen`, `examples/torus.lichen`, `examples/filter.lichen` — the three samples this recipe is written from.
+- `examples/stencil.lichen`, `examples/torus.lichen`, `examples/filter.lichen`, `examples/convolution2d.lichen` — the four samples this recipe is written from.
