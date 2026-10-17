@@ -42,6 +42,16 @@ settled = march (2, seed)
 compute.collect settled.y : array{Float, 6}
 "#;
 
+/// The same annotated fold with the field read **on the apply result**: `(march (2, seed)).y`.
+///
+/// # Invariant
+/// The read's chains root at the container pair, so evaluating it forces the apply; before `096b75bb`
+/// this printed `raw none` even annotated, and it is the case that fix was measured against.
+const ANNOTATED_INLINE: &str = r#"
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut))) : tuple{Int, XOut} -> XOut)
+compute.collect (march (2, seed)).y : array{Float, 6}
+"#;
+
 /// What the raw runner renders for `body`, or how it refused.
 fn rendered(body: &str) -> String {
     let source = format!("--- compute = import \"compute.lichen\" ---\n{KERNEL}{body}");
@@ -61,7 +71,11 @@ fn rendered(body: &str) -> String {
 #[test]
 fn probe_the_struct_annotation() {
     let _guard = common::device("zz_fold_struct_probe");
-    for (label, body) in [("unannotated", UNANNOTATED), ("annotated", ANNOTATED)] {
+    for (label, body) in [
+        ("unannotated", UNANNOTATED),
+        ("annotated", ANNOTATED),
+        ("annotated_inline", ANNOTATED_INLINE),
+    ] {
         println!("[{label}] {}", rendered(body));
     }
 }
