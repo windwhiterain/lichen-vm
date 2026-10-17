@@ -1020,6 +1020,14 @@ Every error is grounded in a span and a message — no panics, no "internal"
 messages.  Garbage input (`""`, `"("`, `"3 :"`, `"\@"`, `"x =>"`) returns
 diagnostics.
 
+**One measured exception:** a runtime read failure (`EvalError::IndexTarget` /
+`EvalError::TableMiss`) blames a checker-derived node whose origin is the
+caller's argument, and the argument node carries no attribution edge, so the
+message renders with no span at all.  Measured: `f = x => x.a` ; `f [10, 20]`
+reports both kinds (`this value is not a container — it has no element to read`
+and `table lookup missed — no entry for key "a"`) with no position; the chain is
+in [eval-before-unify](notes/eval-before-unify.md) §5.2.
+
 ### Checker spellings
 
 Checker messages are rendered by the same printer as the CLI output, so
