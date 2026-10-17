@@ -809,12 +809,14 @@ maps every span back to the original file.
   read **by name**: `a.x` resolves `x` through the struct's name→index table to
   the field's positional index, and the read's type is that field's type (a
   `a.x` on a struct without that field is a `NamedField` diagnostic at the read,
-  with a did-you-mean clause naming the closest field; a `a.x` on a non-struct is
-  refused
-  by a struct-kind **Guard** at check time — `f = x => x.a` ; `f (10, 20)`
-  reports `expected a struct type, found tuple{Int, Int}` — and the lazy
-  name-table read still runs, so the two runtime read messages (`this value is not
-  a container`, `table lookup missed`) follow it, each at the read).  The
+  with a did-you-mean clause naming the closest field; a `a.x` on a **decided**
+  non-struct value is refused by a struct-kind **Guard** at check time —
+  `(10, 20).a` reports `expected TypeStruct, found TypeTuple` and `[10, 20].a`
+  reports `expected TypeStruct, found TypeArray` — while a container still
+  **undecided** at check carries no requirement there: `f = x => x.a` ; `f (10, 20)`
+  fails at the **read**, with `this value is not a container — it has no element to
+  read` (`table lookup missed — no entry for key …` for a table read), each at the
+  read, per the ruling in [eval-before-unify](notes/eval-before-unify.md) §6.2).  The
   positional form
   `s(1, 2)(0)` is **not** this read — `a(k)` is the *tuple* read, and a struct
   instance is refused by it (see *Indexing*) — nor is `s(1, 2)[0]`, which is the
