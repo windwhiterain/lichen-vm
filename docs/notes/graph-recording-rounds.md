@@ -497,3 +497,27 @@ dispatch that read an input buffer**. The fallback stays; the silence goes.
 claim that the fix is bound in two halves. The empty branch may stay as it is; the fix is the conjunction, and
 the only remaining change is a test that asserts the new sentence — a **test change, still awaiting the owner's
 sign-off**.
+
+### Where the capture flag lives, and why there
+
+The fix's two halves are settled: a conjunction diagnostic and the fallback kept. This records where its
+boolean goes, because a wrong home makes the diagnostic either unable to name the dispatch or unable to be
+cheap.
+
+**The predicate is `is_a_graph_placeholder`** (`compute.rs:425-450`): a buffer the graph owns is a `Buf` wrapper
+around a placeholder, and a live buffer from outside the body is not. It is universal. `handed_a_placeholder`
+(`:468`) is **not** — it is called only by `Real` and `BufferCollect` (`:509`, `:516`), so a `plrun` capture
+never reaches it. It is the reference for "this fact is wanted here too", never the signal.
+
+**The position is `graph::record_dispatch`** (`graph.rs:448`), the single entry a dispatch has into a recording
+(`recording.nodes.push(...)`, `:515`).
+
+**The boolean belongs on `RecordedNode`, not on the recording.** The diagnostic must name **which** dispatch
+read the live buffer, and an accumulator on the recording can only say that one did. A per-dispatch field costs
+one byte per recorded dispatch and makes the sentence's "and a dispatch in this recording read a buffer from
+outside the body" a fact about a named node rather than about a count. A second reason is that the flag is
+already a property of that dispatch's operands — putting it anywhere else would recompute a decision made one
+layer down.
+
+The diagnostic then reads the recording's dispatch list once, at build time, and reports the first dispatch whose
+flag is set; the recording side already has that list, so nothing crosses layers.
