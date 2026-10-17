@@ -116,32 +116,28 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    the annotation is what turns it into a real type — so the fix belongs to the
    checker's body typing (the `if`-join of the two branches must not leave a
    wildcard when one branch is the recursion), not to the loop's bind.
-   **Where the wildcard enters, located — and it is not the array-literal typing.**
-   The language lowers `if c then t else e` to `Index([else, then], c)`
-   (`compile.rs`, no conditional IR kind), and the checker reads that node through
-   **`check_index`** (`checker/indexing.rs`), not `check_field`: the `Index` read's
-   type is the array type's element slot, `ARRAY_TYPE_ELEMENT_SLOT = 0` (`shape.rs`)
-   — i.e. **the `else` branch's type alone**; the branches are never unified, and
-   the `then` branch contributes only the runtime value. For the recursive fold the
-   `else` branch **is** the recursive application, so the body's tail type is the
-   function's own return type — a cycle whose type half is left as a bare,
-   unfilled cell (measured at `Iteration::Exit`: the recorded type half has no
-   value and no operation, and its clone is the blank cell the loop then binds).
-   So the defect is the **`if`'s static type being its `else` arm**, and two fixes
-   are open: (a) a design decision to join the branches' types (would change what a
-   heterogeneous `if` means); or (b) keep the `else`-arm rule and make the loop's
-   **exit carry its own base branch's type** (the conversion records the base's
-   value half today, so the branch's pair type is not reachable) instead of the
-   function's cyclic return type. (b) is the integrity-preserving one.
-   **The `check_index` route was tried and reverted, measured**: reading the element
-   type from the **chosen** slot for a non-constant subscript — the chain
-   `Index(Index(Index(array_ty, shape), index_value), type)` — makes even the
-   *working* tuple-of-Ints fold fail with two *"this value is not a container — it has
-   no element to read"* errors (the chain reads the container's shape before the
-   condition is decided), so a read's type cannot follow a runtime index at check.
-   (a) is therefore not avoidable by a local read change: either the branches' types
-   join at check, or the loop's exit carries the base branch's own type — and (b)
-   needs the branch's pair, which the conversion does not record today.   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
+   **The mechanism, corrected and located.** The language lowers `if c then t else e`
+   to `Index([else, then], c)` (`compile.rs`, no conditional IR kind); the author's
+   ruling is *"既然是脱糖，那么 checker 就不应该有 if 这个分支，直接就都是 array 分支"* —
+   no `if`-specific typing exists or should exist. The desugared `[else, then]` is an
+   **array literal**, and `check_array_term` (`checker/indexing.rs`) **does** unify every
+   element against one shared `element_ty` (`DiagKind::ArrayElement`): a heterogeneous
+   `if` is **refused**, measured — `x = if 1 == 1 then 1 else "a"` answers *"expected
+   string, found Int"*. So the `Index` read's type is that shared `element_ty` (a bare
+   cell), and for the recursive fold — whose two arms are both *open* at check, so the
+   unify succeeds — the `else` arm is the recursive application, and `element_ty`'s
+   class holds the arms' type nodes, one of which is the function's own return type.
+   **Why it stays open — the last mile, measured**: a per-call clone of a bare cell
+   shares the *template's* class, and the class's deciding member is the *template's*
+   derived read (of the template's parameter type), because the clone walk does not
+   traverse class members. Deep-evaluating the exit's type cell changes nothing
+   (tried): the clone's class still answers the template's read, whose operand is
+   unbound. So the fold's silent `none` is a **clone-walk limitation on class
+   members**, not the array-literal typing; the workaround stays the annotation, and
+   the engine-side fix (carry a cloned cell's deciding members per call) is the
+   owner's call — the two local routes tried (runtime-index element type, deep exit
+   evaluation) are recorded below as measured negatives.
+   **A minimal, compute-free repro** (the hand-over): `S = struct{.y Int}` ;
    `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ;
    `(f (0, S(.y 3))).y` answers `raw none: ?a`, and so does the identity fold
    `… then s(1) else f (s(0) - 1, s(1))` over an `S`-typed state. The control is a

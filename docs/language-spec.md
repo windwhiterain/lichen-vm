@@ -248,7 +248,10 @@ farg     := '.' name expr                         -- named instantiation argumen
   an infix operator, so the condition cannot extend through it), and the
   branches extend maximally like a lambda body.  It desugars to the lazy index
   `[e2, e1][cond]` — the condition (`0`/`1`) selects the branch, and the
-  untaken branch is never evaluated.
+  untaken branch is never evaluated.  There is no conditional typing rule: the
+  desugared literal is an **array**, so both branches must agree with the array's
+  one element type (a disagreement is an `ArrayElement` mismatch, e.g. `if c then
+  1 else "a"` is refused), and the expression's checked type is that element type.
 - **Tables.**  `table(k1 ==> v1, k2 ==> v2, …)` is a constant table value;
   each entry is a deep-equal `key ==> value` pair (the table arrow is not part
   of the expression grammar, so it unambiguously separates the pair).
