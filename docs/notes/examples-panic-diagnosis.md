@@ -1,12 +1,22 @@
 # The `examples` binary panics: `invalid SlotMap key used`
 
-> Status: **diagnosed — a defect on `dev`, unchanged by this note.** The `examples`
-> test binary in `lichen-compute` panics at
+> Status: **historical — diagnosed, then fixed by disabling the read-path trigger.**
+> The `examples` test binary in `lichen-compute` panicked at
 > `crates/lichen-lowlevel/src/evaluation.rs:517` with `invalid SlotMap key used`,
-> which takes the whole binary down and masks the examples-level verdicts it
-> would otherwise report. The panic is a **stale `NodeId`** — a node that
-> `drop_block` had already removed — reached by a deep walk, which is the failure
-> `drop_block`'s own `# Invariant` sentence names.
+> taking the whole binary down and masking the examples-level verdicts it would
+> otherwise report. The panic was a **stale `NodeId`** — a node that `drop_block`
+> had already removed — reached by a deep walk, which is the failure `drop_block`'s
+> own `# Invariant` sentence names. It no longer reproduces: the maintainer ruled the
+> engine-side collection trigger off until its owner repairs it
+> ([gc-trigger-disabled](gc-trigger-disabled.md)), and
+> `examples::every_example_runs_and_prints_what_it_declares` passes again
+> (measured on the merged tip after the ruling). The chain below is the record of the
+> measurement, and its line numbers are **as of that measurement** — the files have
+> grown since, and where they did, the note kept the number rather than re-deriving
+> it.
+>
+> The two probes named below are **not stale**: they are the survey that reopened
+> this question for the collector's owner, and they stay while the repair is open.
 >
 > No production behaviour, no `Invariant`/`Safety` sentence, no example and no
 > test expectation was changed to produce this. Two probe test files are left
