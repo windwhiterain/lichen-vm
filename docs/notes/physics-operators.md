@@ -77,11 +77,16 @@ backends agree bit for bit.
   cites from `attention.lichen`'s `scores` was about arms computed in *different* classes — so the
   horizontal boundary costs one `Select` per direction and nothing else. Measured: `agrees, 15 of 15
   element(s)` on the RTX 3060, both chains together, so the mask is right on the device too.
-- **A periodic or clamped boundary is no longer blocked by the class rule.** A `Float`-armed `Select`
-  is accepted, so a periodic boundary is the wrap done on purpose
-  (`if col == 0 then read (row * cols + cols - 1) else read (i - 1)`) and a clamped one is `max` on
-  the index. What is *not* expressible is a boundary that is a **runtime parameter**: the condition
-  would have to be data, and the surface has no such `Select`.
-- **A conserved quantity** — mass, energy — cannot be stated: the language has no place for a
-  physical invariant, so the declared output is the only acceptance there is. That is honest rather
-  than convenient, and it is what a solver written in this language has to live with.
+- **A periodic boundary is measured, and it changes the answer in one place.** A `Float`-armed
+  `Select` is accepted, so the ring is the wrap done on purpose:
+  `if i == 0 then read (n - 1) else read (i - 1)` and the mirror at `n - 1`. On the **same**
+  `4 0 0 0 0 4`, the Dirichlet step answers `2 1 0 0 1 2` and the ring answers `3 1 0 0 1 3` — the
+  two edges stop leaking — and all three chains together answer
+  `agrees, 21 of 21 element(s)` on the RTX 3060. What is *not* expressible is a boundary that is a
+  **runtime parameter**: the condition would have to be data, and the surface has no such `Select`.
+- **A conserved quantity can be *read* but not *stated*.** The ring's total is unchanged — `8` in,
+  `8` out — while the Dirichlet step's is `6`, because the Laplacian sums to zero over a ring, so
+  the conservation is visible in the declared output and nowhere else. The language has no place for
+  a physical invariant, which means a solver's correctness rests on the output a caller chose to
+  declare. That is honest rather than convenient, and it is what anybody writing a solver in this
+  language has to live with.

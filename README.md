@@ -2534,7 +2534,7 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `i - 1` and at `i = n - 1` the right one is `i + 1`, and both are **outside the buffer** — an \
     out-of-buffer read answers `0` (`crates/lichen-compute/src/compute.rs:6234`; the same rule that \
     made `examples/gemv.lichen` answer `0` for `x`'s fourth element). So both ends are \
-    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the **one-dimensional** \
+    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the **Dirichlet** \
     operator has no case analysis in it at all. That is a choice of operator rather than a limitation of the surface: a \
     different boundary is a different operator, because the surface has no way to spell a boundary \
     that is a parameter without a `Select`, and a `Select` refuses when its two arms are computed \
@@ -2578,6 +2578,17 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     cell takes `0.25 * 4 = 1` from the one `4` that is a real neighbour — `(0, 0)` from below, `(0, 1)` \
     from the right, `(1, 1)` from the left, `(1, 2)` and `(2, 0)` from above — and `(2, 1)`, `(2, 2)` \
     have no `4` at any tap and stay `0`. The answer is `1 1 0 / 0 1 1 / 1 0 0`.\n\n\
+    **The same data under a periodic boundary, which is the wrap done on purpose.** The third chain \
+    runs the ring kernel on the *same* `4 0 0 0 0 4`, so the only thing that changes is the boundary: \
+    lane `0`'s left tap is `x[5] = 4` instead of the padding's `0`, and lane `5`'s right tap is \
+    `x[0] = 4`. The two edges therefore stop leaking and answer `3` where the Dirichlet step answered \
+    `2`, so the readings are `3 1 0 0 1 3` against `2 1 0 0 1 2` — and the difference is visible as a \
+    **conserved total**: both start at `8`, the ring ends at `8` (the Laplacian sums to zero over a \
+    ring, so a step with any `alpha` leaves the total alone) and the Dirichlet step ends at `6`, \
+    having lost `2` through the two zero edges. That pair is what makes the boundary a *choice* \
+    rather than a detail, and it is as close as this file comes to the conserved quantity \
+    `docs/notes/physics-operators.md` says the language cannot state: the declared output is the only \
+    place the conservation shows.\n\n\
     **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
     has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
@@ -2586,7 +2597,7 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
     on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
     leave the answer untouched."
-  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]): tuple{array{Float, 6}, array{Float, 9}}"
+  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}}"
 ---
 XIn  = struct{.x (compute.Buf Float)}
 XOut = struct{.y (compute.Buf Float)}
@@ -2600,6 +2611,14 @@ stencil_raw = (c : XPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
 stencil = compute.parallel stencil_raw "cpu"
+ring_raw = (c : XPar) => {
+  i = compute.range c.n
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  left = if i == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if i == (c.n - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at 0))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+}
+ring = compute.parallel ring_raw "cpu"
 GIn  = struct{.x (compute.Buf Float)}
 GOut = struct{.y (compute.Buf Float)}
 GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
@@ -2620,7 +2639,8 @@ x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (comput
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
-(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9})
+looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6})
 ```
 
 <!-- end: examples -->
