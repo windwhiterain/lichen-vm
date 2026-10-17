@@ -26,15 +26,22 @@ refuses their disagreement. That refusal is the ruling's point.
 
 ## What did change, and what did not
 
-Two diagnostic defects were found on the way and fixed, both without touching the judgement:
+Three diagnostic defects were found on the way and fixed, all without touching the judgement:
 
 - a conflict raised by an **engine-side** unify has no diary entry, and the generic branch of `mismatch` took
   its location only from that entry — so it printed `expected ?, found ?` with no span at all. It now falls
   back to the descent the error itself recorded (the deepest step's operands, then the trigger's root, each
   through `node_loc`), so those diagnostics carry `span: Some((13, 10))`;
 - the same branch forced `value_a`/`value_b` to `None`, discarding the values the error carried; they are
-  kept now, so the diagnostic names `ComputeValue(GraphValue(1))` against `ComputeValue(GraphValue(0))`.
+  kept now, so the diagnostic names `ComputeValue(GraphValue(1))` against `ComputeValue(GraphValue(0))`;
+- **the message now names the collision when both cells are open.** With the values kept, the rendered
+  sides were still two `?`s, which name nothing; the renderer now spells the class instead:
+  `expected ?, found ? — two answers met on one node (docs/notes/answer-collision.md)`, in the
+  type-system layer and without a semantic change. Measured on a one-kernel graph program whose root
+  is a `collect` of `graphrun` (CLI, no device): the message reads that sentence at the kernel's
+  `compute.parallel` line. The checker facts still carry `value_a`/`value_b`, so a probe can print the
+  two placeholders; the user-facing message names the class.
 
-The compute suite is unchanged by both (203 passed / 15 failed / 2 ignored) — what changed is that its
-failures explain themselves. Whether those thirteen programs *should* check is the compute side's decision,
-not a lowlevel defect: the engine is reporting a real disagreement between two answers.
+The compute suite is unchanged by all three (203 passed / 15 failed / 2 ignored) — what changed is that
+its failures explain themselves. Whether those thirteen programs *should* check is the compute side's
+decision, not a lowlevel defect: the engine is reporting a real disagreement between two answers.

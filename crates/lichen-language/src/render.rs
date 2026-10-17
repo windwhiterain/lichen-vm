@@ -295,11 +295,18 @@ where
         ),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).
-        DiagKind::Runtime => format!(
-            "expected {}, found {}",
-            printer.node(d.a),
-            printer.node(d.b)
-        ),
+        DiagKind::Runtime => {
+            let expected = printer.node(d.a);
+            let found = printer.node(d.b);
+            // Two open cells name neither side; the collision is the class a reader needs.
+            if expected == "?" && found == "?" {
+                "expected ?, found ? — two answers met on one node \
+                 (`docs/notes/answer-collision.md`)"
+                    .to_string()
+            } else {
+                format!("expected {expected}, found {found}")
+            }
+        }
         DiagKind::IndexOutOfBounds => {
             let (Some(index), Some(length)) = (d.index, d.length) else {
                 return "index out of bounds".to_string();
