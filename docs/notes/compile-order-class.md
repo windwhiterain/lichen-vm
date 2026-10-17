@@ -227,19 +227,28 @@ reads an empty cell. On that reading the read-order candidate and the apply-site
 *compensations* for a normalize that did not decide: the fix belongs at the function's birth
 normalize, which must leave the term decided, not at the recording and not at the apply.
 
-**Three attempts to decide it where the checker can, all measured and none enough.** (a) Forcing the
-type application at the apply site fails: the argument's own term is open there (the probe above).
-(b) Forcing the **type application at its denotation** (`type_denotation`, where a field's type
-expression is read) materializes the term — 18 applications, each `before = false`, `after = true` —
-and leaves the recording's cell open, whether the evaluation is shallow or deep. (c) The definition
-pass already deep-evaluates every **written type term** before the definition pass runs
-(`checker.rs`'s `is_type` loop), and the cell is still open. So the decide that reaches the recording
-is neither the checker's term nor the apply's unify: it is a **per-call clone of the frozen
-`compute.lichen` template**, whose cells arrive empty by the carry rule and are filled only when the
-kernel's own parameter unify descends. On the ruling, that clone's cells are the **caller's**
-(`apply-clone-ownership.md` §1), so the caller's birth normalize must decide them; the only site that
-can is the clone materialization itself — candidate (i)'s carry change — which changes the carry
-contract and needs the author's decision.
+**Three attempts to decide it where the checker can, all measured and none enough — and the class
+hypothesis they served is corrected by §4.1.** (a) Forcing the type application at the apply site
+fails: the argument term is open there. (b) Forcing the **type application at its denotation**
+(`type_denotation`, where a field's type expression is read) materializes the term — 18 applications,
+each `before = false`, `after = true` — and leaves the recording's cell open, shallow or deep. (c) The
+definition pass already deep-evaluates every **written type term** (`checker.rs`'s `is_type` loop),
+and the cell is still open.
+
+**Why none of them could have worked: the class is never consulted.** §4.1's probe at
+`compute.rs:2428-2432` shows attempt 1's `write_node` returning `None` — the codomain position
+reaches no `compute.write` at all — so the refusal's own sentence packs a **shape** and a **class**
+and the shape fired. A change that decides a class cannot move a refusal that never reads one.
+
+**And the id the “`compute.Buf` application” was found by does not transfer across commits.**
+Re-measured on `dev@938f83b8` at `apply_parameter_check`: `StaticFunctionId(22)`'s argument
+expression is an `ExprKind::Placeholder` (`check_app` names the pair's own nodes, `value =
+NodeId(602)`, `type = NodeId(603)`, matching the open pair at the run-time check). So the two open
+sides measured at that apply are the program's `_` — open **by design**, nothing to evaluate — not an
+`Int` whose decision went missing; a real type argument would put a value in its slot, which is what
+the unify's “one side knows a value” arm would then write. The open question is §4.2's: why attempt 1
+does not reach a `compute.write`, and the one-read refactor that makes the first attempt see the
+program's writes — not a class seed, a clone carry, or a build normalisation.
 
 ## 4. One half of that did land: an undecided class is refused, not guessed
 
