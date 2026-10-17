@@ -38,7 +38,7 @@ reduction = (k : Par) => {
 }
 kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu"
 step = (s : Par) => {
-  compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b)))
+  compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }
 built = compute.graph step
 data = (compute.buffer ([ELEMENTS] : array{Float, COUNT}) : (compute.Buf _))

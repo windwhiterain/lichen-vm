@@ -552,6 +552,17 @@ need a node-local producer for `r`.
   spelling, and the device path is not implicated either — the type system's owner reproduced the same
   collision through the CLI with **no compute backend installed**.
 
+  **The suite now says the same thing, and the owner has ruled it the contract**: five of its graph-leg
+  programs — `automatic_tiling.rs`, `combine_fold.rs`, `fold_datum.rs`, `identity_from_body.rs` and
+  `pack_placement.rs` — wrote the step's `plrun` without that annotation, and **thirteen of their
+  assertions were red on exactly this collision** (`ComputeValue(GraphValue(1))` against
+  `ComputeValue(GraphValue(0))` at the step's application). One `: Out` per program, five lines in all,
+  turned all thirteen green: the suite went from `206 passed / 15 failed / 2 ignored` to
+  `219 passed / 2 failed / 2 ignored`, the two remaining failures being different causes. So an
+  **unannotated step return is not a spelling this suite accepts**, and a graph leg written without the
+  annotation will collide rather than run — the re-drive is deliberate and the collision is its
+  consequence, not a bug to be found in the body.
+
   **What is still open is GEMV's own program**, and it is not the collision: it refuses at stage `Check`
   with the collect's *"empty value of a failed read"* (span `None`) and *"this value is not a container"*
   at the `collect` line, and it does the same with `x` padded to the count — so neither the short input
