@@ -2190,30 +2190,30 @@ fn tail_guard(
     let extent = slots[&fragment.body.parameters()[0]];
     let condition = *cursor;
     *cursor += 1;
-    let merge = *cursor;
+    let enter = *cursor;
     *cursor += 1;
-    let body = *cursor;
+    let merge = *cursor;
     *cursor += 1;
     Some(TailGuard {
         condition,
         less_than: vec![lane.id, extent.id],
+        enter,
         merge,
-        body,
         prologue,
     })
 }
 
-/// The two blocks the tail guard adds to the entry point, and where its entry block splits.
+/// The two blocks the tail guard adds, and how much of the body's entry block it takes.
 struct TailGuard {
     /// The `%bool` holding `index < extent`.
     condition: u32,
     /// `OpULessThan`'s operands after its result: the index, then the extent.
     less_than: Vec<u32>,
+    /// The label the guard itself runs in, ahead of the body's own entry block.
+    enter: u32,
     /// The selection's merge block, which a surplus lane returns from.
     merge: u32,
-    /// The label the guarded body starts at.
-    body: u32,
-    /// How much of the entry block's own code reads its inputs and stays above the branch.
+    /// How much of the entry block's own code reads its inputs and runs ahead of the branch.
     prologue: usize,
 }
 
@@ -3318,10 +3318,10 @@ impl Emitter<'_> {
 /// block's `OpPhi`s, then its code.
 ///
 /// # Invariant
-/// **A guarded entry block is still the function's first block and still owns the prologue**: the
-/// branch that skips a surplus lane is a selection whose merge block returns, so the body's own
-/// instructions and terminator move whole into the block the branch falls into. Nothing of the
-/// body is executed above the branch, which is the whole of what the guard promises.
+/// **The guard leads the function and the body keeps its own labels**: a surplus lane branches
+/// around the whole body, so the only thing that moves is the prologue, and every `OpPhi` still
+/// names the block that actually reaches it. The merge block is reached from nowhere but the
+/// branch, which is what makes it the post-dominator a `OpSelectionMerge` must name.
 fn function_body(
     plan: &Plan,
     blocks: &mut [Block],
@@ -3330,18 +3330,18 @@ fn function_body(
 ) -> Vec<Inst> {
     let mut function = Vec::new();
     for &node in &plan.order {
+        let label = plan.labels[node];
         let Some(guard) = guard.filter(|_| node == plan.entry) else {
-            function.push(Inst::new(op::LABEL, vec![plan.labels[node]]));
+            function.push(Inst::new(op::LABEL, vec![label]));
             function.extend(blocks[node].phis(ids));
             function.append(&mut blocks[node].code);
             continue;
         };
-        let mut body = blocks[node].code.split_off(guard.prologue);
         let mut less_than = vec![ids.boolean, guard.condition];
         less_than.extend_from_slice(&guard.less_than);
-        function.push(Inst::new(op::LABEL, vec![plan.labels[node]]));
-        function.extend(blocks[node].phis(ids));
-        function.append(&mut blocks[node].code);
+        let prologue = blocks[node].code.drain(..guard.prologue).collect::<Vec<_>>();
+        function.push(Inst::new(op::LABEL, vec![guard.enter]));
+        function.extend(prologue);
         function.push(Inst::new(op::U_LESS_THAN, less_than));
         function.push(Inst::new(
             op::SELECTION_MERGE,
@@ -3349,10 +3349,11 @@ fn function_body(
         ));
         function.push(Inst::new(
             op::BRANCH_CONDITIONAL,
-            vec![guard.condition, guard.body, guard.merge],
+            vec![guard.condition, label, guard.merge],
         ));
-        function.push(Inst::new(op::LABEL, vec![guard.body]));
-        function.append(&mut body);
+        function.push(Inst::new(op::LABEL, vec![label]));
+        function.extend(blocks[node].phis(ids));
+        function.append(&mut blocks[node].code);
         function.push(Inst::new(op::LABEL, vec![guard.merge]));
         function.push(Inst::new(op::RETURN, vec![]));
     }
