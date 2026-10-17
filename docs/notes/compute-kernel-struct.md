@@ -197,18 +197,24 @@ open. A root-level `compute.launch (compute.jit (y : Int => y + y)) 3` prints `6
 the *printed value's* type derived from the value at print time, not the checker's cell. So nothing
 about argument availability distinguishes the cases.
 
-**The cell bind is not skipped either, and that moves the question to whether the body runs.**
-A probe at `static_function_apply`'s cell bind on the same program printed, for **every** static
-apply that ran: `cell=true`, `codomain=Some(...)`, `codomain_value=true` — the binding path has the
-caller cell and a *decided* codomain every time it executes. So the jit body's launch apply is
-evidently one that does **not run during checking**: the definition pass iterates over `FunctionId`s,
-and a lambda is not a `FunctionId` until it is applied (the jit's own body is cloned at the jit
-application, which the program's root never forces for `k`), while the checker's pre-pass
-deep-evaluates each lambda **value** without running its body against the undecided parameter. The
-next probe is exactly that: does the launch apply inside the jit body execute at check time at all?
-If not, the fix is the [function-normalization](function-normalization.md) contract's first clause
-again — a jit'd lambda's body must be evaluated once at its birth so its apply result cell is
-decided, rather than left for a call that never comes.
+**The cell bind is not skipped either, and the binding shape is what is missing.** A probe at
+`static_function_apply`'s cell bind on the same program printed, for **every** static apply that ran:
+`cell=true`, `codomain=Some(...)`, `codomain_value=true` — the binding path has the caller cell and a
+*decided* codomain every time it executes. So the static path is fine, and the **dynamic** path
+(`function_apply`) is the one without a cell bind: it only calls `wire_apply_result`. (The jit body
+*does* run at check time — an `@assert (1 == 2)` inside it fires, so the "never checked" reading is
+wrong; the launch apply runs, and its result cell is what stays open.)
+
+**Two experiments pin the shape of the missing bind.** Adding the static path's bind
+(`unify(cell, codomain)` after evaluating the codomain) to `function_apply` **decides the jit `.O`**
+— `k` renders `(raw Kernel, Int, Int)` with `.O Type` — but it breaks
+`a_call_result_annotation_is_checked_against_the_return_type`: the annotation conflict is reported
+**twice** (the explicit unify and the pair sync each record it). Guarding the unify to a still-open
+cell keeps the diagnostic count but **loses the `.O` fix**, so the merge is needed even when the cell
+already holds a value: the run's cell and the template's are different nodes, and the unify is what
+merges their classes into one. The missing piece is therefore a **class merge that does not re-harvest
+a value conflict** — the pair sync owns the verdict, the merge owns the sharing — not the static
+path's `unify` copied over.
 
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
