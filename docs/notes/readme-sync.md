@@ -63,7 +63,7 @@ for `examples/` and exceeding it is reported, never a silent truncation.
   instead of failing the suite. A program's declared `output =` is not among the things it
   rewrites, and the next bullet says why.
 - `sync-readme` is idempotent: running it on an already-synced tree produces the same
-  README.
+  README — measured on the synced tree at `dev@d820b609`: exit 0 and `git status` still clean.
 - The README's embedded example section is **derived documentation**, so `tests/lichen_compute/readme.rs`
   rewrites it in place on drift instead of failing. An example's own `output = "…"`
   metadata is the opposite case — a claim about observable behaviour — so
