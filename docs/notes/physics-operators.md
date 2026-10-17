@@ -63,8 +63,26 @@ backends agree bit for bit.
 
 ## What the family needs next
 
-- **A second step** is a second `plrun` over the first step's output: no new spelling, and the
-  answer is exact only for the same reason (the arithmetic is multiply-add and subtract).
+- **Iteration is measured, and the three shapes do not agree.** On the ring's own data, three
+  straight-line `plrun`s answer `2.1875 1.3125 0.5 0.5 1.3125 2.1875`, typed `array{Float, 6}`, and
+  the total is **`8` at every step** — the unrolled solver works and its conservative property is
+  visible in the declared output, which is the form an example can pin.
+  A top-level `@loop` around the same dispatch behaves differently depending on what it carries:
+  - **state is a plain `array{Float, 6}` and each step builds its input with `compute.buffer (s(1))`**:
+    the loop **dispatches and answers the same six numbers**, but its type is **undecided** — the
+    printer shows `raw[raw 2.1875, …]: ?a`. So iteration *does* compose with dispatch, and the gap
+    is on the **type** side, not the numerics: a caller cannot yet use the answer as an
+    `array{Float, 6}`.
+  - **state is the `XOut` struct** (seed a real kernel result, or hand-build `(XOut)(.y x)`): the
+    fold never resolves — one iteration, two or three all print `raw none: array{Float, 6}`, and the
+    same fold with the dispatch removed *fails* the harness outright. So the struct-carrying fold is
+    the broken part there, not the dispatch.
+  - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read,
+    which is why the array-state form above exists at all.
+
+  What follows for a solver: write it **unrolled** when the answer has to have a type (an example
+  declares one), and **looped over an array state** when it does not. The type of a fold that
+  contains a dispatch is a type-side question, not this family's.
 - **Two dimensions is measured now, and it half-falsified what this note first said.** `compute.row`
   and `compute.col` work, with the **second** scalar leaf as the divisor for both coordinates, so
   `cols` goes second and the strides after it (`examples/matmul.lichen` states the rule for its own
