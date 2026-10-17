@@ -130,6 +130,14 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   **five-slot pairs**, not the two-item type term (measured: `value = NodeId(24)`, `concrete =
   true`, `value[0] = 21`, `value[1] = 22`, each an array of five slots sharing a two-item
   element). The guard must read the same names path the runtime reads; **the fix is not landed**.
+  **Tried that path too, and it fails one step later.** Evaluating the names path at check time,
+  decoding its `LowValue::Table` and testing `name_table_index` *does* detect the miss, and the
+  guard fires with the right kind and place (`NamedField` at `2:1`); but the message then names the
+  container through the **type** printer, and a struct type **value** has no `[shape, kind]` term to
+  print — it rendered `raw[raw[@any, Int, @any, @any, @any], raw[…]]`, which is worse than the miss
+  it replaces. So the remaining step is the renderer: a fallback that prints a struct type *value*
+  (its own `value_label` already does, the `NamedField` arm uses `printer.node`) or records a
+  printable type node with the guard. Not landed.
 
 * **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
   with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —
