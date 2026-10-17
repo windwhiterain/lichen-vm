@@ -133,6 +133,13 @@ fn check(
             as_operand_class(class_of(&args[0]), ScalarClass::Float, at)?;
             Ok(OperandClass::Scalar(ScalarClass::Float))
         }
+        // **Three operands, one class**, as every other float instruction states.
+        KernelInstr::Fma => {
+            for &arg in &args[..3] {
+                as_operand_class(class_of(&arg), ScalarClass::Float, at)?;
+            }
+            Ok(OperandClass::Scalar(ScalarClass::Float))
+        }
         // A `select`'s arms are the value it yields, so they are one class.
         KernelInstr::Select => {
             let arms = arms_class(class_of(&args[0]), class_of(&args[1]));

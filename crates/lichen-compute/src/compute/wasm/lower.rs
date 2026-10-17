@@ -310,6 +310,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         | KernelInstr::Ln
         | KernelInstr::Sin
         | KernelInstr::Cos => Some(Type::F32),
+        KernelInstr::Fma => Some(Type::F32),
         KernelInstr::CallKernel(callee) => {
             let at = *context.index.get(&callee)?;
             let target = context.callees.get(at as usize)?;
@@ -439,6 +440,17 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 "compute.wasm: {op:?} is defined by its expansion into the primitive operators, \
                  which `Lower` applies before a fragment is registered — a body that still holds \
                  one was not built by it (`docs/notes/floating-point.md` §6, §7)"
+            ));
+        }
+        // **Refused, not lowered to a multiply and an add**: two roundings is another program.
+        KernelInstr::Fma => {
+            return Err(format!(
+                "compute.wasm: `{op:?}` is a fused multiply-add, and wasm's MVP has no \
+                 instruction for one. A multiply followed by an add rounds twice, which is a \
+                 different program, so there is nothing here to lower it to — and the definition \
+                 `KernelBody::expand_transcendentals` inlines for what this target lacks cannot \
+                 be written out of two roundings either \
+                 (`docs/notes/fused-multiply-add.md` §7)"
             ));
         }
         KernelInstr::CallKernel(callee) => {

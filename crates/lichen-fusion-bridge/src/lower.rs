@@ -192,6 +192,7 @@ impl Walk<'_> {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
+            KernelInstr::Fma => Err(BridgeRefusal::FusedMultiplyAdd),
             KernelInstr::Exp => {
                 let operand = self.argument(args, 0)?;
                 Ok(UnaryOp::Exp.apply(operand))

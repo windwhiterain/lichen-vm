@@ -768,6 +768,16 @@ pub enum KernelInstr {
     /// emits for `Add` is `i64.add` in one class and `f32.add` in the other, and a body
     /// that mixes the two needs both.
     Bin(ScalarClass, KernelBin),
+    /// `A·B + C` over three `Float`s, rounded **once**.
+    ///
+    /// # Invariant
+    /// **One rounding is the whole instruction**: two of them are [`Self::Bin`] twice, and on a
+    /// compensated division's residual the second costs the bit that made the answer exact
+    /// (`docs/notes/fused-multiply-add.md` §2).
+    ///
+    /// **Not [`crate::TRANSCENDENTALS`]**, which is what the IR defines and inlines: this one is
+    /// native where it exists at all, and wasm's MVP has none.
+    Fma,
     /// Convert a value to the condition width a `select` needs.
     I32WrapI64,
     /// A `if c then a else b`, which is `Select`.
@@ -954,7 +964,7 @@ impl KernelInstr {
             | KernelInstr::Ln
             | KernelInstr::Sin
             | KernelInstr::Cos => 1,
-            KernelInstr::Select => 3,
+            KernelInstr::Fma | KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
             KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
@@ -978,6 +988,7 @@ impl KernelInstr {
             | KernelInstr::Ln
             | KernelInstr::Sin
             | KernelInstr::Cos => Some(ScalarClass::Float),
+            KernelInstr::Fma => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)
             }

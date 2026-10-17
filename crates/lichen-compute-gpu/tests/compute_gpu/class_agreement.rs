@@ -248,6 +248,12 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
             "`own_class` states none for it — its class is its arms', which is what \
              `conv_class.rs` already pins",
         ),
+        (
+            "Fma",
+            "the emitter writes it as one `OpExtInst`, so the guard could drive it as `Exp` is \
+             driven and does not: this slice added the instruction and no probe, and a probe that \
+             reads three buffer operands is this file's shape with one more read",
+        ),
     ]
 }
 
@@ -261,6 +267,7 @@ fn every_variant() -> Vec<(&'static str, KernelInstr)> {
     [
         KernelInstr::Const(ScalarClass::Int, 7),
         KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        KernelInstr::Fma,
         KernelInstr::Conv {
             from: ScalarClass::Int,
             to: ScalarClass::Float,
@@ -289,6 +296,7 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
     let name = match instr {
         KernelInstr::Const(..) => "Const",
         KernelInstr::Bin(..) => "Bin",
+        KernelInstr::Fma => "Fma",
         KernelInstr::Conv { .. } => "Conv",
         KernelInstr::Exp => "Exp",
         KernelInstr::Sqrt => "Sqrt",

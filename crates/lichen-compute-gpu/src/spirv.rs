@@ -90,6 +90,15 @@ mod op {
     pub const BITWISE_OR: u16 = 197;
     pub const BITWISE_XOR: u16 = 198;
     pub const BITWISE_AND: u16 = 199;
+    /// The import that names an extended instruction set, ahead of `OpMemoryModel`.
+    ///
+    /// # Invariant
+    /// **The first instruction of a module that reaches for an extended set, and the import is
+    /// never optional**: `OpExtension` is not a substitute, and `spirv-val` answers `OpExtInst set
+    /// Id 1 does not reference an OpExtInstImport result Id` without one.
+    pub const EXT_INST_IMPORT: u16 = 11;
+    /// An instruction of an imported set, named by its id rather than by an opcode of its own.
+    pub const EXT_INST: u16 = 12;
     /// The workgroup barrier: no invocation of the workgroup passes before every one arrives.
     pub const CONTROL_BARRIER: u16 = 224;
     /// The read of another lane's value through the exchange network, at subgroup scope.
@@ -152,6 +161,8 @@ const MEMORY_SEMANTICS_WORKGROUP_MEMORY: u32 = 0x100;
 /// memory scope because that must not be *narrower* than the execution scope, and `Subgroup` is
 /// narrower than it.
 const MEMORY_SEMANTICS_ACQUIRE_RELEASE_WORKGROUP_MEMORY: u32 = 0x108;
+/// `GLSLstd450Fma`, the one extended instruction this emitter writes.
+const GLSL_STD_450_FMA: u32 = 50;
 /// The `None` a merge instruction's optional control mask carries.
 const CONTROL_NONE: u32 = 0;
 /// `SpvExecutionModelGLCompute`, `SpvExecutionModeLocalSize`.
@@ -643,6 +654,13 @@ struct Ids {
     /// The class the module's *arithmetic* is built for — [`module_class`] of the
     /// root; not a buffer's element type.
     class: ScalarClass,
+    /// The `GLSL.std.450` import an [`KernelInstr::Fma`] names.
+    ///
+    /// # Invariant
+    /// Taken by the same cursor as every other module-scope id and **declared only when a body
+    /// emitted an `OpExtInst`**: an id nothing defines is legal, so a module that never reaches
+    /// for the set pays nothing, and one that declares the import without using it pays six words.
+    glsl_std_450: u32,
     void: u32,
     boolean: u32,
     /// The fragment's own integer type: unsigned 64-bit in an integer module.
@@ -1002,6 +1020,27 @@ pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
     Ok(false)
 }
 
+/// The extended instruction sets a module's bodies reached for, one flag each.
+///
+/// # Invariant
+/// **Recorded by the emission that names it, and read once by [`assemble`]**: an `OpExtInst` names
+/// its set by the result id of an `OpExtInstImport`, so a body that emitted one and a module that
+/// did not declare the import are a `spirv-val` rejection rather than a slower program.
+#[derive(Default)]
+struct Extensions {
+    /// Whether any body emitted an `OpExtInst`, and so whether the module declares `GLSL.std.450`.
+    glsl_std_450: bool,
+}
+
+impl Extensions {
+    /// Record the set `instr` needs, if it is one this target has no opcode for.
+    fn note(&mut self, instr: KernelInstr) {
+        if matches!(instr, KernelInstr::Fma) {
+            self.glsl_std_450 = true;
+        }
+    }
+}
+
 /// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, position
 /// `0` being the entry point.
 pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
@@ -1021,6 +1060,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         taken += count;
         first
     };
+    let glsl_std_450 = take(1);
     let void = take(1);
     let boolean = take(1);
     let ulong = take(1);
@@ -1103,6 +1143,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let push_index: Vec<u32> = (0..push_members).map(|_| take(1)).collect();
     let ids = Ids {
         class,
+        glsl_std_450,
         void,
         boolean,
         ulong,
@@ -1146,6 +1187,8 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let mut bodies = Vec::with_capacity(ordered.len());
     // Every float result this module's arithmetic rounds once at, and so must keep.
     let mut exact_results: Vec<u32> = Vec::new();
+    // The extended sets the bodies reached for, read once the module is written.
+    let mut extensions = Extensions::default();
     for (position, fragment) in ordered.iter().copied().enumerate() {
         bodies.push(emit_function(
             Function {
@@ -1161,6 +1204,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
             &mut literals,
             &mut next,
             &mut exact_results,
+            &mut extensions,
         )?);
     }
 
@@ -1175,6 +1219,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         &literals.declarations,
         &bodies,
         &exact_results,
+        &extensions,
         next,
     ))
 }
@@ -1208,6 +1253,7 @@ fn emit_function(
     mut literals: &mut Literals,
     cursor: &mut u32,
     exact_results: &mut Vec<u32>,
+    extensions: &mut Extensions,
 ) -> Result<Vec<Inst>, SpirvRefusal> {
     // This function's own cursor, above every module-scope id and above every
     // earlier function's.
@@ -1607,6 +1653,60 @@ fn emit_function(
                                 definition,
                                 as_condition(popped, &ids, &mut literals, &mut code, &mut next),
                             );
+                        }
+                        // **The three operands in the instruction's own order**:
+                        // `args[0]*args[1] + args[2]`.
+                        KernelInstr::Fma => {
+                            let added = operand(2)?;
+                            let multiplier = operand(1)?;
+                            let multiplicand = operand(0)?;
+                            let added = as_class(
+                                added,
+                                ScalarClass::Float,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let multiplier = as_class(
+                                multiplier,
+                                ScalarClass::Float,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let multiplicand = as_class(
+                                multiplicand,
+                                ScalarClass::Float,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let result = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::EXT_INST,
+                                vec![
+                                    ids.float,
+                                    result,
+                                    ids.glsl_std_450,
+                                    GLSL_STD_450_FMA,
+                                    multiplicand.id,
+                                    multiplier.id,
+                                    added.id,
+                                ],
+                            ));
+                            extensions.note(KernelInstr::Fma);
+                            slots.insert(definition, scalar(result, ScalarClass::Float));
+                            // **Every float result, as `Bin` records them.**
+                            if exact {
+                                exact_results.push(result);
+                            }
                         }
                         KernelInstr::Exp
                         | KernelInstr::Sqrt
@@ -2229,6 +2329,8 @@ fn incoming_edges(fragment: &KernelFragment, block: usize) -> Vec<&[ValueId]> {
 fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> Option<ScalarClass> {
     match *op {
         KernelInstr::Bin(class, _) => Some(class),
+        // **All three positions are `Float`**, the one class the instruction names.
+        KernelInstr::Fma => Some(ScalarClass::Float),
         KernelInstr::Conv { from, .. } => (position == 0).then_some(from),
         // **A `Select` arm**: a fact about the value in the position, not the op.
         KernelInstr::Select => None,
@@ -3130,6 +3232,7 @@ fn assemble(
     literals: &[Inst],
     bodies: &[Vec<Inst>],
     exact_results: &[u32],
+    extensions: &Extensions,
     bound: u32,
 ) -> Vec<u32> {
     let root = launch.root();
@@ -3156,7 +3259,14 @@ fn assemble(
     }
     emit_all(&mut out, &capabilities);
 
-    // 2. The single memory model.
+    // 2. The extended sets a body reached for — **ahead of the memory model**.
+    if extensions.glsl_std_450 {
+        let mut operands = vec![ids.glsl_std_450];
+        operands.extend(spv_string(b"GLSL.std.450"));
+        emit_all(&mut out, &[Inst::new(op::EXT_INST_IMPORT, operands)]);
+    }
+
+    // 3. The single memory model.
     emit_all(
         &mut out,
         &[Inst::new(
@@ -3165,7 +3275,7 @@ fn assemble(
         )],
     );
 
-    // 3. Entry point and its execution mode. The interface lists only Input/Output
+    // 4. Entry point and its execution mode. The interface lists only Input/Output
     // globals, which is all SPIR-V 1.4 allows.
 
     // Storage buffers are named by their `Binding` decorations, not listed here.
@@ -3181,7 +3291,7 @@ fn assemble(
         )],
     );
 
-    // 4. Annotations: the stride is the **buffer's own** element width, stated here and
+    // 5. Annotations: the stride is the **buffer's own** element width, stated here and
     // nowhere else.
     let mut annotations = Vec::new();
     for used in classes {
@@ -3246,7 +3356,7 @@ fn assemble(
     }
     emit_all(&mut out, &annotations);
 
-    // 5. Types, then the constants (module-scope, so the body's literals belong here),
+    // 6. Types, then the constants (module-scope, so the body's literals belong here),
     // then the globals.
     let mut types = vec![
         Inst::new(op::TYPE_VOID, vec![ids.void]),

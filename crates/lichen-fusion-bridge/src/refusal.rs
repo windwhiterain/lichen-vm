@@ -79,6 +79,13 @@ pub enum BridgeRefusal {
     /// The marked value floors a number, which the symbolic language cannot name: no
     /// inverse and no algebraic law.
     Floor,
+    /// The marked value computes a fused multiply-add.
+    ///
+    /// # Invariant
+    /// Over the reals `A·B + C` and a multiply then an add are one number, so the symbolic
+    /// language has no way to hold the two apart — and it is exactly that apartness a device's
+    /// rounding makes visible.
+    FusedMultiplyAdd,
     /// The body does not pass its own well-formedness gate.
     MalformedBody {
         /// What [`lichen_kernel_ir::KernelBody::validate`] reported.
@@ -181,6 +188,13 @@ impl fmt::Display for BridgeRefusal {
                 formatter,
                 "the projection computes a floor, and the symbolic language has no counterpart \
                  for it: a floor is not invertible and names no law"
+            ),
+            BridgeRefusal::FusedMultiplyAdd => write!(
+                formatter,
+                "the projection computes a fused multiply-add, and the symbolic language cannot \
+                 tell one rounding from two — over the reals `A·B + C` and a multiply then an add \
+                 are the same number, so projecting it here would claim they are one program \
+                 (`docs/notes/fused-multiply-add.md` §2)"
             ),
             BridgeRefusal::MalformedBody { reason } => write!(
                 formatter,

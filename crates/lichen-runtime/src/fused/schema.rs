@@ -114,6 +114,14 @@ pub enum KernelInstr {
         /// The operator.
         op: KernelBin,
     },
+    /// `A·B + C` over three `Float`s, rounded once.
+    ///
+    /// # Invariant
+    /// **A variant, not a field, and `deny_unknown_fields` is what makes that safe**: an older
+    /// build reads this document and refuses it **by this name**, where a field it did not know
+    /// would have been mis-parsed (`docs/notes/fused-multiply-add.md` §7).
+    #[facet(rename = "fma")]
+    Fma,
     /// Convert a value to the condition width a `select` needs.
     #[facet(rename = "i32_wrap_i64")]
     I32WrapI64,

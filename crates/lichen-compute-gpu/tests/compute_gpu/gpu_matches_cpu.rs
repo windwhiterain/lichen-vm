@@ -604,6 +604,19 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                     };
                     produced = Scalar::Float(lichen_kernel_ir::cos_value(x));
                 }
+                // **The host's own fused multiply-add**: the reference rounds once, as promised.
+                KernelInstr::Fma => {
+                    let Scalar::Float(a) = operand(0) else {
+                        panic!("the fused multiply-add reads floats")
+                    };
+                    let Scalar::Float(b) = operand(1) else {
+                        panic!("the fused multiply-add reads floats")
+                    };
+                    let Scalar::Float(c) = operand(2) else {
+                        panic!("the fused multiply-add reads floats")
+                    };
+                    produced = Scalar::Float(a.mul_add(b, c));
+                }
                 KernelInstr::BufferReadCall(_) => {
                     let element_index = operand(1).as_index();
                     let position = operand(0).as_index();

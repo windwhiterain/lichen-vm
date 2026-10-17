@@ -1,25 +1,21 @@
 # The fused multiply-add: what it is, what it would touch, and what is not measured
 
-> Status: **a proposal, not a change** — **no production file and no test was touched.** Every
-> figure below was measured on **two** devices off `dev@12425166`, by running the **same binary
-> twice** with `VK_DRIVER_FILES` pointed at one vendor's ICD manifest and nothing else: an
-> **NVIDIA GeForce RTX 3060 Laptop GPU** (discrete) and an **Intel(R) Iris(R) Xe Graphics**
-> (integrated), the two manifests
-> [contraction-control](contraction-control.md) §1 names.
+> Status: **shipped**, by the user's decision, in `feature/fmas`. §1–§10 are the **proposal** and
+> are left as they were measured; **§11 is the landed state and the device measurement that was
+> missing**, and where §6 and §9 say a thing is *inferred* or *unknown*, §11 says what was actually
+> run. Every §11 figure was measured on **two** devices off this branch by running **the same
+> binary twice** with `VK_DRIVER_FILES` pointed at one vendor's ICD manifest and nothing else:
+> `…\DriverStore\FileRepository\nvamsi.inf_…\nv-vk64.json` for the
+> **NVIDIA GeForce RTX 3060 Laptop GPU** and `…\DriverStore\FileRepository\iigd_dch.inf_…\igvk64.json`
+> for the **Intel(R) Iris(R) Xe Graphics**. The probe is
+> `crates/lichen-compute-gpu/examples/fma_probe.rs`.
 >
-> **What is being measured** is the cost of the one capability
-> [division-rounding-gap](division-rounding-gap.md) §7 says is missing. That note's numbers, its
-> grids and its five compensated spellings are **referenced here, not restated**, as is
-> [floating-point](floating-point.md) §7's account of why `floor` was defined in the IR rather
-> than emitted and §8's two-term reduction.
->
-> **The one-sentence result: the spelling exists in the validator and not in the language.**
-> `GLSL.std.450`'s `Fma` is **`spirv-val` ACCEPT** under `--target-env vulkan1.1` in a hand-built
-> module **and** in the shipped emitter's own module with four of its multiply–subtract pairs
-> rewritten, and **the compensated division built on a host `f32::mul_add` reaches the correctly
-> rounded quotient on 24,576 of 24,576 points at one step, from a reciprocal that is one and two
-> ulp below the nearest**. **What is not measured is the device**: the folded module cannot be
-> dispatched, so §6's zero-ulp claim on a device is **inferred**, and §6 says exactly from what.
+> **The one-sentence result: the device reaches the correctly rounded quotient.** §11.3 measures
+> the compensated division written on `KernelInstr::Fma` at **4096 of 4096 bit for bit, a zero
+> worst ulp**, on **both** vendors, on all four of §1's division grids, **decorated and
+> undecorated** — against a plain division beside it that answers **2730 / 1852 / 3276** on the
+> RTX 3060 and **2730 / 1097 / 3276** on the Iris Xe, which are [division-rounding-gap](division-rounding-gap.md) §3's rows **to the digit**.
+
 
 ## 1. The platform's own fused multiply-add, and the reference it is measured against
 
@@ -373,3 +369,222 @@ level decode, the `Fma` fold and the dead-code pass — was **deleted before thi
 held no production code and nothing else referenced it. **No example file was edited**, no
 `output =` line moved, and **`git diff dev...HEAD -- examples/` is empty**. The two host probes and
 the five hand-built modules lived under `target/`, which is not a tree, and are left there.
+
+## 11. What landed, and what it measures on a device
+
+> **This section is the landed state.** Sections 1–10 are the proposal, measured on `dev@12425166`
+> and left as they were; where they say "inferred" or "unknown", this section says what was run.
+
+### 11.1 The instruction, and where each backend answers it
+
+**`KernelInstr::Fma` is `A·B + C` over three `Float`s, rounded once**, a **three-operand variant**
+beside `Bin` in `crates/lichen-kernel-ir/src/lib.rs` — `arity()` answers `3` in the group `Select`
+already occupies and `own_class()` answers `Some(ScalarClass::Float)`. **It is not a
+`TRANSCENDENTALS` entry**, and the reason is the one §7 gave: that table is the six operators the IR
+*defines and inlines*, and a fused multiply-add is native on one target and absent on the other,
+which is §7's own test and this one fails it.
+
+| where | what it does | measured where |
+|---|---|---|
+| `crates/lichen-compute-gpu/src/spirv.rs`, `emit_function` | one `OpExtInst %float %glsl_std_450 Fma %a %b %c`, all three operands forced to `Float` through `as_class`, and the result decorated like any other float result | §11.2 |
+| `crates/lichen-compute-gpu/src/spirv.rs`, `assemble` | `%glsl_std_450 = OpExtInstImport "GLSL.std.450"`, **section 2, ahead of `OpMemoryModel`**, and **only when a body emitted an `OpExtInst`** | §11.2 |
+| `crates/lichen-compute-gpu/src/spirv.rs`, `operand_class` | `Some(ScalarClass::Float)` at all three positions, so a block parameter an `Fma` reads is classed `Float` | the emitter builds |
+| `crates/lichen-compute/src/compute/wasm/lower.rs` | **refused by name**, with the reason in the error | §11.5 |
+| `crates/lichen-compute/src/compute/wasm/mixed.rs` | all three operands checked against `Float` before that | §11.5 |
+| `crates/lichen-fusion-bridge/src/lower.rs` | **`BridgeRefusal::FusedMultiplyAdd`** | §11.5 |
+| `crates/lichen-runtime/src/fused/schema.rs` + `convert.rs` | `#[facet(rename = "fma")] Fma`, and two arms in the two-way conversion | §11.6 |
+
+**`OpFNegate` was measured to be needed and is not there.** §4's finding stands and §11.2 confirms
+it: **the compensated division's residual `a − b·q` is `Fma(−b, q, a)`, so a subtraction does need
+a negation** — and `spirv.rs` still declares **no `OpFNegate` opcode at all**, because
+`KernelBin` has **no negation either** and `Fma` is `A·B + C`. The residual is therefore spelled
+`Fma(Bin(Float, Sub)(+0.0, b), q, a)` in the probe, and §11.3 measures that to be exact on
+**every lane of every grid**: `fl(+0.0 − b)` is `−b` for every divisor the language admits, because
+a zero divisor is undefined. **The cost of that spelling is four words, the same four an
+`OpFNegate` would have cost**, and it is a subtraction rather than a negation — which is a trap
+at `b = +0.0` and nowhere else.
+
+### 11.2 The modules, through `spirv-val --target-env vulkan1.1`
+
+**Measured, six modules, every one this slice could emit.** `NoContraction` is `exact`, the body's
+own `exact_float_arithmetic`; the census is `OpExtInst` / `OpExtInstImport` / `OpDecorate`, and the
+id bound is the module's fourth word.
+
+| module | words | `OpExtInst` | `OpExtInstImport` | `OpDecorate` | id bound | `spirv-val` |
+|---|---|---|---|---|---|---|
+| `a*b + c` on `Fma`, `NoContraction` | **284** | 1 | 1 | 13 | 52 | **ACCEPT** |
+| `a*b + c` on `Fma`, undecorated | **281** | 1 | 1 | 12 | 52 | **ACCEPT** |
+| `a*b + c` as `Bin` twice, `NoContraction` | **283** | **0** | **0** | 14 | 53 | **ACCEPT** |
+| compensated division, `NoContraction` | **303** | 3 | 1 | 15 | 54 | **ACCEPT** |
+| compensated division, undecorated | **288** | 3 | 1 | 10 | 54 | **ACCEPT** |
+| plain `a / b`, `NoContraction` | **248** | 0 | 0 | 11 | 48 | **ACCEPT** |
+
+**`spirv-dis` prints**, from the two modules that use the instruction:
+
+```
+         %1 = OpExtInstImport "GLSL.std.450"
+        %50 = OpExtInst %float %1 Fma %43 %46 %49
+```
+
+```
+         %1 = OpExtInstImport "GLSL.std.450"
+        %49 = OpExtInst %float %1 Fma %42 %48 %float_0_0
+        %51 = OpExtInst %float %1 Fma %50 %49 %42
+        %52 = OpExtInst %float %1 Fma %51 %48 %49
+```
+
+**Measured, and this corrects §8's one row.** §8 said the substitution is "8 words against 8 —
+free". Through the emitter it is **284 words against 283**, decomposed exactly:
+`+6` for the import, `−2` because an `OpExtInst Fma` is **8 words and the `OpFMul` + `OpFAdd` it
+replaces is 10**, and `−3` because the product the unfused body had to decorate is **no longer a
+value**, so one `NoContraction` fewer is written. **One word, for a body whose arithmetic drops
+from two float instructions to one** — and the import is charged **once per module**, not once per
+instruction: the compensated division carries **three** `OpExtInst` and **one** import.
+
+**Measured, the two things §3 and §9 left open about the decoration.** A `NoContraction` on an
+`OpExtInst Fma` result **validates** (§3's claim, now through the emitter rather than a hand-built
+module), and **§9's open question is answered in §11.3: the guarantee survives** — the decorated and
+undecorated bodies return the identical bits on every grid on both vendors, which is what an inert
+decoration looks like.
+
+### 11.3 The device measurement
+
+**Measured on both vendors, on the grid §1 names** — numerators `1 + i/2^12` for `i < 4096`, four
+divisor sets, and three product grids. The reference is the **host's own `f32::mul_add`** for the
+product and the **host's `a / b`** for the division, which §1 measured to be the correctly rounded
+quotient on 200,000 of 200,000 samples.
+
+**`a*b + c`, against the host's `f32::mul_add`.** *Bit for bit* is the count of lanes whose bits
+are the host's; *discriminating* is the count of lanes where `mul_add(a,b,c)` and `a*b + c` differ,
+which is the set the grid was chosen to produce.
+
+| grid | discriminating lanes | RTX 3060, fused | Iris Xe, fused | RTX, `Bin` twice | Iris, `Bin` twice |
+|---|---|---|---|---|---|
+| `product` (`a`, `b`, `c` three strides of the grid) | **0** | **4096 / 4096**, 0 ulp | **4096 / 4096**, 0 ulp | 4096 / 4096, 0 ulp | 4096 / 4096, 0 ulp |
+| `cancel` (`c = −(a·b)`, rounded) | **1255** | **4096 / 4096**, 0 ulp | **4096 / 4096**, 0 ulp | 2841 / 4096 | 2841 / 4096 |
+| `band` (`a` in `[1/√2, √2)`, `b = 3.0`) | **647** | **4096 / 4096**, 0 ulp | **4096 / 4096**, 0 ulp | 3449 / 4096, 1 ulp | 3449 / 4096, 1 ulp |
+
+**Measured: the two devices agree with the host bit for bit on every discriminating point, and the
+control is what makes the row mean anything** — on `cancel` the *unfused* body gets 2841 of 4096 and
+on `band` 3449, because the driver is not contracting a multiply into an add it was told not to.
+The `product` row is reported as it came out: **it discriminates nothing**, because three values in
+`[1, 2)` leave the addend large enough that the second rounding never bites. It is a control, and it
+is stated as one.
+
+**The compensated division, against the correctly rounded quotient.** One step: `q0 = Fma(a, y, 0)`,
+`r = Fma(−b, q0, a)`, `q1 = Fma(r, y, q0)` — §2's `Markstein on mul_add, 1 step`, written in the IR.
+
+| grid | RTX 3060, compensated | Iris Xe, compensated | RTX, plain `a / b` | Iris, plain `a / b` | host, same sequence |
+|---|---|---|---|---|---|
+| `dense / 3.0` | **4096 / 4096, 0 ulp** | **4096 / 4096, 0 ulp** | 2730, 1 ulp | 2730, 1 ulp | 4096 / 4096, 0 ulp |
+| `dense / 7.0` | **4096 / 4096, 0 ulp** | **4096 / 4096, 0 ulp** | 1852, 1 ulp | **1097**, 1 ulp | 4096 / 4096, 0 ulp |
+| `dense / 2.5` | **4096 / 4096, 0 ulp** | **4096 / 4096, 0 ulp** | 3276, 1 ulp | 3276, 1 ulp | 4096 / 4096, 0 ulp |
+| `ln` band, divisor on the lane | **4096 / 4096, 0 ulp** | **4096 / 4096, 0 ulp** | 3000, 2 ulp | 3001, 2 ulp | 4096 / 4096, 0 ulp |
+
+**Every cell of the two plain-division columns is [division-rounding-gap](division-rounding-gap.md)
+§3's, to the digit, on both vendors** — including the one that distinguishes them, `1097` against
+`1852` on `dense / 7.0`. Three notes written a fortnight apart, with two independent
+correctly-rounded references and two different probe drivers, agree on every cell.
+
+**Measured, and this is the result the whole thread was for: a compensated division written on the
+instruction reaches the correctly rounded quotient on the device, on both vendors, on every grid,
+with and without `NoContraction`.** §5's table is the shape of what that replaced — **10,604 of
+16,384** on the RTX 3060 and **9,861 of 16,384** on the Iris Xe, both at a **two-ulp worst**, both
+*worse* than the plain division they were meant to fix — against **4096 of 4096 at zero** here. The
+Iris Xe is the sharper half of the claim: it is the device whose `r(b)` is **one ulp low on 24 of
+64** divisors, and §2 established on the host that Markstein on `mul_add` recovers the quotient
+**exactly from a reciprocal one and two ulp low**. The device needed no degraded reciprocal to be
+handed — its own `OpFDiv` supplied the bad one.
+
+**Measured, and it is the one thing a validator cannot tell you.** Both vendors answer
+`OpExtInst Fma` in **one rounding**, on every point, and neither driver reassociates around it
+under `NoContraction`. §6 listed three things as "not established"; two of them are now measured on
+two vendors.
+
+### 11.4 What was *not* changed, and what wiring it into `ln` would touch
+
+**`ln`'s body was not touched, and this is the user's decision rather than this slice's.**
+`docs/notes/operator-reverification.md` records that `ln` is the transcendentals' only body with an
+`OpFDiv` and that it is **1 ulp wrong on the Iris Xe**. Wiring `Fma` into it would touch:
+
+- **`crates/lichen-kernel-ir/src/unary.rs`, `ln_body` and `ln_value`.** The two-term reduction's
+  residual is the one instruction that must be fused, and §3 of [floating-point](floating-point.md)
+  writes it with `Bin` twice. `ln_value` is the host's own reading of that body — the definition the
+  emitters inline — so **changing the body changes the reference**, and
+  `spliced_transcendentals.rs` is held to **`0` ulp** against it.
+- **`crates/lichen-fusion-bridge/src/lower.rs`'s `inlined_transcendental` reader** and the
+  `UnaryOp::Ln` projection beside it, since the fragment a dispatcher registers would no longer
+  hold the sequence `kernel-ir` wrote.
+- **The pipeline cache.** `contraction-control.md` §9.2 already settled that a decision inside
+  `KernelBody` is inside `fragment_digest`, and an `Fma` inside a body is the same case — so the
+  key moves by construction and `dispatch.rs` is untouched. **This slice measured that: no
+  `dispatch.rs` line changed.**
+- **`crates/lichen-compute-gpu/tests/compute_gpu/spliced_transcendentals.rs`**, whose bound is the
+  thing that would move.
+
+**It would change `ln`'s bits on both vendors**, which is why it is a separate decision and not a
+consequence of shipping the instruction.
+
+### 11.5 What the two backends that cannot run it do
+
+**Both refuse it by name, and the brief's own question — whether `sqrt`/`floor`/`ln` are host calls
+on the wasm path or refusals — has the answer: refusals.** `lower_instr`'s arms for the six
+transcendentals return an error naming `KernelBody::expand_transcendentals`; they are not host
+calls. The mechanism for an instruction wasm has none is therefore **the refusal**, and `Fma` gets
+one:
+
+```
+compute.wasm: `Fma` is a fused multiply-add, and wasm's MVP has no instruction for one. A
+multiply followed by an add rounds twice, which is a different program, so there is nothing
+here to lower it to — and the definition `KernelBody::expand_transcendentals` inlines for what
+this target lacks cannot be written out of two roundings either
+(`docs/notes/fused-multiply-add.md` §7)
+```
+
+**The definition was considered and is wrong, and the reason is the measurement, not taste.**
+[floating-point](floating-point.md) §7's rule is that the IR *defines* what the two targets cannot
+agree on natively, so that both compute the same bits. **A fused multiply-add cannot be defined out
+of two roundings** — Dekker's two-product recovers the product's residual exactly, and §2's table
+is that the quotient it corrects is still **19,029 of 24,576 at a two-ulp worst**. An IR definition
+would therefore be a *different program* from the one the GPU runs, which is the failure
+[floating-point](floating-point.md) §7's rule exists to prevent. **A named refusal is the honest
+answer and a silently unfused module is not.**
+
+The fusion bridge refuses it too, for the same shape of reason in reverse: over the reals
+`A·B + C` and a multiply then an add are **one number**, so the symbolic language cannot hold the
+two apart, and projecting it would let the bridge certify a fusion the device would not reproduce.
+
+### 11.6 The artifact format, and the tests
+
+**`FORMAT_VERSION` was not bumped, and §7's analysis is the reason.** `Fma` is a **variant** under
+`#[facet(deny_unknown_fields)]`, not a field: an older build reads a document carrying it and
+**refuses it by the name `"fma"`**, which is the schema's own invariant, where the field
+`exact_float_arithmetic` that took the version `2 → 3` would have been **mis-parsed**. The version
+moves for a mis-parse, and this is not one. **Whether it moves anyway is the user's call, and this
+slice did not make it.**
+
+**No test was added.** Two **existing** tests carry an exhaustive match over `KernelInstr` — a
+tripwire the tree put there on purpose ("an instruction added to `KernelInstr` is a compile error
+here rather than a variant the ledger silently leaves out") — so both needed an arm to keep the
+crate building: `class_agreement.rs`'s `every_variant`/`named`/`unasked` ledger, and
+`gpu_matches_cpu.rs`'s hand-written reference, which reads `Fma` as the **host's `a.mul_add(b, c)`**
+so the reference rounds once as the instruction promises. **Neither is a new assertion.**
+
+**A pin is worth having and this slice did not write one.** The strongest candidate is
+`spirv_validation.rs`: a `Fma` module beside the two `Bin` ones, validated under
+`--target-env vulkan1.1`, which would hold the emitter to §11.2's six `ACCEPT`s. **That is a test,
+and tests are the user's to authorise.**
+
+### 11.7 What is still open
+
+- **The two refusals are named, not resolved.** A body holding an `Fma` does not run on the wasm
+  backend at all, so the language surface that would reach it — a keyword, an arity, a tagged
+  `TypeOperator`, a `TypeOperator` arm in the value codec — is **unbuilt and unbuilt on purpose**.
+- **The `0 − b` spelling is a subtraction, not a negation.** It is exact for every divisor the
+  language admits and it is four words, but a `KernelInstr::Negate` and an `OpFNegate` would say
+  what it means. **That is a second instruction and the user's to authorise.**
+- **Two vendors were measured.** Whether a third answers `OpExtInst Fma` in one rounding, and
+  whether any driver reassociates around one, is not.
+- **The wasm refusal has no accuracy question attached**, because there is no definition to
+  measure — which is §9's third bullet answered by *not shipping a definition*, with the reason.
+
