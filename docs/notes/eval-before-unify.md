@@ -554,7 +554,19 @@ compute **225/2/2** (the same two), language-server 22/0. The compute `graphrun`
 field spellings are **still refused** after this fix, so they are a different item
 (see [compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item).
 
-### 6.3 The message/predicate disagreement
+**The `::` counterpart is a different gap: a type-valued call result carries the
+universe, not its kind.** `type_of = x => {t = _; x: t; t}` ; `S1 = struct{.a Int}`.
+`S1` alone prints `struct{.a Int}: TypeStruct` and `S1::a` is `Int: Type`, but
+`T = type_of S1` prints its value as the struct type while its **type** is `Type` —
+so `T::a` is refused as `expected raw[?a, TypeStruct], found Type`, and the inline
+`(type_of S1)::a` is `raw none: ?a`. The read is guarded on the container's
+**type item**, and for a call whose value is a type that item is the universe rather
+than the value's kind; the `::` chains also root at that item, so they cannot see
+the value's own kind. Two candidate fixes, neither landed: fill the kind into the
+result item when the returned value is a type (the `type_of` definition's `t` cell
+never receives one), or let the guard and the chains ask the **value's** marker when
+the type item is the universe. The four `defer_pending` tests read through exactly
+this shape (`T::I` with `T = type_of (P _)(…)`).
 
 ### 6.3 The message/predicate disagreement
 
