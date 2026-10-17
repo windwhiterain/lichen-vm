@@ -188,6 +188,18 @@ neither was chosen: **(i)** carry the parameter binding into the `.element` slot
 clone time** in `static_node_apply`, or **(ii)** make the `Buf` application's argument **decided before
 its `apply_parameter_check`**. Both need a decision that this note does not make.
 
+**The next measurement, and why `apply_parameter_check` is the suspect.** That check evaluates the
+argument only to the depth the pattern references (`evaluate_pattern_argument`, `apply.rs:76`) and then
+unifies (`apply.rs:78`). At the `Buf` application the pattern is a bare cell, so the argument's
+positions can stay open; the unify then compares open cells and `fill_class_holes` has no value to
+write — which is exactly the `param = [..=None, ..=None]`, `arg = [..=None, ..=None]` the trace above
+prints. The kernel's later parameter unify descends the struct type, evaluates deeper, and that is
+what fills the cell. So the next probe is at `evaluate_pattern_argument` for
+`StaticFunctionId(22)`: what does the argument hold before and after, and which positions does the
+pattern reference? If it leaves them open, the fix candidate is a **type-position evaluation for a
+type argument** — a type value is a decided fact and never a lazy runtime value — which is neither
+the carry change (i) nor the read reorder (ii) but a third, narrower lowlevel site.
+
 ## 4. One half of that did land: an undecided class is refused, not guessed
 
 `compile_parallel_fragment` now returns `RoleUnread::Refusal` naming what it could not read
