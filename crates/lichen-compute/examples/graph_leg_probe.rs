@@ -79,13 +79,57 @@ out = (compute.graphrun built (6, 3, a, b) : OutG)
 compute.collect out.c : array{Float, 6}
 "#;
 
+const ONE_BUFFER: &str = r#"
+--- compute = import "compute.lichen" ---
+In2  = struct{.b (compute.Buf Float)}
+Out2 = struct{.w (compute.Buf Float)}
+Par2 = compute.P (compute.KT Float)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
+}
+k2 = compute.parallel f2 "gpu"
+GArg = struct{.n Int, .in In2}
+step = (s : GArg) => {
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b)))
+}
+built = compute.graph step
+src = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (3, src))
+"#;
+
+const UNUSED_BUFFER: &str = r#"
+--- compute = import "compute.lichen" ---
+In2  = struct{.b (compute.Buf Int)}
+Out2 = struct{.w (compute.Buf Int)}
+Par2 = compute.P (compute.KT Int)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value i + 10))
+}
+k2 = compute.parallel f2 "gpu"
+GArg = struct{.n Int, .in In2}
+step = (s : GArg) => {
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b)))
+}
+built = compute.graph step
+src = (compute.buffer ([1, 2, 3] : array{Int, 3}) : (compute.Buf Int))
+compute.collect (compute.graphrun built (3, src))
+"#;
 fn main() {
     if let Err(reason) = lichen_compute_gpu::install_default() {
         println!("no device: {reason}");
         return;
     }
     let only: Option<String> = std::env::args().nth(1);
-    for (name, template) in [("single", SINGLE), ("gemv", GEMV), ("matmul", MATMUL)] {
+    for (name, template) in [
+        ("single", SINGLE),
+        ("one_buffer", ONE_BUFFER),
+        ("unused_buffer", UNUSED_BUFFER),
+        ("gemv", GEMV),
+        ("matmul", MATMUL),
+    ] {
         if only.as_deref().is_some_and(|wanted| wanted != name) {
             continue;
         }
