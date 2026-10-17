@@ -15,8 +15,21 @@ fn decompose(value: f32) -> (u32, i32) {
     let bits = value.to_bits();
     let exponent = ((bits >> 23) & 0xff) as i32;
     let mantissa = bits & 0x007f_ffff;
-    assert!(exponent != 0, "the probe's grids stay inside the normal range");
+    assert!(
+        exponent != 0 && exponent != 0xff,
+        "the probe's grids stay inside the normal, finite range"
+    );
     (mantissa | 0x0080_0000, exponent - 127 - 23)
+}
+
+/// Whether a lane's operands and quotient are all normal and finite, which is the
+/// only range the integer reference and the residual are stated over.
+fn scored(a: f32, b: f32) -> bool {
+    let normal = |value: f32| {
+        let field = (value.to_bits() >> 23) & 0xff;
+        field != 0 && field != 0xff
+    };
+    normal(a) && normal(b) && normal(correctly_rounded(a, b))
 }
 
 /// `a / b` as the integer quotient `n1 / d1` and the power of two `2^shift`, with
@@ -176,7 +189,7 @@ fn quotient_program(n: usize, a: &[f32], b: &[f32], body: &str) -> String {
          \x20 i = compute.range k.n\n\
          \x20 qa = compute.read ((compute.Read _)(.from k.in.a, .at i))\n\
          \x20 qb = compute.read ((compute.Read _)(.from k.in.b, .at i))\n\
-         \x20 qd = compute.read ((compute.Read _)(.from k.in.b, .at 0))\n\
+         \x20 qs = compute.read ((compute.Read _)(.from k.in.b, .at 0))\n\
          \x20 qn = int2float k.n\n{body}\n\
          \x20 compute.write ((compute.Write _)(.to k.out.y, .at i, .value (result ~ \"element\")))\n\
          }}\n\
@@ -230,34 +243,41 @@ impl Report {
     }
 
     fn report(&self) {
-        let n = self.a.len();
+        let lanes: Vec<usize> = (0..self.a.len()).filter(|&i| scored(self.a[i], self.b[i])).collect();
+        let n = lanes.len();
         // The reference question first: is the host's own divide correctly rounded?
-        let host_matches = (0..n)
-            .filter(|&i| self.a[i] / self.b[i] == correctly_rounded(self.a[i], self.b[i]))
+        let host_matches = lanes
+            .iter()
+            .filter(|&&i| self.a[i] / self.b[i] == correctly_rounded(self.a[i], self.b[i]))
             .count();
-        let cpu_matches = (0..n)
-            .filter(|&i| self.cpu[i].value == correctly_rounded(self.a[i], self.b[i]))
-            .filter(|i| self.cpu[*i].round_trips)
+        let cpu_matches = lanes
+            .iter()
+            .filter(|&&i| {
+                self.cpu[i].value == correctly_rounded(self.a[i], self.b[i])
+                    && self.cpu[i].round_trips
+            })
             .count();
-        let cpu_round_trips = (0..n).filter(|&i| self.cpu[i].round_trips).count();
-        let device_round_trips = (0..n)
-            .filter(|&i| self.device[i].round_trips)
+        let cpu_round_trips = lanes.iter().filter(|&&i| self.cpu[i].round_trips).count();
+        let device_round_trips = lanes.iter().filter(|&&i| self.device[i].round_trips).count();
+        let agree = lanes
+            .iter()
+            .filter(|&&i| self.cpu[i].token == self.device[i].token)
             .count();
-        let agree = (0..n)
-            .filter(|&i| self.cpu[i].token == self.device[i].token)
+        let agree_bits = lanes
+            .iter()
+            .filter(|&&i| self.cpu[i].value == self.device[i].value)
             .count();
-        let agree_bits = (0..n)
-            .filter(|&i| self.cpu[i].value == self.device[i].value)
-            .count();
-        let worst = (0..n)
-            .map(|i| ulps_apart(self.device[i].value, self.cpu[i].value))
+        let worst = lanes
+            .iter()
+            .map(|&i| ulps_apart(self.device[i].value, self.cpu[i].value))
             .max()
             .unwrap_or(0);
         println!(
-            "CASE {} n={n} host_=/_exact={host_matches} cpu_=_exact={cpu_matches} \
+            "CASE {} scored={n}/{} host_=/_exact={host_matches} cpu_=_exact={cpu_matches} \
              cpu_round_trips={cpu_round_trips} device_round_trips={device_round_trips} \
              same_token={agree} same_bits={agree_bits} worst_ulp_vs_cpu={worst}",
-            self.name
+            self.name,
+            self.a.len()
         );
 
         // Models for the device's answer.
@@ -278,8 +298,9 @@ impl Report {
         }))
         .collect();
         for (name, model) in models {
-            let hits = (0..n)
-                .filter(|&i| model(self.a[i], self.b[i]) == self.device[i].value)
+            let hits = lanes
+                .iter()
+                .filter(|&&i| model(self.a[i], self.b[i]) == self.device[i].value)
                 .count();
             if hits * 4 >= n * 3 {
                 println!("  MODEL {name} explains {hits}/{n}");
@@ -289,7 +310,7 @@ impl Report {
         // The mover rule, from the exact residual.
         let mut worst_mover = 0.0f64;
         let mut best_quiet = 0.5f64;
-        for i in 0..n {
+        for &i in &lanes {
             let t = residual(self.a[i], self.b[i]).abs();
             if self.device[i].value == self.cpu[i].value {
                 best_quiet = best_quiet.min(t);
@@ -345,7 +366,7 @@ fn dense(divisor: f32) -> Report {
 }
 
 /// `ln`'s own division, `(v - 1) / (v + 1)`, over the band its reduction lands in.
-fn ln_band() -> Report {
+fn ln_band() {
     let n = 4096;
     let low = 0.707_106_78f32;
     let high = 1.414_213_5f32;
@@ -354,30 +375,45 @@ fn ln_band() -> Report {
     v[1] = 1.25;
     v[2] = 0.976_562_5;
     let body = "  result = (qa - 1.0) / (qa + 1.0)";
-    let a = v.clone();
-    let b = vec![1.0; n];
-    let report = Report::run(
-        "ln:(v-1)/(v+1)",
-        &quotient_program(n, &a, &b, body),
-        a,
-        b,
+    let source = quotient_program(n, &v, &vec![1.0f32; n], body);
+    let (cpu, device) = measure(&source);
+    let same = (0..n)
+        .filter(|&i| cpu[i].value == device[i].value)
+        .count();
+    let worst = (0..n)
+        .map(|i| ulps_apart(device[i].value, cpu[i].value))
+        .max()
+        .unwrap_or(0);
+    let by_recip = (0..n)
+        .filter(|&i| {
+            let numerator = v[i] - 1.0;
+            let denominator = v[i] + 1.0;
+            numerator * (1.0 / denominator) == device[i].value
+        })
+        .count();
+    let cpu_round_trips = (0..n).filter(|&i| cpu[i].round_trips).count();
+    let device_round_trips = (0..n).filter(|&i| device[i].round_trips).count();
+    println!(
+        "LNBAND n={n} same={same} worst_ulp={worst} recip_model={by_recip} \
+         cpu_round_trips={cpu_round_trips} device_round_trips={device_round_trips}"
     );
     for lane in 0..3 {
-        let exact = (report.a[lane] - 1.0) / (report.a[lane] + 1.0);
+        let numerator = v[lane] - 1.0;
+        let denominator = v[lane] + 1.0;
+        let reciprocal = numerator * (1.0 / denominator);
         println!(
-            "  LN v={} cpu={} cpu_bits=0x{:08x} device={} device_bits=0x{:08x} ulp={} \
-             correctly_rounded_bits=0x{:08x}",
-            report.a[lane],
-            report.cpu[lane].token,
-            report.cpu[lane].value.to_bits(),
-            report.device[lane].token,
-            report.device[lane].value.to_bits(),
-            ulps_apart(report.device[lane].value, report.cpu[lane].value),
-            exact.to_bits(),
+            "  LN v={} denominator={} cpu={} cpu_bits=0x{:08x} device={} device_bits=0x{:08x} \
+             ulp={} recip_model_bits=0x{:08x}",
+            v[lane],
+            denominator,
+            cpu[lane].token,
+            cpu[lane].value.to_bits(),
+            device[lane].token,
+            device[lane].value.to_bits(),
+            ulps_apart(device[lane].value, cpu[lane].value),
+            reciprocal.to_bits(),
         );
     }
-    report.report();
-    report
 }
 
 /// `rmsnorm`'s own divisor: the Newton `sqrt` computed on the device, then the
@@ -425,7 +461,7 @@ fn rmsnorm(spelling: &str) -> Report {
         .collect();
     let (cpu, device) = measure(&body);
     let report = Report {
-        name: "rmsnorm:{spelling}".to_string(),
+        name: format!("rmsnorm:{spelling}"),
         a,
         b: device_divisors,
         cpu,
@@ -436,7 +472,7 @@ fn rmsnorm(spelling: &str) -> Report {
 }
 
 /// `softmax`'s gathered divisor, `exp (x[i]) / total[i]`.
-fn softmax_gathered() -> Report {
+fn softmax_gathered() {
     let file = readme::example_dir().join("softmax.lichen");
     let source = readme::read_normalized(&file);
     let n = 256;
@@ -464,46 +500,51 @@ fn softmax_gathered() -> Report {
         .replace(".n 4", &format!(".n {n}"))
         .replace("array{Float, 4}", &format!("array{{Float, {n}}}"));
     let (cpu, device) = measure(&body);
-    let report = Report {
-        name: "softmax:gathered".to_string(),
-        a,
-        b: totals,
-        cpu,
-        device,
-    };
-    report.report();
-    report
+    let all = (0..n).filter(|&i| cpu[i].value == device[i].value).count();
+    let worst = (0..n)
+        .map(|i| ulps_apart(device[i].value, cpu[i].value))
+        .max()
+        .unwrap_or(0);
+    println!(
+        "SOFTMAX_GATHERED n={n} same={all} worst_ulp={worst} \
+         cpu_round_trips={} device_round_trips={}",
+        (0..n).filter(|&i| cpu[i].round_trips).count(),
+        (0..n).filter(|&i| device[i].round_trips).count(),
+    );
 }
 
-/// Compensated spellings of `qa / qd`, over `rmsnorm`'s own divisor grid.
+/// Compensated spellings of `qa / qb`, over `rmsnorm`'s own divisor grid.
 fn compensated(spelling: &str) {
     let n = 256;
     let a: Vec<f32> = (0..n).map(|m| grid(m % 64, 0)).collect();
     let b: Vec<f32> = (0..n).map(|m| (3.0 + m as f32 / 16.0 / 4.0 + 0.25).sqrt()).collect();
     let body = match spelling {
-        "plain" => "  result = qa / qd".to_string(),
-        "recip" => "  result = qa * (1.0 / qd)".to_string(),
+        "plain" => "  result = qa / qb".to_string(),
+        "recip" => "  result = qa * (1.0 / qb)".to_string(),
         "nr1" => {
-            "  rc = 1.0 / qd\n  rc = rc * (2.0 - qd * rc)\n  result = qa * rc".to_string()
+            "  rc0 = 1.0 / qb\n  rc = rc0 * (2.0 - qb * rc0)\n  result = qa * rc".to_string()
+        }
+        "rebind" => {
+            "  rc = 1.0 / qb\n  rc = rc * (2.0 - qb * rc)\n  result = qa * rc".to_string()
         }
         "nr2" => {
-            "  rc = 1.0 / qd\n  rc = rc * (2.0 - qd * rc)\n  rc = rc * (2.0 - qd * rc)\n  \
+            "  rc0 = 1.0 / qb\n  rc1 = rc0 * (2.0 - qb * rc0)\n  rc = rc1 * (2.0 - qb * rc1)\n  \
              result = qa * rc"
                 .to_string()
         }
         "markstein" => {
-            "  q0 = qa / qd\n  \
+            "  q0 = qa / qb\n  \
              sc = 4097.0\n  \
-             bh = (qd * sc) - ((qd * sc) - qd)\n  \
-             bl = qd - bh\n  \
-             pr = qd * q0\n  \
+             bh = (qb * sc) - ((qb * sc) - qb)\n  \
+             bl = qb - bh\n  \
+             pr = qb * q0\n  \
              ph = (pr * sc) - ((pr * sc) - pr)\n  \
              pl = pr - ph\n  \
              qh = (q0 * sc) - ((q0 * sc) - q0)\n  \
              ql = q0 - qh\n  \
              ee = ((bh * qh - pr) + bh * ql + bl * qh) + bl * ql\n  \
              rr = (qa - pr) - ee\n  \
-             result = q0 + rr * (1.0 / qd)"
+             result = q0 + rr * (1.0 / qb)"
                 .to_string()
         }
         other => panic!("no such spelling: {other}"),
@@ -513,20 +554,79 @@ fn compensated(spelling: &str) {
     let exact = (0..n)
         .filter(|&i| correctly_rounded(a[i], b[i]) == cpu[i].value)
         .count();
-    let same = (0..i32::MAX as usize)
-        .filter(|&i| i < n && cpu[i].value == device[i].value)
+    let same = (0..n)
+        .filter(|&i| cpu[i].value == device[i].value)
         .count();
     let worst = (0..n)
         .map(|i| ulps_apart(device[i].value, cpu[i].value))
         .max()
         .unwrap_or(0);
-    let worse_than_cpu = (0..n)
-        .filter(|&i| ulps_apart(device[i].value, correctly_rounded(a[i], b[i])) > 0)
+    let worse = (0..n)
+        .filter(|&i| {
+            ulps_apart(device[i].value, correctly_rounded(a[i], b[i]))
+                > ulps_apart(cpu[i].value, correctly_rounded(a[i], b[i]))
+        })
         .count();
     println!(
         "COMP spelling={spelling} n={n} cpu_is_exact={exact} device_=_cpu={same} \
-         worst_ulp_vs_cpu={worst} device_off_exact={worse_than_cpu}"
+         worst_ulp_vs_cpu={worst} lanes_worse_than_cpu={worse}"
     );
+    if spelling == "markstein" {
+        // The same sequence on the host, over the same grids the device ran, so a
+        // shortfall is the device's and not the spelling's.
+        let mut grids: Vec<(Vec<f32>, Vec<f32>, bool)> = Vec::new();
+        grids.push((
+            (0..4096).map(|m| grid(m % 64, 0)).collect(),
+            (0..4096).map(|m| grid((m / 64) % 64, -4)).collect(),
+            false,
+        ));
+        for divisor in [3.0f32, 7.0, 0.1, 2.5] {
+            grids.push((
+                (0..4096).map(|m| 1.0 + m as f32 / 4096.0).collect(),
+                vec![divisor; 4096],
+                false,
+            ));
+        }
+        grids.push((
+            (0..4096)
+                .map(|m| 0.707_106_78 + (1.414_213_5 - 0.707_106_78) * m as f32 / 4096.0)
+                .collect(),
+            vec![1.0f32; 4096],
+            true,
+        ));
+        let mut host_exact = 0usize;
+        let mut host_total = 0usize;
+        let mut host_worst = 0i64;
+        for (numerators, divisors, atanh) in &grids {
+            for i in 0..numerators.len() {
+                let (numerator, denominator) = if *atanh {
+                    (numerators[i] - 1.0, numerators[i] + 1.0)
+                } else {
+                    (numerators[i], divisors[i])
+                };
+                let right = correctly_rounded(numerator, denominator);
+                let sc = 4097.0f32;
+                let bh = (denominator * sc) - ((denominator * sc) - denominator);
+                let bl = denominator - bh;
+                let q0 = numerator / denominator;
+                let pr = denominator * q0;
+                let qh = (q0 * sc) - ((q0 * sc) - q0);
+                let ql = q0 - qh;
+                let ee = ((bh * qh - pr) + bh * ql + bl * qh) + bl * ql;
+                let rr = (numerator - pr) - ee;
+                let out = q0 + rr * (1.0 / denominator);
+                host_total += 1;
+                if out.to_bits() == right.to_bits() {
+                    host_exact += 1;
+                } else {
+                    host_worst = host_worst.max(ulps_apart(out, right));
+                }
+            }
+        }
+        println!(
+            "COMP host_markstein_exact={host_exact}/{host_total} host_worst_ulp={host_worst}"
+        );
+    }
 }
 
 /// The `f32` reciprocal the device's answers are consistent with, if one exists.
@@ -640,8 +740,11 @@ fn main() {
                 softmax_gathered();
             }
             "compensated" => {
-                for spelling in ["plain", "recip", "nr1", "nr2", "markstein"] {
-                    compensated(spelling);
+                for spelling in ["plain", "recip", "rebind", "nr1", "nr2", "markstein"] {
+                    let wanted = std::env::var("COMP_ONLY").unwrap_or_default();
+                    if wanted.is_empty() || wanted == spelling {
+                        compensated(spelling);
+                    }
                 }
             }
             other => println!("CASE {other}: no such case"),
