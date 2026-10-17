@@ -46,18 +46,15 @@
     `[312.0, 414.0]` chained and `[312.0, 414.0]` direct. **So the decode step is two kernels and \
     two address forms, not two kernels and one**: the keys half is this file's kernel as \
     committed, and the values half is `examples/attention.lichen`'s own address form.\n\n\
-    **The device leg, measured on the RTX 3060, and it is refused by name for a reason inherent to \
-    the operator's shape.** The vector is `kdim` long and the count is `M`, so every GEMV with \
-    `kdim < M` — which is every decode-step use, where the reduction runs over the cache positions \
-    and the outputs are the head dimension — hands the device an input shorter than the run, and \
-    that is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`): *input buffer 1 \
-    holds 3 element(s) but the run covers 4 index/indices, so a lane would read past it*. With the \
-    vector padded to the count the same kernel **runs** on the RTX 3060 through the direct \
-    `compute.plrun` leg and answers `[14.0, 32.0, 50.0, 68.0]`, **element for element what `cpu` \
-    answers** — every entry an integer below `2^24`, so that is a bit-exact agreement and not a \
-    tolerance. This file therefore declares `cpu`, the backend the example suite runs, and on \
-    `cpu` the asymmetry is the one `examples/kvcache.lichen` measured: a short input answers `0` \
-    past its own end rather than refusing (`compute.rs:6234`).\n\n\
+    **The device leg, measured on the RTX 3060 — and the rule that used to refuse it is gone.** The \
+    vector is `kdim` long and the count is `M`, so every GEMV with `kdim < M` — which is every \
+    decode-step use, where the reduction runs over the cache positions and the outputs are the head \
+    dimension — hands the device an input shorter than the run. That used to be \
+    `InputShorterThanCount` (*input buffer 1 holds 3 element(s) but the run covers 4 index/indices, \
+    so a lane would read past it*); the owner removed the rule, and **this program now runs on the \
+    device from this source**: 4 of 4 elements bit-exact against `cpu`, the same \
+    `[14.0, 32.0, 50.0, 68.0]` the padded measurement predicted. This file still declares `cpu`, \
+    the backend the example suite runs.\n\n\
     **The graph path refuses this operator twice, and the first refusal is its own shape.** From \
     the CLI there is no graph leg at all — *compute.graph: this graph dispatches to a device, but \
     no compute backend is installed* — so the rest is measured through a host program with the \
@@ -85,9 +82,9 @@
     (`code-audit.md` P1-39, `todo`). Those are known, and none of them is this operator's. Three \
     more, each measured above. **(a) The graph leg** — the only path that consults the fusion \
     floor — records a GEMV and then refuses to run it, on the ground that its two inputs differ \
-    in length, so nothing here reaches the floor. **(b) The device leg** refuses a GEMV whose \
-    reduction is shorter than its output, which is the decode shape; the operator stays on the \
-    host until a kernel may name a read set shorter than `count`. **(c) A position to advance.** \
+    in length, so nothing here reaches the floor. **(b) The device leg** used to refuse a GEMV whose \
+    reduction is shorter than its output; that rule is gone and this program runs on the device \
+    (4 of 4, bit-exact), so the decode shape is not blocked by a length. **(c) A position to advance.** \
     A GEMV carries no position of its own — `t` belongs to the cache kernel — but the pair needs \
     one to advance, and the language holds no mutable state between calls. Beyond those three, \
     nothing: the arithmetic, the layout and the chaining are all expressible today, as measured.\n\n\

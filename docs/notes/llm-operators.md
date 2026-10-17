@@ -476,6 +476,14 @@ need a node-local producer for `r`.
   **the ladder's last operator now runs on a device bit-exact**: `examples/generate.lichen` answers
   `([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0])` on both backends with no ulp distance
   — see [device-leg](device-leg-of-the-ladder.md) §5.
+- **The length rule below has since been removed** (the owner's decision; the readings are kept as
+  the record of the rule as it stood). A host input shorter than the run's count is **not refused**
+  any more: the device uploads it at its own length and a lane above it reads the cleared padding as
+  `0`, which is the host path's own zero-fill, so the two backends answer one answer. `RaggedInputs`
+  was removed with it, because its premise — *a dispatch reads every input to `count`* — was never the
+  body's rule. **The four operators that rule refused now run on a device**: `gemv`, `kvcache`,
+  `decode` and `decode_loop`, measured element for element against `cpu` in
+  [device-operator-sweep](device-operator-sweep.md)'s re-measured table.
 - **The rule's own shape, corrected, and it is narrower than the sentence above** (`device-leg-of-the-ladder.md`
   §5, RTX 3060 Laptop). `InputShorterThanCount` compares a **host** input's **length** against the
   **launch count** — the word *host* is load-bearing and was left out above. `staged_bytes` is
@@ -509,12 +517,13 @@ need a node-local producer for `r`.
   three and answers `0` (`compute.rs:6234`). The **first** leaf governs through `scalar_leaf_classes`
   (`compute.rs:1849`), and the second is reached **only from `coordinate`** (`body.rs:788`) — so "two leaves
   are positional" is exact only for a body that calls `compute.row`/`compute.col`.
-- **The graph path cannot carry a GEMV at all, by construction.** `RaggedInputs`
-  (`crates/lichen-graph-ir/src/run.rs:273`, with `ragged_host` at `:520-529`) refuses the run at submit:
-  *"node 0's inputs are not all the same length: 48 and 12"* — it compares **payload bytes** — and a GEMV's
-  two inputs (`M · kdim` against `kdim`) are **never** the same length except at `M = 1`, so **the check's
-  own sentence is false of a legitimate body**. Since the graph leg is the only path that consults the
-  fusion floor, nothing here reaches the floor.
+- **The graph path could not carry a GEMV, and the check that refused it is gone.** `RaggedInputs`
+  (`crates/lichen-graph-ir/src/run.rs`, with `ragged_host`) refused the run at submit: *"node 0's inputs
+  are not all the same length: 48 and 12"* — it compared **payload bytes** — and a GEMV's two inputs
+  (`M · kdim` against `kdim`) are **never** the same length except at `M = 1`, so **the check's own
+  sentence was false of a legitimate body**. It was removed with the length rule (the correction above);
+  what a GEMV through the graph meets now is the class arm below, not a length. The graph leg is still
+  the only path that consults the fusion floor.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
@@ -539,11 +548,11 @@ need a node-local producer for `r`.
   actually wants — one lane per **column**, writing at `t · dim + d` = 4 and 5 over a count of 2 — the
   `cpu` path answers `[0.0, 0.0]` **and so does the RTX 3060**: no error, no refusal, no line. That is why
   the committed KV-cache operator rewrites the whole cache instead of one row. (2) **Capacity against
-  filled prefix is asymmetric**: a host input **shorter than the count** is *refused on the device by name*
-  (`dispatch.rs:219`, `InputShorterThanCount`, because an input is uploaded at its own length) while the
-  **host path silently zero-fills the tail** (`compute.rs:6234`) — a cache holding only its filled prefix
-  `[1, 2, 3, 4]` is refused on the device (*"input buffer 0 holds 4 element(s) but the run covers 8"*) and
-  answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` on `cpu` with nothing said. (3) **A written-but-never-read
+  filled prefix is no longer asymmetric** (the device check was removed — see the correction above):
+  the device used to refuse a host input shorter than the count while the **host path silently
+  zero-fills the tail** (`compute.rs:6234`); both zero-fill now, so a cache holding only its filled
+  prefix `[1, 2, 3, 4]` answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` on **both** backends.
+  (3) **A written-but-never-read
   region is not observable**: `collect` reads every element of a buffer exactly `count` long
   (`compute.rs:1550-1621`) and on the device the output is allocated `padded` = 64 (`dispatch.rs:1052`)
   while `collect` still reads `count`, so the surplus lanes' slots are written and never handed back.
@@ -575,7 +584,9 @@ need a node-local producer for `r`.
   crate's one-buffer `Float` graph **with no runtime scalar** dispatches and answers correctly, so the leg
   works and the refusal is this operator's. `ragged_host` (`graph-ir/src/run.rs:520`) compares payload
   bytes and its own `# Invariant` **admits a width-ratio blind spot**, but the counting site was not
-  proven.
+  proven. **Both readers have since moved**, so this records the graph leg as it stood: the class defect
+  was fixed (`7eedb125`, [compile-order-class](compile-order-class.md)) and the length check was removed
+  (the correction above).
 - **What a decode loop still needs, measured — and corrected** (`wall-claims-audit.md` §3, §4). Carried state
   across calls: **yes** — a `plrun` output is a buffer a later `plrun` takes as an input, and the committed
   operator's output is shaped to be fed straight back. A second kernel reading what the first wrote:
@@ -694,9 +705,9 @@ need a node-local producer for `r`.
   with `output_classes [Int]` / `input_classes [Float, Int]` where the program declares `Float`, and it
   depends only on which kernel compiled first — a program that *declares* the step compiles `attend`
   **first** and gets `[Float, Int] → [Int]`, while the same kernels without the step compile `scores` first
-  and get `[Float, Float] → [Float]`. `graphrun` then refuses *"input buffer 1 holds 4 element(s) but the
-  run covers 8 index/indices, so a lane would read past it"* (`InputShorterThanCount`,
-  `lichen-compute-gpu/src/dispatch.rs:219`): the wrong class means the wrong element width. The chain is
+  and get `[Float, Float] → [Float]`. `graphrun` then refused *"input buffer 1 holds 4 element(s) but the
+  run covers 8 index/indices, so a lane would read past it"* (`InputShorterThanCount`, removed since —
+  see the correction at the top of this list): the wrong class meant the wrong element width. The chain is
   `compute.rs:2013-2017` — `walk_role` reads a `Buf T`'s element class through
   `low_type_of_slot(module, element).filter(|shape| shape.is_known())` — into **lazily-filled cells**
   (`lichen-highlevel/src/shape.rs:858` → `low_type_of` at `:704`) that **no pass evaluates a type term

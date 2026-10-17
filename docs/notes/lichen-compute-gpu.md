@@ -516,18 +516,24 @@ not).
 writer needs is not "the padding is zeroed" but **how much of a host input is real**: a
 run uploads each input at its **own length** (`own_elements`, `dispatch.rs:320`, asked by
 both the staging reservation and the copy), so every index the body reads is real as long
-as it is **inside its buffer** — the invariant is now `[0, len)`, with the padding past
-`len` filled on the device. What remains is the direction the host *can* see: a host input
-**shorter than the count** is refused by name while the staging is sized
-(`InputShorterThanCount`), because the host cannot see the body's read set and a
-conservative refusal beats a silent zero. The other direction is **still uncaught**: a body
-that reaches **past its buffer** while the count stays inside it is an out-of-bounds device
-read, and the region that silently answers `0` shrank from `[count, padded)` to
-`[len, padded)` rather than closing. A matmul used to be the standard victim of the old
-rule — `m×K · K×n` needed `K ≤ m` and `K ≤ n` against a rule that admitted only the square
-case — and it is the measurement that forced the fix: under the old rule a `2×3 · 3×2`
-answered `[25, 28, 28, 32]` on the device against the CPU's `[58, 64, 139, 154]`, **silently**,
-and a body with **no** `@loop` disagreed identically, which ruled out a lowering bug. The
+as it is **inside its buffer** — the invariant is `[0, len)`, with the padding past
+`len` filled on the device. A read past `len` answers `0`.
+
+**A host input shorter than the count is not refused** (the owner's decision, recorded
+here): the upload is the input's own length, the allocation is the count rounded to a
+workgroup, and a lane that reads above the input reads the same cleared `0` the host path
+zero-fills — so the two backends answer one answer instead of splitting into a refusal and
+a zero. That removes the only length check the device had; the read set is the author's
+obligation, exactly as it is for the host path, and a body that reaches **past its buffer**
+is still an uncaught out-of-bounds read whose region is `[len, padded)`. The cost is
+stated where the decision is: the refusal it replaces used to catch a buffer handed to a
+launch that covers more indices than it holds, and nothing catches that now.
+
+A matmul used to be the standard victim of the **old, narrower** rule — `m×K · K×n` needed
+`K ≤ m` and `K ≤ n` against a rule that admitted only the square case — and it is the
+measurement that forced the upload-width fix: under the old upload a `2×3 · 3×2` answered
+`[25, 28, 28, 32]` on the device against the CPU's `[58, 64, 139, 154]`, **silently**, and
+a body with **no** `@loop` disagreed identically, which ruled out a lowering bug. The
 measurement, the discriminator and what a tiled matmul would still need are in
 [LLM operators](llm-operators.md#smaller-findings-each-with-the-thing-that-would-change).
 
@@ -615,10 +621,11 @@ that changes what the numbers mean.
 - **An extent leaf that is not an `Int` is refused** (`ExtentNotAnInteger`) rather
   than pushed as a converted count. The ABI calls that leaf a count, and there is
   no float one could be read as without inventing it.
-- **A host input shorter than the run's count is refused**, each against its own
-  class's width rather than one module-wide answer. Only a host slot can be too
-  short: a resident buffer already holds what an earlier run put there, and its
-  length is that run's business.
+- **A host input shorter than the run's count is not a refusal**, and there is no
+  length check left to raise one: each input is uploaded at its own length, the
+  allocation is the count rounded to a workgroup, and the lanes above the input read
+  the cleared padding as `0` — the answer the host path's zero-fill gives. The width
+  is still read per input, from its own class, because that is what the upload copies.
 - **The outputs are not initialised.** They are what the caller keeps, so they
   become resident, and they go into the same descriptor list as the inputs — the
   binding layout is inputs-then-outputs in one set, so a run's outputs occupy the

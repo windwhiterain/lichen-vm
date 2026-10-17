@@ -38,11 +38,10 @@
    device (`lichen-compute-gpu/src/dispatch.rs:458-461`; `own_elements` at `:320`, asked by both the
    staging reservation at `:976-984` and the copy at `:1066-1078`, so the two cannot drift) — so an
    element a lane reads is real as long as it is **inside its buffer**, whatever the lane count is.
-   The device's remaining length rule is the opposite one and still bites: a host input **shorter
-   than the count** is refused by name (`InputShorterThanCount`, raised while the staging is sized,
-   before anything is recorded), because the host cannot see the body's read set and a conservative
-   refusal beats a silent zero. Measured on the RTX 3060: this `2 × 3 · 3 × 2` answers what the
-   `cpu` path answers, element for element; under the old rule the same program answered
+   The device's other length rule — a host input **shorter than the count** refused by name while
+   the staging was sized — **has been removed** (the owner's decision), so both backends answer the
+   cleared padding with `0`. Measured on the RTX 3060: this `2 × 3 · 3 × 2` answers what the
+   `cpu` path answers, element for element; under the old upload rule the same program answered
    `[25, 28, 28, 32]` there against `[58, 64, 139, 154]` here, because every entry past index `3`
    was read back as the zero padding. What is still uncaught is the other direction: a body that
    reaches **past the buffer** while the count stays inside it is an out-of-bounds device read, and

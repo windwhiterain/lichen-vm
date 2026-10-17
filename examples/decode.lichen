@@ -48,9 +48,10 @@
     `examples/kvcache.lichen` measures.** Stage 2 reads all eight key slots (`i · kdim + \
     s(0) - 1` over `i` in `0 … 3`) and stage 4 reads all eight value slots **including the \
     two unfilled positions**, which is why the appended cache cannot be handed on as its \
-    filled prefix `[1 2 3 4]`: a host input shorter than the count is refused by name on the \
-    device and zero-filled silently on the host. The chain is the reason that operator rewrites \
-    the whole buffer rather than one row. **Only the query is short, and only by `dim`.**\n\n\
+    filled prefix `[1 2 3 4]`: the device used to refuse a short host input and the host \
+    zero-filled it silently; the rule was removed (the owner's decision), so both answer `0` past \
+    the prefix now. The chain still rewrites the whole buffer rather than one row, because a write \
+    past the count is dropped in silence. **Only the query is short, and only by `dim`.**\n\n\
     **The two config spellings coexist, and which one a kernel can use is decided by its leaf \
     count.** Stages 3a and 3b are `examples/softmax.lichen`'s two kernels **verbatim**, and \
     they carry `compute.P (compute.KT Float)(.I Row, .O Maxs)` — a config holding **one** \
@@ -130,30 +131,22 @@
     **The device leg, which this file cannot reach, and what it would meet.** The CLI installs \
     no compute backend, so flipping every kernel in this program to `gpu` answers by name — \
     *this parallel kernel was compiled for the `gpu` backend, but no compute backend is \
-    installed* — **measured, this program**. The two predecessors' measurements stand in for \
-    it, and a chain meets their walls **in order**. Stage 1 is refused **first**, because its \
-    incoming rows are `dim` = 2 wide against a count of 8, and a host input shorter than the \
-    count is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`); padding them \
-    to the cache's own length makes stage 1 run and agree with `cpu` element for element \
-    (`examples/kvcache.lichen`), and only then is stage 2 refused by the shape \
-    `examples/gemv.lichen` measured — the reduction `kdim = 2` is shorter than the output \
-    `n = 4`, which is the decode shape and every decode step. **Stage 4 is not that refusal**: \
-    its reduction `keys = 4` is *longer* than its output `dim = 2`, and its short operand, the \
-    4-long weights buffer, is no shorter than its count of 2. **That asymmetry is a reason a \
-    chained step may reach a device before a lone GEMV does**, and it is reasoned from the \
-    two measurements above, not measured here.\n\n\
-    **The graph leg, which this chain refuses at two more places.** `RaggedInputs` \
-    (`crates/lichen-graph-ir/src/run.rs:273`, with `ragged_host` at `:520-529`) compares \
+    installed* — **measured, this program**. The walls the two predecessors measured are both \
+    **gone**: the length rule was removed (the owner's decision) and the shape \
+    `examples/gemv.lichen` measured is no longer refused, so **this chain now runs on the device** \
+    — 1 of the 2 declared elements differs by **1 ulp**, the `exp`-and-division family §7 of \
+    `docs/notes/device-operator-sweep.md` attributes, not a length. The hypothesis below that a \
+    chained step might reach a device before a lone GEMV is moot: both do.\n\n\
+    **The graph leg, which used to refuse this chain at two more places.** `RaggedInputs` \
+    (`crates/lichen-graph-ir/src/run.rs`, **removed with the length rule**) compared \
     **payload bytes** across a node's inputs, and **no two stages of this chain have two \
     inputs of one length**: stage 1 is 8 against 2, stage 2 is 8 against 2, stage 4 is 4 \
-    against 8. So the chain meets `RaggedInputs` at stage 2 and again at stage 4, each before \
-    any of it reaches the fusion floor. The compile-order class defect \
-    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`) is measured on attention's \
+    against 8. What stays is the compile-order class defect \
+    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`), measured on attention's \
     two-kernel chain over a **recorded** graph, which is this chain's shape with a second \
     query, so it is not a sixth wall here but **the same one**. What this chain adds to the \
     ladder is the number of *distinct* shapes a real step has to satisfy at once — a \
-    four-input append, a two-input GEMV and a two-input weighted sum in one program — against \
-    a graph leg that requires every node's inputs to be one length.\n\n\
+    four-input append, a two-input GEMV and a two-input weighted sum in one program.\n\n\
     **What is exact and what is modelled.** **Exact, by hand and in `f32`:** the append, every \
     element copied or replaced with integers below `2^24` and no `exp` and no `sqrt` in it; \
     the four dot products `1`, `3`, `1`, `0`, every term a product of integers under 30; the \

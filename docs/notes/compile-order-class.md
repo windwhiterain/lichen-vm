@@ -445,7 +445,8 @@ read). There is **no `wontfix:D<n>` line over the classing**.
 
 A GEMV written as an ordinary operator reaches the same wall without anything hand-built
 (`examples/gemv.lichen`, `da584de5`): recorded through the graph path, it is first refused at submit by
-**`RaggedInputs`** (`crates/lichen-graph-ir/src/run.rs:273`, `ragged_host` at `:520-529`) — *"node 0's
+**`RaggedInputs`** (`crates/lichen-graph-ir/src/run.rs:273`, `ragged_host` at `:520-529`; **both removed
+since**, the length check gone) — *"node 0's
 inputs are not all the same length: 48 and 12"*, comparing **payload bytes**, which a GEMV's two inputs
 (`M · kdim` and `kdim`) can never satisfy unless `M = 1` — and **once the two inputs are equalised**, submit
 is refused by the class arm:

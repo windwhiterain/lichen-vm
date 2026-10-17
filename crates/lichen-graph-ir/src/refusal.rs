@@ -91,17 +91,6 @@ pub enum GraphRefusal {
         wanted: usize,
         got: usize,
     },
-    /// A node's inputs were not all the same length.
-    ///
-    /// # Invariant
-    /// A dispatch over `[0, count)` reads `count` elements of every input, so unequal
-    /// lengths mean a lane reads past the shorter one; the graph is where the message can
-    /// name both lengths.
-    RaggedInputs {
-        node: usize,
-        first: usize,
-        other: usize,
-    },
     /// A dispatch was given a number where it wanted a buffer.
     ///
     /// # Invariant
@@ -302,12 +291,6 @@ impl fmt::Display for GraphRefusal {
                 f,
                 "node {node}'s fragment reads {wanted} input buffer(s) but {got} value(s) were \
                  given it, which is a different program rather than a run with fewer arguments."
-            ),
-            GraphRefusal::RaggedInputs { node, first, other } => write!(
-                f,
-                "node {node}'s inputs are not all the same length: {first} and {other}. A \
-                 dispatch over [0, count) reads every input to `count`, so a lane would read \
-                 past the shorter one."
             ),
             GraphRefusal::NotBufferData { node, value, found } => write!(
                 f,

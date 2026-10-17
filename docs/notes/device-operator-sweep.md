@@ -9,7 +9,11 @@
 > **The method is a program now**:
 > `crates/lichen-compute/examples/operators_on_device.rs`, and
 > [§ The sweep, as a program](#the-sweep-as-a-program) re-measures every example that
-> dispatches a kernel at `dev@602480ed`.
+> dispatches a kernel.
+> **Superseded in one respect**: the length rule four of these verdicts were measured under
+> (`InputShorterThanCount`) was removed by the owner's decision — see
+> [lichen-compute-gpu](lichen-compute-gpu.md)'s "What an author has to know" — and the four operators
+> it refused run now. § The sweep, as a program carries the re-measured rows.
 
 [device-leg-of-the-ladder](device-leg-of-the-ladder.md) reached a device for the append, the row
 maximum, the sampler, `topk` and the generation loop. It left open, in its own closing **Unknown**,
@@ -52,7 +56,7 @@ correction to the brief itself.**
 | `rmsnorm` — a Newton `sqrt` and a division | `rmsnorm.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 2 modules, **2 ACCEPT** |
 | `layernorm` — a diamond of two folds and a Newton `sqrt` | `layernorm.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 3 modules, **3 ACCEPT** |
 | attention — softmax composed with a gemv | **`attention.lichen`** | **runs, diverges** | **1** (of 8 elements, 6 differ) | 2 modules, **2 ACCEPT** |
-| `gemv` | `gemv.lichen` | **refused by name** — the **known** rule | — | 1 module, **1 ACCEPT** |
+| `gemv` | `gemv.lichen` | **refused by name** — the **known** rule; **removed since, and it runs** (§ The sweep, as a program) | — | 1 module, **1 ACCEPT** |
 | `matmul` | `matmul.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 1 module, **1 ACCEPT** |
 
 > **Every row of that table was measured on a device with no `NoContraction`, and two of them
@@ -439,6 +443,11 @@ module the specification accepts.
 
 ## 8. `gemv` — refused by name, on the known rule
 
+> **The rule this section measures has been removed** (the owner's decision; see this note's status).
+> **`gemv.lichen` now runs on the device from the committed program**: 4 of 4 elements bit-exact
+> against `cpu` — the answer §8's padded measurement predicted. What follows is the record of the rule
+> as it stood, and of the spelling gap it left.
+
 **Measured: it is refused by name**, and the refusal, verbatim:
 
 ```
@@ -578,36 +587,40 @@ The comparison is on the **rendered** answers, and that is exact for a finite fl
 [floating-point](floating-point.md)), so two equal renderings are equal bits. When they are not, the tool
 prints the per-element distance in ulp, read off the two renderings.
 
-Re-measured at `dev@602480ed` on the RTX 3060, every example that dispatches a kernel:
+Re-measured at `dev@602480ed` on the RTX 3060, every example that dispatches a kernel. **The four rows
+that used to be refusals were measured again after the length check was removed** (the owner's decision,
+recorded in [lichen-compute-gpu](lichen-compute-gpu.md)); the right-hand column is the reading now:
 
-| example | device verdict |
-|---|---|
-| `attention.lichen` | **differs**, 6 of 8, worst **1** |
-| `decode.lichen` | **refused** — *input buffer 2 holds 2 element(s) but the run covers 8 index/indices* |
-| `decode_loop.lichen` | **refused** — the same sentence |
-| `gemv.lichen` | **refused** — *input buffer 1 holds 3 element(s) but the run covers 4* |
-| `generate.lichen` | **agrees**, 10 of 10 |
-| `kvcache.lichen` | **refused** — the append's 2-of-8 sentence |
-| `layernorm.lichen` | **agrees**, 4 of 4 |
-| `matmul.lichen` | **agrees**, 4 of 4 |
-| `rmsnorm.lichen` | **agrees**, 4 of 4 |
-| `rope.lichen` | **differs**, 2 of 8, worst **1** |
-| `sample.lichen` | **agrees**, 5 of 5 |
-| `silu.lichen` | **differs**, 1 of 4, worst **1** |
-| `softmax.lichen` | **agrees**, 4 of 4 |
-| `topk.lichen` | **agrees**, 30 of 30 |
+| example | device verdict (before the decision) | now |
+|---|---|---|
+| `attention.lichen` | differs, 6 of 8, worst **1** | same |
+| `decode.lichen` | **refused** — *input buffer 2 holds 2 element(s) but the run covers 8* | **differs, 1 of 2, worst 1** |
+| `decode_loop.lichen` | **refused** — the same sentence | **differs, 3 of 7, worst 1** |
+| `gemv.lichen` | **refused** — *input buffer 1 holds 3 element(s) but the run covers 4* | **agrees, 4 of 4** |
+| `generate.lichen` | agrees, 10 of 10 | same |
+| `kvcache.lichen` | **refused** — the append's 2-of-8 sentence | **agrees, 16 of 16** |
+| `layernorm.lichen` | agrees, 4 of 4 | same |
+| `matmul.lichen` | agrees, 4 of 4 | same |
+| `rmsnorm.lichen` | agrees, 4 of 4 | same |
+| `rope.lichen` | differs, 2 of 8, worst **1** | same |
+| `sample.lichen` | agrees, 5 of 5 | same |
+| `silu.lichen` | differs, 1 of 4, worst **1** | same |
+| `softmax.lichen` | agrees, 4 of 4 | same |
+| `topk.lichen` | agrees, 30 of 30 | same |
 
-**It reproduces [operator-reverification](operator-reverification.md) §2's after-table exactly.** The
-eight operators that note re-ran read the same verdicts and the same element counts here — `rope` 2 of 8,
-`silu` 1 of 4, `attention` 6 of 8, all at **1 ulp**; `softmax`, `rmsnorm`, `layernorm` and `matmul`
-bit-exact; `gemv` refused — now off one command instead of a deleted program. That agreement is the tool's
-own control: a re-run that disagreed with it would mean the tool is wrong, not the note.
+**It reproduces [operator-reverification](operator-reverification.md) §2's after-table exactly** for the
+eight operators that note re-ran — `rope` 2 of 8, `silu` 1 of 4, `attention` 6 of 8 at **1 ulp**;
+`softmax`, `rmsnorm`, `layernorm` and `matmul` bit-exact — off one command instead of a deleted program.
+That agreement is the tool's own control: a re-run that disagreed with it would mean the tool is wrong,
+not the note.
 
-**The six programs §1's table does not reach read the way
-[device-leg-of-the-ladder](device-leg-of-the-ladder.md) recorded them.** `generate`, `sample` and `topk`
-agree, and the three programs whose **first** kernel appends a short incoming row (`decode`,
-`decode_loop`, `kvcache`) are refused by the same `InputShorterThanCount` sentence, on that first kernel
-rather than on a later stage.
+**The remove-the-check reading is the operator result this note was missing.** `gemv` and `kvcache` had
+only ever run on a device **after their inputs were padded by hand**; they run now from the committed
+programs, `gemv` 4 of 4 and `kvcache` 16 of 16 bit-exact. `decode` and `decode_loop` reach a device for
+the first time and **differ by one ulp** on one and three elements — the same `exp`-inside-a-fold and
+floor division family §7 below and [operator-reverification](operator-reverification.md) already carry,
+not a layout effect. The old refusals on those two were on the *append*, so this is their first device
+answer at all.
 
 **What the program does not do, so it is not read as covering more than it does.** It does not emit the
 modules, so §1's `spirv-val` column remains [operator-reverification](operator-reverification.md)'s and is

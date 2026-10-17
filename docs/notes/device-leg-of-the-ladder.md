@@ -25,6 +25,12 @@ identical program on `cpu`.
 
 **Verdict per operator.**
 
+> **The rule behind these refusals has since been removed** (the owner's decision, recorded in
+> [lichen-compute-gpu](lichen-compute-gpu.md)'s "What an author has to know"): a host input shorter
+> than the count is no longer refused, and the device zero-fills the same tail the host path does.
+> **The rows below are the record of the rule as it stood**; every program they refused now runs, and
+> [device-operator-sweep](device-operator-sweep.md) has the re-measured verdicts.
+
 | operator | device verdict | evidence |
 |---|---|---|
 | KV-cache append (`kvcache.lichen`) | **refused by name**, `InputShorterThanCount` | *"input buffer 2 holds 2 element(s) but the run covers 8 index/indices"* |

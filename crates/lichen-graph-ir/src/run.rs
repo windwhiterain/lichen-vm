@@ -270,13 +270,6 @@ impl<'backend> Runner<'backend> {
                 },
             });
         }
-        if let Some((first, other)) = ragged_host(&inputs) {
-            return Err(GraphRefusal::RaggedInputs {
-                node: index,
-                first,
-                other,
-            });
-        }
         // The count is read after the buffers, so a swapped node is told
         // which role it got wrong.
 
@@ -508,22 +501,4 @@ fn slots_of<'a>(
             }
         })
         .collect()
-}
-
-/// Two host inputs of different payload lengths, if the inputs have any.
-///
-/// # Invariant
-/// A device buffer has no length to disagree with, so this is about host data. The
-/// comparison is on payload bytes, the one length an input can answer without the
-/// fragment: two slots of different classes with their width ratio between them compare
-/// equal here, which the class check refuses before a dispatch.
-fn ragged_host(inputs: &[BatchInput<'_>]) -> Option<(usize, usize)> {
-    let first = inputs.iter().find_map(|input| match input {
-        BatchInput::Host(data) => Some(data.len()),
-        _ => None,
-    })?;
-    inputs.iter().find_map(|input| match input {
-        BatchInput::Host(data) if data.len() != first => Some((first, data.len())),
-        _ => None,
-    })
 }

@@ -40,12 +40,6 @@ pub enum RunError {
     MissingInt64 { device: String },
     /// The fragment is outside what this backend emits.
     Emit(SpirvRefusal),
-    /// An input buffer is shorter than the run's count; refused rather than zero-filled.
-    InputShorterThanCount {
-        buffer: usize,
-        len: usize,
-        count: usize,
-    },
     /// A run over no indices: Vulkan has no zero-sized allocation to give it.
     EmptyRun,
     /// A launch that stages a slice at a count that is not a whole number of workgroups.
@@ -216,11 +210,6 @@ impl fmt::Display for RunError {
                  device offers {max}, so it is refused here rather than dispatched with a block \
                  the device would read past"
             ),
-            RunError::InputShorterThanCount { buffer, len, count } => write!(
-                f,
-                "input buffer {buffer} holds {len} element(s) but the run covers {count} \
-                 index/indices, so a lane would read past it."
-            ),
             RunError::UnknownResident { id } => write!(
                 f,
                 "buffer {id} is not one this device is holding: it was never issued, or it has \
@@ -264,20 +253,6 @@ enum Extent {
         index: usize,
         capacity: usize,
     },
-}
-
-impl Extent {
-    /// How many elements a run over this extent is allocated for.
-    ///
-    /// # Invariant
-    /// The device arm's `capacity`, because the number deciding how much of those buffers
-    /// the shader reaches is not one this host has.
-    fn allocated(&self) -> usize {
-        match self {
-            Extent::Host(count) => *count,
-            Extent::Device { capacity, .. } => *capacity,
-        }
-    }
 }
 
 /// Where a recorded dispatch's workgroup count is read from.
@@ -886,7 +861,6 @@ impl GpuContext {
         let bound = self.bound(inputs)?;
         let staging_bytes = self.staged_bytes(
             launch,
-            extent.allocated(),
             bound
                 .iter()
                 .enumerate()
@@ -954,18 +928,16 @@ impl GpuContext {
             .collect()
     }
 
-    /// The staging one dispatch's host inputs need, and whether they are long enough.
+    /// The staging one dispatch's host inputs need.
     ///
     /// # Invariant
-    /// The sum of each host input's own `len × byte_width()`, `len` being that slice's own
-    /// length in elements — **the width is the buffer's own class**, not one module-wide
-    /// answer, and a device input stages nothing and has no length to check. Asked for before
-    /// anything is recorded, because that is when the reservation is made, and it is the
-    /// width the upload copies.
+    /// The sum of each host input's own `len × byte_width()`, `len` being that slice's length
+    /// in elements; the width is the buffer's class, not one module-wide answer, and a device
+    /// input stages nothing. Asked for before anything is recorded. A length below the count is
+    /// not refused: the padding past the input is cleared, so a read there answers `0`.
     fn staged_bytes<'a>(
         &self,
         launch: &LaunchSet<'_>,
-        count: usize,
         hosts: impl Iterator<Item = (usize, &'a [u8])>,
     ) -> Result<vk::DeviceSize, RunError> {
         let fragment = launch.root();
@@ -974,13 +946,6 @@ impl GpuContext {
         for (index, data) in hosts {
             let width = spirv::buffer_class_of(fragment, index, class).byte_width();
             let len = own_elements(data, width);
-            if len < count {
-                return Err(RunError::InputShorterThanCount {
-                    buffer: index,
-                    len,
-                    count,
-                });
-            }
             bytes += (len * width) as vk::DeviceSize;
         }
         Ok(bytes)
@@ -992,7 +957,6 @@ impl GpuContext {
         for dispatch in batch {
             bytes += self.staged_bytes(
                 dispatch.launch,
-                dispatch.extent.allocated(),
                 dispatch
                     .inputs
                     .iter()
@@ -1328,14 +1292,6 @@ impl GpuContext {
         }
         let element = input_class.byte_width();
         let len = own_elements(input, element);
-        if len < count {
-            return Err(RunError::InputShorterThanCount {
-                buffer: 0,
-                len,
-                count,
-            });
-        }
-
         let scalars = self.scalar_block(
             launch,
             spirv::module_class(fragment).map_err(RunError::Emit)?,

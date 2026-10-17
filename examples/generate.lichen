@@ -143,11 +143,12 @@
     `examples/decode.lichen` measures, and there is no copy anywhere in the file. (3) **The \
     value half is written and never read** — a **consequence** of (1): `column` is `0` at every \
     lane when `dim = 1`, so `nv` is read at index `0` alone and every lane writes the same number \
-    into `cached.v`, **and `nv` is as wide as the launch: five elements, not one.** That is the \
-    device's own rule and it is a spelling, not a capability — `InputShorterThanCount` compares a \
-    **host** input's length against the **launch count** rather than against the addresses the body \
-    reads (`crates/lichen-compute-gpu/src/dispatch.rs:961-987`), so a one-element `compute.buffer` \
-    beside a five-index append is refused by name. It is written rather than dropped because \
+    into `cached.v`, **and `nv` is as wide as the launch: five elements, not one.** That used to be \
+    the device's own length rule — `InputShorterThanCount` compared a **host** input's length \
+    against the **launch count** rather than against the addresses the body reads, so a \
+    one-element `compute.buffer` beside a five-index append was refused by name. **The rule was \
+    removed (the owner's decision), so the one-element `nv` runs now**: the device answers this \
+    program element for element. It is written rather than dropped because \
     `append_raw` is reused verbatim and a \
     `compute.write` is **the value of an output position and not an effect** \
     (`docs/notes/code-audit.md` P1-42, `wontfix:D17`), so dropping the second write would mean \

@@ -47,16 +47,14 @@
     `t * dim + d`, which is `4` and `5` over a count of `2`: the `cpu` path answers `[0.0, 0.0]` \
     and so does the RTX 3060. **No error, no refusal, no report line.** That is the shape this \
     example cannot take, and it is why the cache is rewritten whole. (b) A host input is uploaded \
-    at its **own length** (`lichen-compute-gpu/src/dispatch.rs:320`, `:976-984`, `:1066-1078`), \
-    so a host input **shorter than the count** is refused by name: the same cache with its keys \
-    holding only the filled prefix, `[1, 2, 3, 4]`, is refused on the device by *input buffer 0 \
-    holds 4 element(s) but the run covers 8 index/indices, so a lane would read past it* \
-    (`InputShorterThanCount`, `dispatch.rs:219`), while the `cpu` path answers \
-    `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` — the elements past the input's own length \
-    reading as `0`, with nothing said (`compute.rs:6234`, whose `.unwrap_or(0)` is the rule). \
-    **So a cache whose capacity is larger than its filled prefix cannot be handed over as a \
-    shorter buffer: on the device it is refused, and on the host it is silently zero-filled \
-    past its own end.** This file therefore carries the whole cache, spare positions and all. (c) \
+    at its **own length** (`lichen-compute-gpu/src/dispatch.rs:320`), so an index past it reads `0`. \
+    The device used to refuse an input shorter than the count; that rule is gone (the owner's \
+    decision), so **the same cache with its keys holding only the filled prefix, `[1, 2, 3, 4]`, \
+    answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` on the device as it already did on `cpu`** \
+    — the elements past the input's own length reading as `0` on both (`compute.rs:6234`). **A cache \
+    whose capacity is larger than its filled prefix can therefore be handed over as a shorter buffer \
+    now**, with the zeros past the prefix being the program's own business on either backend. This \
+    file still carries the whole cache, spare positions and all. (c) \
     A body that reaches **past its buffer** while the count stays inside it is an \
     out-of-bounds device read, uncaught (`examples/matmul.lichen` measures the half that is \
     caught). And **a written-but-never-read region is not observable**: the output buffer is \
@@ -69,9 +67,9 @@
     answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` and \
     `[5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]` through the direct `compute.plrun` leg, \
     **element for element what `cpu` answers**. As the example spells it — a `dim`-wide incoming \
-    row beside a `capacity * dim` cache — the device **refuses** by name, with the `InputShorterThanCount` \
-    sentence of (b) naming buffer 2, the new key row. That is rule (b) meeting an operator whose \
-    incoming row is *inherently* shorter than its cache, and it is why this file declares \
+    row beside a `capacity * dim` cache — the device used to **refuse** by name \
+    (`InputShorterThanCount`, buffer 2, the new key row). **That rule is gone and this program now \
+    runs on the device: 16 of 16 elements bit-exact.** This file still declares \
     `cpu`, the backend the example suite runs.\n\n\
     **The graph path records this body and then refuses to dispatch it — measured, both halves.** \
     A single-kernel step over the same operator records cleanly: **1 node, 8 graph inputs, 10 \

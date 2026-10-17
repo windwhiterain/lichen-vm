@@ -98,11 +98,11 @@
     4 and `o` at **2**, and writes 4 — the first kernel in this ladder whose output is \
     longer than either input. Its leaves are `.n, .j, .dim`: the extent first, and because \
     the body takes no coordinate the second leaf is an ordinary runtime scalar wherever it \
-    sits, which `examples/gemv.lichen` measures rather than this file. **Its device leg is \
-    not reached** — the CLI installs no backend — and on the measurements its predecessors \
-    recorded it is the leg that would refuse it first, `InputShorterThanCount` on the \
-    two-element step buffer: **that is reasoned from those measurements and not measured \
-    here.**\n\n\
+    sits, which `examples/gemv.lichen` measures rather than this file. **Its device leg used to \
+    be expected to refuse**, on the predecessors' `InputShorterThanCount` reading of the \
+    two-element step buffer; **that rule was removed and the leg is measured now: the program \
+    runs on the device and 3 of its 7 elements differ by 1 ulp** — the `exp`-and-division family, \
+    not a length.\n\n\
     **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — no \
     longer `ln`.** Turning a step's output row into a token needs `ln` over the logits, and it \
     is a **named operator** now (`82640443`, `examples/ln.lichen`): two of the three blockers \
@@ -151,8 +151,8 @@
     reads the step's output at `lane % k.dim`, not at `lane - base`** — a **rule**: on the \
     lanes where `lane - base` leaves the two-element buffer the address would be out of \
     range altogether, which answers `0` past a host buffer's end \
-    (`crates/lichen-compute/src/compute.rs:6234`) and is refused by name on a device, so the \
-    address is made total instead. (3) **The chain lives in the recursion's body and is not \
+    (`crates/lichen-compute/src/compute.rs:6234`), which the device now answers the same way \
+    (the length refusal is gone), so the address is made total instead. (3) **The chain lives in the recursion's body and is not \
     factored into a named `step` function** — a **rule**, measured above: the helper collects \
     `raw none` in silence, which is the worst of the three failures because nothing says so. \
     **Two things in this file are preferences and are named as such because neither is \

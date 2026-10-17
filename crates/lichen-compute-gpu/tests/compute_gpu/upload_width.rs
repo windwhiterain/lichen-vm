@@ -7,8 +7,6 @@
 
 use super::common;
 
-use lichen_compute_gpu::RunError;
-
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
     KernelShape, LaneHeight, LaneWidth, LaunchSet, ScalarClass, ScalarData, TargetFacts,
@@ -162,31 +160,24 @@ fn the_padding_past_the_buffer_is_cleared_and_read_as_zero() {
     );
 }
 
-/// A read set that reaches past the buffer's own length is a refusal, not a zero.
+/// A count that reaches past the buffer reads the padding as zero rather than refusing.
 ///
 /// # Invariant
-/// The count is the run's own and the input holds fewer elements than it covers, so the refusal is
-/// raised where the length is checked — before anything is recorded — and it names the buffer, what
-/// it holds and what the run asked for.
+/// The upload is the input's own length and the allocation is the count rounded to a
+/// workgroup, so the lanes above the input read the cleared padding: the answer is the input
+/// followed by `0`s, the same answer the host path's zero-fill gives.
 #[test]
-fn an_input_shorter_than_the_count_is_refused_by_name() {
-    let test = "an_input_shorter_than_the_count_is_refused_by_name";
+fn an_input_shorter_than_the_count_reads_the_padding_as_zero() {
+    let test = "an_input_shorter_than_the_count_reads_the_padding_as_zero";
     let Some(context) = common::context(test) else {
         return;
     };
-    let packed = pack(&(0..100).collect::<Vec<i64>>());
-    let refusal = context
-        .run(&only(&shifted(0)), &[BufferSlot::Host(&packed)], 128)
-        .expect_err("a count reaching past the buffer is refused");
-    assert!(
-        matches!(
-            refusal,
-            RunError::InputShorterThanCount {
-                buffer: 0,
-                len: 100,
-                count: 128
-            }
-        ),
-        "the refusal names the buffer, its length and the count: {refusal}"
+    let short: Vec<i64> = (0..100).collect();
+    let answered = dispatched(&context, &shifted(0), &short, 128, 128);
+    let mut expected = short.clone();
+    expected.resize(128, 0);
+    assert_eq!(
+        answered, expected,
+        "the lanes above the 100-element input answered the cleared padding"
     );
 }

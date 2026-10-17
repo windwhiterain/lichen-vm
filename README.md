@@ -721,11 +721,10 @@ compute.collect out.y : array{Float, 8}
    device (`lichen-compute-gpu/src/dispatch.rs:458-461`; `own_elements` at `:320`, asked by both the
    staging reservation at `:976-984` and the copy at `:1066-1078`, so the two cannot drift) — so an
    element a lane reads is real as long as it is **inside its buffer**, whatever the lane count is.
-   The device's remaining length rule is the opposite one and still bites: a host input **shorter
-   than the count** is refused by name (`InputShorterThanCount`, raised while the staging is sized,
-   before anything is recorded), because the host cannot see the body's read set and a conservative
-   refusal beats a silent zero. Measured on the RTX 3060: this `2 × 3 · 3 × 2` answers what the
-   `cpu` path answers, element for element; under the old rule the same program answered
+   The device's other length rule — a host input **shorter than the count** refused by name while
+   the staging was sized — **has been removed** (the owner's decision), so both backends answer the
+   cleared padding with `0`. Measured on the RTX 3060: this `2 × 3 · 3 × 2` answers what the
+   `cpu` path answers, element for element; under the old upload rule the same program answered
    `[25, 28, 28, 32]` there against `[58, 64, 139, 154]` here, because every entry past index `3`
    was read back as the zero padding. What is still uncaught is the other direction: a body that
    reaches **past the buffer** while the count stays inside it is an out-of-bounds device read, and
@@ -1084,16 +1083,14 @@ compute.collect out.o : array{Float, 8}
     `t * dim + d`, which is `4` and `5` over a count of `2`: the `cpu` path answers `[0.0, 0.0]` \
     and so does the RTX 3060. **No error, no refusal, no report line.** That is the shape this \
     example cannot take, and it is why the cache is rewritten whole. (b) A host input is uploaded \
-    at its **own length** (`lichen-compute-gpu/src/dispatch.rs:320`, `:976-984`, `:1066-1078`), \
-    so a host input **shorter than the count** is refused by name: the same cache with its keys \
-    holding only the filled prefix, `[1, 2, 3, 4]`, is refused on the device by *input buffer 0 \
-    holds 4 element(s) but the run covers 8 index/indices, so a lane would read past it* \
-    (`InputShorterThanCount`, `dispatch.rs:219`), while the `cpu` path answers \
-    `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` — the elements past the input's own length \
-    reading as `0`, with nothing said (`compute.rs:6234`, whose `.unwrap_or(0)` is the rule). \
-    **So a cache whose capacity is larger than its filled prefix cannot be handed over as a \
-    shorter buffer: on the device it is refused, and on the host it is silently zero-filled \
-    past its own end.** This file therefore carries the whole cache, spare positions and all. (c) \
+    at its **own length** (`lichen-compute-gpu/src/dispatch.rs:320`), so an index past it reads `0`. \
+    The device used to refuse an input shorter than the count; that rule is gone (the owner's \
+    decision), so **the same cache with its keys holding only the filled prefix, `[1, 2, 3, 4]`, \
+    answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` on the device as it already did on `cpu`** \
+    — the elements past the input's own length reading as `0` on both (`compute.rs:6234`). **A cache \
+    whose capacity is larger than its filled prefix can therefore be handed over as a shorter buffer \
+    now**, with the zeros past the prefix being the program's own business on either backend. This \
+    file still carries the whole cache, spare positions and all. (c) \
     A body that reaches **past its buffer** while the count stays inside it is an \
     out-of-bounds device read, uncaught (`examples/matmul.lichen` measures the half that is \
     caught). And **a written-but-never-read region is not observable**: the output buffer is \
@@ -1106,9 +1103,9 @@ compute.collect out.o : array{Float, 8}
     answers `[1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 0.0, 0.0]` and \
     `[5.0, 6.0, 7.0, 8.0, 300.0, 400.0, 0.0, 0.0]` through the direct `compute.plrun` leg, \
     **element for element what `cpu` answers**. As the example spells it — a `dim`-wide incoming \
-    row beside a `capacity * dim` cache — the device **refuses** by name, with the `InputShorterThanCount` \
-    sentence of (b) naming buffer 2, the new key row. That is rule (b) meeting an operator whose \
-    incoming row is *inherently* shorter than its cache, and it is why this file declares \
+    row beside a `capacity * dim` cache — the device used to **refuse** by name \
+    (`InputShorterThanCount`, buffer 2, the new key row). **That rule is gone and this program now \
+    runs on the device: 16 of 16 elements bit-exact.** This file still declares \
     `cpu`, the backend the example suite runs.\n\n\
     **The graph path records this body and then refuses to dispatch it — measured, both halves.** \
     A single-kernel step over the same operator records cleanly: **1 node, 8 graph inputs, 10 \
@@ -1226,18 +1223,15 @@ out = (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, 
     `[312.0, 414.0]` chained and `[312.0, 414.0]` direct. **So the decode step is two kernels and \
     two address forms, not two kernels and one**: the keys half is this file's kernel as \
     committed, and the values half is `examples/attention.lichen`'s own address form.\n\n\
-    **The device leg, measured on the RTX 3060, and it is refused by name for a reason inherent to \
-    the operator's shape.** The vector is `kdim` long and the count is `M`, so every GEMV with \
-    `kdim < M` — which is every decode-step use, where the reduction runs over the cache positions \
-    and the outputs are the head dimension — hands the device an input shorter than the run, and \
-    that is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`): *input buffer 1 \
-    holds 3 element(s) but the run covers 4 index/indices, so a lane would read past it*. With the \
-    vector padded to the count the same kernel **runs** on the RTX 3060 through the direct \
-    `compute.plrun` leg and answers `[14.0, 32.0, 50.0, 68.0]`, **element for element what `cpu` \
-    answers** — every entry an integer below `2^24`, so that is a bit-exact agreement and not a \
-    tolerance. This file therefore declares `cpu`, the backend the example suite runs, and on \
-    `cpu` the asymmetry is the one `examples/kvcache.lichen` measured: a short input answers `0` \
-    past its own end rather than refusing (`compute.rs:6234`).\n\n\
+    **The device leg, measured on the RTX 3060 — and the rule that used to refuse it is gone.** The \
+    vector is `kdim` long and the count is `M`, so every GEMV with `kdim < M` — which is every \
+    decode-step use, where the reduction runs over the cache positions and the outputs are the head \
+    dimension — hands the device an input shorter than the run. That used to be \
+    `InputShorterThanCount` (*input buffer 1 holds 3 element(s) but the run covers 4 index/indices, \
+    so a lane would read past it*); the owner removed the rule, and **this program now runs on the \
+    device from this source**: 4 of 4 elements bit-exact against `cpu`, the same \
+    `[14.0, 32.0, 50.0, 68.0]` the padded measurement predicted. This file still declares `cpu`, \
+    the backend the example suite runs.\n\n\
     **The graph path refuses this operator twice, and the first refusal is its own shape.** From \
     the CLI there is no graph leg at all — *compute.graph: this graph dispatches to a device, but \
     no compute backend is installed* — so the rest is measured through a host program with the \
@@ -1265,9 +1259,9 @@ out = (compute.plrun append ((Arg)(.n 8, .cap 4, .dim 2, .t 2, .I KVIn(.k kbuf, 
     (`code-audit.md` P1-39, `todo`). Those are known, and none of them is this operator's. Three \
     more, each measured above. **(a) The graph leg** — the only path that consults the fusion \
     floor — records a GEMV and then refuses to run it, on the ground that its two inputs differ \
-    in length, so nothing here reaches the floor. **(b) The device leg** refuses a GEMV whose \
-    reduction is shorter than its output, which is the decode shape; the operator stays on the \
-    host until a kernel may name a read set shorter than `count`. **(c) A position to advance.** \
+    in length, so nothing here reaches the floor. **(b) The device leg** used to refuse a GEMV whose \
+    reduction is shorter than its output; that rule is gone and this program runs on the device \
+    (4 of 4, bit-exact), so the decode shape is not blocked by a length. **(c) A position to advance.** \
     A GEMV carries no position of its own — `t` belongs to the cache kernel — but the pair needs \
     one to advance, and the language holds no mutable state between calls. Beyond those three, \
     nothing: the arithmetic, the layout and the chaining are all expressible today, as measured.\n\n\
@@ -1359,9 +1353,10 @@ compute.collect out.y : array{Float, 4}
     `examples/kvcache.lichen` measures.** Stage 2 reads all eight key slots (`i · kdim + \
     s(0) - 1` over `i` in `0 … 3`) and stage 4 reads all eight value slots **including the \
     two unfilled positions**, which is why the appended cache cannot be handed on as its \
-    filled prefix `[1 2 3 4]`: a host input shorter than the count is refused by name on the \
-    device and zero-filled silently on the host. The chain is the reason that operator rewrites \
-    the whole buffer rather than one row. **Only the query is short, and only by `dim`.**\n\n\
+    filled prefix `[1 2 3 4]`: the device used to refuse a short host input and the host \
+    zero-filled it silently; the rule was removed (the owner's decision), so both answer `0` past \
+    the prefix now. The chain still rewrites the whole buffer rather than one row, because a write \
+    past the count is dropped in silence. **Only the query is short, and only by `dim`.**\n\n\
     **The two config spellings coexist, and which one a kernel can use is decided by its leaf \
     count.** Stages 3a and 3b are `examples/softmax.lichen`'s two kernels **verbatim**, and \
     they carry `compute.P (compute.KT Float)(.I Row, .O Maxs)` — a config holding **one** \
@@ -1441,30 +1436,22 @@ compute.collect out.y : array{Float, 4}
     **The device leg, which this file cannot reach, and what it would meet.** The CLI installs \
     no compute backend, so flipping every kernel in this program to `gpu` answers by name — \
     *this parallel kernel was compiled for the `gpu` backend, but no compute backend is \
-    installed* — **measured, this program**. The two predecessors' measurements stand in for \
-    it, and a chain meets their walls **in order**. Stage 1 is refused **first**, because its \
-    incoming rows are `dim` = 2 wide against a count of 8, and a host input shorter than the \
-    count is `InputShorterThanCount` (`lichen-compute-gpu/src/dispatch.rs:219`); padding them \
-    to the cache's own length makes stage 1 run and agree with `cpu` element for element \
-    (`examples/kvcache.lichen`), and only then is stage 2 refused by the shape \
-    `examples/gemv.lichen` measured — the reduction `kdim = 2` is shorter than the output \
-    `n = 4`, which is the decode shape and every decode step. **Stage 4 is not that refusal**: \
-    its reduction `keys = 4` is *longer* than its output `dim = 2`, and its short operand, the \
-    4-long weights buffer, is no shorter than its count of 2. **That asymmetry is a reason a \
-    chained step may reach a device before a lone GEMV does**, and it is reasoned from the \
-    two measurements above, not measured here.\n\n\
-    **The graph leg, which this chain refuses at two more places.** `RaggedInputs` \
-    (`crates/lichen-graph-ir/src/run.rs:273`, with `ragged_host` at `:520-529`) compares \
+    installed* — **measured, this program**. The walls the two predecessors measured are both \
+    **gone**: the length rule was removed (the owner's decision) and the shape \
+    `examples/gemv.lichen` measured is no longer refused, so **this chain now runs on the device** \
+    — 1 of the 2 declared elements differs by **1 ulp**, the `exp`-and-division family §7 of \
+    `docs/notes/device-operator-sweep.md` attributes, not a length. The hypothesis below that a \
+    chained step might reach a device before a lone GEMV is moot: both do.\n\n\
+    **The graph leg, which used to refuse this chain at two more places.** `RaggedInputs` \
+    (`crates/lichen-graph-ir/src/run.rs`, **removed with the length rule**) compared \
     **payload bytes** across a node's inputs, and **no two stages of this chain have two \
     inputs of one length**: stage 1 is 8 against 2, stage 2 is 8 against 2, stage 4 is 4 \
-    against 8. So the chain meets `RaggedInputs` at stage 2 and again at stage 4, each before \
-    any of it reaches the fusion floor. The compile-order class defect \
-    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`) is measured on attention's \
+    against 8. What stays is the compile-order class defect \
+    (`compute.rs:2424-2430`'s `unwrap_or(ScalarClass::Int)`), measured on attention's \
     two-kernel chain over a **recorded** graph, which is this chain's shape with a second \
     query, so it is not a sixth wall here but **the same one**. What this chain adds to the \
     ladder is the number of *distinct* shapes a real step has to satisfy at once — a \
-    four-input append, a two-input GEMV and a two-input weighted sum in one program — against \
-    a graph leg that requires every node's inputs to be one length.\n\n\
+    four-input append, a two-input GEMV and a two-input weighted sum in one program.\n\n\
     **What is exact and what is modelled.** **Exact, by hand and in `f32`:** the append, every \
     element copied or replaced with integers below `2^24` and no `exp` and no `sqrt` in it; \
     the four dot products `1`, `3`, `1`, `0`, every term a product of integers under 30; the \
@@ -1676,14 +1663,14 @@ compute.collect out.o : array{Float, 2}
     4 and `o` at **2**, and writes 4 — the first kernel in this ladder whose output is \
     longer than either input. Its leaves are `.n, .j, .dim`: the extent first, and because \
     the body takes no coordinate the second leaf is an ordinary runtime scalar wherever it \
-    sits, which `examples/gemv.lichen` measures rather than this file. **Its device leg is \
-    not reached** — the CLI installs no backend — and on the measurements its predecessors \
-    recorded it is the leg that would refuse it first, `InputShorterThanCount` on the \
-    two-element step buffer: **that is reasoned from those measurements and not measured \
-    here.**\n\n\
+    sits, which `examples/gemv.lichen` measures rather than this file. **Its device leg used to \
+    be expected to refuse**, on the predecessors' `InputShorterThanCount` reading of the \
+    two-element step buffer; **that rule was removed and the leg is measured now: the program \
+    runs on the device and 3 of its 7 elements differ by 1 ulp** — the `exp`-and-division family, \
+    not a length.\n\n\
     **What a real decode loop still lacks, and which of it is a wall.** (a) **Sampling — no \
     longer `ln`.** Turning a step's output row into a token needs `ln` over the logits, and it \
-    is a **named operator** now (`82640443`): two of the three blockers \
+    is a **named operator** now (`82640443`, `examples/ln.lichen`): two of the three blockers \
     once recorded here are gone — `floor` is a `KernelInstr`, and the reduction needs neither a \
     shift nor a bitcast, being the power-of-two fold `sqrt` already uses. So the wall a sampler \
     operator a sampler needs is not. (b) **A stop condition — not a wall**, corrected by measurement \
@@ -1729,8 +1716,8 @@ compute.collect out.o : array{Float, 2}
     reads the step's output at `lane % k.dim`, not at `lane - base`** — a **rule**: on the \
     lanes where `lane - base` leaves the two-element buffer the address would be out of \
     range altogether, which answers `0` past a host buffer's end \
-    (`crates/lichen-compute/src/compute.rs:6234`) and is refused by name on a device, so the \
-    address is made total instead. (3) **The chain lives in the recursion's body and is not \
+    (`crates/lichen-compute/src/compute.rs:6234`), which the device now answers the same way \
+    (the length refusal is gone), so the address is made total instead. (3) **The chain lives in the recursion's body and is not \
     factored into a named `step` function** — a **rule**, measured above: the helper collects \
     `raw none` in silence, which is the worst of the three failures because nothing says so. \
     **Two things in this file are preferences and are named as such because neither is \
@@ -2310,11 +2297,12 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel(.x scor
     `examples/decode.lichen` measures, and there is no copy anywhere in the file. (3) **The \
     value half is written and never read** — a **consequence** of (1): `column` is `0` at every \
     lane when `dim = 1`, so `nv` is read at index `0` alone and every lane writes the same number \
-    into `cached.v`, **and `nv` is as wide as the launch: five elements, not one.** That is the \
-    device's own rule and it is a spelling, not a capability — `InputShorterThanCount` compares a \
-    **host** input's length against the **launch count** rather than against the addresses the body \
-    reads (`crates/lichen-compute-gpu/src/dispatch.rs:961-987`), so a one-element `compute.buffer` \
-    beside a five-index append is refused by name. It is written rather than dropped because \
+    into `cached.v`, **and `nv` is as wide as the launch: five elements, not one.** That used to be \
+    the device's own length rule — `InputShorterThanCount` compared a **host** input's length \
+    against the **launch count** rather than against the addresses the body reads, so a \
+    one-element `compute.buffer` beside a five-index append was refused by name. **The rule was \
+    removed (the owner's decision), so the one-element `nv` runs now**: the device answers this \
+    program element for element. It is written rather than dropped because \
     `append_raw` is reused verbatim and a \
     `compute.write` is **the value of an output position and not an effect** \
     (`docs/notes/code-audit.md` P1-42, `wontfix:D17`), so dropping the second write would mean \

@@ -41,7 +41,7 @@ one is quoted by enough of its source to be re-typed.
 | 1 | A `@loop` nest cannot be applied inside another nest's step | **real** for a nest, and **weaker than stated** in what makes it fail — there is a second, unrecorded wall next to it |
 | 2 | There is no loop | **not real** — a loop over dispatches is expressible, measured end to end |
 | 3 | Nothing advances a position | **weaker than stated** — a program binding advances a kernel today; what is absent is narrower and stranger |
-| 4 | `RaggedInputs` makes the graph leg unable to carry a GEMV | not reached — §5 |
+| 4 | `RaggedInputs` makes the graph leg unable to carry a GEMV | not reached — §5; **the check has since been removed** |
 | 5 | The device refuses a reduction shorter than its output | not reached — §5 |
 | 6 | A write past the count is dropped in silence | **a spelling gap** for the drop, and a **third, unnamed** silent no-op beside it |
 | 7 | Under the fused reduction schedule a projection cannot read the invocation | **real**, and the new runtime scalar did not reach it |
