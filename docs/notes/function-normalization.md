@@ -116,6 +116,13 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    the annotation is what turns it into a real type — so the fix belongs to the
    checker's body typing (the `if`-join of the two branches must not leave a
    wildcard when one branch is the recursion), not to the loop's bind.
+   **Where the wildcard enters, located**: the language lowers `if c then t else e`
+   to `Index([else, then], c)` (`compile.rs`, no conditional IR kind), so the body's
+   tail type is that `Index` read's type, and the read's branches are `s(1)`'s
+   derived read and the recursive call's result cell — both open at check. The
+   wildcard is therefore produced in the `Index`/array-literal typing of that
+   shape, which is where the next probe should print the read's type node and who
+   writes `Any` into it.
    The collect's own type stays `?a` in all three annotated variants — a separate,
    cosmetic open cell.
 2. **Once, at birth.** A function is normalized exactly once, at its first
