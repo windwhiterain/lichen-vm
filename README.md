@@ -2589,6 +2589,21 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     rather than a detail, and it is as close as this file comes to the conserved quantity \
     `docs/notes/physics-operators.md` says the language cannot state: the declared output is the only \
     place the conservation shows.\n\n\
+    **A solver is a loop, and it can be typed.** The fourth chain does not unroll: it seeds an \
+    `array{Float, 6}` with the ring's first step and runs two more through a top-level `@loop`, \
+    rebuilding the kernel's input with `compute.buffer (s(1))` each iteration. Two things make that \
+    work and neither is obvious. A **recursive function's type follows from its annotation** \
+    (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so `march` carries \
+    `tuple{Int, array{Float, 6}} -> array{Float, 6}` — without it the loop's answer prints \
+    `raw[raw …]: ?a`, a value with no type, which was measured this session and is why the \
+    annotation is here. And the **dispatch happens inside the fold**: a plain run is one pass, so an \
+    operator asked before its operand is decided is never asked again \
+    (`docs/notes/graph-recording-rounds.md`), which is why the state is an array that each iteration \
+    turns back into a buffer rather than the `XOut` struct this file's other chains pass around — a \
+    fold carrying that struct never resolves at all (measured: `raw none` at one, two and three \
+    iterations). The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` the unrolled form \
+    gives, and the total is still `8` at every step, which is what makes three steps checkable by \
+    hand rather than by comparing two runs.\n\n\
     **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
     has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
@@ -2597,7 +2612,7 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
     on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
     leave the answer untouched."
-  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}}"
+  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}, array{Float, 6}}"
 ---
 XIn  = struct{.x (compute.Buf Float)}
 XOut = struct{.y (compute.Buf Float)}
@@ -2640,7 +2655,10 @@ out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
-(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6})
+seed = (compute.collect looped.y : array{Float, 6})
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, 6}))) : tuple{Int, array{Float, 6}} -> array{Float, 6})
+solved = march (2, seed)
+(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6}, solved)
 ```
 
 <!-- end: examples -->
