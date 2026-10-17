@@ -132,17 +132,6 @@ fn function_call_operator_preserves_undecided_operand_chain() {
     // The body is untouched.
     assert!(m.blocks.contains_key(m.node_block(ret)));
     assert_eq!(m.node_operation(mid).unwrap().operand, Some(param));
-
-    // The binding goes through `unify`, so the parameter clone shares its class.
-    let p = m.blocks[root].arena.alloc(99u128);
-    let ninety_nine = m.add_node(
-        root,
-        None,
-        Some(TestValue::U128(dyn_handle(p as *const u128))),
-    );
-    m.unify(arg, ninety_nine);
-    m.write_node_value(call, None); // drop the cached marker
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 99);
 }
 #[test]
 fn function_call_operator_recomputes_stale_definition_markers() {

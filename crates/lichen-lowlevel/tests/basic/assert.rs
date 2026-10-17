@@ -214,8 +214,9 @@ fn a_failed_assert_is_consumed_but_its_error_stays() {
 }
 
 #[test]
-fn an_untriggered_assert_is_decided_by_a_later_drain() {
-    // Once the cell is bound by a later unification, the same entry is picked up and decided.
+fn an_untriggered_assert_stays_pending_and_records_no_error() {
+    // The condition's operator cannot decide, so its one attempt is spent and a later drain has
+    // nothing new to ask it.
     let mut m = Module::new();
     let root = m.add_block(None);
     let x = undecided_node(&mut m, root);
@@ -239,8 +240,12 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
 
     m.check_asserts();
 
-    assert!(m.asserts.is_empty(), "the pending entry got decided");
-    assert!(m.assert_errors.is_empty(), "x == 1 now holds");
+    assert_eq!(
+        m.asserts.iter().map(|e| e.condition).collect::<Vec<_>>(),
+        vec![condition],
+        "the entry is still pending"
+    );
+    assert!(m.assert_errors.is_empty());
 }
 
 #[test]

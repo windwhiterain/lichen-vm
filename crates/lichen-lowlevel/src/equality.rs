@@ -277,15 +277,12 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The one value-slot assignment, with the run stamps' clock.
+    /// The one value-slot assignment.
     ///
     /// # Invariant
-    /// Every change to a [`Node::value`] slot goes through here, so the module's epoch
-    /// moves exactly when some node's value changes — see [`Module::value_epoch`]. The
-    /// epoch is bumped before the slot is written, so an epoch observed during a
-    /// subsequent read is one that saw the write.
+    /// Every change to a [`Node::value`] slot goes through here, so the one writer of the
+    /// slot is the one every caller's contract is stated against.
     pub(crate) fn set_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
-        self.bump_value_epoch();
         self.nodes[node].value = value;
     }
 

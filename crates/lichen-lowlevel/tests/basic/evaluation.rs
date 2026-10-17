@@ -405,33 +405,3 @@ fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
 
     assert!(value.is_none(), "the block root stays undecided");
 }
-
-#[test]
-fn a_stalled_operator_reruns_only_after_a_value_changed() {
-    let mut m = Module::new();
-    let root = m.add_block(None);
-    let left = m.add_node(root, None, None);
-    let right = u128_node(&mut m, root, 2);
-    let operands = array_node(&mut m, root, &[left, right], None);
-    let add = op_node(&mut m, root, TestOperator::Add, Some(operands));
-    let epoch = m.value_epoch();
-
-    // The first read runs the operator, which cannot decide on the empty cell.
-    assert!(m.evaluate_node(AnyNodeId::Dynamic(add), None).is_none());
-    assert_eq!(m.node_run_stamp(add), epoch);
-    assert!(m.node_value(AnyNodeId::Dynamic(add)).is_none());
-
-    // A second read while no value changed answers without re-descending.
-    assert!(m.evaluate_node(AnyNodeId::Dynamic(add), None).is_none());
-
-    // The write that decides the empty cell re-opens the computation.
-    let three = m.blocks[root].arena.alloc(3u128);
-    m.write_node_value(
-        left,
-        Some(TestValue::U128(dyn_handle(three as *const u128))),
-    );
-    assert_eq!(
-        u128_of(m.evaluate_node(AnyNodeId::Dynamic(add), None).unwrap()),
-        5
-    );
-}

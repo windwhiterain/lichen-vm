@@ -43,8 +43,6 @@ impl<P: Program> Module<P> {
             apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,
-            // The epoch starts at one: zero is the run stamp's "never ran".
-            value_epoch: 1,
             budget_exhausted: None,
         }
     }
@@ -310,33 +308,14 @@ impl<P: Program> Module<P> {
         self.nodes[node].assumed_concrete = false;
     }
 
-    /// The module's value epoch: how many value-slot writes have happened. See
-    /// [`Self::bump_value_epoch`].
-    pub fn value_epoch(&self) -> u32 {
-        self.value_epoch
-    }
-
-    /// Count one value-slot write.
-    ///
-    /// # Invariant
-    ///
-    /// Every site that changes a [`Node::value`] slot calls this exactly once per slot
-    /// written, so "the epoch did not move" is the same fact as "no node's value changed".
-    /// The counter saturates rather than wrapping: a saturated epoch can only make a run
-    /// stamp read as stale, which re-runs an operator instead of skipping one.
-    pub(crate) fn bump_value_epoch(&mut self) {
-        self.value_epoch = self.value_epoch.saturating_add(1);
-    }
-
-    /// The value epoch this node's operator ran under; zero means it never ran.
+    /// The node's run stamp: zero means its operator never ran.
     pub fn node_run_stamp(&self, node: NodeId) -> u32 {
         self.nodes[node].runned
     }
 
-    /// Write the node's run stamp at the current epoch: it has run.
+    /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
-        let epoch = self.value_epoch;
-        self.nodes[node].runned = epoch;
+        self.nodes[node].runned = 1;
     }
 
     /// Write the node's run stamp from the boolean form the clone and freeze walks read.
@@ -348,17 +327,14 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether the node's operator ran and no value changed since, so a re-read owes no work.
+    /// Whether the node's operator has run, so a re-read of its empty slot owes no work.
     ///
     /// # Invariant
     ///
-    /// The run stamp is written when the operator runs and the epoch moves on every value
-    /// write, so equality is proof that every read this operator made would answer the same
-    /// now. A node that never ran reads `false`: nothing has been attempted there.
-    pub(crate) fn run_stamp_is_current(&self, node: NodeId) -> bool {
-        self.nodes
-            .get(node)
-            .is_some_and(|node| node.runned != 0 && node.runned == self.value_epoch)
+    /// The stamp is written the once an operator runs and cleared only by the walks that
+    /// re-open a stalled subtree, so a node reading true has had its one attempt.
+    pub(crate) fn run_stamp_is_set(&self, node: NodeId) -> bool {
+        self.nodes.get(node).is_some_and(|node| node.runned != 0)
     }
 
     /// Re-open every operator under `block` that ran and could not decide.

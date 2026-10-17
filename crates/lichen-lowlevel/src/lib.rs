@@ -758,8 +758,8 @@ pub struct Node<P: Program> {
     /// ([`Module::has_no_result_yet`]). An operation-bearing member holds that value
     /// while the stamp stays zero, so it still reads as owed an answer.
     value: Option<P::Value>,
-    /// The value epoch the node's operator ran under: zero means it never ran — a produced
-    /// answer versus an asserted one.
+    /// The node's run stamp: zero means its operator never ran — a produced answer versus
+    /// an asserted one.
     runned: u32,
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     low_shape: Option<LowShape>,
@@ -933,14 +933,6 @@ pub struct Module<P: Program> {
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
-    /// How many value-slot writes this module has made — the run stamps' clock.
-    ///
-    /// # Invariant
-    /// It starts at one, because zero is the run stamp's "never ran". Only
-    /// [`Module::bump_value_epoch`] writes it, and every site that changes a
-    /// [`Node::value`] slot calls that once per slot written: a node's run stamp equal to
-    /// this counter means no value changed since that run.
-    value_epoch: u32,
 }
 
 /// One diagnostic a layer above the lowlevel recorded. See [`Module::record_extension_diagnostic`].

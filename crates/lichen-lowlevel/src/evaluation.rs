@@ -165,8 +165,8 @@ impl<P: Program> Module<P> {
             return None;
         }
 
-        // The stamp matching the epoch is proof that nothing the operator read has changed.
-        if self.run_stamp_is_current(node) {
+        // The stamp is proof this operator has had its one attempt, so a re-read owes no work.
+        if self.run_stamp_is_set(node) {
             return None;
         }
         let guard = self.retain_node(node);
@@ -433,7 +433,7 @@ impl<P: Program> Module<P> {
                 }
             }
         };
-        // An undecided answer is not cached: the run stamp records the epoch it stalled at.
+        // An undecided answer is not cached: the run stamp records that it ran.
         let Some(value) = value else {
             self.stamp_node_ran(node);
             return None;
