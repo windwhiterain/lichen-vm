@@ -220,6 +220,9 @@ Over the messages `fail()` returns for the three programs:
 | `"nowhere for what it computes"` | 1 |
 | `"compute.graph"` | **3** — one per program's message, the three checks at `:401`, `:402`, `:405` |
 
+**Six fragments, four blocks.** The count and the block count do not disagree: the first assert block pins one
+fragment, the second one, the third two, and the fourth block checks the shared `"compute.graph"` once against
+each of the three messages. Six = 1 + 1 + 2 + (1 × 3 messages).
 **Read the input from the source, never from this table.** The four `assert` blocks (`:342-348`, `:367-372`,
 `:390-397`, `:398-409`) hold the `contains` arguments; the table only says where to look, and if the two ever
 disagree the source wins. A table used as the input freezes the acceptance on **old** text the day the source
