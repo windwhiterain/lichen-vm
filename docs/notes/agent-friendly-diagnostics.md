@@ -107,12 +107,11 @@ gap is **narrowed, not closed**.
 
 **Two corrections to what the surveys first said, both worth more than the claims they replaced.**
 
-* **`TableMiss` is a P1-only failure, and its fix is one field away.** The survey said the key is never
-  printed; it is — as the **span**. `crates/lichen-highlevel/src/diagnostic.rs:462-464` builds it as
-  `Diag::factual(DiagKind::TableMiss, self.node_loc(*key))`, so the caret lands on the key and **P2
-  holds**; only P1 fails, because `render.rs:261` is a literal — *"table lookup missed — no entry for this
-  key"*. The key is bound on that line and consumed only as a location, so printing it makes the message
-  answerable — the reader can see **which** key to add.
+* **`TableMiss` was a P1-only failure, and it is fixed.** `91d236fd` ("a missed table read names the key it
+  looked up") gave `Diag` a `table_key` slot, filled it from `self.module.node_value(*key)` at
+  `diagnostic.rs:469-472`, and made `render.rs:261-264` answer *"table lookup missed — no entry for key
+  {key}"*, with the old literal kept as the fall-back for an unreadable key. P2 already held — the caret
+  lands on the key — so the message now names the key as well, which is the whole of P1.
 * **`DiagKind::IndexTarget` is dead code, and its message was already written.** It is defined
   (`diagnostic.rs:33`), rendered with the right words (`render.rs:173`: *"expected a tuple, array, or
   struct type, found {}"*), and **produced nowhere** — the other `IndexTarget` hits are
@@ -140,8 +139,11 @@ produces. And `checker.rs:738` does **not** pin the `IndexTarget` wording: that 
 kind, location and the requirement's `TypeArray` kind, never a rendered sentence, so `render.rs`'s
 "expected a tuple, array, or struct type, found {}" is unpinned.
 
-**Still open**: the positional-struct `raw[Int, Int]` offender, whose fix belongs to
-`crates/lichen-render/src/render/type_printer.rs` under `docs/notes/type-rendering-inconsistent.md`.
+**Still open, and it no longer has a home**: the positional-struct `raw[Int, Int]` offender. This section
+pointed at [type-rendering-inconsistent](type-rendering-inconsistent.md), which has since **closed as
+unreachable** — its own finding is that the written type cannot be reached where the diagnostic renders. The
+residual here is narrower and different: a *positional* struct spelling reaching the printer as `raw[…]`. No
+note owns it now, so it is recorded here rather than left pointing at a closed one.
 
 **Superseded here**: the two facts the main report carried are no longer the state of `dev`. The examples no
 longer panic with `invalid SlotMap key used` — the read path's collection is disabled while its trigger is
