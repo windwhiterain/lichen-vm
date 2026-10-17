@@ -179,6 +179,17 @@ are **different nodes in different classes** — the per-call clone boundary
 write lands in a class whose members include the value's check-time cells, which is what would tell
 the clone rule from the bind.
 
+**A dynamic application in the body does not open `.O`; a *static* one with a dependent codomain
+does.** `compute.jit (x : Int => x + 1)` and `compute.jit (x : Int => id x)` both render
+`(raw Kernel, Int, Int)` with `.O Type`, so an open `.O` is not "the body applies something". It is
+specific to the callee being a **static** function whose codomain is **dependent on its argument** —
+`compute.lichen`'s `launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}` names its
+codomain `k.O`. The checker's type-apply pass resolves a plain function type at check time (which is
+why `id x` types), but a dependent codomain is a *read on the callee's parameter*, so the apply's
+result cell stays open until the application runs — and the run's write lands in the clone's class,
+not the value's. The fix is check-time resolution of a static apply's dependent codomain, the
+[function-normalization](function-normalization.md) contract's first clause.
+
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
 over both statements and is red for this reason alone — it is the witness, not a stale assertion.
