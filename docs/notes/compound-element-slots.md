@@ -1,6 +1,6 @@
 # Compound element slots
 
-> Status: **in progress.** `LowValue::Any` has landed and is merged
+> Status: **complete.** `LowValue::Any` landed and is merged
 > (`8b2fa7a`); every compound's element is a full `[value, type, attrs…]` slot —
 > tuple, struct, array, table, and set — with both construction sites, the
 > readers, the printers, the element-attribute and value-pin reconciliation, the
