@@ -1,5 +1,8 @@
 # A nested apply loses the parameter it consumed
 
+> Status: **fixed.** §27 records the repair as landed: every one of the twenty-two failing programs answers its
+> correct value, and none of the other four hundred and seven answers moved. What follows is the derivation,
+> kept because the mechanisms it refuted are what a later reader needs.
 > **In one paragraph.** `mk = x => y => x; f = n => (mk n) 1; f 3` answers `none` because the
 > checker evaluates **every function's return node once, by design** ("so its checks fire even
 > unapplied"), and for this shape that node *is* the body's apply — so the pass **runs the call with
