@@ -97,6 +97,18 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    though the parameter pair is unified there. A fix must make the body's read
    resolve when the parameter's type is bound (the apply's own unify is the place
    that has it), not rely on the reader.
+   **The failing path is the converted loop, and its own bind is where to look.**
+   `@loop` calls take `apply_loop` (`loop_run.rs`), and `loop_body`'s exit already
+   resolves the return type and unifies the result cell with it — but it reads that
+   type from `pair_type_half(template_return)` through `instantiation.node_of`, and
+   the clone walk never enters the return pair's **type half** (the pair's items are
+   not operation operands), so `node_of` answers the template node, whose derived
+   read still points at the template's parameter cell. **The candidate tried and
+   measured — make the walk enter the type half too** (`node_apply(pair_type_half(return))`
+   right after the return pair): the fold still reads `raw none`, so the type half
+   was already referenced in place or the operand chain breaks elsewhere. The next
+   step is a probe at `loop_iteration`'s `Iteration::Exit` printing whether
+   `node_of(type_half)` is a clone and what its operand chain evaluates to.
    The collect's own type stays `?a` in all three annotated variants — a separate,
    cosmetic open cell.
 2. **Once, at birth.** A function is normalized exactly once, at its first
