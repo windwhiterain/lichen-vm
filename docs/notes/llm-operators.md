@@ -522,9 +522,8 @@ need a node-local producer for `r`.
   are not all the same length: 48 and 12"* — it compared **payload bytes** — and a GEMV's two inputs
   (`M · kdim` against `kdim`) are **never** the same length except at `M = 1`, so **the check's own
   sentence was false of a legitimate body**. It was removed with the length rule (the correction above),
-  and **the removal is not what unblocks the graph leg: a graph step that reads an argument buffer is
-  refused at check, by a rule that is deliberate.** Measured on the RTX 3060 with
-  `crates/lichen-compute/examples/graph_leg_probe.rs`:
+  and **what a graph step needs in its place is a spelling, not a device feature**: the return must be
+  annotated. Measured on the RTX 3060 with `crates/lichen-compute/examples/graph_leg_probe.rs`:
 
   | graph argument | reading |
   |---|---|
@@ -540,23 +539,24 @@ need a node-local producer for `r`.
   class, the two element placeholders are `GraphValue(1)` against `GraphValue(0)`, and the engine
   reports the disagreement — the maintainer's ruling is *"答案相撞就 unify error 啊，有什么问题"*
   ([answer-collision](answer-collision.md), which also records the two diagnostic defects fixed on the
-  way: the missing span and the dropped `value_a`/`value_b`). **And the buffer is not what decides which
-  rows collide**: the example's own **two-kernel** chain runs (`[20, 22, 24]`), while every
-  **one-kernel** variant here collides — with or without an argument buffer — which is the shape the
-  recording's re-drive mints twice. So the table's `expected ?, found ?` rows are instances of the known
-  collision class, not a property of argument buffers, and **where these programs should check is the
-  compute side's decision**, not a defect in the graph run or in the device. The device path is not
-  implicated either: the type system's owner reproduced the same collision through the CLI with **no
-  compute backend installed**. The probe
-  `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs` prints it for all four shapes,
-  including the two that end in `collect` — **stage `Check`, span on the `compute.parallel` line**, both
-  placeholders named — so the check-stage locus is measured and it is the same one for every
-  `expected ?, found ?` row.
+  way: the missing span and the dropped `value_a`/`value_b`). **And what decides which rows collide is
+  the step's return, not its argument: annotating it is the spelling.** The same one-buffer program that
+  collides as above **runs** when the step's last expression carries its type —
+  `compute.plrun k2 (…) : Out2` answers `[2, 4, 6]`, the argument buffer `[1, 2, 3]` doubled twice — and
+  a two-dispatch step that reads the argument buffer answers `[4, 8, 12]`. A `~ "claim:…"` mark does
+  **not** substitute for the annotation (the claimed variant still collides). So the collision is the
+  recording's re-drive minting a second answer **when the return is not nameable in the first
+  evaluation**, which is the compute side's decision, and **an argument buffer is not a blocker on the
+  graph leg**: the probe `crates/lichen-compute/tests/lichen_compute/zz_graph_argument_probe.rs` runs
+  both of those shapes on the device. The table's `expected ?, found ?` rows are the unannotated
+  spelling, and the device path is not implicated either — the type system's owner reproduced the same
+  collision through the CLI with **no compute backend installed**.
 
-  **One row is not that collision, and it is not localised**: the two-buffer GEMV reaches the run and
-  answers the collect's *"empty value of a failed read"*, with no `compute.graph` reason in the
-  diagnostic list. It is the only shape here that gets past the check. The graph leg is still the only
-  path that consults the fusion floor.
+  **What is still open is GEMV's own program**, and it is not the collision: it refuses at stage `Check`
+  with the collect's *"empty value of a failed read"* (span `None`) and *"this value is not a container"*
+  at the `collect` line, and it does the same with `x` padded to the count — so neither the short input
+  nor the argument binding is what refuses there. The graph leg is still the only path that consults the
+  fusion floor, and it now carries a two-input step whose return is annotated.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
