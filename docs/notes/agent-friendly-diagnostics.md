@@ -228,7 +228,9 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
 
   **The current baseline, re-measured at `9fad30c7`** (the dynamic apply's result-cell bind; see
   [compute-kernel-struct](compute-kernel-struct.md)): lowlevel **146/13**, highlevel **140/0**,
-  language **271/1** (the known one: `gc_block::a_gc_block_releases_its_scope`),
+  language **271/1** (the known one: `gc_block::a_gc_block_releases_its_scope` — the
+  read-path collection is disabled by the maintainer's ruling,
+  [gc-trigger-disabled](gc-trigger-disabled.md), so that red is the decision, not a defect),
   compute **230/2/2**
   (`graph_jit` and
   `graph_structure`; the latter is the one-read refactor's witness, per
