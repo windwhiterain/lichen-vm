@@ -43,3 +43,11 @@ a workspace member and a dev-dependency of `lichen-highlevel`.
 - `cargo check` for compilation pass.
 - `cargo tests` for behaviour correctness.
 - `cargo fix --allow-dirty`, `cargo fmt` for final commit, no tests need after them.
+- A filtered run can read as a pass: `--exact` needs the **full** path
+  (`<crate>::<module>::<test>`), because a bare name filters to **0 tests** and
+  prints `ok`. Cite the tool's own `test result:` line, never a count you derived.
+- A parsed table is not the output it parsed: PowerShell's `-match 'FAILED'` is
+  **case-insensitive**, so it matched the `0 failed` of a *passing* run and
+  reported nine passes as failures. Both traps were measured twice each while the
+  rounds in [graph-recording-rounds](docs/notes/graph-recording-rounds.md) were
+  being verified; that note records the readings, this list records the rules.
