@@ -511,7 +511,9 @@ asserted a refusal for a program the language legitimately records.
 - **No production code changed.** The per-dispatch live-buffer boolean, `named_abi` and the
   conjunction were implemented, measured to be unreachable, and reverted before commit; a flag with
   no consumer is not worth its field.
-- The test change carries the compute owner's sign-off. The old program's stated premise ("`held` is
+- **The test change was approved by the owner before it was written** — the reworked program and the
+  new test alike. The repository's rule is *no test without permission* (`AGENTS.md`), so this is the
+  record of that permission, not a review after the fact. The old program's stated premise ("`held` is
   a live buffer") is not what the language does.
 
 ### The readings
