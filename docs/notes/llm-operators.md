@@ -599,17 +599,21 @@ need a node-local producer for `r`.
     `(4, 2)`. The device answers `[1.0, 100.0, 3.0, 4.0, 5.0, 0.0, 7.0, 8.0]` where `cpu` answers
     `[1.0, 100.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]`, in both cache halves, with no refusal and no report
     line. The graph leg reproduces the direct chain exactly, so the graph is not implicated. **The
-    mechanism is now diagnosed and it is the tail-lane obligation, not this operator**
+    mechanism is the tail-lane obligation, not this operator**, and it is now **fixed**
     (`zz_append_slot_probe.rs`, and `lichen-compute-gpu.md` §"A computed write address is not protected
-    by the padding"): a surplus lane runs the whole body unguarded, its fabricated `(column, position)`
-    puts its write at `position · dim + column`, which is **inside `[0, count)`**, and when its
-    `position` equals `t` it takes the fresh arm and writes `nk[column]` there. A `nk` with eight
-    elements makes it visible as the wrong value: the device answers `47 = nk[4]` where the host
-    answers `60`. The zeroes are the same write with a one-element `nk` (the padded input answers `0`),
-    and the outcome is a **race**: three identical runs clobbered `K`'s slot 5 every time and `V`'s
-    once out of three. So `(4, 2)` agreeing is the race lost, **not** a safe configuration, and the
-    committed KV-cache example's "agrees element for element" holds of the runs taken and is not a
-    guarantee.
+    by the padding"): a surplus lane ran the whole body unguarded, its fabricated `(column, position)`
+    put its write at `position · dim + column`, which is **inside `[0, count)`**, and when its
+    `position` equalled `t` it took the fresh arm and wrote `nk[column]` there. A `nk` with eight
+    elements makes it visible as the wrong value: the device answered `47 = nk[4]` where the host
+    answers `60`. The zeroes were the same write with a one-element `nk` (the padded input answered `0`),
+    and the outcome was a **race**: three identical runs clobbered `K`'s slot 5 every time and `V`'s
+    once out of three. So `(4, 2)` agreeing was the race lost, **not** a safe configuration, and the
+    committed KV-cache example's "agrees element for element" held of the runs taken and was not a
+    guarantee. **How it is fixed**: the entry point's body is wrapped in `if (index < extent)`, where
+    `extent` is push-constant member `0` — the `count` the run dispatches over — so a surplus lane
+    executes no instruction of the body and writes nothing; the write address is never computed at
+    all. The probe now answers `[10, 100, 30, 40, 50, 60, 70, 80]` on **both** backends in the same
+    run, `60` in slot `5` for the eight-element `nk`, and the three repeats agree with each other.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same

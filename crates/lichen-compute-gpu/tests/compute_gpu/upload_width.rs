@@ -1,9 +1,9 @@
 //! What a host input's upload covers: its own length, and the padding past it.
 //!
 //! # Invariant
-//! An index the body reads above the count answers the element the host really holds, and the
-//! padding past the buffer's own length is still cleared on the device, so the surplus lanes of
-//! the last workgroup read a defined `0` and a later run's allocation inherits no stale byte.
+//! A lane above the count runs no instruction of the body, so it writes nothing; the padding past
+//! a buffer's own length is still cleared on the device, so a real lane that reads it — or a later
+//! run's allocation — inherits no stale byte.
 
 use super::common;
 
@@ -124,13 +124,13 @@ fn an_index_above_the_count_answers_the_element_the_host_holds() {
     );
 }
 
-/// The padding past the buffer's own length is still cleared, and a run above the count reads it.
+/// A lane above the count writes nothing, and the tail of the allocation stays as cleared.
 ///
 /// # Invariant
 /// Two runs on one context, both at a count of 100 and so both allocated 128 elements, which is
-/// what puts the second on the first's buffer: without the clear its surplus lanes would answer the
-/// first run's bytes. The first run fills the allocation, so its surplus lanes read real elements —
-/// and the second's read `0` in exactly the places the first answered them.
+/// what puts the second on the first's buffer. The first run's 28 surplus lanes run no instruction
+/// and so write nothing, leaving the tail at the cleared `0`; the second run writes its own 100
+/// elements over the first's and leaves the same 28, which is what a recycled allocation shows.
 #[test]
 fn the_padding_past_the_buffer_is_cleared_and_read_as_zero() {
     let test = "the_padding_past_the_buffer_is_cleared_and_read_as_zero";
@@ -142,11 +142,9 @@ fn the_padding_past_the_buffer_is_cleared_and_read_as_zero() {
     let first = dispatched(&context, &fragment, &long, 100, 128);
     assert_eq!(
         first[100..],
-        [
-            100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
-            117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127
-        ],
-        "a surplus lane answered the real element above the count, not a zero"
+        [0i64; 28],
+        "a surplus lane runs no instruction, so the tail is the cleared allocation and not the \
+         real element above the count"
     );
 
     let short: Vec<i64> = (0..100).map(|value| value - 50).collect();

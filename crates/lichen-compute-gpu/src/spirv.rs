@@ -194,10 +194,10 @@ fn element_stride(class: ScalarClass) -> u32 {
 /// The local workgroup size this target schedules.
 ///
 /// # Invariant
-/// A run of `count` indices is `ceil(count / LOCAL_SIZE_X)` workgroups, and the surplus lanes of the
-/// last one are a caller obligation, not the shader's. It is also the only width this target
-/// schedules, so a fragment declaring another is refused by name rather than having its `LocalSize`
-/// rounded to this.
+/// A run of `count` indices is `ceil(count / LOCAL_SIZE_X)` workgroups, and the entry point's
+/// body branches on `index < extent` before any instruction of it, so a surplus lane runs none.
+/// It is also the only width this target schedules, so a fragment declaring another is refused by
+/// name rather than having its `LocalSize` rounded to this.
 pub const LOCAL_SIZE_X: u32 = 64;
 
 /// The lanes one subgroup runs, as this target's device reports them.
@@ -1370,8 +1370,7 @@ fn emit_function(
         };
         slots.insert(value, scalar(id, read_as));
     }
-    // The prologue reads the block's own inputs and nothing of the body, so it stays above a
-    // guard built on two of those leaves; [`function_body`] splits the entry block here.
+    // The prologue reads the block's inputs and nothing of the body, so it runs above the guard.
     let prologue_len = prologue.len();
     let first_label = next;
 
@@ -2145,8 +2144,7 @@ fn emit_function(
     Ok(body)
 }
 
-/// What the tail guard is decided from: the entry point's own place in the launch, the leaves the
-/// prologue bound, and the slot each bound leaf reads through.
+/// What the tail guard is decided from: this function's place in the launch and the leaves it bound.
 struct TailInputs<'a> {
     entry: bool,
     index: u32,
@@ -2155,22 +2153,13 @@ struct TailInputs<'a> {
     prologue: usize,
 }
 
-/// The `index < extent` guard the entry point's body is wrapped in, or `None` where there is no
-/// extent member to compare the index against.
+/// The `index < extent` guard the entry point's body is wrapped in, or `None` without one.
 ///
 /// # Invariant
-/// **Member `0` is the extent and is declared `Int`**, which is the one a run whose first leaf is
-/// not `Int` is refused for (`RunError::ExtentNotAnInteger`), and the index is the last leaf — so
-/// the two compared below share one integer type. The index is `gl_GlobalInvocationID.x` widened
-/// to the module's own integer width, exactly as the prologue loaded it.
-///
-/// A fragment whose only leaf is its index has no member `0` left to name an extent, and a first
-/// leaf of another class names none the guard could compare as an unsigned integer; either way
-/// the body is emitted unguarded rather than against a member that is not a count.
-///
-/// The condition is **uniformly true for every lane of a staged launch**: a staged launch is
-/// refused unless its count is a whole number of workgroups, so its rounding leaves no surplus
-/// lane and no lane leaves the body early to skip a barrier.
+/// Member `0` is the extent and is `Int` — what a run whose first leaf is not is refused for —
+/// and the index is the last leaf, so both operands share one integer type. The condition is
+/// **uniformly true on a staged launch**: such a launch is refused unless its count is a whole
+/// number of workgroups, so no surplus lane exists and none leaves the body early at a barrier.
 fn tail_guard(
     fragment: &KernelFragment,
     inputs: TailInputs<'_>,
@@ -2183,6 +2172,7 @@ fn tail_guard(
         slots,
         prologue,
     } = inputs;
+    // A fragment whose only leaf is its index has no member `0` naming an extent to compare.
     if !entry || index == 0 || leaves.first() != Some(&ScalarClass::Int) {
         return None;
     }
@@ -3339,7 +3329,10 @@ fn function_body(
         };
         let mut less_than = vec![ids.boolean, guard.condition];
         less_than.extend_from_slice(&guard.less_than);
-        let prologue = blocks[node].code.drain(..guard.prologue).collect::<Vec<_>>();
+        let prologue = blocks[node]
+            .code
+            .drain(..guard.prologue)
+            .collect::<Vec<_>>();
         function.push(Inst::new(op::LABEL, vec![guard.enter]));
         function.extend(prologue);
         function.push(Inst::new(op::U_LESS_THAN, less_than));

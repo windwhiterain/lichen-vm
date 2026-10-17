@@ -496,34 +496,40 @@ shape the compiler produces. (This is the fact the graph runner's old
 ## The tail-lane obligation
 
 A dispatch covers `LOCAL_SIZE_X` (64) invocations per workgroup, so the last
-workgroup runs lanes past the end. The shader has **no bounds test**, and that is
-deliberate: a bounds test is a branch every lane takes, on the hottest path, to
-guard indices the host already knows.
+workgroup runs lanes past the end. **The entry point's body runs only where the
+index is below the count.** The emitted function leads with a selection on
+`index < extent`, where `extent` is push-constant member `0` — the `count` this run
+dispatches over — and a surplus lane branches past the whole body to a block that
+returns. It runs no instruction of the body and writes nothing.
 
-Instead every buffer is allocated rounded up to a whole number of workgroups and
-the padding is zeroed — inputs so the surplus lanes' reads are in bounds and
-return `0`, outputs so their writes land in padding rather than past the end.
-**That second half holds only while the write address is the lane's own index**
-(see the counterexample below). Inputs are zeroed **on the device**, by a
-`cmdFillBuffer` recorded next to the upload: only the `count` real elements cross
-the bus, and the tail is cleared where it already lives rather than uploaded as
-zeroes the host had copies of anyway. Only the first `count` elements are read
-back. Out-of-range access is impossible by construction rather than by a runtime
-test, and the shader stays branch-free. The tests pin **both** ends of that: a
-count that is not a multiple of 64 (so the padding is exercised) and one that is
-exactly a multiple (so it is not).
+Before the guard landed the shader had **no bounds test**, deliberately, on the
+theory that the padding made one unnecessary. The theory held for reads, and for a
+write addressed by the lane's own index; it failed for a computed address. See the
+subsection below, which keeps the measurements that forced the guard.
 
-### A computed write address is not protected by the padding, and the clobber is a race
+What the padding still buys: every buffer is allocated rounded up to a whole
+number of workgroups, and the padding past an input's own length is still zeroed
+**on the device** by a `cmdFillBuffer` recorded next to the upload, so only the
+`count` real elements cross the bus and a read past `len` answers `0`. The tests
+pin **both** ends of that: a count that is not a multiple of 64 (so the padding is
+exercised) and one that is exactly a multiple (so it is not).
 
-**Measured (`zz_append_slot_probe.rs`), and it falsifies the sentence above for a
+### A computed write address is not protected by the padding, and the clobber was a race
+
+**Fixed.** The entry point now branches on `index < extent` before any instruction
+of the body, so a surplus lane never computes a write address at all. The readings
+below are what the probe measured **before** the guard and are kept as the
+evidence; the reading after the fix is at the end of this subsection.
+
+**Measured (`zz_append_slot_probe.rs`), and it falsified the sentence above for a
 kernel whose write address is data**: `examples/kvcache.lichen`'s append writes at
 `slot = position · dim + column`, where `position` and `column` come from
-`compute.row`/`compute.col`. A surplus lane runs the whole body with no guard, so
+`compute.row`/`compute.col`. A surplus lane ran the whole body with no guard, so
 its fabricated coordinates are `(column, position) = (i / cap, i % cap)` for an `i`
-past `count`, and its write lands at `position · dim + column` — which is **inside
+past `count`, and its write landed at `position · dim + column` — which is **inside
 `[0, count)`** whenever `i / cap < count / dim`, i.e. for most surplus lanes. If
-`position` happens to equal the kernel's `t`, that lane takes the *fresh* arm and
-writes `nk[column]`/`nv[column]` there instead of the copy.
+`position` happened to equal the kernel's `t`, that lane took the *fresh* arm and
+wrote `nk[column]`/`nv[column]` there instead of the copy.
 
 The readings, over `capacity` positions of `dim` elements with the cache
 `10, 20, …, 10·count`:
@@ -545,25 +551,39 @@ t 1` case gave the same `K` slot `5` clobbered each time and a `V` slot `5` that
 was `0` once and `1060` twice; `(cap 4, dim 2)` and `(cap 2, dim 4)` agreed with
 the host in the runs taken, which is the race lost, **not** a configuration that is
 safe. So the committed KV-cache example's "agrees with `cpu` element for element"
-is true of the runs taken and is not a guarantee, and `StagedLaunchNotAWholeWorkgroup`
-does not cover this: it refuses a **staged** launch whose count is not a whole
+was true of the runs taken and was not a guarantee, and `StagedLaunchNotAWholeWorkgroup`
+did not cover it: it refuses a **staged** launch whose count is not a whole
 number of workgroups, and a plain body with a computed address is dispatched
 whatever its count is.
 
-What the padding does buy, and what it does not: it makes a surplus lane's *reads*
-defined (`0` past `len`) and keeps a write past `count` out of the answer. It does
-**not** confine a computed write address to `[count, padded)`. Nothing checks that
-today — `dispatch.rs`'s own invariant says "every invocation reaches its write, so
-only the `count` real elements are ever read back", and that argument assumes the
-address is the invocation's index.
+**After the guard, in the same probe and the same run, host and device agree on
+every line**: `cap 8, dim 1, t 1` answers `[10, 100, 30, 40, 50, 60, 70, 80]` on
+both backends and the three repeats no longer differ; `nk = [7, 17, …, 77]` puts
+`60` in slot `5` on both instead of `47`; `cap 16, dim 1, t 1` slot `3` and
+`cap 8, dim 1, t 3` slot `7` are the host's values on both. The race is gone
+because there is no second writer left in the launch, not because the two writes
+were made to agree.
 
-Three shapes a fix could take, none of them taken here because each changes an
-invariant the backend states: (a) a body guard `if lane < count` (a branch every
-lane takes, which the note above deliberately avoids); (b) refusing a launch whose
-count is not a whole number of workgroups **whenever the body's write address is
-not the lane index** — the staged refusal generalised, but it needs a rule for
-"is the address the index"; (c) bounding the emitted write to `[0, count)` — one
-`Select` per write, on the path the branch-free rule exists to protect.
+What the padding does buy, and what it does not: it makes a surplus lane's *reads*
+defined (`0` past `len`). It does **not** confine a computed write address to
+`[count, padded)` — that was the gap, and the guard closes it by not running the
+body at all rather than by clamping the address.
+
+What the guard cost, measured in `upload_width.rs`: an **output** buffer's tail
+past `count` is no longer written by the dispatch at all. Before, the surplus lanes
+filled it with a value derived from the zero-padded input; now it holds whatever
+the recycled allocation had — `dispatch.rs` still allocates an output across
+`[0, padded)` and initialises nothing there. A caller that reads past `count` is
+reading memory no run wrote, so that tail is not defined by the dispatch. Clearing
+it host-side would restore a defined answer; it is not done.
+
+Of the three shapes a fix could take, **(a) is what landed**: the entry point
+branches on `index < extent` and the body moves whole into the block the branch
+falls into, so nothing of it executes above the branch. (b) — refusing a launch
+whose count is not a whole number of workgroups whenever the body's write address
+is not the lane index — was not taken, because it needs a rule for "is the address
+the index"; the guard does not need one. (c), bounding the emitted write to
+`[0, count)` with one `Select` per write, was not taken and is now unnecessary.
 
 **What an author has to know, and what this note did not say.** The sentence a kernel
 writer needs is not "the padding is zeroed" but **how much of a host input is real**: a
@@ -590,38 +610,36 @@ a body with **no** `@loop` disagreed identically, which ruled out a lowering bug
 measurement, the discriminator and what a tiled matmul would still need are in
 [LLM operators](llm-operators.md#smaller-findings-each-with-the-thing-that-would-change).
 
-**The same padding discharges a workgroup barrier's convergence obligation, and
-it does so for free.** "A write is reached by every invocation" — the invariant
-the next paragraph rests on — is exactly what `OpControlBarrier` needs: a barrier
-every lane of the workgroup does not arrive at is a hang, and a `count` that is
-not a multiple of 64 would hang the last workgroup if the surplus lanes exited
-early. They do not: there is no bounds test, so every lane runs the whole shader
-and reaches every barrier, and a partial group's barrier is arrived at by all 64.
-What remains a hang is a barrier under **divergent** control flow, which is a
-refusal and not a padding question — see
+**The padding discharges a workgroup barrier's convergence obligation only because a
+staged launch is a whole number of workgroups.** "Every lane of a workgroup reaches
+the barrier" is exactly what `OpControlBarrier` needs: a barrier one lane of the
+group does not arrive at is a hang, and a `count` that is not a multiple of 64
+would hang the last workgroup now that the surplus lanes do exit early. They do not
+exit there, because such a launch is refused by name: `launch_workgroups` admits a
+launch that stages only at a whole number of its root's lane width, so every
+workgroup is full, `index < extent` is true for all 64 of its lanes, and the branch
+does not divide one. What remains a hang is a barrier under **divergent** control
+flow, which is a refusal and not a tail-lane question — see
 [shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-convergence-is-free-the-slots-content-is-not).
 There is no barrier in the emitter today; that section records where one goes.
 
-**What the padding does not discharge is what the surplus lanes *write*, and the
-launch refuses the count that would make it observable.** A padded lane runs the whole
-shader, so it runs every staged write — every `SliceWriteCall` — too, at the index its own
-invocation id computes — and a staged slot is not an ABI output whose surplus element is
-never read back: a real lane's read can reach an element only a surplus lane wrote, and then
-the staged value is the padding's. So a launch set that stages is dispatched over a whole
-number of its root's declared lane width's workgroups only, refused by name with the count
-and the width otherwise — which leaves the slot's **content** as the author's obligation,
-recorded with the staged exchange that shows it in
+**A staged body therefore has no surplus lane to miswrite a slot.** A staged launch
+runs whole workgroups, so every lane that runs the body is inside the count and its
+staged write — every `SliceWriteCall` — lands on its own slot. What the slot's
+**content** is remains the author's obligation, recorded with the staged exchange
+that shows it in
 [shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-convergence-is-free-the-slots-content-is-not);
 no barrier and no `spirv-val` run can see it.
 
-**An uninitialised output buffer is safe only because a write is reached by every
-invocation.** `dispatch` allocates output buffers and does not initialise them, so
-a lane that never reaches its `BufferWriteCall` leaves a hole the reader would
-take for data. A **selection** arm is fine: it runs on exactly the lanes that took
-it, and a `select` is a value rather than a branch. **A loop body is not**, because
-a zero-trip count is a lane that never runs it — so a write inside a loop is
-refused by name (`SpirvRefusal::WriteInsideLoop`) rather than emitted, and the
-straight-line body the invariant rests on is the one the subset produces.
+**An uninitialised output buffer is safe only where a write is reached.** `dispatch`
+allocates output buffers and does not initialise them, so a lane that never reaches
+its `BufferWriteCall` leaves a hole the reader would take for data. A **selection**
+arm is fine: it runs on exactly the lanes that took it, and a `select` is a value
+rather than a branch. **A loop body is not**, because a zero-trip count is a lane
+that never runs it — so a write inside a loop is refused by name
+(`SpirvRefusal::WriteInsideLoop`) rather than emitted. Since the guard, a **surplus
+lane** is a third such case: it writes nothing, so the tail past `count` is whatever
+the allocation held, as recorded above.
 
 ## Acceptance
 

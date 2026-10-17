@@ -1,15 +1,15 @@
 //! The Vulkan side: a device, a pipeline per fragment, and a dispatch.
 //!
 //! # Invariant
-//! Every buffer is allocated rounded up to a whole workgroup, and every invocation
-//! reaches its write, so only the `count` real elements are ever read back. The
-//! tail-lane accounting, where the data lives, and the memory ordering:
-//! `docs/notes/lichen-compute-gpu.md`.
+//! Every buffer is allocated rounded up to a whole workgroup, and the entry point's body runs
+//! only for a lane whose index is below the count, so a surplus lane writes nothing. The
+//! tail-lane accounting and the memory ordering: `docs/notes/lichen-compute-gpu.md`.
 //! The Vulkan dispatch backend: device-local buffers, explicit ordering, host pools.
 //!
 //! # Invariant
-//! A launch set that stages a slice is dispatched over a whole number of workgroups
-//! only, so no surplus lane writes a slot a real lane of its workgroup reads.
+//! A launch set that stages a slice is dispatched over a whole number of workgroups only,
+//! so the guard's condition is true for every lane of every workgroup and the branch does
+//! not divide one.
 //!
 //! # Invariant
 //! Buffers are device-local and data reaches them through a host-cached staging buffer: an
@@ -45,9 +45,9 @@ pub enum RunError {
     /// A launch that stages a slice at a count that is not a whole number of workgroups.
     ///
     /// # Invariant
-    /// A dispatch rounds up to whole workgroups and runs the surplus lanes with zero-padded input,
-    /// so a surplus lane of a staged body writes a value a real lane of its workgroup reads and no
-    /// diagnostic sees it. Both numbers are named because the pair is what is wrong
+    /// The entry point's body runs only for a lane inside the count, and every lane of a workgroup
+    /// must reach a barrier, so a staged launch is a whole number of workgroups: its last workgroup
+    /// is full, the condition is true for all of its lanes, and the branch does not divide one
     /// (`docs/notes/shared-memory-and-barriers.md` §8).
     StagedLaunchNotAWholeWorkgroup { count: usize, lane_width: u32 },
     /// More storage buffers than the pool has room for; the pool is allocated once.
@@ -141,9 +141,9 @@ impl fmt::Display for RunError {
             RunError::StagedLaunchNotAWholeWorkgroup { count, lane_width } => write!(
                 f,
                 "the launch covers {count} indices, which is not a whole number of workgroups of \
-                 {lane_width} lanes, and this launch stages a slice: a dispatch rounds up \
-                 and runs the surplus lanes with zero-padded input, so a surplus lane's fabricated \
-                 value would reach a real lane's answer with no diagnostic. Launch a multiple of \
+                 {lane_width} lanes, and this launch stages a slice: the entry point's body runs \
+                 only for a lane inside the count, and every lane of a workgroup has to reach a \
+                 barrier, so a partial workgroup would divide the branch. Launch a multiple of \
                  {lane_width}, or stage nothing (`docs/notes/shared-memory-and-barriers.md` §8)."
             ),
             RunError::TooManyBindings { total, max } => write!(
@@ -307,10 +307,10 @@ fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, Run
 /// How many workgroups a launch of `count` indices over `launch` is, or why it cannot be one.
 ///
 /// # Invariant
-/// A launch set that stages declares `Workgroup` storage for the module, so a surplus lane —
-/// which the rounding runs with zero-padded input — can write a slot a real lane of its workgroup
-/// reads, and no diagnostic sees it. A staged launch is therefore a whole number of workgroups; the
-/// width is the root fragment's own declared fact
+/// A launch set that stages declares `Workgroup` storage, and every lane of a workgroup must
+/// reach a barrier while the body runs only for a lane inside the count — so a partial last
+/// workgroup would divide the branch around it. A staged launch is therefore a whole number of
+/// workgroups; the width is the root fragment's own declared fact
 /// (`docs/notes/shared-memory-and-barriers.md` §8).
 fn launch_workgroups(launch: &LaunchSet<'_>, count: usize) -> Result<usize, RunError> {
     let lane_width = launch.root().target.lane_width.lanes();
@@ -1002,9 +1002,7 @@ impl GpuContext {
             None => leaf,
             Some((_, _, capacity)) => capacity,
         };
-        // The block the entry point reads the launch's leaves out of, carrying **the count this
-        // run dispatches over**: a device-held extent reads its own count from a buffer, so what
-        // member `0` names for it is the capacity that bounds it.
+        // The block the entry point reads its leaves out of, carrying the count dispatched over.
         let scalars = self.scalar_block(launch, class, count)?;
         let binding = Binding {
             inputs: inputs.len(),
@@ -1012,8 +1010,8 @@ impl GpuContext {
         };
         let pipeline = self.pipeline(launch, binding, scalars.len() as u32)?;
 
-        // Round up so the last workgroup's surplus lanes address padding rather
-        // than memory past the end; see the module docs.
+        // Round up so the last workgroup's lanes that are inside the count have a buffer to
+        // write; see the module docs.
         let workgroups = launch_workgroups(launch, count)?;
         let padded = workgroups * launch.root().target.lane_width.lanes() as usize;
         if padded == 0 {
@@ -1441,12 +1439,10 @@ impl GpuContext {
     /// The push-constant bytes this launch hands the shader.
     ///
     /// # Invariant
-    /// **One layout, from one rule**: the bytes sit at the offsets [`spirv::push_layout`]
-    /// gave the module's members, each at the width the emitter gave that class.
-    ///
-    /// Member `0` is the extent, whose value is the `count` this run dispatches over: the
-    /// ABI's first scalar **is** that count, so a caller stating it again would be giving
-    /// this function two answers to one question.
+    /// **One layout, from one rule**: the bytes sit at the offsets [`spirv::push_layout`] gave
+    /// the module's members, each at the width the emitter gave that class. Member `0` is the
+    /// extent, the `count` this run dispatches over and the value the tail guard compares a lane
+    /// index against; a device-held extent pushes the capacity bounding it.
     fn scalar_block(
         &self,
         launch: &LaunchSet<'_>,
