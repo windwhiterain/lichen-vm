@@ -318,6 +318,14 @@ pub struct Diag<P: Program> {
     /// (`docs/notes/core-prelude.md`), and one that kept none leaves the
     /// failure unattributed.
     pub static_template: Option<lichen_lowlevel::StaticNodeId>,
+    /// The per-call clone the static-template assert failure came from, in **this**
+    /// build's module.
+    ///
+    /// # Invariant
+    /// Present exactly when `static_template` is. The clone's own **origin** is the
+    /// caller's use — the apply it was materialized for — so resolving it through the
+    /// build names the failing use in this document (`docs/notes/core-prelude.md` §5).
+    pub clone: Option<NodeId>,
 }
 
 impl<P: Program> Diag<P> {
@@ -345,6 +353,7 @@ impl<P: Program> Diag<P> {
             budget: None,
             error_index: None,
             static_template: None,
+            clone: None,
         }
     }
 
@@ -461,6 +470,7 @@ where
                     table_key: None,
                     error_index: None,
                     static_template: None,
+                    clone: None,
                 }),
                 EvalError::TableMiss { key, .. } => out.push(Diag {
                     table_key: self.module.node_value(*key),
@@ -505,6 +515,7 @@ where
                 // static ref.
                 AnyNodeId::Static(sref) => {
                     out.push(Diag {
+                        clone: Some(err.condition),
                         assert_value: Some(err.value),
                         static_template: Some(sref),
                         ..Diag::factual(DiagKind::Assert, None)
@@ -708,6 +719,7 @@ where
                 table_key: None,
                 error_index: Some(i),
                 static_template: None,
+                clone: None,
             };
         }
         // The owning diary entry: ranges are disjoint, so exactly one contains
@@ -753,6 +765,7 @@ where
             table_key: None,
             error_index: Some(i),
             static_template: None,
+            clone: None,
         }
     }
 }

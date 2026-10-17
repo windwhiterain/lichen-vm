@@ -397,6 +397,16 @@ where
                                         .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                                 })
                         });
+                    // The clone's origin is the caller's use, so it names the failing use here.
+                    let related = d.clone.and_then(|clone| {
+                        build
+                            .node_loc(AnyNodeId::Dynamic(clone))
+                            .and_then(|loc| {
+                                span_index
+                                    .as_ref()
+                                    .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
+                            })
+                    });
                     // A static failure names its own source; its spelling travels in the record
                     // (`docs/notes/core-prelude.md` §5).
                     let (span, file, spelling) = match d.static_template {
@@ -422,7 +432,7 @@ where
                             .unwrap_or_else(|| crate::render::checker_message(&mut printer, &d)),
                         stage: Stage::Check,
                         file,
-                        related: None,
+                        related,
                         check: Some(Box::new(d)),
                     })
                 })

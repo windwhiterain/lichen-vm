@@ -144,17 +144,17 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   channel's generic wording), beside the annotation's own `assertion failed: expected 1,
   found 0` at `3:39` — that one is an `AssertSpelling::Condition` by registration
   (`checker/annotations.rs`) and is meant to stay generic.
-- **The call site is not attached.** The diagnostic names the built-in's line; it
-  does not also name the application in the document that failed the contract,
-  because an assert's clone records its *template* and not the apply that made it.
-  Recording that origin — the apply node, at the two clone sites — and resolving
-  it through `Build::apply_edges` is what would add the "related" location
-  (`Diag::related` is plumbed for it and nothing fills it). Half of that mechanism
-  has landed for a failure's *own* location: the static materializer records the
-  apply it materialized a clone for as that clone's origin, so a runtime failure
-  inside a materialized imported function — a deferred instantiation's table miss —
-  points at the argument the caller passed. The clone the *dynamic* walk makes
-  still records only its template, and neither path produces a `related` location.
+- **The call site is now attached — closed.** A failure cloned out of the prelude
+  names the built-in's line **and** the failing use in the document. The static
+  materializer already recorded the apply a clone was materialized for as that
+  clone's origin; the static-template diagnostic had been dropping the clone, so
+  the origin was never resolved. It now carries the clone (`Diag::clone`), the
+  report resolves the clone's origin through the build's `node_loc` and the
+  document's `span_index`, `Diag::related` holds the caller's use, and the renderer
+  prints it as a `note:` block in the document's coordinates. Measured:
+  `add ["a", "b"]` reports `core.lichen:3:39` / `3:56` **and** `1:5` (the array
+  argument). The dynamic walk's clone still records only its template, so a
+  prelude body cloned at run time would have no related use.
 - **The built-in's names are not hovered with a type.** A jump and a completion
   item for a prelude name name the built-in's file; the hover shows the definition
   line in it (`defined at line 3 of core.lichen`). It does not render

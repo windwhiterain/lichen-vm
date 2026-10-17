@@ -76,6 +76,7 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
     starts: &[usize],
     diag: &Diag<P>,
 ) -> String {
+    let document_starts = starts;
     let mut out = format!("error: {}\n", diag.message);
     let Some((line, col)) = diag.span else {
         return out;
@@ -100,6 +101,17 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
         let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
         out.push_str(&format!(" {line} | {text}\n"));
         out.push_str(&format!("   | {caret}\n"));
+    }
+    // The failing use is in this document even when the failure's line is elsewhere.
+    if let Some((line, col)) = diag.related {
+        out.push_str("note: the failing use is here\n");
+        out.push_str(&format!("  --> {line}:{col}\n"));
+        out.push_str("   |\n");
+        if let Some(text) = crate::lex::line_text(source, document_starts, line) {
+            let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
+            out.push_str(&format!(" {line} | {text}\n"));
+            out.push_str(&format!("   | {caret}\n"));
+        }
     }
     out
 }
