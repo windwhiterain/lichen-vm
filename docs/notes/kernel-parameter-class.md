@@ -179,10 +179,15 @@ Gating it was what left a frozen function type decoding as
 2. **The domain refusals' coverage.** The three domain refusals above are
    measured by probe, not by a test: a test for the struct-domain and the
    open-position texts is a maintainer's decision, like (1).
-3. **`pair_type_half` over a static type half of a *dynamic* pair.** The
-   recogniser takes a `NodeId` and the arm is gated on `AnyNodeId::Dynamic`, so a
-   static type half of a dynamic parameter pair leaves the whole signature
-   `None`. Unmeasured; no caller is known to reach it.
+3. **`pair_type_half` over a static type half of a *dynamic* pair — measured
+   unreachable.** The recogniser takes a `NodeId` and the arm is gated on
+   `AnyNodeId::Dynamic`, so a static type half of a dynamic parameter pair leaves the
+   whole signature `None`. An env-gated probe in that arm over all four suites
+   (`lichen-lowlevel` 146/13, `lichen-highlevel` 140/0, `lichen-language` 72 lib +
+   265/11, `lichen-compute` 19 lib + 203/15/2) took **0 hits**: no program in the
+   tree reaches it, so the arm stays as the documented limit rather than becoming a
+   fix. The reading replaces the earlier "unmeasured; no caller is known to reach
+   it" with a measurement of exactly that.
 4. Two silent compute failures recorded elsewhere are **not** this note's and are
    still open: a bare `plrun` whose body reads a runtime scalar on a device
    answers `none` with no diagnostic
