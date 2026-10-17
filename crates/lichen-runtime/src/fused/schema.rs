@@ -122,6 +122,9 @@ pub enum KernelInstr {
     /// would have been mis-parsed (`docs/notes/fused-multiply-add.md` §7).
     #[facet(rename = "fma")]
     Fma,
+    /// A float negation: exact, and the one instruction whose zero differs from a subtraction's.
+    #[facet(rename = "negate")]
+    Negate,
     /// Convert a value to the condition width a `select` needs.
     #[facet(rename = "i32_wrap_i64")]
     I32WrapI64,

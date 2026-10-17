@@ -214,6 +214,11 @@ fn probes() -> Vec<Probe> {
 fn unasked() -> Vec<(&'static str, &'static str)> {
     vec![
         (
+            "Negate",
+            "this slice added it, and its one caller is the kernel IR's compensated division, \
+             which no probe dispatches yet",
+        ),
+        (
             "Exp",
             "`own_class` states `Float` for it, but the emitter refuses an unexpanded \
              transcendental while emitting the instruction itself, and `value_class` is reached \
@@ -268,6 +273,7 @@ fn every_variant() -> Vec<(&'static str, KernelInstr)> {
         KernelInstr::Const(ScalarClass::Int, 7),
         KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
         KernelInstr::Fma,
+        KernelInstr::Negate,
         KernelInstr::Conv {
             from: ScalarClass::Int,
             to: ScalarClass::Float,
@@ -297,6 +303,7 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
         KernelInstr::Const(..) => "Const",
         KernelInstr::Bin(..) => "Bin",
         KernelInstr::Fma => "Fma",
+        KernelInstr::Negate => "Negate",
         KernelInstr::Conv { .. } => "Conv",
         KernelInstr::Exp => "Exp",
         KernelInstr::Sqrt => "Sqrt",

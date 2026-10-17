@@ -886,7 +886,12 @@ fn compensated_quotient(
         vec![numerator, reciprocal, zero],
         vec![ScalarClass::Float],
     );
-    let negated = float_bin(body, entry, KernelBin::Sub, zero, denominator);
+    let negated = body.add_op(
+        entry,
+        KernelInstr::Negate,
+        vec![denominator],
+        vec![ScalarClass::Float],
+    );
     let residual = body.add_op(
         entry,
         KernelInstr::Fma,

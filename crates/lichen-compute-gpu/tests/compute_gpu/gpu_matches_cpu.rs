@@ -617,6 +617,12 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                     };
                     produced = Scalar::Float(a.mul_add(b, c));
                 }
+                KernelInstr::Negate => {
+                    let Scalar::Float(x) = operand(0) else {
+                        panic!("a negation reads a float")
+                    };
+                    produced = Scalar::Float(-x);
+                }
                 KernelInstr::BufferReadCall(_) => {
                     let element_index = operand(1).as_index();
                     let position = operand(0).as_index();

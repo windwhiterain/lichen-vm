@@ -768,6 +768,13 @@ pub enum KernelInstr {
     /// emits for `Add` is `i64.add` in one class and `f32.add` in the other, and a body
     /// that mixes the two needs both.
     Bin(ScalarClass, KernelBin),
+    /// `-A` over one `Float`, which SPIR-V spells `OpFNegate` and wasm `f32.neg`.
+    ///
+    /// # Invariant
+    /// A negation, not a subtraction from zero: `0.0 - a` is `-a` for every operand except
+    /// `a = +0.0`, where it answers `+0.0` while a negation answers `-0.0`. A compensated
+    /// division's residual reads the sign of the divisor, so the two are not interchangeable.
+    Negate,
     /// `A·B + C` over three `Float`s, rounded **once**.
     ///
     /// # Invariant
@@ -958,6 +965,7 @@ impl KernelInstr {
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
             KernelInstr::I32WrapI64
             | KernelInstr::Conv { .. }
+            | KernelInstr::Negate
             | KernelInstr::Exp
             | KernelInstr::Sqrt
             | KernelInstr::Floor
@@ -988,6 +996,7 @@ impl KernelInstr {
             | KernelInstr::Ln
             | KernelInstr::Sin
             | KernelInstr::Cos => Some(ScalarClass::Float),
+            KernelInstr::Negate => Some(ScalarClass::Float),
             KernelInstr::Fma => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)

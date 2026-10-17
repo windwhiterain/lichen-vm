@@ -311,6 +311,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         | KernelInstr::Sin
         | KernelInstr::Cos => Some(Type::F32),
         KernelInstr::Fma => Some(Type::F32),
+        KernelInstr::Negate => Some(Type::F32),
         KernelInstr::CallKernel(callee) => {
             let at = *context.index.get(&callee)?;
             let target = context.callees.get(at as usize)?;
@@ -383,6 +384,11 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             let narrow = walk.add(native, &[lhs, rhs], &[Type::I32]);
             let value = walk.add(Operator::I64ExtendI32U, &[narrow], &[Type::I64]);
             walk.values.insert(instr, (value, Type::I64));
+        }
+        KernelInstr::Negate => {
+            let (operand, _) = operands[0];
+            let value = walk.add(Operator::F32Neg, &[operand], &[Type::F32]);
+            walk.values.insert(instr, (value, Type::F32));
         }
         KernelInstr::I32WrapI64 => {
             let (operand, _) = operands[0];

@@ -10,8 +10,9 @@ use std::collections::HashMap;
 
 use lichen_fusion::{Expr, UnaryOp, Variable};
 use lichen_kernel_ir::{
-    KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, inlined_cos_operand,
-    inlined_exp_operand, inlined_ln_operand, inlined_sin_operand, inlined_sqrt_operand,
+    KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId,
+    inlined_cos_operand, inlined_exp_operand, inlined_ln_operand, inlined_sin_operand,
+    inlined_sqrt_operand,
 };
 
 use crate::operators::binary;
@@ -193,6 +194,16 @@ impl Walk<'_> {
             }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
             KernelInstr::Fma => Err(BridgeRefusal::FusedMultiplyAdd),
+            KernelInstr::Negate => {
+                // **A subtraction, not a refusal**: over the reals `-x` equals `0 - x` exactly.
+                let Some(subtract) = binary(KernelBin::Sub) else {
+                    return Err(BridgeRefusal::UnsupportedOperator {
+                        operator: KernelBin::Sub,
+                    });
+                };
+                let operand = self.argument(args, 0)?;
+                Ok(subtract.apply(Expr::Constant(0.0), operand))
+            }
             KernelInstr::Exp => {
                 let operand = self.argument(args, 0)?;
                 Ok(UnaryOp::Exp.apply(operand))

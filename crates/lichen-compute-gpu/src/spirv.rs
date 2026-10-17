@@ -45,6 +45,8 @@ mod op {
     pub const FUNCTION_END: u16 = 56;
     /// The cross-kernel call, into a function this module declares.
     pub const FUNCTION_CALL: u16 = 57;
+    /// A float negation, which is exact and needs no decoration of its own.
+    pub const FP_NEGATE: u16 = 126;
     pub const PHI: u16 = 245;
     pub const LOOP_MERGE: u16 = 246;
     pub const SELECTION_MERGE: u16 = 247;
@@ -1708,6 +1710,28 @@ fn emit_function(
                                 exact_results.push(result);
                             }
                         }
+                        KernelInstr::Negate => {
+                            let negated = as_class(
+                                operand(0)?,
+                                ScalarClass::Float,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let result = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::FP_NEGATE,
+                                vec![ids.float, result, negated.id],
+                            ));
+                            slots.insert(definition, scalar(result, ScalarClass::Float));
+                            // A negation rounds nothing, so this decoration is inert; kept anyway.
+                            if exact {
+                                exact_results.push(result);
+                            }
+                        }
                         KernelInstr::Exp
                         | KernelInstr::Sqrt
                         | KernelInstr::Floor
@@ -2331,6 +2355,7 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
         KernelInstr::Bin(class, _) => Some(class),
         // **All three positions are `Float`**, the one class the instruction names.
         KernelInstr::Fma => Some(ScalarClass::Float),
+        KernelInstr::Negate => Some(ScalarClass::Float),
         KernelInstr::Conv { from, .. } => (position == 0).then_some(from),
         // **A `Select` arm**: a fact about the value in the position, not the op.
         KernelInstr::Select => None,
