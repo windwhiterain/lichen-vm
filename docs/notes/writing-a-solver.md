@@ -67,18 +67,31 @@ is its identity.
 
 ## 4. Choose the boundary, and know which ones exist
 
+**The index arithmetic is unsigned, and that decides which boundaries are spellable.** `i - 1` at
+`i = 0` is not `-1` in a kernel body: it wraps to a huge value. That is *why* the padding works — the
+huge index is out of the buffer, so the read answers `0` — and it is why a **lower** clamp has to be
+shifted: `max (i - 1) 0` never takes the bound, because the wrapped value is positive. Measured:
+`min (max (col - 1) 0) 4` answers `4, 0, 1, 2, 3` for `col = 0..4`
+(`zz_replicate_address_probe.rs`). Write `(max i 1) - 1`, which is `max (i - 1, 0)` with no negative
+intermediate.
+
 | boundary | spelling | cost |
 |---|---|---|
-| zero outside the buffer (Dirichlet) | read `i - 1` and `i + 1` and do nothing else | free — this is the default |
-| wrap (periodic) | `if i == 0 then read (n - 1) else read (i - 1)`, mirrored at the end | one `Select` per end |
-| masked in one axis of a row-major grid | `if col == 0 then 0.0 else read (i - 1)`, mirrored | one `Select` per axis |
+| zero outside the buffer (Dirichlet) | read `i - 1` and `i + 1` and do nothing else | free — this is the default, and the unsigned index is what makes it work |
+| wrap (periodic) | `if i == 0 then read (n - 1) else read (i - 1)`, mirrored at the end | one `Select` per end, at the body's **top level** |
+| masked in one axis of a row-major grid | `if col == 0 then 0.0 else read (i - 1)`, mirrored | one `Select` per axis, top level; **not spellable inside a fold** |
+| replicate (the edge repeats) | `min ((max i 1) - 1) (dim - 1)` per coordinate, then `row * cols + col` | two builtins per axis, no `Select`, **works inside a fold** |
 | anything the caller *chooses at run time* | **not expressible**: the condition would have to be data | — |
 
-A `Select` is accepted when **both arms are `Float`** — **at the body's top level.** Inside a fold body it is refused: the fold is compiled into a template before any apply, and a conditional there has no value to emit (`zz_masked_conv_probe.rs` measures it with a read in the arm and with a bare `0.0`/`1.0`, so the cause is the conditional and not the read). That is why every masked boundary in the samples sits at the top level, and why a masked window has to be a caller's zero border or a different encoding. The refusal you may have seen quoted is about
+A `Select` is accepted when **both arms are `Float`** — **at the body's top level.** Inside a fold body it is refused: the fold is compiled into a template before any apply, and a conditional there has no value to emit (`zz_masked_conv_probe.rs` measures it with a read in the arm and with a bare `0.0`/`1.0`, so the cause is the conditional and not the read). That is why every masked boundary in the samples sits at the top level, and why a masked *window* has to be a caller's zero border or the clamp below. The refusal you may have seen quoted is about
 arms computed in *different* classes (`examples/attention`'s `scores`), which a physics body never
 needs. In a row-major grid the **vertical** taps are the padding and the **horizontal** ones are not —
-`i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask and a 1D body does
-not.
+`i - 1` at `col = 0` is the previous row's last element — so a grid needs the mask, a clamp, or a
+caller-supplied border, and a 1D body needs none of them.
+
+`examples/convolution2d.lichen` carries two of these side by side — the flat address over a
+zero-bordered grid, and the replicate clamp over a value on the edge — because that pair is the
+cheapest way to see what a boundary decision costs.
 
 **What may sit where, measured** (all three in `zz_clamp_grouping_probe.rs` and
 `zz_masked_conv_probe.rs`):
@@ -87,14 +100,11 @@ not.
   `(min (max i lo) hi) * cols`. Three spellings of one clamp, only the first parenthesised, answer the
   same `102 102 102 103 104 104` over `i = 0..5`; the `* 10 + 1` variant answers `21 21 21 31 41 41`,
   the clamp's own values, so the arithmetic tail stays outside.
-- **`min`/`max` may sit anywhere, including inside a fold**, and a clamped address therefore is
-  expressible — but **the index arithmetic is unsigned**, so `i - 1` at `i = 0` wraps to a huge value
-  and `max (i - 1) 0` never takes its lower bound. Measured: `min (max (col - 1) 0) 4` answers
-  `4, 0, 1, 2, 3` for `col = 0..4`, the *upper* bound leaking through. Spell the lower clamp shifted,
-  `(max i 1) - 1`, which is `max (i - 1, 0)` with no negative intermediate; then
-  `min ((max i 1) - 1) (dim - 1)` is the whole clamp, and `examples/convolution2d.lichen`'s second
-  chain builds a replicate boundary from it. The upper clamp alone was verified earlier by an address
-  probe and the lower one silently was not, which is the mistake this bullet exists to record.
+- **`min`/`max` may sit inside a fold even though a `Select` may not**, which is what makes §4's
+  replicate boundary spellable in a window. The unsigned-index trap in its spelling, and the shifted
+  `(max i 1) - 1` that fixes it, are §4's preamble — measured in `zz_replicate_address_probe.rs`. The
+  upper clamp alone was verified there first, and the lower one silently was not: that is the mistake
+  the preamble exists to record.
 - **An `Int` result cannot join a `Float` fold accumulator.** A fold whose arm is
   `s(1) + (min (max (s(0) - 1) 0) 4)` is refused by the *device* backend, not the parser: *"the block
   parameter is read as one class in one place and another ([Int, Float]). A block parameter is one
