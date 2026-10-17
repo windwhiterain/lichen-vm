@@ -61,6 +61,30 @@ What the example *can* pin is that the arithmetic is exact for its own data: eve
 quarter or a half below `2^24`, so no `exp`, `sqrt`, `ln` or division is involved and the two
 backends agree bit for bit.
 
+## What the fusion floor makes of it
+
+**The floor refuses the family at its precondition, not at an address.** Through the graph leg all
+three shapes run on the device and answer exactly what the example's host path answers —
+`2 1 0 0 1 2`, `3 1 0 0 1 3` and `1 1 0 0 1 1 1 0 0` — measured by
+`crates/lichen-compute/tests/lichen_compute/zz_operator_floor_probe.rs`'s `stencil_dirichlet`,
+`stencil_ring` and `stencil_grid` cases, which print the same two runs (`recorded` with no pass
+installed, `floored` with it). With the floor installed, each is refused **`NotClaimed`**: *"no
+claim is registered for the fragment at 0, so it is in no row of the digest join and no algebra can
+be derived for it; a composed fragment is exactly this, because composition registers neither body it
+joins"*.
+
+That sentence is the floor's **precondition** rather than a wall about addresses: its model starts
+from a `claim:Reduction(combine,identity,element)`, and a stencil has no reduction in it to claim.
+`examples/gemv.lichen` reaches the address questions (`RegionIsNotAPair`, then `BeyondANode`) only
+because it *has* such a claim. So the stencil family is outside the floor's model today, and
+"outside" here means **before** the question of whether two stencils could fuse — which is the honest
+answer, because the floor's algebra is about reductions and a stencil is pointwise arithmetic with
+neighbour reads.
+
+One reading trap, since the probe prints it: it does not force the program's type node, so **every**
+case there prints `raw[…]: ?a`, including the ones known to be good. The numbers are the reading;
+the type is not.
+
 ## What the family needs next
 
 - **Iteration is measured, and the three shapes do not agree.** On the ring's own data, three

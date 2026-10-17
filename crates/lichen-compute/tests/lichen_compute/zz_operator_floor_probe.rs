@@ -27,6 +27,82 @@ x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 compute.collect (compute.graphrun built (4, 3, w, x))
 "#;
 
+/// The stencil of `examples/stencil.lichen`, through the graph leg, collected directly.
+///
+/// # Invariant
+/// Its write address is the lane's own index and its read addresses are computed (`i - 1`,
+/// `i + 1`, and a `Select` at each end), which is the shape `gemv`'s refusal calls an element
+/// that read another node's output.
+const STENCIL_RING: &str = r#"
+--- compute = import "compute.lichen" ---
+XIn  = struct{.x (compute.Buf Float)}
+XOut = struct{.y (compute.Buf Float)}
+XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
+XArg = struct{.n Int, .alpha Float, .I XIn}
+ring_raw = (c : XPar) => {
+  i = compute.range c.n
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  left = if i == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if i == (c.n - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at 0))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+}
+ks = compute.parallel ring_raw "gpu"
+step = (s : XPar) => (compute.plrun ks ((XArg)(.n s.n, .alpha s.alpha, .I XIn(.x s.in.x))) : XOut)
+built = compute.graph step
+x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (6, 0.25, x))
+"#;
+
+/// The stencil with no `Select`: both boundaries are the padding.
+///
+/// # Invariant
+/// Three computed reads and a lane-index write, so the body is the Dirichlet form with no case
+/// analysis at all.
+const STENCIL_DIRICHLET: &str = r#"
+--- compute = import "compute.lichen" ---
+XIn  = struct{.x (compute.Buf Float)}
+XOut = struct{.y (compute.Buf Float)}
+XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
+XArg = struct{.n Int, .alpha Float, .I XIn}
+step_raw = (c : XPar) => {
+  i = compute.range c.n
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  left = compute.read ((compute.Read _)(.from c.in.x, .at (i - 1)))
+  right = compute.read ((compute.Read _)(.from c.in.x, .at (i + 1)))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
+}
+ks = compute.parallel step_raw "gpu"
+step = (s : XPar) => (compute.plrun ks ((XArg)(.n s.n, .alpha s.alpha, .I XIn(.x s.in.x))) : XOut)
+built = compute.graph step
+x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (6, 0.25, x))
+"#;
+
+/// The two-dimensional step: `compute.row`/`compute.col`, four neighbours, two masks.
+const STENCIL_GRID: &str = r#"
+--- compute = import "compute.lichen" ---
+GIn  = struct{.x (compute.Buf Float)}
+GOut = struct{.y (compute.Buf Float)}
+GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
+GArg = struct{.n Int, .cols Int, .alpha Float, .I GIn}
+grid_raw = (c : GPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  above = compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col)))
+  below = compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col)))
+  left = if col == 0 then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if col == (c.cols - 1) then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+}
+kg = compute.parallel grid_raw "gpu"
+step = (s : GPar) => (compute.plrun kg ((GArg)(.n s.n, .cols s.cols, .alpha s.alpha, .I GIn(.x s.in.x))) : GOut)
+built = compute.graph step
+plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
+compute.collect (compute.graphrun built (9, 3, 0.25, plane))
+"#;
+
 /// The elements of a `Float` literal list, as lichen spells them.
 fn floats(values: &[f32]) -> String {
     values
@@ -182,4 +258,7 @@ fn probe_the_floor_on_a_real_operator() {
     );
     measure("decode_pair", &decode_pair(4, 2, false));
     measure("decode_pair_equal", &decode_pair(8, 1, false));
+    measure("stencil_dirichlet", STENCIL_DIRICHLET);
+    measure("stencil_ring", STENCIL_RING);
+    measure("stencil_grid", STENCIL_GRID);
 }
