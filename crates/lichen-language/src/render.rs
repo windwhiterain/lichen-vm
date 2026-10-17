@@ -2,7 +2,7 @@
 //! See docs/notes/raw-rendering-mark.md.
 use lichen_highlevel::diagnostic::{AssertSpelling, Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
-use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId};
+use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId, ValueExt};
 
 use crate::LangProgramShape;
 use crate::diag::Diag;
@@ -298,11 +298,21 @@ where
         DiagKind::Runtime => {
             let expected = printer.node(d.a);
             let found = printer.node(d.b);
-            // Two open cells name neither side; the collision is the class a reader needs.
+            // Two open cells name neither side; the collision's two values do.
             if expected == "?" && found == "?" {
-                "expected ?, found ? — two answers met on one node \
-                 (`docs/notes/answer-collision.md`)"
-                    .to_string()
+                let named = |value: &Option<P::Value>| match value {
+                    Some(value) if !value.is_handle() => Some(format!("{value:?}")),
+                    _ => None,
+                };
+                match (named(&d.value_a), named(&d.value_b)) {
+                    (Some(expected), Some(found)) => format!(
+                        "expected ?, found ? — two answers met on one node: {expected} against \
+                         {found} (`docs/notes/answer-collision.md`)"
+                    ),
+                    _ => "expected ?, found ? — two answers met on one node \
+                          (`docs/notes/answer-collision.md`)"
+                        .to_string(),
+                }
             } else {
                 format!("expected {expected}, found {found}")
             }

@@ -34,13 +34,14 @@ Three diagnostic defects were found on the way and fixed, all without touching t
   through `node_loc`), so those diagnostics carry `span: Some((13, 10))`;
 - the same branch forced `value_a`/`value_b` to `None`, discarding the values the error carried; they are
   kept now, so the diagnostic names `ComputeValue(GraphValue(1))` against `ComputeValue(GraphValue(0))`;
-- **the message now names the collision when both cells are open.** With the values kept, the rendered
-  sides were still two `?`s, which name nothing; the renderer now spells the class instead:
-  `expected ?, found ? — two answers met on one node (docs/notes/answer-collision.md)`, in the
-  type-system layer and without a semantic change. Measured on a one-kernel graph program whose root
-  is a `collect` of `graphrun` (CLI, no device): the message reads that sentence at the kernel's
-  `compute.parallel` line. The checker facts still carry `value_a`/`value_b`, so a probe can print the
-  two placeholders; the user-facing message names the class.
+- **the message now names the collision and, when it can, its two values.** With the values kept, the
+  rendered sides were still two `?`s, which name nothing; the renderer now spells the class and — when
+  neither value is a handle, whose `Debug` would print an address — the two values:
+  `expected ?, found ? — two answers met on one node: ComputeValue(GraphValue(1)) against
+  ComputeValue(GraphValue(0)) (docs/notes/answer-collision.md)`. Measured on a one-kernel graph program
+  whose root is a `collect` of `graphrun` (CLI, no device): the message reads that sentence at the
+  kernel's `compute.parallel` line. A handle-bearing value falls back to the class sentence alone, so
+  nothing address-bearing is ever rendered (`docs/notes/raw-rendering-mark.md`).
 
 The compute suite is unchanged by all three (203 passed / 15 failed / 2 ignored) — what changed is that
 its failures explain themselves. Whether those thirteen programs *should* check is the compute side's
