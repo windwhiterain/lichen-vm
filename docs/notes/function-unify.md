@@ -1,6 +1,11 @@
 # A function unifies by its own cells
 
-> Status: **in progress.** Branch `feature/function-unify`. The value match has a
+> Status: **complete on today's `dev`.** The one suite failure this status used to name — the diagnostic-shape
+> pin — does not fail there: `lichen-highlevel` is 140 passed / 0 failed, measured on `dev`. The numbers this
+> paragraph used to quote were taken on the branch before the collection trigger was disabled and before the
+> epoch run gate was retired, so they are kept only as the measurement that justified the repair.
+>
+> The value match has a
 > `LowValue::Function` arm beside `Array`, so two functions unify by descending
 > `[parameter, return]` and the `function_type_function` recogniser is no longer
 > part of unification; a class pair met again on the descent now agrees instead of
