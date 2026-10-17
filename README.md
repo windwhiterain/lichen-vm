@@ -2908,4 +2908,58 @@ replicated = (compute.plrun replicate ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x
 (compute.collect blurred.y : array{Float, 25}, compute.collect replicated.y : array{Float, 25})
 ```
 
+### `pooling.lichen`
+
+```text
+---
+  order = "34"
+  compute = import "compute.lichen"
+  doc = "A 3x3 max-pooling over a row-major grid: `y[r, c]` is the maximum of the nine cells around \
+    `(r, c)`, one lane per output cell. It is the smallest operator whose **identity is not a \
+    constant**, and the one where the boundary has to be chosen with that in mind rather than after \
+    it.\n\n\
+    **A maximum has no finite neutral element.** A sum starts at `0.0` honestly; a maximum does not, so \
+    the seed is a **leaf** the caller supplies — `.least` here, and this file passes \
+    `(0.0 - 100.0)`, below every datum (`examples/mathlib.lichen` says the same for `rowmax`). A seed \
+    that is not below the data silently clips the answer, and the kernel cannot detect it.\n\n\
+    **The padding rule is right for a sum and wrong for a maximum.** An out-of-buffer read answers \
+    `0.0`, which for a max is not neutral: it is *larger* than any negative datum and would win the \
+    window. Both failures are measured in \
+    `crates/lichen-compute/tests/lichen_compute/zz_pool_probe.rs` — with `0.0` as the seed every cell \
+    outside the centre answers `0.0`, and even with a proper seed the cells whose window leaves the \
+    buffer answer `0.0`. So this operator takes its boundary from **the caller**, the way \
+    `examples/convolution2d.lichen` takes its zero border: the input below is a `7x7` grid whose outer \
+    ring is `-1000000.0`, and the five-by-five interior is the actual field. Every tap then lands on a \
+    real cell, no zero can enter the maximum, and the window arithmetic needs no clamp and no \
+    `Select` — the offsets are `(row + j)` and `(col + k)` into the padded grid, and `.stride` carries \
+    its row length.\n\n\
+    **The answer is a block over a floor.** The interior is `-1.0` everywhere except `4.0` at \
+    `(2, 2)`, and the outer ring is `-1000000.0`. An output cell's window contains the `4.0` exactly \
+    when the cell is in rows `1..3` by columns `1..3` — those answer `4.0`. Every other window holds \
+    only `-1.0` and ring values, so it answers `-1.0`. Twenty-five numbers, worked out from the window \
+    rather than read off a run.\n\n\
+    **Twenty-five lanes leave 39 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
+    coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
+    answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
+    the RTX 3060: the padded addressing, the seed leaf and the guard are all right there."
+  output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: array{Float, 25}"
+---
+PIn  = struct{.x (compute.Buf Float)}
+POut = struct{.y (compute.Buf Float)}
+PPar = struct{.n Int, .cols Int, .stride Int, .taps Int, .least Float, .in PIn, .out POut}
+PArg = struct{.n Int, .cols Int, .stride Int, .taps Int, .least Float, .I PIn}
+pool_raw = (c : PPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at ((row + (s(0) - 1) / 3) * c.stride + (col + (s(0) - 1) % 3)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, c.least ~ "identity"))))
+}
+pool = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+padded = (compute.buffer ([(0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), 4.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0)] : array{Float, 49}) : (compute.Buf Float))
+pooled = (compute.plrun pool ((PArg)(.n 25, .cols 5, .stride 7, .taps 9, .least (0.0 - 100.0), .I PIn(.x padded))) : POut)
+compute.collect pooled.y : array{Float, 25}
+```
+
 <!-- end: examples -->
