@@ -574,6 +574,13 @@ need a node-local producer for `r`.
     program whose answer is never collected performs no dispatch, and whether that is the intended
     laziness or a lost forcing is **not diagnosed**. The test's own premise (`plain.len() == 2`) says
     the author measured two, so something changed on the forcing path and not in the graph.
+    **Two hypotheses were then tested and excluded**: collecting the plain answer
+    (`out = compute.collect r.w` instead of returning the step's struct) leaves `plain` empty, and so
+    does deciding every class in the shared `KERNELS` (`compute.Buf Int`, `compute.KT Int`) — with both,
+    the plain leg still logs nothing while the graph logs its two lines, and the plain run's root comes
+    back as an array with **no diagnostics**: a `compute.collect` that answers without a dispatch, which
+    is the reading to start from rather than a wrong answer to the test's question. The two edits were
+    reverted, so the test still spells the program it was written with.
   - `graph_structure::a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`
     refuses to check at all: *"compute.parallel: no output of this parallel index function carries a
     decided scalar class: its codomain names 1 output(s) and none of them is a `compute.write` of a
