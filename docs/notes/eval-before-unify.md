@@ -390,11 +390,15 @@ different blamed nodes for the two evaluations — `IndexTarget { target: 84 }` 
 `TableMiss { table: 105, key: 113 }`, the definition's evaluation and the apply
 clone's — and the report dedups by kind and blamed node, so both survive by
 design. Neither blamed node carries a source position, which is why all four
-render unattributed: the chain is measured — `edge=None`, `lowering=None`, and
-`origin=Some(32)` for the `IndexTarget` nodes and `Some(37)` for the key nodes,
-i.e. the **caller's argument**, so `node_loc` walks to an argument node with no
-edge either and stops. The read's own source edge is registered for the
-template's key, which is not on the clone's origin chain. `X::a` was already
+render unattributed: a probe on the nodes names the chain — the `IndexTarget`
+clones are an `Index` op with no value, whose origin (32) is the checker's
+**lazy names-path read**, and the `TableMiss` key clones hold `Str("a")`, whose
+origin (37) is the checker's **name node**. Neither origin is in the attribution
+map (`node_edges` plus the slot layout), so `node_loc` stops there. Registering
+the container type and the name node at the named read was tried and measured to
+change nothing — the runtime blames these derived nodes, and the read's own edge
+(the template's key) is not on their chain; the two registrations were reverted.
+`X::a` was already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
 
