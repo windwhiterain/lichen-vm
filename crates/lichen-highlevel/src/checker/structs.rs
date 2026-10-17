@@ -279,7 +279,7 @@ where
             self.record_guard(
                 container_ty,
                 container_ty,
-                self.loc(container, 1),
+                self.loc(e, 0),
                 DiagKind::NamedField,
                 Some(name),
             );

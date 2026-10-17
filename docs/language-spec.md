@@ -781,8 +781,9 @@ maps every span back to the original file.
   so the static checks see the concrete struct type.  An instance's fields are
   read **by name**: `a.x` resolves `x` through the struct's name→index table to
   the field's positional index, and the read's type is that field's type (a
-  `a.x` on a struct without that field is a `NamedField` diagnostic, reported at
-  the instantiation that bound the field list; a `a.x` on a non-struct is refused
+  `a.x` on a struct without that field is a `NamedField` diagnostic at the read,
+  with a did-you-mean clause naming the closest field; a `a.x` on a non-struct is
+  refused
   by a struct-kind **Guard** at check time — `f = x => x.a` ; `f (10, 20)`
   reports `expected a struct type, found tuple{Int, Int}` — and the lazy
   name-table read still runs, so the two runtime read messages (`this value is not

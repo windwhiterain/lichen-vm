@@ -715,15 +715,18 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   this note implied more: **no unannotated step completes a recording** — the fallback's
   placeholder is a bare `GraphInput` rather than a `Buf`, so a dispatch that reads a buffer
   refuses it — what it buys is that the recording is entered and the fallback's own wording is
-  what such a step hears. **Still open: no source span — only the recording half.** The
-  refusal files its record with `node: None` (`ExtensionDiagnostic::failure(category, None,
-  reason)`), so `node_loc` answers `None` and the error is unattributed. The checker half has
-  landed: `check_app` now attributes each application argument's value node, so the step
-  function's value node — a lambda's — has a `node_edges` entry and would resolve to the
-  argument's source position. What remains is the recording site passing that node instead of
-  `None`; the re-attribution this note predicted (every runtime diagnostic naming an argument)
-  is measured and harmless — the highlevel, language, compute and language-server suites hold
-  their baselines.
+  what such a step hears. **The claim that this refusal had no source span does not reproduce.**
+  The paragraph here used to say a lambda's value node has no `node_edges` entry, so `node_loc`
+  answers `None`. Measured on `dev@1662d376` with `step = (n : Int) => n + 1` ;
+  `built = compute.graph step` — the "this function's return is not a value a graph can hand
+  back" refusal: the report carries `span: Some((4, 9))` (`3, 9` in a body without the metadata
+  header) and `check.loc = Some(Loc { expr: 12, path: [] })`, and the span is the same whether or
+  not the recording site passes the step's node. The location comes from `Build::lowerings()`,
+  which is `node_edges` **plus** every expression's pair/value/type slot layout: a lambda's value
+  node is an expression slot, so it was attributed all along. What the recording site's node
+  changes is only the diagnostic's `a`/`b` (the default node against the step's node), which no
+  renderer reads. The remaining question is whether *another* refusal is unattributed; that is a
+  measurement, not a claim, and none is recorded here.
 
 ## Landmines, each of which is a silent wrong answer
 

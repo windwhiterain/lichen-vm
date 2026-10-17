@@ -1,9 +1,11 @@
 # A diagnostic an agent can act on: a property, and where this codebase meets it
 
-> **Status: the property is stated and two cases are fixed.** The unclosed-delimiter case is fixed
-> (`4cb42d3f`) and the preprocessor's missing span is fixed (§7); the offender list below is
+> **Status: the property is stated and three cases are fixed.** The unclosed-delimiter case is fixed
+> (`4cb42d3f`), the preprocessor's missing span is fixed (§7), and the `NamedField` miss now blames the
+> read (P2, in the corrections below); the offender list below is
 > **parser-heavy and under-covers the checker and the module
-> layers**, which is the first thing to close before another diagnostics slice.
+> layers**, which is the first thing to close before another diagnostics slice — the `NamedField` case is
+> the checker layer's first reproduction-verified entry.
 > Points at: `crates/lichen-language-parser/src/parse/diagnostics.rs`,
 > `crates/lichen-language-parser/src/parse.rs`, `crates/lichen-highlevel/src/diagnostic.rs`,
 > `crates/lichen-highlevel/src/checker/`.
@@ -105,7 +107,15 @@ load-bearing claims itself** — but *"neither survey ran anything: every claim 
 reproduction-verified"*. So this section records **reads with quoted strings**, and the one item that was
 reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not closed**.
 
-**Two corrections to what the surveys first said, both worth more than the claims they replaced.**
+**Three corrections to what the surveys first said, each worth more than the claims they replaced.**
+
+* **A `NamedField` miss blamed the container's definition, not the read, and it is fixed.** A program
+  with `a = A(1,)` then `a.z` (a struct without `.z`) rendered `--> 2:5` — the `A(1,)` instantiation —
+  because `check_named_field` recorded the guard at `self.loc(container, 1)` and the container
+  expression is the *substituted* instantiation, not the use. Blaming the read expression instead
+  (`self.loc(e, 0)`) puts the caret on `a.z` (`3:1`; `3:5` inside `q = a.z`). This is a **P2** failure
+  worth its own entry: the old position mentions neither `.z` nor the struct's fields, so a reader who
+  cannot ask again was sent to the wrong line. The suites hold at their baselines.
 
 * **`TableMiss` was a P1-only failure, and it is fixed.** `91d236fd` ("a missed table read names the key it
   looked up") gave `Diag` a `table_key` slot, filled it from `self.module.node_value(*key)` at
