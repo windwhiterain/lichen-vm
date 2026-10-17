@@ -1873,7 +1873,7 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
     conditional.\n\n\
     **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
     `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
-    kernel twice, on both backends, and this one answers `agrees, 6 of 6 element(s)` on the RTX \
+    kernel twice, on both backends, and this one answers `agrees, 10 of 10 element(s)` on the RTX \
     3060 — both chains, the fold included. Exact arithmetic is what that should say: every value is \
     a quarter or a half, there is no transcendental and no division, so there is no ulp for the two \
     backends to disagree about.\n\n\
@@ -1888,6 +1888,22 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
     on the `cpu` path they are carried and not consulted. `mean` is then `scale` with \
     `k = 0.25` over the sums and `clamp` bounds the result, because a buffer is a buffer: the \
     reduction layer composes with the elementwise one and neither knows about the other.\n\n\
+    **Two more reductions, and the identity is where the modelling creeps in.** `rowmax` is the same \
+    fold with `max` for its combine, and `dot` is the same fold reading **two** buffers at the same \
+    computed address (`a[...] * b[...]`). The difference between them and `rowsum` is the seed: a sum \
+    has `0.0` as a true identity, while a max has **no finite identity**, so `rowmax` takes its seed \
+    as a leaf — `.least` — and the caller passes a value below everything in the data \
+    (`(0.0 - 100.0)` here). That is the one place this file models something rather than computing it, \
+    and it models it *outside* the kernel: a seed too high would silently clip the answer, and the \
+    kernel cannot know. `dot`'s fold adds a product per step and its `0.0` seed is honest. Note also \
+    that **`floor` is a reserved builtin name**, so the field is `.least`; a struct field spelled \
+    `.floor` does not parse, which cost a round to find.\n\n\
+    **The third chain, worked out by hand.** `bumps` is `1 -2 3 4 -5 6 7 -8` and `weights` is \
+    `1 2 3 4 4 3 2 1`, both two rows of four. `rowmax` answers `4` for the first row (the largest of \
+    `1, -2, 3, 4`) and `7` for the second (the largest of `-5, 6, 7, -8`), and the seed `-100` is \
+    below every element so it never wins. `dot` answers `1*1 + (-2)*2 + 3*3 + 4*4 = 22` and \
+    `(-5)*4 + 6*3 + 7*2 + (-8)*1 = 4`. Every value is an integer below `2^24`, so the arithmetic is \
+    exact and the declaration is hand-computed, not transcribed.\n\n\
     **The second chain, worked out by hand.** `grid` is `1` through `8`, `scale` with `k = 2.0` \
     answers `2 4 6 8 10 12 14 16`, `rowsum` over two rows of four gives `2 + 4 + 6 + 8 = 20` and \
     `10 + 12 + 14 + 16 = 52`, `scale` with `0.25` gives `5` and `13`, and `clamp` with `lo 6.0`, \
@@ -1895,7 +1911,7 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
     above — quarters and halves, no division — and the two chains are the root as a **tuple**, so \
     both are performed: an unread chain would not be, which is the plain-run gate \
     `docs/notes/graph-recording-rounds.md` records."
-  output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0]): tuple{array{Float, 4}, array{Float, 2}}"
+  output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0], [4.0, 7.0], [22.0, 4.0]): tuple{array{Float, 4}, array{Float, 2}, array{Float, 2}, array{Float, 2}}"
 ---
 SIn  = struct{.x (compute.Buf Float)}
 SOut = struct{.y (compute.Buf Float)}
@@ -1938,6 +1954,26 @@ rowsum_raw = (c : RPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 }
 rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+MIn  = struct{.x (compute.Buf Float)}
+MOut = struct{.y (compute.Buf Float)}
+MPar = struct{.n Int, .kdim Int, .least Float, .in MIn, .out MOut}
+MArg = struct{.n Int, .kdim Int, .least Float, .I MIn}
+rowmax_raw = (c : MPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, c.least ~ "identity"))))
+}
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+DIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+DOut = struct{.y (compute.Buf Float)}
+DPar = struct{.n Int, .kdim Int, .in DIn, .out DOut}
+DArg = struct{.n Int, .kdim Int, .I DIn}
+dot_raw = (c : DPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.a, .at (r * c.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from c.in.b, .at (r * c.kdim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+}
+dot = compute.parallel (dot_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
 down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
@@ -1948,7 +1984,11 @@ doubled = (compute.plrun scale ((SArg)(.n 8, .k 2.0, .I SIn(.x grid))) : SOut)
 rows = (compute.plrun rowsum ((RArg)(.n 2, .kdim 4, .I RIn(.x doubled.y))) : ROut)
 means = (compute.plrun scale ((SArg)(.n 2, .k 0.25, .I SIn(.x rows.y))) : SOut)
 bounded_rows = (compute.plrun clamp ((CArg)(.n 2, .lo 6.0, .hi 12.0, .I CIn(.x means.y))) : COut)
-(compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2})
+bumps = (compute.buffer ([1.0, (0.0 - 2.0), 3.0, 4.0, (0.0 - 5.0), 6.0, 7.0, (0.0 - 8.0)] : array{Float, 8}) : (compute.Buf Float))
+weights = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
+peaks = (compute.plrun rowmax ((MArg)(.n 2, .kdim 4, .least (0.0 - 100.0), .I MIn(.x bumps))) : MOut)
+products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights))) : DOut)
+(compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2}, compute.collect peaks.y : array{Float, 2}, compute.collect products.y : array{Float, 2})
 ```
 
 ### `sample.lichen`
@@ -2572,18 +2612,22 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     zero over a ring, so a step with any `alpha` leaves the total alone) and the Dirichlet step ends \
     at `6`, having lost `2` through the two zero edges. `examples/torus.lichen` shows the same pair \
     in two dimensions, where the masked grid loses three and the torus holds.\n\n\
-    **A solver is a loop, and it can be typed.** The third chain does not unroll: it seeds an \
-    `array{Float, 6}` with the ring's first step and runs two more through a top-level `@loop`, \
-    rebuilding the kernel's input with `compute.buffer (s(1))` each iteration. Two things make that \
-    work and neither is obvious. A **recursive function's type follows from its annotation** \
-    (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so `march` carries \
-    `tuple{Int, array{Float, 6}} -> array{Float, 6}` — without it the loop's answer prints \
-    `raw[raw …]: ?a`, a value with no type, which is why the annotation is here. And the **dispatch \
+    **A solver is a loop, and it can be typed.** The third chain does not unroll: it seeds the kernel's \
+    buffer with the ring's first step and runs two more through a top-level `@loop`, handing the beam \
+    from one iteration to the next as `s(1)`. Two things make that work and neither is obvious. A \
+    **recursive function's type follows from its annotation** (`language-spec.md` §3's `f : f` rule; \
+    `examples/gcd.lichen` states it), so `march` carries \
+    `tuple{Int, compute.Buf Float} -> compute.Buf Float` — an **array** state without that annotation \
+    prints `raw[raw …]: ?a`, a value with no type, which is why a solver that threads an array needs \
+    one. And the **dispatch \
     happens inside the fold**: a plain run is one pass, so an operator asked before its operand is \
     decided is never asked again (`docs/notes/graph-recording-rounds.md`), which is why the state is \
-    an array that each iteration turns back into a buffer rather than the `XOut` struct the other two \
-    chains pass around — a fold carrying that struct never resolves at all (measured: `raw none` at \
-    one, two and three iterations). The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` \
+    the kernel's **buffer** — `seed = looped.y`, and each iteration hands `s(1)` straight to `.x` — \
+    rather than the `XOut` struct the other two chains pass around: a fold carrying that struct never \
+    resolves at all (measured: `raw none` at one, two and three iterations), while a buffer threads \
+    through and needs no `collect` inside the step, so the loop pays **one** readback for the whole run \
+    instead of one per step (measured: 3.29 ms against 7.21 per dispatch at 1024 lanes on the device, the median of five runs). \
+    The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` \
     the unrolled form gives, and the total is still `8` at every step, which is what makes three \
     steps checkable by hand rather than by comparing two runs.\n\n\
     **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so each of these \
@@ -2619,10 +2663,10 @@ ring = compute.parallel ring_raw "cpu"
 x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
-seed = (compute.collect looped.y : array{Float, 6})
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, 6}))) : tuple{Int, array{Float, 6}} -> array{Float, 6})
+seed = looped.y
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (2, seed)
-(compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, solved)
+(compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, compute.collect solved : array{Float, 6})
 ```
 
 ### `torus.lichen`
@@ -2667,13 +2711,16 @@ solved = march (2, seed)
     That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
     conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
     in the declared output but not stated as an invariant.\n\n\
-    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is an \
-    `array{Float, 9}` and each iteration rebuilds the kernel's input with `compute.buffer (s(1))`, \
-    because a plain run is one pass and an operator asked before its operand is decided is never \
-    asked again (`docs/notes/graph-recording-rounds.md`); a fold carrying the `GOut` struct never \
-    resolves at all. The recursion annotation `tuple{Int, array{Float, 9}} -> array{Float, 9}` is \
-    what makes the answer typed: without it the loop prints `raw[raw …]: ?a`, because a recursive \
-    function's type follows from its annotation (`language-spec.md` §3's `f : f` rule).\n\n\
+    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is the \
+    kernel's **buffer**: `seed = wrapped.y`, and each iteration hands `s(1)` straight to `.x`, because \
+    a plain run is one pass and an operator asked before its operand is decided is never asked again \
+    (`docs/notes/graph-recording-rounds.md`). A fold carrying the `GOut` **struct** never resolves at \
+    all (`raw none`); a buffer threads through and needs no `collect` inside the step, so the loop \
+    pays one readback for the whole run instead of one per step. `march` still carries \
+    `tuple{Int, compute.Buf Float} -> compute.Buf Float`: a recursive function's type follows from its \
+    annotation (`language-spec.md` §3's `f : f` rule), and stating it is what an example should do — \
+    though a buffer state is the one shape that also resolves without it, unlike an array state, which \
+    prints `raw[raw …]: ?a` unannotated.\n\n\
     **Nine lanes leave 55 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
     coordinates would put its write inside `[0, 9)` if nothing guarded it — the class of silent \
     wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
@@ -2714,10 +2761,10 @@ torus = compute.parallel torus_raw "cpu"
 plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
-seed = (compute.collect wrapped.y : array{Float, 9})
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
+seed = wrapped.y
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (1, seed)
-(compute.collect stepped.y : array{Float, 9}, solved)
+(compute.collect stepped.y : array{Float, 9}, (compute.collect solved : array{Float, 9}))
 ```
 
 <!-- end: examples -->

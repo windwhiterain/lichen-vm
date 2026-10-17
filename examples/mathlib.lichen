@@ -51,7 +51,7 @@
     conditional.\n\n\
     **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
     `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
-    kernel twice, on both backends, and this one answers `agrees, 6 of 6 element(s)` on the RTX \
+    kernel twice, on both backends, and this one answers `agrees, 10 of 10 element(s)` on the RTX \
     3060 — both chains, the fold included. Exact arithmetic is what that should say: every value is \
     a quarter or a half, there is no transcendental and no division, so there is no ulp for the two \
     backends to disagree about.\n\n\
@@ -66,6 +66,22 @@
     on the `cpu` path they are carried and not consulted. `mean` is then `scale` with \
     `k = 0.25` over the sums and `clamp` bounds the result, because a buffer is a buffer: the \
     reduction layer composes with the elementwise one and neither knows about the other.\n\n\
+    **Two more reductions, and the identity is where the modelling creeps in.** `rowmax` is the same \
+    fold with `max` for its combine, and `dot` is the same fold reading **two** buffers at the same \
+    computed address (`a[...] * b[...]`). The difference between them and `rowsum` is the seed: a sum \
+    has `0.0` as a true identity, while a max has **no finite identity**, so `rowmax` takes its seed \
+    as a leaf — `.least` — and the caller passes a value below everything in the data \
+    (`(0.0 - 100.0)` here). That is the one place this file models something rather than computing it, \
+    and it models it *outside* the kernel: a seed too high would silently clip the answer, and the \
+    kernel cannot know. `dot`'s fold adds a product per step and its `0.0` seed is honest. Note also \
+    that **`floor` is a reserved builtin name**, so the field is `.least`; a struct field spelled \
+    `.floor` does not parse, which cost a round to find.\n\n\
+    **The third chain, worked out by hand.** `bumps` is `1 -2 3 4 -5 6 7 -8` and `weights` is \
+    `1 2 3 4 4 3 2 1`, both two rows of four. `rowmax` answers `4` for the first row (the largest of \
+    `1, -2, 3, 4`) and `7` for the second (the largest of `-5, 6, 7, -8`), and the seed `-100` is \
+    below every element so it never wins. `dot` answers `1*1 + (-2)*2 + 3*3 + 4*4 = 22` and \
+    `(-5)*4 + 6*3 + 7*2 + (-8)*1 = 4`. Every value is an integer below `2^24`, so the arithmetic is \
+    exact and the declaration is hand-computed, not transcribed.\n\n\
     **The second chain, worked out by hand.** `grid` is `1` through `8`, `scale` with `k = 2.0` \
     answers `2 4 6 8 10 12 14 16`, `rowsum` over two rows of four gives `2 + 4 + 6 + 8 = 20` and \
     `10 + 12 + 14 + 16 = 52`, `scale` with `0.25` gives `5` and `13`, and `clamp` with `lo 6.0`, \
@@ -73,7 +89,7 @@
     above — quarters and halves, no division — and the two chains are the root as a **tuple**, so \
     both are performed: an unread chain would not be, which is the plain-run gate \
     `docs/notes/graph-recording-rounds.md` records."
-  output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0]): tuple{array{Float, 4}, array{Float, 2}}"
+  output = "([2.0, 2.5, 3.75, 5.0], [6.0, 12.0], [4.0, 7.0], [22.0, 4.0]): tuple{array{Float, 4}, array{Float, 2}, array{Float, 2}, array{Float, 2}}"
 ---
 SIn  = struct{.x (compute.Buf Float)}
 SOut = struct{.y (compute.Buf Float)}
@@ -116,6 +132,26 @@ rowsum_raw = (c : RPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 }
 rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+MIn  = struct{.x (compute.Buf Float)}
+MOut = struct{.y (compute.Buf Float)}
+MPar = struct{.n Int, .kdim Int, .least Float, .in MIn, .out MOut}
+MArg = struct{.n Int, .kdim Int, .least Float, .I MIn}
+rowmax_raw = (c : MPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, c.least ~ "identity"))))
+}
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+DIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+DOut = struct{.y (compute.Buf Float)}
+DPar = struct{.n Int, .kdim Int, .in DIn, .out DOut}
+DArg = struct{.n Int, .kdim Int, .I DIn}
+dot_raw = (c : DPar) => {
+  r = compute.range c.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.a, .at (r * c.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from c.in.b, .at (r * c.kdim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
+}
+dot = compute.parallel (dot_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
 down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
@@ -126,4 +162,8 @@ doubled = (compute.plrun scale ((SArg)(.n 8, .k 2.0, .I SIn(.x grid))) : SOut)
 rows = (compute.plrun rowsum ((RArg)(.n 2, .kdim 4, .I RIn(.x doubled.y))) : ROut)
 means = (compute.plrun scale ((SArg)(.n 2, .k 0.25, .I SIn(.x rows.y))) : SOut)
 bounded_rows = (compute.plrun clamp ((CArg)(.n 2, .lo 6.0, .hi 12.0, .I CIn(.x means.y))) : COut)
-(compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2})
+bumps = (compute.buffer ([1.0, (0.0 - 2.0), 3.0, 4.0, (0.0 - 5.0), 6.0, 7.0, (0.0 - 8.0)] : array{Float, 8}) : (compute.Buf Float))
+weights = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
+peaks = (compute.plrun rowmax ((MArg)(.n 2, .kdim 4, .least (0.0 - 100.0), .I MIn(.x bumps))) : MOut)
+products = (compute.plrun dot ((DArg)(.n 2, .kdim 4, .I DIn(.a bumps, .b weights))) : DOut)
+(compute.collect bounded.y : array{Float, 4}, compute.collect bounded_rows.y : array{Float, 2}, compute.collect peaks.y : array{Float, 2}, compute.collect products.y : array{Float, 2})

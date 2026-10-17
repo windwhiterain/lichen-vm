@@ -58,7 +58,7 @@ correction to the brief itself.**
 | attention — softmax composed with a gemv | **`attention.lichen`** | **runs, diverges** | **1** (of 8 elements, 6 differ) | 2 modules, **2 ACCEPT** |
 | `gemv` | `gemv.lichen` | **refused by name** — the **known** rule; **removed since, and it runs** (§ The sweep, as a program) | — | 1 module, **1 ACCEPT** |
 | `matmul` | `matmul.lichen` | **runs, bit-exact** | **0** (of 4 elements) | 1 module, **1 ACCEPT** |
-| the elementwise and reduction library — `scale`, `lerp`, `clamp`, `rowsum` | `mathlib.lichen` | **runs, bit-exact** | **0** (of 6 elements) | not checked in this note's run |
+| the elementwise and reduction library — `scale`, `lerp`, `clamp`, `rowsum`, `rowmax`, `dot` | `mathlib.lichen` | **runs, bit-exact** | **0** (of 10 elements) | not checked in this note's run |
 | a 1D stencil, a ring and a three-step solver loop | `stencil.lichen` | **runs, bit-exact** | **0** (of 18 elements) | not checked in this note's run |
 | a 2D masked grid, a 3x3 torus and a two-step solver loop | `torus.lichen` | **runs, bit-exact** | **0** (of 18 elements) | not checked in this note's run |
 
