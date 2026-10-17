@@ -521,9 +521,21 @@ need a node-local producer for `r`.
   (`crates/lichen-graph-ir/src/run.rs`, with `ragged_host`) refused the run at submit: *"node 0's inputs
   are not all the same length: 48 and 12"* — it compared **payload bytes** — and a GEMV's two inputs
   (`M · kdim` against `kdim`) are **never** the same length except at `M = 1`, so **the check's own
-  sentence was false of a legitimate body**. It was removed with the length rule (the correction above);
-  what a GEMV through the graph meets now is the class arm below, not a length. The graph leg is still
-  the only path that consults the fusion floor.
+  sentence was false of a legitimate body**. It was removed with the length rule (the correction above),
+  and **the removal is not what unblocks the graph leg: it cannot run a body that reads an argument
+  buffer at all.** Measured at `dev@e639becd` with
+  `crates/lichen-compute/examples/graph_leg_probe.rs` on the RTX 3060: a graph whose only argument is a
+  scalar **runs** (`compute.collect (compute.graphrun built 3)` answers `[20, 22, 24]`), and the same
+  program with **one** argument buffer, or a GEMV's two of unequal length, or a non-square matmul's,
+  answers *"a `compute.collect` reads every element of one buffer, and its buffer position holds
+  nothing (the empty value of a failed read)"* — the graph run's own `compute.graph` refusal is
+  **recorded and not surfaced**, so the reason is not in the diagnostic list. The two-input shapes pass
+  through the **stub** backend in
+  `crates/lichen-compute/tests/lichen_compute/graph_argument.rs` (6 of 6 pass at the same commit),
+  while the matmul probe also reports a bare *"expected ?, found ?"*. **Where the split is, is open**:
+  the stub tests and the probe differ in the backend *and* in the program (claims, decided classes,
+  the returned value), so the device's `run_batch`, the graph's result cell and the argument's buffer
+  type are all candidates. The graph leg is still the only path that consults the fusion floor.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same
