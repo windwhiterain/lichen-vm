@@ -90,11 +90,12 @@ Three rules, all measured:
 
 - **A buffer threads through and is the cheapest state.** No `collect` inside the step, so the loop
   pays one readback for the whole run instead of one per step — at 1024 lanes on the device that is
-  4.32 ms per dispatch against 9.81 ms for an array state. It also needs **no annotation**: the
+  3.29 ms per dispatch against 7.21 ms for an array state. It also needs **no annotation**: the
   state's type comes from the seed.
-- **A fold carrying the kernel's output *struct* never resolves** — one iteration or three, it prints
-  `raw none`. Thread `.y`, not the struct, and do not try to build a seed with `(Out)(.y x)`; it yields
-  a value nothing can read.
+- **A fold carrying the kernel's output *struct* works only when the recursive function is annotated**
+  (`tuple{Int, Out} -> Out`). Unannotated it prints `raw none` and records **no diagnostic**, which is
+  worse than the array state's unannotated `?a`: a struct loses the value, an array loses only the type.
+  Do not build a seed with `(Out)(.y x)` either — it yields a value nothing can read.
 - **If the state must be an array** (because the step needs the numbers on the host), rebuild with
   `compute.buffer (s(1))` and **annotate the recursive function**
   (`tuple{Int, array{Float, N}} -> array{Float, N}`). A recursive function's type follows from its
@@ -132,14 +133,14 @@ Per extra dispatch of a stencil, measured on this machine (RTX 3060 and its host
 
 | backend | lanes | per dispatch, buffer state | per dispatch, array state |
 |---|---|---|---|
-| `cpu` | 6 | 4.79 ms | 4.55 ms |
-| `gpu` | 6 | 4.66 ms | 5.21 ms |
-| `cpu` | 1024 | 27.25 ms | 27.72 ms |
-| `gpu` | 1024 | **4.32 ms** | **9.81 ms** |
+| `cpu` | 6 | 3.25 ms | 3.36 ms |
+| `gpu` | 6 | 3.38 ms | 4.23 ms |
+| `cpu` | 1024 | 17.06 ms | 19.21 ms |
+| `gpu` | 1024 | **3.29 ms** | **7.21 ms** |
 
 Three readings: the device loses at six lanes, where there is nothing but dispatch overhead; it wins
-at 1024, and by **6.3×** rather than the 2.5× an array state makes it look; and the difference between
-the two states *is* the loop's readback — 5.5 ms of the array state's 9.81 ms at 1024 lanes on the
+at 1024, and by **5.2×** rather than the 2.8× an array state makes it look; and the difference between
+the two states *is* the loop's readback — 3.9 ms of the array state's 7.21 ms at 1024 lanes on the
 device. So thread the buffer (§5) unless the step needs the numbers on the host, and do not expect
 kernel-speed arithmetic either way: these are interpreter numbers, and no spelling changes that.
 

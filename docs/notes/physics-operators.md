@@ -104,10 +104,11 @@ the type is not.
     `[straight]` (control, typed), `[loop]` (`?a`), `[loop_root_annotated]` (`(out : array{Float, 6})`,
     typed) and `[loop_recursion_annotated]`
     (`((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`, typed).
-  - **state is the `XOut` struct** (seed a real kernel result, or hand-build `(XOut)(.y x)`): the
-    fold never resolves — one iteration, two or three all print `raw none: array{Float, 6}` — while
-    the buffer state above answers correctly. So **the struct is the shape that fails, not the
-    dispatch**, and a fold carrying a resident buffer is the one to write.
+  - **state is the `XOut` struct, with the recursive function annotated** (`tuple{Int, XOut} -> XOut`):
+    it works exactly as the array state does — same six numbers, typed `array{Float, 6}`. **Unannotated**
+    it prints `raw none: array{Float, 6}` and records **no diagnostic at all**, which is worse than the
+    array state's unannotated `?a`: an array loses only its type, a struct loses the value itself. So
+    the rule is the recursion annotation again, and every state works once it is stated.
   - **`(XOut)(.y x)` is not a usable constructor** for a seed: it yields a value nothing can read.
     Seed the loop with a real kernel result's `.y` instead.
 
@@ -164,17 +165,17 @@ this machine's RTX 3060 and its host:
 
 | backend | lanes | `steps = 1` | `steps = 101` | per extra dispatch |
 |---|---|---|---|---|
-| `cpu` | 6 | 33.1 ms | 368.0 ms | **3.35 ms** |
-| `gpu` | 6 | 34.9 ms | 413.0 ms | **3.78 ms** |
-| `cpu` | 1024 | 86.5 ms | 1995.2 ms | **19.09 ms** |
-| `gpu` | 1024 | 64.4 ms | 815.2 ms | **7.51 ms** |
+| `cpu` | 6 | 35.7 ms | 372.0 ms | **3.36 ms** |
+| `gpu` | 6 | 41.0 ms | 464.0 ms | **4.23 ms** |
+| `cpu` | 1024 | 88.5 ms | 2009.6 ms | **19.21 ms** |
+| `gpu` | 1024 | 66.5 ms | 787.5 ms | **7.21 ms** |
 
 Three readings, and the third is the one that matters:
 
-- **At six lanes the device is slower**: 3.78 ms against 3.35 ms, because at six lanes there is
+- **At six lanes the device is slower**: 4.23 ms against 3.36 ms, because at six lanes there is
   nothing but dispatch overhead and the device path pays more of it.
-- **At 1024 lanes it is 2.5 times faster**: 7.51 ms against 19.09 ms, because the host interprets
-  element by element while the device runs sixteen workgroups. Per element that is 0.0073 ms against
+- **At 1024 lanes it is 2.8 times faster**: 7.21 ms against 19.21 ms, because the host interprets
+  element by element while the device runs sixteen workgroups. Per element that is 0.0070 ms against
   0.0186 ms — both of them enormous next to a hand-written kernel, which is what an interpreter
   costs.
 - **The array-state loop's cost is its per-step `compute.collect`**, which round-trips the answer
@@ -184,14 +185,14 @@ Three readings, and the third is the one that matters:
 
   | backend | lanes | buffer state | array state |
   |---|---|---|---|
-  | `cpu` | 6 | 4.79 ms | 4.55 ms |
-  | `cpu` | 1024 | 27.25 ms | 27.72 ms |
-  | `gpu` | 6 | 4.66 ms | 5.21 ms |
-  | `gpu` | 1024 | **4.32 ms** | **9.81 ms** |
+  | `cpu` | 6 | 3.25 ms | 3.36 ms |
+  | `cpu` | 1024 | 17.06 ms | 19.21 ms |
+  | `gpu` | 6 | 3.38 ms | 4.23 ms |
+  | `gpu` | 1024 | **3.29 ms** | **7.21 ms** |
 
-  At 1024 lanes on the device the readback is **more than half the array-state cost** (5.5 ms of
-  9.81), and it is the reason the device's advantage looked like 2.5× when it is really 6.3×: the
-  same kernel against the same host is `27.25 / 4.32`. At six lanes the two states are within noise,
+  At 1024 lanes on the device the readback is **over half the array-state cost** (3.9 ms of
+  7.21), and it is the reason the device's advantage looked like 2.5× when it is really 5.2×: the
+  same kernel against the same host is `17.06 / 3.29`. At six lanes the two states are within noise,
   because there is nothing to read back that the dispatch did not already cost.
 
   **This note said earlier that a buffer-threading loop did not exist and was the measurement to
@@ -201,5 +202,6 @@ Three readings, and the third is the one that matters:
   is the shape that fails, not the buffer. A capability claim about a spelling is a hypothesis until
   that spelling is run.
 
-The numbers are machine- and state-dependent: they are one run each, no repetitions, no warm-up beyond
-one dispatch. They are readings of a shape, not benchmarks.
+The numbers are machine- and state-dependent: every figure is the **median of five** runs, with the min
+and max printed beside it, and the spread runs from about 5% on the host to about 20% on the device's
+six-lane case. They are readings of a shape, not benchmarks.

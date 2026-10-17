@@ -13,6 +13,9 @@ use std::time::Instant;
 
 use lichen_compute::language::new_store;
 
+/// Repetitions per case, so a reading comes with a spread rather than a single run.
+const REPEATS: usize = 5;
+
 /// One program: `steps` dispatches of a stencil over `lanes` elements on `backend`, threading `shape`.
 ///
 /// # Invariant
@@ -100,12 +103,23 @@ fn probe_the_dispatch_cost() {
     for backend in ["cpu", "gpu"] {
         for lanes in [6usize, 1024] {
             for shape in ["buffer", "array"] {
-                let (once, _) = timed(&program(backend, lanes, 1, shape));
-                let (hundred, answer) = timed(&program(backend, lanes, 101, shape));
+                let mut samples = Vec::new();
+                let mut answer = String::new();
+                for _ in 0..REPEATS {
+                    let (once, _) = timed(&program(backend, lanes, 1, shape));
+                    let (hundred, rendered) = timed(&program(backend, lanes, 101, shape));
+                    samples.push((hundred - once) / 100.0);
+                    answer = rendered;
+                }
+                samples.sort_by(|left, right| {
+                    left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let median = samples[samples.len() / 2];
                 println!(
-                    "[{backend}/lanes={lanes}/state={shape}] steps=1 {once:.3} ms, steps=101 \
-                     {hundred:.3} ms, per extra dispatch {:.4} ms, answer {}",
-                    (hundred - once) / 100.0,
+                    "[{backend}/lanes={lanes}/state={shape}] {REPEATS} runs: per extra dispatch \
+                     median {median:.4} ms, min {:.4}, max {:.4}, answer {}",
+                    samples[0],
+                    samples[samples.len() - 1],
                     answer
                         .rsplit_once(": ")
                         .map_or(answer.as_str(), |(value, _)| value)

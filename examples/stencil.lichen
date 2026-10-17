@@ -61,7 +61,7 @@
     rather than the `XOut` struct the other two chains pass around: a fold carrying that struct never \
     resolves at all (measured: `raw none` at one, two and three iterations), while a buffer threads \
     through and needs no `collect` inside the step, so the loop pays **one** readback for the whole run \
-    instead of one per step (measured: 4.32 ms against 9.81 per dispatch at 1024 lanes on the device). \
+    instead of one per step (measured: 3.29 ms against 7.21 per dispatch at 1024 lanes on the device, the median of five runs). \
     The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` \
     the unrolled form gives, and the total is still `8` at every step, which is what makes three \
     steps checkable by hand rather than by comparing two runs.\n\n\

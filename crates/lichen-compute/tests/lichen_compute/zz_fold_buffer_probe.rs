@@ -43,7 +43,15 @@ settled = march (2, seed)
 compute.collect settled : array{Float, 6}
 "#;
 
-/// The state is the kernel's output **struct**, which is the shape that never resolves.
+/// The state is the kernel's output **struct**, annotated: the type system's rule makes it resolve.
+const STRUCT_STATE_ANNOTATED: &str = r#"
+seed = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut))) : tuple{Int, XOut} -> XOut)
+settled = march (2, seed)
+compute.collect settled.y : array{Float, 6}
+"#;
+
+/// The state is the kernel's output **struct** with no annotation: it silently loses its value.
 const STRUCT_STATE: &str = r#"
 seed = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 @loop march = (s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1).y))) : XOut)))
@@ -81,6 +89,7 @@ fn probe_the_fold_state() {
     for (label, body) in [
         ("buffer_state", BUFFER_STATE),
         ("buffer_state_unannotated", BUFFER_STATE_UNANNOTATED),
+        ("struct_state_annotated", STRUCT_STATE_ANNOTATED),
         ("struct_state", STRUCT_STATE),
         ("array_state", ARRAY_STATE),
     ] {
