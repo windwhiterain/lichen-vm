@@ -313,6 +313,16 @@ commits** on A′'s account. Each reading answers its own question, and only in 
 - **Did any refusal text change silently?** The six `(literal, count)` pairs, read from the source's own `assert`
   blocks, on the after commit.
 
+**The `consumer_guard` before reading**, taken the same way on `a4593102`:
+
+```text
+consumer_guard::a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched   r1 false/0 | r2 true/2
+```
+
+So A′'s verdict is a two-part reading on the after commit: the per-round `nodes` must be **`0` then `2`** — the
+walk's extent must not move — *while* the producer's roles stop growing and the test turns green. A change in
+those two numbers is A′ moving the walk, which the name-set reading cannot see; a green test with different
+numbers is a green that came from somewhere else.
 One non-fault: `crates/lichen-compute-gpu/examples/fma_probe.rs` stays in the tree (the repository allows a probe
 during an investigation and it drives the two device tables), so a detached run compiles one extra example. That
 is a few seconds, not a failure.
