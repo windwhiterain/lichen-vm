@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use stacksafe::stacksafe;
 
+use crate::Span;
 use crate::ast::{BinderId, BlockStmt, Expr, Program, RecordField, Stmt};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
@@ -51,6 +52,9 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         next_binder: 0,
         diagnostics: Vec::new(),
         prelude: Vec::new(),
+        open_bindings: Vec::new(),
+        lambda_depth: 0,
+        call_head: None,
     };
     let import_binders = resolver.seed_imports(imports);
     // The program is one scope, never popped, so every later statement (and the
@@ -85,6 +89,21 @@ struct Resolver {
     /// The prelude's own binders, recorded as they are seeded (see
     /// [`Resolved::prelude`]).
     prelude: Vec<(String, BinderId)>,
+    /// The block-wide bindings whose value the pass is inside, innermost last.
+    open_bindings: Vec<OpenBinding>,
+    /// How many lambda bodies the expression being resolved is under.
+    lambda_depth: u32,
+    /// The lambda depth the innermost apply's function was entered at, `None` outside one.
+    call_head: Option<u32>,
+}
+
+/// A block-wide binding whose value is being resolved right now.
+struct OpenBinding {
+    binder: BinderId,
+    /// The lambda depth the value started at, so a reference under a `=>` body is not this one.
+    depth: u32,
+    /// Whether this binding has already been refused, so it speaks once.
+    refused: bool,
 }
 
 impl Resolver {
@@ -155,6 +174,43 @@ impl Resolver {
         }
     }
 
+    /// Enter a block-wide binding's value, where a name that resolves back to it is its own input.
+    fn open_binding(&mut self, binder: Option<BinderId>) {
+        if let Some(binder) = binder {
+            self.open_bindings.push(OpenBinding {
+                binder,
+                depth: self.lambda_depth,
+                refused: false,
+            });
+        }
+    }
+
+    /// Refuse a name that resolves to the block-wide binding whose value is being resolved.
+    fn refuse_self_reference(&mut self, name: &str, span: Span, binder: &mut Option<BinderId>) {
+        let Some(id) = *binder else { return };
+        let depth = self.lambda_depth;
+        let head = self.call_head;
+        let Some(open) = self.open_bindings.iter_mut().find(|open| open.binder == id) else {
+            return;
+        };
+        // A binding named as the head of an apply inside a `=>` body is calling itself.
+        if depth > open.depth && head == Some(depth) {
+            return;
+        }
+
+        // The use is left unresolved, so it lowers to the inert leaf an unresolved name's does.
+        *binder = None;
+        if open.refused {
+            return; // The first reference already named the mistake.
+        }
+        open.refused = true;
+        self.diagnostics.push(Diag::new(
+            Stage::Resolve,
+            span,
+            self_referential_binding(name),
+        ));
+    }
+
     fn resolve_stmt(&mut self, stmt: &mut Stmt) {
         match stmt {
             Stmt::Binding(binding) if binding.restrictive => {
@@ -166,7 +222,9 @@ impl Resolver {
                     .push(HashMap::from([(binding.name.clone(), id)]));
             }
             Stmt::Binding(binding) => {
+                self.open_binding(binding.binder);
                 self.resolve_expr(&mut binding.value);
+                self.open_bindings.pop();
             }
             Stmt::Expr(e) => self.resolve_expr(e),
         }
@@ -191,7 +249,11 @@ impl Resolver {
         for f in fields.iter_mut() {
             let name = f.name.clone();
             match (&name, f.field) {
-                (Some(_), true) => self.resolve_expr(&mut f.value),
+                (Some(_), true) => {
+                    self.open_binding(f.binder);
+                    self.resolve_expr(&mut f.value);
+                    self.open_bindings.pop();
+                }
                 (Some(name), false) => {
                     self.resolve_expr(&mut f.value);
                     let id = self.next_binder;
@@ -231,6 +293,7 @@ impl Resolver {
                         None
                     }
                 };
+                self.refuse_self_reference(name, *span, binder);
             }
             Expr::Lambda {
                 parameter,
@@ -250,13 +313,18 @@ impl Resolver {
                 if let Some(p) = parameter_perspective {
                     self.resolve_expr(p);
                 }
+                self.lambda_depth += 1;
                 self.resolve_expr(r#return);
+                self.lambda_depth -= 1;
                 self.scopes.pop();
             }
             Expr::Apply {
                 function, argument, ..
             } => {
+                let enclosing = self.call_head;
+                self.call_head = Some(self.lambda_depth);
                 self.resolve_expr(function);
+                self.call_head = enclosing;
                 self.resolve_expr(argument);
             }
             Expr::BinOp { left, right, .. } => {
@@ -413,3 +481,15 @@ const UNRESOLVED: u64 = u64::MAX;
 
 /// The `@shallow(0)` refusal; docs/language-spec.md §"Shallow markers" states the bound.
 const SHALLOW_ZERO_DEPTH: &str = "a `@shallow` depth of 0 marks no level — the mark is erased before the checker sees the element, so the position is checked exactly as if it were unmarked — write a depth of at least 1, or drop the marker entirely";
+
+/// The self-reference refusal, measured in docs/notes/self-referential-binding-overflow.md §11.
+fn self_referential_binding(name: &str) -> String {
+    format!(
+        "`{name}` names itself in its own value: a block-wide binding's value may not reference \
+         the binding it binds, because the name **is** the value's own node in the IR graph, so \
+         the value would be its own input. Write the rebinding with `let`, which compiles the \
+         value before the name enters scope, so `let {name} = …` reads the **outer** `{name}` and \
+         binds a new one — recursion is spelled the same way, with the reference under a `=>` \
+         parameter (`f = n => … f (n - 1)`), which is a call rather than a self-reference."
+    )
+}
