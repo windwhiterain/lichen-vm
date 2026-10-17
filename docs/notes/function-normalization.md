@@ -87,6 +87,18 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    wiring is not the origin; **the gap is the un-annotated recursive function's
    return type never receiving the argument's type**, and the fix belongs to the
    checker's template inference, not to the apply or to the fold.
+   **Which annotation fixes it, measured**: annotating the **parameter**
+   (`@loop march = ((s : tuple{Int, XOut}) => …)`) is enough — the fold collects its
+   numbers — and so are the return annotation (`… : tuple{Int, XOut} -> XOut`) and
+   annotating only the read's result (`(settled : XOut).y`). So the missing piece is
+   the *body's named read*'s resolution once the parameter's type is known: the
+   un-annotated case leaves `s`'s type open at check, the `.y` key becomes the lazy
+   `TableGet(names, name)` — and that chain does not resolve at the first apply even
+   though the parameter pair is unified there. A fix must make the body's read
+   resolve when the parameter's type is bound (the apply's own unify is the place
+   that has it), not rely on the reader.
+   The collect's own type stays `?a` in all three annotated variants — a separate,
+   cosmetic open cell.
 2. **Once, at birth.** A function is normalized exactly once, at its first
    appearance. Later applications do not normalize it again, and its template's
    facts stay as the birth left them.
