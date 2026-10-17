@@ -244,6 +244,20 @@ Four steps, in this order. Nothing here needs a decision, so the comparison cann
    `assert` blocks at `graph_jit.rs:342-348`, `:367-372`, `:390-397`, `:398-409`. Check each against the
    messages `fail()` collects, with `"compute.graph"` appearing exactly three times.
 
+**A detached checkout needs its own target directory.** Different worktrees of the same commit carry an identical
+`path` hash in their fingerprints, so two checkouts can write the *same* `liblichen_lowlevel-<hash>.rlib` and
+overwrite each other; this repository has produced "the code compiles but the probe cannot find the symbol" four
+times from exactly that. A run on someone else's branch must therefore set
+`CARGO_TARGET_DIR` to a target inside its own checkout, and every `Compiling` line it prints must name that
+checkout — not the parent and not the branch's own worktree. If a reading disagrees with the owner's, rule out a
+mixed build first (`cargo clean -p lichen-compute`, then re-run); only a clean re-run counts.
+
+**Why a derived reading cannot be trusted.** The verdict column of the before readings was produced by a script,
+and it was wrong: PowerShell's `-match` is case-insensitive, so `-match 'FAILED'` matched the `0 failed` inside a
+passing result line and reported all nine programs as failed. The suite's own `test result:` lines were right all
+along. So the rule is not "be careful with scripts" but the stronger one the compute owner stated: **ignore any
+table that went through a parser, and read the output the parser read.** That is also why the acceptance anchors
+on the suite's name set and the source's literals — both are first-hand — rather than on a summary.
 The probe is reverted before any commit, in both directions: before the change, the table above is the record;
 after it, the compared lines are the record.
 ## The before readings, taken on `a4593102`
