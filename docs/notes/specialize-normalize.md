@@ -94,3 +94,17 @@ walk over `TableItem` in the lowlevel would be the duplication that doc comment 
 The order of work is therefore: sink the decode, add the fold after `function.rs`'s clone pass and before
 anything walks the clones, then verify with a probe that the read's key is a constant and that the three
 suites are unchanged (146/13, 140/0, 201/17/2 on today's `dev`).
+
+## The fold cannot be a rewrite, measured
+
+The consumer is settled: `slot_read` (`structs.rs:113-118`) builds `Index(container_value, key)`, with the key
+as operand item 1 of a freshly built operand array. But **both** ways of changing that afterwards are closed by
+the invariants: the operand array is a node whose value is already set ("a slot that holds a value is never
+given a different one"), and the `Index`'s own operand is part of a computation that the operation setter
+asserts is defined once. So the fold cannot re-point anything after the clone exists.
+
+The conclusion changes where the work goes rather than what it does: the fold must build the constant **while
+the clone walk builds its nodes** — `node_apply` copying a `TableGet` key can copy it as the constant instead,
+which is a construction, not a rewrite, and touches no invariant. Everything else in the section above stands:
+the decode stays the one sunk primitive, an unreadable name table or an absent name keeps the lazy form, and no
+answer may change.
