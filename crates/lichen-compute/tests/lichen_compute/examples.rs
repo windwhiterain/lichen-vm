@@ -5,9 +5,8 @@ use std::path::PathBuf;
 
 use lichen_tools::readme;
 
-/// `compute_jit` is parked: `Launch` states no type, so the launch result's type
-/// stays an open cell.
-const WORK_IN_PROGRESS: &[&str] = &["compute_jit.lichen"];
+/// No example is parked: `compute_jit`'s launch result is typed since the jit `.O` fix.
+const WORK_IN_PROGRESS: &[&str] = &[];
 
 #[test]
 fn every_example_runs_and_prints_what_it_declares() {
