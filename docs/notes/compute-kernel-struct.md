@@ -222,8 +222,15 @@ diagnostic, and the **whole language-server suite goes 22/0** — the LSP witnes
 breaks `a_nested_function_value_captures_the_applied_outer_parameter` (highlevel and language both):
 the merge ties the closure's per-call result cell to the template's class, so `f1 3 4` reads the
 first call's capture instead of rebuilding it — the leak [apply-clone-ownership](apply-clone-ownership.md)
-§1 warns about. So the merge needs the per-call exclusion the clone rule already states, which is the
-remaining refinement.
+§1 warns about.
+
+**Landed with the per-call exclusion.** `function_apply` now binds the result cell the way the static
+path does, with `!module.is_function_type(codomain)` as the guard: a closure's codomain is its own
+function type, so its per-call cell stays out of the template's class. Measured after the change:
+`k_outer` renders `(raw Kernel, Int, Int)` with `.O Type`, the capture test passes, the
+annotation-conflict test keeps one diagnostic, **language-server is 22/0 (its known red is fixed)**,
+and the other suites hold — lowlevel 146/13, highlevel 140/0, language 265/11, compute 223/2/2 (the
+same two known names).
 
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops

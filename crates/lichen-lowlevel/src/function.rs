@@ -124,6 +124,17 @@ impl<P: Program> Module<P> {
                 return None;
             };
             let result = module.evaluate_node(Dyn(instantiation.applied), Some(block));
+            // A closure's type cell is the call's own; the pair sync below owns the verdict.
+            if let Some(cell) = cell
+                && let Some(codomain) = module.pair_type_item(instantiation.applied)
+            {
+                let codomain = module.as_dynamic(codomain, block);
+                module.evaluate_node(Dyn(codomain), Some(block));
+                if !module.is_function_type(codomain) {
+                    let (_, recorded) = module.try_unify(cell, codomain);
+                    module.unify_errors.truncate(recorded.start);
+                }
+            }
             module.wire_apply_result(node, result, instantiation.applied, block)
         })
     }
