@@ -190,6 +190,16 @@ result cell stays open until the application runs — and the run's write lands 
 not the value's. The fix is check-time resolution of a static apply's dependent codomain, the
 [function-normalization](function-normalization.md) contract's first clause.
 
+**The argument's value is not the blocker, which is measured.** Making the inlined kernel the call's
+argument (`compute.jit (x : Int => compute.launch (compute.jit (y : Int => y + y)) x)`) and making
+the body's argument a **literal** (`… (compute.jit (y : Int => y + y)) 3`) both still leave `.O`
+open. A root-level `compute.launch (compute.jit (y : Int => y + y)) 3` prints `6: Int`, but that is
+the *printed value's* type derived from the value at print time, not the checker's cell. So nothing
+about argument availability distinguishes the cases: the apply's result cell is simply never bound
+for a jit'd body's static apply, which points the next probe at the definition pass's run of that
+body — `static_function_apply`'s cell bind (`pair_type_item(applied)`) and what it sees for a
+dependent codomain.
+
 The LSP test
 `language_server::statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` loops
 over both statements and is red for this reason alone — it is the witness, not a stale assertion.
