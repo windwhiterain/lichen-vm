@@ -242,7 +242,7 @@ Four steps, in this order. Nothing here needs a decision, so the comparison cann
    for each name in the table above. Compare **per recording, in order**, and as a **single-program** comparison — the same program measured on its own commit before and after, never the whole table against the whole table (see "The comparison is single-program" below).
 3. **Run the suite and diff the failure names**:
    `cargo test -p lichen-compute -j 1 --no-fail-fast`, then `Compare-Object` the `… FAILED` names against a
-   pristine `dev` run. `consumer_guard` must leave the set; the other sixteen must not move.
+   pristine `dev` run. The sixteen other failures must not move, and `consumer_guard` is **not** expected to leave the set — its role is a separate defect, as the correction at the end of this note measures.
 4. **Read the six refusal fragments from the source**, not from this note: the `contains` arguments of the four
    `assert` blocks at `graph_jit.rs:342-348`, `:367-372`, `:390-397`, `:398-409`. Check each against the
    messages `fail()` collects, with `"compute.graph"` appearing exactly three times.
@@ -326,3 +326,32 @@ numbers is a green that came from somewhere else.
 One non-fault: `crates/lichen-compute-gpu/examples/fma_probe.rs` stays in the tree (the repository allows a probe
 during an investigation and it drives the two device tables), so a detached run compiles one extra example. That
 is a few seconds, not a failure.
+
+## Corrected by measurement: `consumer_guard` is a separate defect
+
+This note's chain was written for the nine `graph_jit` programs and then **attributed to `consumer_guard`
+without measuring that program's rounds** — the mistake both sides of this exchange kept repeating, partial
+readings read as the whole. Measured, it does not hold:
+
+- `consumer_guard` **does** drive the loop once (two evaluations: the before reading on `a4593102` is
+  `r1 false/0 → r2 true/2`, and the compute owner's own probe reports the loop iterating once).
+- With the per-round reset **in place** — so the graph holds the last round's dispatches only — its producer's
+  roles are still `["combine", "identity", "element"]` and the test still fails, while the suite's name set is
+  unchanged at `201 passed / 17 failed / 2 ignored`.
+
+So the extra `"element"` is produced **inside one round's own dispatches**, not by a recording that spans two.
+A′ therefore changes nothing on this program: it is a no-op there by measurement, not by argument.
+
+**What this corrects:**
+
+- Rings 3 and 4 of "The cause, measured" explain the **multi-round path** — the nine `graph_jit` programs. They
+  do **not** explain `consumer_guard`.
+- A′'s acceptance is about the multi-round path (the nine readings unchanged) and about **not disturbing** the
+  suite's name set. It is **not** required to turn `consumer_guard` green, and a green `consumer_guard` would not
+  be A′'s evidence.
+- `consumer_guard`'s own defect is **open** with an unknown shape. Its next step is the role collection point the
+  test asserts on, `consumer_guard.rs:240-260`: the roles must be found there from a single round's dispatches,
+  which is a different question from which recording they land in.
+
+**The `consumer_guard` before reading** stands as recorded below (`r1 false/0 | r2 true/2`); what was wrong was
+the cause attached to it, not the reading.
