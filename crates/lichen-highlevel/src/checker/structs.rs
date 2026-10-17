@@ -82,6 +82,7 @@ where
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
+        self.read_site = Some(self.loc(e, 0));
         // The field's position, when the key is a literal: `slot_read` reads
         // the field's type out of the field list.
         let position = self.constant_position(key);
@@ -116,6 +117,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
+        self.stamp_read_node(value_node);
         // A field type is a node of this table: a frozen one is materialized as its own leaf.
         let resolved = position
             .and_then(|at| {
@@ -177,6 +179,7 @@ where
             return self.refused_pair(e);
         }
         // The struct marker's name table, read from the container's *type*.
+        self.read_site = Some(self.loc(e, 0));
         let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
         // key = TableGet(names, name) — the field's positional index.
         let name_node = self.name_node(name);
@@ -286,6 +289,7 @@ where
 
         // A constant is not an optimisation: a kernel body is walked by
         // operands, and a `TableGet` is no value to resolve.
+        self.read_site = Some(self.loc(e, 0));
         let key = match position {
             Some(at) => self.alloc_node(
                 self.current_block,

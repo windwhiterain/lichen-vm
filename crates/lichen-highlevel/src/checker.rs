@@ -174,6 +174,12 @@ where
     /// # Invariant
     /// No span is stored on a node, which is what lets the graph be shared.
     node_edges: HashMap<NodeId, Loc>,
+    /// The read whose derived nodes are being built.
+    ///
+    /// # Invariant
+    /// Set by a read's check before it builds a node no expression slot owns, so
+    /// [`Self::name_node`] and the read's slot nodes are attributed to that read.
+    read_site: Option<Loc>,
     /// The user-facing assert condition nodes: the explicit `assert` expressions.
     ///
     /// # Invariant
@@ -499,6 +505,7 @@ where
             type_applies: HashMap::new(),
             shallow_types: Vec::new(),
             node_edges: HashMap::new(),
+            read_site: None,
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
             lambda_value_nodes: Vec::new(),
@@ -800,6 +807,7 @@ where
     /// frontend already interns the string side.
     pub(super) fn name_node(&mut self, name: &'static str) -> NodeId {
         if let Some(&node) = self.name_nodes.get(name) {
+            self.stamp_read_node(node);
             return node;
         }
         let node = self.alloc_node(
@@ -808,7 +816,15 @@ where
             Some(P::Value::from(LowValue::Str(name))),
         );
         self.name_nodes.insert(name, node);
+        self.stamp_read_node(node);
         node
+    }
+
+    /// Attribute a node the read being built created, when there is one.
+    pub(super) fn stamp_read_node(&mut self, node: NodeId) {
+        if let Some(site) = self.read_site.clone() {
+            self.node_edges.insert(node, site);
+        }
     }
 
     // --- allocation ------------------------------------------------------
@@ -1023,6 +1039,7 @@ where
                 P::Operator::from(LowOperator::Index),
                 Some(ops),
             );
+            self.stamp_read_node(node);
         }
         node
     }

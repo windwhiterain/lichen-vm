@@ -389,20 +389,17 @@ different blamed nodes for the two evaluations — `IndexTarget { target: 84 }` 
 `TableMiss { table: 80, key: 88 }` against `IndexTarget { target: 109 }` and
 `TableMiss { table: 105, key: 113 }`, the definition's evaluation and the apply
 clone's — and the report dedups by kind and blamed node, so both survive by
-design. Neither blamed node carries a source position, which is why all four
-render unattributed: a probe on the nodes names the chain — the `IndexTarget`
-clones are an `Index` op with no value, whose origin (32) is the checker's
-**lazy names-path read**, and the `TableMiss` key clones hold `Str("a")`, whose
-origin (37) is the checker's **name node**. Neither origin is in the attribution
-map (`node_edges` plus the slot layout), so `node_loc` stops there. Registering
-the container type and the name node at the named read was tried and measured to
-change nothing; a probe on the checker path shows why — `check_named_field`'s
-lazy branch creates **fresh** derived nodes per check (measured at `e=125`:
-`names=757`, `name=204`, `key=759`), while the runtime blames other derived
-nodes (`84`/`88`), minted by a different evaluation, so no single call-site
-registration covers them. A real fix has to attribute each derived node where it
-is **created** (the helpers, or a read-local "current position" the helpers
-stamp), and both attempted registrations were reverted. `X::a` was already
+design. Both blamed nodes carry a source position now: a read's derived nodes are
+attributed at **creation**. `Checker::read_site` is set by `check_field`,
+`check_named_field` and `check_named_type_access` to the read's own location, and
+`name_node`, `lazy_index_path` and the read's slot node stamp `node_edges` through
+`stamp_read_node`. Measured: all four runtime messages on `f = x => x.a` ;
+`f [10, 20]` carry `--> 1:10` (the `.a` name) where they used to render
+unattributed. The earlier reading recorded here — each check minting fresh derived
+nodes (measured at `e=125`: `names=757`, `name=204`, `key=759`) against the
+runtime's blamed `84`/`88`, so that no single call-site registration reached them
+— is why the stamp lives at creation: one site covers every check. `X::a` was
+already
 enforced in both tiers (its kind unify binds the container's own type cell, which
 the parameter check does meet), and the paren read keeps its unify.
 
