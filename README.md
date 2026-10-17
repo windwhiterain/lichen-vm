@@ -2529,25 +2529,17 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
   doc = "One explicit step of the 1D heat equation: `y[i] = x[i] + alpha * (x[i - 1] - 2 * x[i] + \
     x[i + 1])`, the three-point Laplacian, one lane per element. It is the ladder's first \
     **physics** operator and its first whose **read set is wider than its lane**: every operator \
-    below it reads `x[i]` or a slice from `0`, this one reads `i - 1` and `i + 1` as well.\n\n\
+    below it reads `x[i]` or a slice from `0`, this one reads `i - 1` and `i + 1` as well. Its \
+    two-dimensional half is `examples/torus.lichen`, which is where the horizontal boundary stops \
+    being the padding.\n\n\
     **The boundary condition is the padding, not a special case.** At `i = 0` the left index is \
     `i - 1` and at `i = n - 1` the right one is `i + 1`, and both are **outside the buffer** — an \
     out-of-buffer read answers `0` (`crates/lichen-compute/src/compute.rs:6234`; the same rule that \
     made `examples/gemv.lichen` answer `0` for `x`'s fourth element). So both ends are \
-    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the **Dirichlet** \
-    operator has no case analysis in it at all. That is a choice of operator rather than a limitation of the surface: a \
-    different boundary is a different operator, because the surface has no way to spell a boundary \
-    that is a parameter without a `Select`, and a `Select` refuses when its two arms are computed \
-    in different classes (`attention.lichen`'s `scores` refusal, fixed at `b6dea46c`).\n\n\
-    **Two dimensions show where the padding stops being the boundary.** A row-major flattening makes \
-    the vertical taps honest — `(row - 1) * cols + col` is negative on the first row and past the end \
-    on the last, so both answer `0` — but the **horizontal** ones are not: `i - 1` at `col = 0` is the \
-    *previous row's last element* and `i + 1` at `col = cols - 1` is the *next row's first*, so a flat \
-    neighbour walk **wraps** instead of vanishing. The second chain therefore masks them, \
-    `if col == 0 then 0.0 else read (i - 1)` and the same at `cols - 1`. A `Select` whose two arms are \
-    both `Float` is **accepted** — the refusal recorded on `attention.lichen`'s `scores` was about arms \
-    computed in *different* classes (`b6dea46c`) — so the horizontal boundary costs one `Select` per \
-    direction and nothing else, and the vertical one still costs nothing.\n\n\
+    **Dirichlet-zero** with no branch, no `Select` and no clamp, and the **Dirichlet** operator has \
+    no case analysis in it at all. That is a choice of operator rather than a limitation of the \
+    surface: a different boundary is a different operator, because a boundary that is *a parameter* \
+    would need a `Select` whose arms are data, and the surface has none.\n\n\
     **The write address is the lane's own index.** A `compute.write` names a slot of an output \
     buffer exactly as long as the launch's extent \
     (`crates/lichen-compute/src/compute.rs:5979`), so `compute.range c.n` with `.at i` is a \
@@ -2561,8 +2553,9 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     number that decides **stability** is a caller's to choose: this step is stable only for \
     `alpha <= 1/2`, which is a fact about the physics and not something the operator can enforce, \
     because `alpha` is a runtime value by design. The rule that bites is positional: the **second** \
-    leaf is what `compute.row`/`compute.col` divide by (`crates/lichen-compute/src/compute_body` \
-    note: `body.rs:788-815`), and this body has no coordinates, so the second leaf is free.\n\n\
+    leaf is what `compute.row`/`compute.col` divide by \
+    (`crates/lichen-compute/src/compute/body.rs:788-815`), and this body has no coordinates, so the \
+    second leaf is free.\n\n\
     **The arithmetic is exact, and the declared output is worked out by hand.** `x` is a bump at \
     both ends, `4 0 0 0 0 4`, and `alpha` is `0.25`. Lane `0` reads the padding as `0`, so \
     `4 + 0.25 * (0 + 0 - 8) = 2`; lane `1` is `0 + 0.25 * (4 + 0 - 0) = 1`; lanes `2` and `3` have \
@@ -2570,57 +2563,38 @@ final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
     with the right padding as its right neighbour, is `4 + 0.25 * (0 + 0 - 8) = 2`. The answer is \
     `2 1 0 0 1 2` — every value a quarter or a half below `2^24`, so **nothing is modelled**: no \
     `exp`, no `sqrt`, no `ln`, no division.\n\n\
-    **The grid's own answer, by hand.** `cols = 3`, `alpha = 0.25`, and the grid is `0 0 4 / 4 0 0 / 0 0 \
-    0` — the two `4`s sit at the cells that make the wrap **visible**, because `(0, 2)`'s unmasked right \
-    neighbour is `(1, 0)` and `(1, 0)`'s unmasked left is `(0, 2)`. Masked, both taps are `0` and the \
-    two `4`s simply decay: `4 + 0.25 * (0 - 16) = 0`. Unmasked, each would instead add `0.25 * 4 = 1` \
-    from the other row's edge cell and answer `1`, which is the difference the mask buys. Every other \
-    cell takes `0.25 * 4 = 1` from the one `4` that is a real neighbour — `(0, 0)` from below, `(0, 1)` \
-    from the right, `(1, 1)` from the left, `(1, 2)` and `(2, 0)` from above — and `(2, 1)`, `(2, 2)` \
-    have no `4` at any tap and stay `0`. The answer is `1 1 0 / 0 1 1 / 1 0 0`.\n\n\
-    **The same data under a periodic boundary, which is the wrap done on purpose.** The third chain \
-    runs the ring kernel on the *same* `4 0 0 0 0 4`, so the only thing that changes is the boundary: \
-    lane `0`'s left tap is `x[5] = 4` instead of the padding's `0`, and lane `5`'s right tap is \
-    `x[0] = 4`. The two edges therefore stop leaking and answer `3` where the Dirichlet step answered \
-    `2`, so the readings are `3 1 0 0 1 3` against `2 1 0 0 1 2` — and the difference is visible as a \
-    **conserved total**: both start at `8`, the ring ends at `8` (the Laplacian sums to zero over a \
-    ring, so a step with any `alpha` leaves the total alone) and the Dirichlet step ends at `6`, \
-    having lost `2` through the two zero edges. That pair is what makes the boundary a *choice* \
-    rather than a detail, and it is as close as this file comes to the conserved quantity \
-    `docs/notes/physics-operators.md` says the language cannot state: the declared output is the only \
-    place the conservation shows.\n\n\
-    **A solver is a loop, and it can be typed.** The fourth chain does not unroll: it seeds an \
+    **The same data under a periodic boundary, which is the wrap done on purpose.** The second \
+    chain runs the ring kernel on the *same* `4 0 0 0 0 4`, so the only thing that changes is the \
+    boundary: lane `0`'s left tap is `x[5] = 4` instead of the padding's `0`, and lane `5`'s right \
+    tap is `x[0] = 4`. The two edges therefore stop leaking and answer `3` where the Dirichlet step \
+    answered `2`, so the readings are `3 1 0 0 1 3` against `2 1 0 0 1 2` — and the difference is \
+    visible as a **conserved total**: both start at `8`, the ring ends at `8` (the Laplacian sums to \
+    zero over a ring, so a step with any `alpha` leaves the total alone) and the Dirichlet step ends \
+    at `6`, having lost `2` through the two zero edges. `examples/torus.lichen` shows the same pair \
+    in two dimensions, where the masked grid loses three and the torus holds.\n\n\
+    **A solver is a loop, and it can be typed.** The third chain does not unroll: it seeds an \
     `array{Float, 6}` with the ring's first step and runs two more through a top-level `@loop`, \
     rebuilding the kernel's input with `compute.buffer (s(1))` each iteration. Two things make that \
     work and neither is obvious. A **recursive function's type follows from its annotation** \
     (`language-spec.md` §3's `f : f` rule; `examples/gcd.lichen` states it), so `march` carries \
     `tuple{Int, array{Float, 6}} -> array{Float, 6}` — without it the loop's answer prints \
-    `raw[raw …]: ?a`, a value with no type, which was measured this session and is why the \
-    annotation is here. And the **dispatch happens inside the fold**: a plain run is one pass, so an \
-    operator asked before its operand is decided is never asked again \
-    (`docs/notes/graph-recording-rounds.md`), which is why the state is an array that each iteration \
-    turns back into a buffer rather than the `XOut` struct this file's other chains pass around — a \
-    fold carrying that struct never resolves at all (measured: `raw none` at one, two and three \
-    iterations). The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` the unrolled form \
-    gives, and the total is still `8` at every step, which is what makes three steps checkable by \
-    hand rather than by comparing two runs.\n\n\
-    **A periodic grid, stepped twice, is where the two dimensions and the loop agree.** The fifth \
-    chain wraps all four taps — `rows = c.n / c.cols`, then `above`/`below` select the last and \
-    first rows and `left`/`right` the last and first columns — and feeds the result back through a \
-    loop of one, so the answer is two steps of a 3×3 torus. With the four wraps in place every \
-    element contributes to exactly two taps, so **the total cannot move**: the plane sums to `8`, \
-    the wrapped step sums to `8`, and so does the looped one. That is the contrast the fourth and \
-    fifth chains are for, and it is a reading rather than an argument — the Dirichlet grid's step \
-    sums to `5`, having lost three through its four zero edges, while the torus holds at `8`.\n\n\
-    **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so this run \
-    has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
+    `raw[raw …]: ?a`, a value with no type, which is why the annotation is here. And the **dispatch \
+    happens inside the fold**: a plain run is one pass, so an operator asked before its operand is \
+    decided is never asked again (`docs/notes/graph-recording-rounds.md`), which is why the state is \
+    an array that each iteration turns back into a buffer rather than the `XOut` struct the other two \
+    chains pass around — a fold carrying that struct never resolves at all (measured: `raw none` at \
+    one, two and three iterations). The answer is the same `2.1875 1.3125 0.5 0.5 1.3125 2.1875` \
+    the unrolled form gives, and the total is still `8` at every step, which is what makes three \
+    steps checkable by hand rather than by comparing two runs.\n\n\
+    **The lane count is six, which matters for one reason.** `LOCAL_SIZE_X` is 64, so each of these \
+    runs has 58 surplus lanes, and a surplus lane's fabricated coordinates would put its write at \
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
-    `examples/kvcache.lichen`'s append before the guard landed. A six-element stencil is therefore \
-    a device check of the tail-lane guard, not only a physics demonstration, and the sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 6 of 6 element(s)` \
-    on the RTX 3060: the padding is the same boundary on both backends, and the surplus lanes \
-    leave the answer untouched."
-  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 6}, array{Float, 9}, array{Float, 6}, array{Float, 6}, array{Float, 9}}"
+    `examples/kvcache.lichen`'s append before the guard landed. A six-element stencil is therefore a \
+    device check of the tail-lane guard, not only a physics demonstration, and the sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    on the RTX 3060 for all three chains: the padding is the same boundary on both backends, and the \
+    surplus lanes leave the answer untouched."
+  output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 6}, array{Float, 6}}"
 ---
 XIn  = struct{.x (compute.Buf Float)}
 XOut = struct{.y (compute.Buf Float)}
@@ -2642,6 +2616,72 @@ ring_raw = (c : XPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
 ring = compute.parallel ring_raw "cpu"
+x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
+out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
+seed = (compute.collect looped.y : array{Float, 6})
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, 6}))) : tuple{Int, array{Float, 6}} -> array{Float, 6})
+solved = march (2, seed)
+(compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, solved)
+```
+
+### `torus.lichen`
+
+```text
+---
+  order = "31"
+  compute = import "compute.lichen"
+  doc = "The heat equation's three-point Laplacian in **two** dimensions, one lane per element of a \
+    row-major grid, and then the same step wrapped into a torus and looped. It is the half of the \
+    stencil family that `examples/stencil.lichen` does not cover: that file is one-dimensional and \
+    its boundaries are the padding, this one is two-dimensional and its **horizontal** boundaries \
+    are not.\n\n\
+    **The vertical taps are the padding and the horizontal ones wrap.** With a row-major \n\
+    flattening, `(row - 1) * cols + col` is negative on the first row and past the end on the last, \
+    so both answer `0` — the same rule `examples/stencil.lichen` states. But `i - 1` at `col = 0` is \
+    the *previous row's last element* and `i + 1` at `col = cols - 1` is the *next row's first*, so a \
+    flat neighbour walk crosses rows instead of vanishing. The first chain masks them, \
+    `if col == 0 then 0.0 else read (i - 1)` and the same at `cols - 1`, and a `Select` whose two \
+    arms are both `Float` is **accepted** — the refusal recorded on `examples/attention.lichen`'s \
+    `scores` was about arms computed in *different* classes (`b6dea46c`).\n\n\
+    **`cols` is the second scalar leaf, and that is where it must go.** A `compute.range` launch's \
+    first leaf is the extent, and the **second** is the divisor `compute.row` and `compute.col` use \
+    (`crates/lichen-compute/src/compute/body.rs:788-815`); a stride anywhere else silently answers a \
+    different grid, which is the trap `examples/matmul.lichen` records for its own `k`. So the \
+    parameter shape is `(.n Int, .cols Int, .alpha Float, ...)` and `rows` is computed in the body as \
+    `c.n / c.cols` — integer division, which is exact here because the launch is `rows * cols`.\n\n\
+    **The first chain's answer, by hand.** `cols = 3`, `alpha = 0.25`, and the plane is `0 0 4 / 4 0 \
+    0 / 0 0 0` — the two `4`s sit at the cells that make the wrap **visible**, because `(0, 2)`'s \
+    unmasked right neighbour is `(1, 0)` and `(1, 0)`'s unmasked left is `(0, 2)`. Masked, both taps \
+    are `0` and the two `4`s simply decay: `4 + 0.25 * (0 - 16) = 0`. Unmasked, each would instead \
+    add `0.25 * 4 = 1` from the other row's edge cell and answer `1`, which is the difference the \
+    mask buys. Every other cell takes `0.25 * 4 = 1` from the one `4` that is a real neighbour — \
+    `(0, 0)` from below, `(0, 1)` from the right, `(1, 1)` from the left, `(1, 2)` and `(2, 0)` from \
+    above — and `(2, 1)`, `(2, 2)` have no `4` at any tap and stay `0`. The answer is `1 1 0 / 0 1 1 \
+    / 1 0 0`.\n\n\
+    **The second chain wraps all four taps, and then the total cannot move.** `above` and `below` \
+    select the last and first rows, `left` and `right` the last and first columns, so every element \
+    contributes to exactly two taps and the Laplacian sums to zero over the torus. The plane sums to \
+    `8`; the masked chain's step sums to `5`, having lost three through its four zero edges; the \
+    wrapped step sums to `8`, and so does the wrapped answer after one more step through the loop. \
+    That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
+    conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
+    in the declared output but not stated as an invariant.\n\n\
+    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is an \
+    `array{Float, 9}` and each iteration rebuilds the kernel's input with `compute.buffer (s(1))`, \
+    because a plain run is one pass and an operator asked before its operand is decided is never \
+    asked again (`docs/notes/graph-recording-rounds.md`); a fold carrying the `GOut` struct never \
+    resolves at all. The recursion annotation `tuple{Int, array{Float, 9}} -> array{Float, 9}` is \
+    what makes the answer typed: without it the loop prints `raw[raw …]: ?a`, because a recursive \
+    function's type follows from its annotation (`language-spec.md` §3's `f : f` rule).\n\n\
+    **Nine lanes leave 55 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
+    coordinates would put its write inside `[0, 9)` if nothing guarded it — the class of silent \
+    wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    on the RTX 3060 for both chains, so the four `Select`s, the computed `rows` and the guard are \
+    all right on the device."
+  output = "([1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 9}, array{Float, 9}}"
+---
 GIn  = struct{.x (compute.Buf Float)}
 GOut = struct{.y (compute.Buf Float)}
 GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
@@ -2658,14 +2698,6 @@ grid_raw = (c : GPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
 }
 grid = compute.parallel grid_raw "cpu"
-x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
-out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
-plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
-stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
-looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
-seed = (compute.collect looped.y : array{Float, 6})
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : XOut).y : array{Float, 6}))) : tuple{Int, array{Float, 6}} -> array{Float, 6})
-solved = march (2, seed)
 torus_raw = (c : GPar) => {
   i = compute.range c.n
   row = compute.row c
@@ -2679,11 +2711,13 @@ torus_raw = (c : GPar) => {
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
 }
 torus = compute.parallel torus_raw "cpu"
+plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
+stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
-seed2 = (compute.collect wrapped.y : array{Float, 9})
-@loop march2 = ((s => if s(0) == 0 then s(1) else march2 (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
-solved2 = march2 (1, seed2)
-(compute.collect out.y : array{Float, 6}, compute.collect stepped.y : array{Float, 9}, compute.collect looped.y : array{Float, 6}, solved, solved2)
+seed = (compute.collect wrapped.y : array{Float, 9})
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
+solved = march (1, seed)
+(compute.collect stepped.y : array{Float, 9}, solved)
 ```
 
 <!-- end: examples -->

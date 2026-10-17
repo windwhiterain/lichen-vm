@@ -1,0 +1,90 @@
+---
+  order = "31"
+  compute = import "compute.lichen"
+  doc = "The heat equation's three-point Laplacian in **two** dimensions, one lane per element of a \
+    row-major grid, and then the same step wrapped into a torus and looped. It is the half of the \
+    stencil family that `examples/stencil.lichen` does not cover: that file is one-dimensional and \
+    its boundaries are the padding, this one is two-dimensional and its **horizontal** boundaries \
+    are not.\n\n\
+    **The vertical taps are the padding and the horizontal ones wrap.** With a row-major \n\
+    flattening, `(row - 1) * cols + col` is negative on the first row and past the end on the last, \
+    so both answer `0` — the same rule `examples/stencil.lichen` states. But `i - 1` at `col = 0` is \
+    the *previous row's last element* and `i + 1` at `col = cols - 1` is the *next row's first*, so a \
+    flat neighbour walk crosses rows instead of vanishing. The first chain masks them, \
+    `if col == 0 then 0.0 else read (i - 1)` and the same at `cols - 1`, and a `Select` whose two \
+    arms are both `Float` is **accepted** — the refusal recorded on `examples/attention.lichen`'s \
+    `scores` was about arms computed in *different* classes (`b6dea46c`).\n\n\
+    **`cols` is the second scalar leaf, and that is where it must go.** A `compute.range` launch's \
+    first leaf is the extent, and the **second** is the divisor `compute.row` and `compute.col` use \
+    (`crates/lichen-compute/src/compute/body.rs:788-815`); a stride anywhere else silently answers a \
+    different grid, which is the trap `examples/matmul.lichen` records for its own `k`. So the \
+    parameter shape is `(.n Int, .cols Int, .alpha Float, ...)` and `rows` is computed in the body as \
+    `c.n / c.cols` — integer division, which is exact here because the launch is `rows * cols`.\n\n\
+    **The first chain's answer, by hand.** `cols = 3`, `alpha = 0.25`, and the plane is `0 0 4 / 4 0 \
+    0 / 0 0 0` — the two `4`s sit at the cells that make the wrap **visible**, because `(0, 2)`'s \
+    unmasked right neighbour is `(1, 0)` and `(1, 0)`'s unmasked left is `(0, 2)`. Masked, both taps \
+    are `0` and the two `4`s simply decay: `4 + 0.25 * (0 - 16) = 0`. Unmasked, each would instead \
+    add `0.25 * 4 = 1` from the other row's edge cell and answer `1`, which is the difference the \
+    mask buys. Every other cell takes `0.25 * 4 = 1` from the one `4` that is a real neighbour — \
+    `(0, 0)` from below, `(0, 1)` from the right, `(1, 1)` from the left, `(1, 2)` and `(2, 0)` from \
+    above — and `(2, 1)`, `(2, 2)` have no `4` at any tap and stay `0`. The answer is `1 1 0 / 0 1 1 \
+    / 1 0 0`.\n\n\
+    **The second chain wraps all four taps, and then the total cannot move.** `above` and `below` \
+    select the last and first rows, `left` and `right` the last and first columns, so every element \
+    contributes to exactly two taps and the Laplacian sums to zero over the torus. The plane sums to \
+    `8`; the masked chain's step sums to `5`, having lost three through its four zero edges; the \
+    wrapped step sums to `8`, and so does the wrapped answer after one more step through the loop. \
+    That pair is what makes a boundary a *choice*, and it is the closest this language comes to a \
+    conserved quantity — `docs/notes/physics-operators.md` records that a conservation can be read \
+    in the declared output but not stated as an invariant.\n\n\
+    **The loop is the same shape `examples/stencil.lichen` uses, one dimension up.** The state is an \
+    `array{Float, 9}` and each iteration rebuilds the kernel's input with `compute.buffer (s(1))`, \
+    because a plain run is one pass and an operator asked before its operand is decided is never \
+    asked again (`docs/notes/graph-recording-rounds.md`); a fold carrying the `GOut` struct never \
+    resolves at all. The recursion annotation `tuple{Int, array{Float, 9}} -> array{Float, 9}` is \
+    what makes the answer typed: without it the loop prints `raw[raw …]: ?a`, because a recursive \
+    function's type follows from its annotation (`language-spec.md` §3's `f : f` rule).\n\n\
+    **Nine lanes leave 55 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
+    coordinates would put its write inside `[0, 9)` if nothing guarded it — the class of silent \
+    wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    on the RTX 3060 for both chains, so the four `Select`s, the computed `rows` and the guard are \
+    all right on the device."
+  output = "([1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 9}, array{Float, 9}}"
+---
+GIn  = struct{.x (compute.Buf Float)}
+GOut = struct{.y (compute.Buf Float)}
+GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
+GArg = struct{.n Int, .cols Int, .alpha Float, .I GIn}
+grid_raw = (c : GPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  above = compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col)))
+  below = compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col)))
+  left = if col == 0 then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if col == (c.cols - 1) then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+}
+grid = compute.parallel grid_raw "cpu"
+torus_raw = (c : GPar) => {
+  i = compute.range c.n
+  row = compute.row c
+  col = compute.col c
+  rows = (c.n / c.cols)
+  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  above = if row == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at ((rows - 1) * c.cols + col)))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col))))
+  below = if row == (rows - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at col))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))))
+  left = if col == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (i + c.cols - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
+  right = if col == (c.cols - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at (i - c.cols + 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+}
+torus = compute.parallel torus_raw "cpu"
+plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
+stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
+wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
+seed = (compute.collect wrapped.y : array{Float, 9})
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.collect (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x (compute.buffer (s(1)) : (compute.Buf Float))))) : GOut).y : array{Float, 9}))) : tuple{Int, array{Float, 9}} -> array{Float, 9})
+solved = march (1, seed)
+(compute.collect stepped.y : array{Float, 9}, solved)

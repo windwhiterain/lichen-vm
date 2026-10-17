@@ -126,16 +126,16 @@ the type is not.
   `(row +/- 1) * cols + col` runs off the end and answers `0` — and the **horizontal** ones are not:
   `i - 1` at `col = 0` is the *previous row's last element* and `i + 1` at `col = cols - 1` is the
   *next row's first*, so a flat neighbour walk **wraps**. The second chain of
-  `examples/stencil.lichen` masks them, `if col == 0 then 0.0 else read (i - 1)` and the same at
+  `examples/torus.lichen` masks them, `if col == 0 then 0.0 else read (i - 1)` and the same at
   `cols - 1`, and **a `Select` whose two arms are both `Float` is accepted** — the refusal this note
   cites from `attention.lichen`'s `scores` was about arms computed in *different* classes — so the
-  horizontal boundary costs one `Select` per direction and nothing else. Measured: `agrees, 15 of 15
-  element(s)` on the RTX 3060, both chains together, so the mask is right on the device too.
+  horizontal boundary costs one `Select` per direction and nothing else. Measured: `agrees, 18 of 18
+  element(s)` on the RTX 3060 for `torus.lichen`'s two chains, so the mask is right on the device too.
   **A torus wraps all four taps** — `rows = c.n / c.cols`, `above`/`below` selecting the last and
   first rows and `left`/`right` the last and first columns — and then every element contributes to
   exactly two taps, so **the total cannot move**: the plane sums to `8` and so do two wrapped steps,
-  against the Dirichlet grid's step which sums to `5`. That is the fifth chain in
-  `examples/stencil.lichen`, looped once, measured `agrees, 36 of 36 element(s)` with the other four.
+  against the Dirichlet grid's step which sums to `5`. That is the second chain in
+  `examples/torus.lichen`, looped once, and that file answers `agrees, 18 of 18 element(s)`; the one-dimensional half, including its own solver loop, is `examples/stencil.lichen`, `agrees, 18 of 18` of its own.
 - **A periodic boundary is measured, and it changes the answer in one place.** A `Float`-armed
   `Select` is accepted, so the ring is the wrap done on purpose:
   `if i == 0 then read (n - 1) else read (i - 1)` and the mirror at `n - 1`. On the **same**
