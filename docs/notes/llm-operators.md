@@ -555,8 +555,11 @@ need a node-local producer for `r`.
   **What is still open is GEMV's own program**, and it is not the collision: it refuses at stage `Check`
   with the collect's *"empty value of a failed read"* (span `None`) and *"this value is not a container"*
   at the `collect` line, and it does the same with `x` padded to the count — so neither the short input
-  nor the argument binding is what refuses there. The graph leg is still the only path that consults the
-  fusion floor, and it now carries a two-input step whose return is annotated.
+  nor the argument binding is what refuses there. **Neither is the fold**: the same body written as a
+  straight-line sum of three terms, with `.kdim` no longer read from the graph argument at all, refuses
+  the same way (`gemv_no_fold` in the probe). What is left between it and the shape that runs is the
+  **two-buffer** argument itself. The graph leg is still the only path that consults the fusion floor,
+  and it now carries a two-input step whose return is annotated.
 - **A real operator is a second witness to the compile-order class defect.** With the two inputs
   equalised, submit is refused by the **class** arm: *"instruction 0 mixed an integer and a float in one
   operation … this is a malformed fragment rather than an unsupported shape"* — the same

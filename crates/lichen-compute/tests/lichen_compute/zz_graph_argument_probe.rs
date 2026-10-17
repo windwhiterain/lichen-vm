@@ -183,12 +183,34 @@ x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 out = (compute.graphrun built (4, 3, w, x) : OutG)
 compute.collect out.y : array{Float, 4}
 "#;
+const GEMV_NO_FOLD: &str = r#"
+--- compute = import "compute.lichen" ---
+InG  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+OutG = struct{.y (compute.Buf Float)}
+Par  = struct{.n Int, .in InG, .out OutG}
+ArgK = struct{.n Int, .I InG}
+f = (k : Par) => {
+  i = compute.range k.n
+  y = (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 0))) * compute.read ((compute.Read _)(.from k.in.x, .at 0)))
+    + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 1))) * compute.read ((compute.Read _)(.from k.in.x, .at 1)))
+    + (compute.read ((compute.Read _)(.from k.in.w, .at (i * 3 + 2))) * compute.read ((compute.Read _)(.from k.in.x, .at 2)))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value y))
+}
+kg = compute.parallel f "gpu"
+step = (g : Par) => (compute.plrun kg ((ArgK)(.n g.n, .I InG(.w g.in.w, .x g.in.x))) : OutG)
+built = compute.graph step
+w = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 12}) : (compute.Buf Float))
+x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
+out = (compute.graphrun built (4, w, x) : OutG)
+compute.collect out.y : array{Float, 4}
+"#;
 #[test]
 fn probe_graph_argument_buffer() {
     let Some((_context, _guard)) = common::device("zz_graph_argument_probe") else {
         return;
     };
     for (name, source) in [
+        ("gemv_no_fold", GEMV_NO_FOLD),
         ("gemv_graph", GEMV),
         ("one_buffer_annotated", ONE_BUFFER_ANNOTATED),
         ("arg_buffer_twice", ARG_BUFFER_TWICE),
