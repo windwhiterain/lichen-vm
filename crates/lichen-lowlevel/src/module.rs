@@ -308,10 +308,6 @@ impl<P: Program> Module<P> {
         self.nodes[node].assumed_concrete = false;
     }
 
-    /// The node's run stamp: zero means its operator never ran.
-    pub fn node_run_stamp(&self, node: NodeId) -> u32 {
-        self.nodes[node].runned
-    }
 
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {

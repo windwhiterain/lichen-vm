@@ -1,4 +1,4 @@
-# A stalled operator re-runs only when a value changed
+# The epoch run gate: retired, and what it cost
 
 > Status: **retired, and landed.** The run stamp no longer carries the value epoch:
 > `Module::run_stamp_is_set` reads `runned != 0`, so an operator that stalled has had its one
