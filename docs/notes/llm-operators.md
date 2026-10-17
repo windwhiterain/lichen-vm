@@ -561,7 +561,7 @@ need a node-local producer for `r`.
   annotated step reads both argument buffers and answers `[11, 22, 33]` in `Int` and `[11.0, 22.0,
   33.0]` in `Float` (`two_buffers_annotated`, `two_buffers_float`). **The computed read address is not
   it either**: the same GEMV body with both reads at the lane index, `Int`/`Float` aside, refuses the
-  same way (`gemv_at_i`). So every *body* difference is excluded, and what separates GEMV's probe from
+  same way (`gemv_at_i`, run once and not yet a committed probe case). So every *body* difference is excluded, and what separates GEMV's probe from
   every shape that runs is **how its parameter type is built**: the running shapes spell it with
   `compute.P`/`compute.A`, GEMV's spells it as a plain struct — measured as a difference, not isolated as
   the cause. The graph leg is still the only path that consults the fusion floor, and it now carries
@@ -919,3 +919,4 @@ need a node-local producer for `r`.
   the body: correct for this example and wrong for anything else.
 - **`BeyondANode`'s message claims a fact it never inspected** ("whose code reads the value another node
   produced") about a node that has no producer. The check fires on the role *name* alone.
+
