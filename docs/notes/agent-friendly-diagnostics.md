@@ -394,4 +394,9 @@ a message change, so neither belongs to the slice that fixed the unclosed delimi
   and `TypeTuple` for the array, scalar and tuple arguments — the kind of the chain node, not the user's
   `array{Int, 2}`. So the wording would expose internals. Naming the value the user passed needs the checker
   to record the **container expression's type** as a fact on the diagnostic (a new field), not a re-read of the
-  runtime error's node; the plain sentence stays until then.
+  runtime error's node; the plain sentence stays until then. **The checker route was measured too**: recording
+  the container expression's type node in the checker and printing it answers **`?a`** — at check the
+  container's type is the parameter's open cell, and the argument's type only ever reaches the *call's clone*,
+  not the template node the record holds. So naming the user's value needs the **engine** to carry the failed
+  target's type at run time (through the class that holds the argument), not a checker-side fact either. Both
+  routes are reverted; the plain sentence is the honest answer until the engine records it.
