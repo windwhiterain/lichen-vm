@@ -1817,6 +1817,106 @@ final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
 (compute.collect final(2) : array{Float, 4}, compute.collect final(3).o : array{Float, 2}, final(0))
 ```
 
+### `mathlib.lichen`
+
+```text
+---
+  order = "26"
+  compute = import "compute.lichen"
+  doc = "The elementwise basics, as a library rather than one operator: `scale` (`y = k · x`), \
+    `lerp` (`y = a + t · (b − a)`) and `clamp` (`y = max lo (min hi x)`), each one lane per \
+    element and each taking its constant as a **`Float` leaf** rather than a literal. Every \
+    operator above this file in the ladder is a fold, a coordinate or an address form; these \
+    three are the arithmetic they are built out of, and they are what a caller reaches for when \
+    the answer is a per-element formula and there is nothing to reduce.\n\n\
+    **One lane per element, and the write address is the lane's own index.** A `compute.write` \
+    names a slot of an output buffer exactly as long as the launch's extent \
+    (`crates/lichen-compute/src/compute.rs:5979`), so `i = compute.range k.n` with `compute.write \
+    (... .at i)` is a bijection and the only spelling whose answer does not depend on a schedule. \
+    That is also why these operators need **no coordinates**: unlike `examples/matmul.lichen` and \
+    `examples/attention.lichen` they never read `compute.row` or `compute.col`, so the second \
+    scalar leaf is an ordinary runtime scalar and a `Float` one at that.\n\n\
+    **A constant is an argument, and `Float` is a leaf class of its own** (`e24d00fb`): the \
+    recorded config carries the first scalar leaf as the launch extent and **every other leaf for \
+    what it is**, and the graph's value table holds a float at its own class. So `.k`, `.t`, `.lo` \
+    and `.hi` here are pushed as `Float` words beside the extent, and a caller can vary them \
+    without recompiling a kernel — which is the whole difference between a library and a set of \
+    hard-coded constants. The rule that bites is **positional**: the **second** leaf is what \
+    `compute.row`/`compute.col` divide by (`crates/lichen-compute/src/compute/body.rs:788-815`), \
+    and these bodies have no coordinates, so the second leaf is free; a new leaf goes after it \
+    anyway, as `examples/gemv.lichen` states for the case where it is not.\n\n\
+    **Three `plrun`s, and the chain is the library's own composition.** `scale` twice (up and \
+    down), `lerp` between them, then `clamp` on the result: four kernels, four buffers, no \
+    buffer reused. They are **elementwise**, and this is worth stating because an elementwise \
+    chain is the one shape the fusion floor **refuses by name**: `InterfacesAreNotProved`, \
+    because an `Elementwise` region carries no licence and has no reduction chain for the floor's \
+    own proof to hold (`docs/notes/llm-operators.md`, the SiLU row). These four therefore never \
+    merge, and the answer is four dispatches rather than one — correct, and slower than a \
+    hand-written fuse would be. That is a measured refusal and not a missing feature.\n\n\
+    **The arithmetic is exact, and the declared output is worked out by hand.** `x` is `1 2 3 4`, \
+    so `scale` with `k = 2.0` answers `2 4 6 8` and with `k = −1.0` answers `−1 −2 −3 −4`; \
+    `lerp` with `t = 0.25` gives `2 + 0.25 · (−1 − 2) = 1.25`, `4 + 0.25 · (−2 − 4) = 2.5`, \
+    `6 + 0.25 · (−3 − 6) = 3.75` and `8 + 0.25 · (−4 − 8) = 5`; `clamp` with `lo 2.0`, `hi 5.0` \
+    lifts `1.25` to `2` and leaves the rest, so the answer is `2, 2.5, 3.75, 5`. Every value is a \
+    quarter or a half below `2^24` and `f32` represents each exactly, so **nothing here is \
+    modelled**: there is no `exp`, no `sqrt`, no `ln` and no division, unlike SiLU, softmax, \
+    LayerNorm and attention. The declared output is that arithmetic, not a transcription of what \
+    the program printed.\n\n\
+    **`clamp` is two builtins and no branch.** `max lo (min hi x)` is one instruction each and a \
+    `Select`'s two arms are not involved, which matters because a `Select` inside a fold's step \
+    is refused (`examples/topk.lichen` records that sentence) and an `if` would have put a branch \
+    in a body whose lanes are otherwise identical. `abs` is **not** here for that reason: it is \
+    `if x < 0 then -x else x`, a `Select`, and the surface's `Select` refuses when its two arms \
+    are computed in different classes (`attention.lichen`'s `scores` refusal, fixed at \
+    `b6dea46c`) — so a `Float`-only body would be fine today and an `Int` one would not, and one \
+    file should not be the place to find that out. Nothing else in these three operators is \
+    conditional.\n\n\
+    **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
+    `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
+    kernel twice, on both backends, and this one answers `agrees, 4 of 4 element(s)` on the RTX \
+    3060. Exact arithmetic is what that should say: every value is a quarter or a half, there is \
+    no transcendental and no division, so there is no ulp for the two backends to disagree about."
+  output = "[2.0, 2.5, 3.75, 5.0]: array{Float, 4}"
+---
+SIn  = struct{.x (compute.Buf Float)}
+SOut = struct{.y (compute.Buf Float)}
+SPar = struct{.n Int, .k Float, .in SIn, .out SOut}
+SArg = struct{.n Int, .k Float, .I SIn}
+scale_raw = (c : SPar) => {
+  i = compute.range c.n
+  x = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (x * c.k)))
+}
+scale = compute.parallel scale_raw "cpu"
+LIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+LOut = struct{.y (compute.Buf Float)}
+LPar = struct{.n Int, .t Float, .in LIn, .out LOut}
+LArg = struct{.n Int, .t Float, .I LIn}
+lerp_raw = (c : LPar) => {
+  i = compute.range c.n
+  a = compute.read ((compute.Read _)(.from c.in.a, .at i))
+  b = compute.read ((compute.Read _)(.from c.in.b, .at i))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (a + c.t * (b - a))))
+}
+lerp = compute.parallel lerp_raw "cpu"
+CIn  = struct{.x (compute.Buf Float)}
+COut = struct{.y (compute.Buf Float)}
+CPar = struct{.n Int, .lo Float, .hi Float, .in CIn, .out COut}
+CArg = struct{.n Int, .lo Float, .hi Float, .I CIn}
+clamp_raw = (c : CPar) => {
+  i = compute.range c.n
+  x = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (max c.lo (min c.hi x))))
+}
+clamp = compute.parallel clamp_raw "cpu"
+x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
+up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
+down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
+mixed = (compute.plrun lerp ((LArg)(.n 4, .t 0.25, .I LIn(.a up.y, .b down.y))) : LOut)
+bounded = (compute.plrun clamp ((CArg)(.n 4, .lo 2.0, .hi 5.0, .I CIn(.x mixed.y))) : COut)
+compute.collect bounded.y : array{Float, 4}
+```
+
 ### `sample.lichen`
 
 ```text
