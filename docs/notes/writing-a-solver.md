@@ -56,6 +56,13 @@ has. Mark the body `claim:Reduction(combine,identity,element)` if you want the f
 at all; without a claim the floor refuses the graph with `NotClaimed`, before it asks anything about
 addresses.
 
+**The identity is where modelling creeps in.** A sum has `0.0` as a true neutral element; a **max has
+none**, so a `rowmax` takes its seed as a leaf and the caller passes something below every datum
+(`examples/mathlib.lichen` passes `(0.0 - 100.0)` and says so). That is the one place a reduction
+library has to model rather than compute, and the kernel cannot detect a seed that is too high — it
+would clip the answer silently. A product-accumulate (`dot`) is back on the honest side: `0.0` really
+is its identity.
+
 ## 4. Choose the boundary, and know which ones exist
 
 | boundary | spelling | cost |
