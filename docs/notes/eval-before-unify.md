@@ -554,33 +554,33 @@ compute **225/2/2** (the same two), language-server 22/0. The compute `graphrun`
 field spellings are **still refused** after this fix, so they are a different item
 (see [compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item).
 
-**The `::` counterpart is a different gap: a type-valued call result carries the
-universe, not its kind.** `type_of = x => {t = _; x: t; t}` ; `S1 = struct{.a Int}`.
-`S1` alone prints `struct{.a Int}: TypeStruct` and `S1::a` is `Int: Type`, but
-`T = type_of S1` prints its value as the struct type while its **type** is `Type` —
-so `T::a` is refused as `expected raw[?a, TypeStruct], found Type`, and the inline
-`(type_of S1)::a` is `raw none: ?a`. The read is guarded on the container's
-**type item**, and for a call whose value is a type that item is the universe rather
-than the value's kind; the `::` chains also root at that item, so they cannot see
-the value's own kind.
+**The `::` counterpart is a different gap: the guard asks a type item, and a type
+value's correct type is the universe.** `type_of = x => {t = _; x: t; t}` ;
+`S1 = struct{.a Int}`. `S1` alone prints `struct{.a Int}: TypeStruct` and `S1::a` is
+`Int: Type`, but `T = type_of S1` prints its value as the struct type while its
+**type** is `Type` — and that is **correct**, the author's ruling: *"type_of Struct
+类型本来就是 Type"*. So `T::a` being refused as
+`expected raw[?a, TypeStruct], found Type` is the defect, not the item: the guard
+reads the container's **type item**, which is the universe for any type value
+produced by a call, and the `::` chains root at that same item.
 
 **Measured with a probe at the read (reverted):** at the moment `T::a` is checked,
 `T`'s **type item is decided** (the universe) while `T`'s **value is still
-undecided** — the binding's evaluation has not run yet — so neither the type-based
-guard nor a value-based one can answer at check time, and `struct_names_any` on the
-value returns `None`. `S1::a`'s own read sees a one-element value array on its first
-pass and the term on the second, so a value-based chain would also need the term's
-layout, not the value node's.
+undecided** — the binding's evaluation has not run yet — so a value-based guard
+cannot answer at check time either. For the decided case (`S1`), the owner's
+`TypeRef::Slot` on the value yields a term (`slot_term = Some(NodeId(21v1))`) but
+`field_names` on that slot is `None`: the value's term is not the two-slot
+`[shape, kind]` the `TypeRef` documents, so a value-based `::` decode needs its own
+layout work. The syntactic case works because the checker's item for a type
+*expression* is its kind, not because the value was consulted.
 
-Two candidate fixes, neither landed: **fill the kind into the result item** when the
-returned value is a type — the type system's own rule that a type's type is its kind,
-which the `type_of` definition's `t` cell never receives (a real inference rule, not
-a local read) — or **defer the `::` guard and read** until the value exists, treating
-the universe-typed container as "cannot tell yet" rather than as a decided
-non-struct kind. The first matches the author's ruling that types are determined at
-check time; the second is the named read's deferred-assert shape extended to `::`.
-The four `defer_pending` tests read through exactly this shape (`T::I` with
-`T = type_of (P _)(…)`).
+**The candidate the ruling withdraws:** filling the kind into the result item when
+the returned value is a type. The type of a struct type is `Type`, so the item is
+right and the repair must come from the **value's kind**; that value is only
+available after the binding's evaluation, so the read has to be deferred the way the
+named read's per-apply assert is — with a decode of the value's own term, which is
+the open piece. The four `defer_pending` tests read through exactly this shape
+(`T::I` with `T = type_of (P _)(…)`).
 
 ### 6.3 The message/predicate disagreement
 
