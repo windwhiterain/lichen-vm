@@ -48,18 +48,19 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 
 **Status: `blocked:D6`** — the first half of `D6` (cache the extracted indexes and
 reuse one `PackageStore`/registry handle across requests; cancellation plus a
-debounce) has landed, and so has **client-version tracking** on the diagnostic
-publish; the remainder below has not.
+debounce) has landed, and so have **client-version tracking** and **file
+watching**; the remaining sub-item is (b) `BufferSession`, blocked on T3.
 
 - **(b) `BufferSession` — untouched, blocked on T3.** It avoids the lex and parse
   on the keystroke path, and T3 — the memoized check — does not exist, so skipping
   the check without it is not a win; it is worth doing for the keystroke path and
   is not a substitute for what has already landed.
-- **No file watching.** `did_save` and `did_change_watched_files` are still
-  absent, so editing an imported `math.lichen` never refreshes the importer; that
-  is why the dependency half of the cache key is load-bearing rather than a
-  belt-and-braces extra, and it leaves the server to notice a change only by
-  hashing, on the next request.
+- **File watching landed.** The server now declares save support (`did_save`
+  re-analyzes the saved document at once) and handles `did_change_watched_files`:
+  a changed file drops every cached index whose dependency list names it and the
+  affected open documents are re-analyzed. The dependency half of the cache key
+  stays load-bearing — it is what tells the server *which* indexes an import
+  change invalidates.
 - **Document-version tracking landed.** `did_open`/`did_change` record
   `text_document.version` with the text, and the document's own diagnostic set now
   publishes with it (`Some(version)`), so a client can reject a set a newer edit

@@ -597,6 +597,19 @@ where
             inner.analyze_and_publish(uri, generation).await;
         });
     }
+
+    /// Re-analyze a document whose text did not change (a save, or an import it reads).
+    ///
+    /// # Invariant
+    /// The generation bumps, so an analysis launched for the old text is superseded
+    /// by this one; a closed document has no text and is skipped.
+    fn reanalyze(&self, uri: Url) {
+        let Some((text, _, _)) = self.inner.current(&uri) else {
+            return;
+        };
+        let version = self.inner.version(&uri).unwrap_or_default();
+        self.schedule_analysis(uri, text, version, Duration::ZERO);
+    }
 }
 
 /// The package store for one run: the device handle the worker keeps open,
@@ -684,8 +697,14 @@ where
     async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                // A save re-runs the text; a changed import drops the importer's index.
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                        ..TextDocumentSyncOptions::default()
+                    },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -729,6 +748,43 @@ where
             return;
         };
         self.schedule_analysis(uri, last.text, params.text_document.version, EDIT_DEBOUNCE);
+    }
+
+    /// A save re-analyzes the document: the file on disk is what an importer reads.
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        self.reanalyze(params.text_document.uri);
+    }
+
+    /// A changed watched file drops importers' cached indexes and re-analyzes them.
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let paths: Vec<PathBuf> = params
+            .changes
+            .iter()
+            .filter_map(|change| change.uri.to_file_path().ok())
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let affected = {
+            let mut indexes = self.inner.indexes.lock().unwrap();
+            let affected: Vec<Url> = indexes
+                .iter()
+                .filter(|(_, cached)| {
+                    cached
+                        .dependencies
+                        .iter()
+                        .any(|(dependency, _)| paths.contains(dependency))
+                })
+                .map(|(uri, _)| uri.clone())
+                .collect();
+            for uri in &affected {
+                indexes.remove(uri);
+            }
+            affected
+        };
+        for uri in affected {
+            self.reanalyze(uri);
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
