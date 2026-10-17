@@ -308,7 +308,6 @@ impl<P: Program> Module<P> {
         self.nodes[node].assumed_concrete = false;
     }
 
-
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
         self.nodes[node].runned = 1;

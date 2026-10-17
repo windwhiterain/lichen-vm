@@ -112,14 +112,18 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   `diagnostic.rs:469-472`, and made `render.rs:261-264` answer *"table lookup missed — no entry for key
   {key}"*, with the old literal kept as the fall-back for an unreadable key. P2 already held — the caret
   lands on the key — so the message now names the key as well, which is the whole of P1.
-* **`DiagKind::IndexTarget` is dead code, and its message is *obsolete*, not merely unwired.** It is
-  defined (`diagnostic.rs:33`), rendered with words that no longer hold (`render.rs:173`: *"expected a
+* **`DiagKind::IndexTarget` was dead code, its message *obsolete* rather than merely unwired, and both are now
+  deleted** — the kind, its doc comment, and the `render.rs` arm that spelled it. It was
+  defined (`diagnostic.rs:33`), rendered with words that no longer held (`render.rs:173`: *"expected a
   tuple, array, or struct type, found {}"*), and **produced nowhere** — the other `IndexTarget` hits
   are `RuntimeIndexTarget` (a distinct runtime variant) and `EvalError::IndexTarget` (a different type
   in another crate). **Measured, not read**: the wiring was applied, run through the language front end
   and reverted. `check_index` (`checker/indexing.rs:49`) refuses a concrete non-array target with
   `DiagKind::Guard`, so `render.rs`'s `Guard` arm prints the **kind it requires**; flipping that one
-  call site to `IndexTarget` swaps the kind and nothing else, and the spans are unchanged:
+  call site to `IndexTarget` swaps the kind and nothing else, and the spans are unchanged. **After the
+  deletion the suites are unchanged**: `lichen-highlevel` 140 passed / 0 failed, and `lichen-language` 260
+  passed / 11 failed, the same eleven names as before — the kind produced nothing, so removing it can move
+  nothing.
 
   | program | `Guard` (today) | `IndexTarget` (wired, reverted) |
   |---|---|---|

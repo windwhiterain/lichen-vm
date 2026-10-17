@@ -170,12 +170,7 @@ where
                 printer.node(d.a)
             )
         }
-        DiagKind::IndexTarget => {
-            format!(
-                "expected a tuple, array, or struct type, found {}",
-                printer.node(d.a)
-            )
-        }
+
         DiagKind::RuntimeIndexTarget => {
             "this value is not a container — it has no element to read".to_string()
         }

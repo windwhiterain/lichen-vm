@@ -31,9 +31,7 @@ pub enum DiagKind {
     /// An operand's type must have a particular shape and does not;
     /// expected = that shape (a callee, a container, a set).
     Guard,
-    /// Indexing a concretely non-indexable type (a function, an atomic
-    /// type) — expected = a tuple, array, or struct type.
-    IndexTarget,
+
     /// A named field read `a.name` on a struct with no such field: expected is
     /// that field.
     NamedField,
@@ -89,9 +87,7 @@ pub enum DiagKind {
     ///
     /// # Invariant
     /// The lowlevel's `EvalError::IndexTarget` reaches the diagnostics as a fact
-    /// about a *value*, with no type to print, so the wording is
-    /// self-contained.  Distinct from [`Self::IndexTarget`], which reports a
-    /// *type* the checker refused to index and therefore names that type.
+    /// about a *value*, with no type to print, so the wording is self-contained.
     RuntimeIndexTarget,
     /// A type access (`X{n}`, `X::a`) whose **element** is not a pair at runtime.
     ///
