@@ -532,6 +532,21 @@ the whole-term pin refuses at the apply, and it still costs the extension. Optio
 1's assert is the route that landed for `.a`; the whole-term pin stays the
 rejected one.
 
+**A call result's named read resolves nothing — measured.** `st = struct{.a Int}` ;
+`f = x => st(.a 7)` ; `(f 1).a` prints `raw none: ?a`, while the same read through a
+binding (`z = f 1` ; `z.a`) is `1: Int`, and a positional read of an apply result
+works (`f = x => (x, 2)` ; `(f 1)(0)` is `1: Int`). The field's own value does not
+matter (`.a 7` above), so this is not about the argument being undecided: the read's
+key chain — `TableGet(names(container_ty), name)`, and the shape/field-type chain
+behind it — hangs off the apply's **result-type cell**, and nothing in the read's own
+evaluation forces the apply to run before that chain is read. The container's *value*
+read would force it, but the key is a sibling operand, and the lazy `TableGet` built
+at check time holds the still-open cell. The binding form works because its top-level
+evaluation runs the apply first. This is the same shape as compute's `graphrun` field
+spellings (`two_buffers_field` and `gemv_p_a` refused; see
+[compute-buffer-wrapper](compute-buffer-wrapper.md)'s open item) and as a fold whose
+read sits inline on the recursion's apply rather than on a binding.
+
 ### 6.3 The message/predicate disagreement
 
 > **Superseded in part (measured).** The struct marker became a **tag**
