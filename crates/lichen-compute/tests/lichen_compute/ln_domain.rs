@@ -1,11 +1,10 @@
-//! `ln` spliced into a kernel body answers what its reduction computes at the band's
-//! own edges, not only near one.
+//! `ln`'s body is a compensated quotient, and the wasm backend refuses it by name.
 //!
 //! # Invariant
-//! The table runs the emitted kernel — compiled, assembled and run through the wasm
-//! path — against a model written from the reduction's own algorithm and constants.
-//! The model calls nothing in `lichen-kernel-ir`, so agreement is evidence about the
-//! kernel body rather than about a function that mirrors it.
+//! The device leg is held at zero ulp by `spliced_transcendentals` against the definition, on both
+//! an RTX 3060 and an Intel Iris Xe. This file holds the other leg: wasm's MVP has no fused
+//! multiply-add, so the operator is **refused** rather than lowered into a program that would round
+//! twice — the reason `fused-multiply-add.md` §7 measured and the emitter states.
 
 use super::common;
 
@@ -16,89 +15,18 @@ const BAND_LOW: f32 = 0.707_106_78;
 /// `sqrt(2)` as the class holds it: the reduction's open upper edge.
 const BAND_HIGH: f32 = 1.414_213_5;
 /// The fine phase's own guard: the `2^-4` step's product with the band, `16/sqrt(2)`.
-///
-/// # Invariant
-/// **The fine guard is this, not the band's upper edge**: a `2^-4` step from inside the
-/// band leaves it, so a guard on `BAND_HIGH` overshot below for 1,604,117,031 of the
-/// positive class (`unary.rs`'s `LN_FINE_EDGE`).
 const FINE_EDGE: f32 = BAND_LOW * 16.0;
-/// `ln 2` in this class, the track's unit.
-const LN_TWO: f32 = std::f32::consts::LN_2;
-/// The `atanh` coefficients `1/(2i+1)`, ascending in `z^2`.
-const COEFFICIENTS: [f32; 10] = [
-    1.0,
-    1.0 / 3.0,
-    1.0 / 5.0,
-    1.0 / 7.0,
-    1.0 / 9.0,
-    1.0 / 11.0,
-    1.0 / 13.0,
-    1.0 / 15.0,
-    1.0 / 17.0,
-    1.0 / 19.0,
-];
 
 /// The operand one unit of the last place below `x`, in the class's own order.
 fn below(x: f32) -> f32 {
     f32::from_bits(x.to_bits() - 1)
 }
 
-/// The three conditional scalings, in the order the body runs them.
+/// The operands the refused kernel is built over.
 ///
 /// # Invariant
-/// **Powers of two, and the track is added to rather than multiplied**, so `k` is the
-/// exact integer exponent — it sums `[-32, 1]` per step and never leaves `[-160, 32]`,
-/// which the class holds exactly.
-fn reduce(mut value: f32) -> (f32, f32) {
-    let mut track = 0.0f32;
-    for _ in 0..5 {
-        if value < BAND_LOW {
-            value *= 4_294_967_296.0;
-            track -= 32.0;
-        }
-    }
-    for _ in 0..32 {
-        if value >= FINE_EDGE {
-            value *= 1.0 / 16.0;
-            track += 4.0;
-        }
-    }
-    for _ in 0..5 {
-        if value >= BAND_HIGH {
-            value *= 0.5;
-            track += 1.0;
-        }
-    }
-    (value, track)
-}
-
-/// Horner over `square`, in the order the polynomial states it.
-fn horner(square: f32) -> f32 {
-    let last = COEFFICIENTS.len() - 1;
-    let mut value = COEFFICIENTS[last];
-    for coefficient in COEFFICIENTS[..last].iter().rev() {
-        value = value * square + coefficient;
-    }
-    value
-}
-
-/// The reduction and the `atanh` series, as the definition computes them.
-fn model(x: f32) -> f32 {
-    if !(x > 0.0) {
-        return f32::NEG_INFINITY;
-    }
-    let (value, track) = reduce(x);
-    let z = (value - 1.0) / (value + 1.0);
-    z * 2.0 * horner(z * z) + track * LN_TWO
-}
-
-/// The operands the emitted kernel is run over.
-///
-/// # Invariant
-/// Both band edges with the last `f32` either side of each, the fine phase's own
-/// guard, `0.99999994` — the operand §3.3 measured against the rejected `[1, 2)`
-/// band — `0.0001` and `2^40` to reach the coarse, fine and unit phases each, and
-/// `0.0` and `-1.0` for the guard that answers `-inf` rather than a number.
+/// Both band edges with the last `f32` either side of each, the fine phase's own guard, and one
+/// operand per reduction phase, so the body being refused is the one the device leg measures.
 fn operands() -> Vec<f32> {
     vec![
         1.0,
@@ -159,54 +87,14 @@ compute.collect out.v : array{{Float, {}}}
     answers
 }
 
-/// How far `got` is from `want`, in units of the last place of a `f32`.
-fn ulps(got: f32, want: f32) -> i64 {
-    (i64::from(got.to_bits()) - i64::from(want.to_bits())).abs()
-}
-
-/// The emitted body computes the reduction's own value, bit for bit, at every edge.
+/// The wasm backend refuses `ln` by name instead of lowering a fused multiply-add into two roundings.
 ///
 /// # Invariant
-/// The comparison is exact, not a tolerance: the body runs the model's sequence, so
-/// any gap at all is a different computation. `0.99999994` is here because that is
-/// where the rejected band lost a factor of two, and the non-positive lanes are here
-/// because the answer is a `Select` — the shape whose arms `floating-point.md` §8
-/// records having been listed backwards.
+/// The anchor is the emitter's own sentence: a lowering would answer values the device does not, so
+/// the refusal is the contract and not a failure. `expand_transcendentals`' invariant keeps one
+/// definition for both targets, which is why this leg cannot be given a different sequence.
 #[test]
-fn the_spliced_body_matches_the_reduction_at_every_band_edge() {
-    let operands = operands();
-    let answers = emitted(&operands);
-    for (index, &x) in operands.iter().enumerate() {
-        let want = model(x);
-        assert_eq!(
-            ulps(answers[index], want),
-            0,
-            "ln({x}) is emitted as {}, the reduction computes {want}",
-            answers[index]
-        );
-    }
-}
-
-/// Every positive answer stays beside the logarithm, which is what the band buys.
-///
-/// # Invariant
-/// **Two ulp is the criterion §3.3 measured, and the band is what meets it**: over
-/// `[0.5, 2)` a `[1, 2)` reduction's worst relative error is 1.000 and this one's is
-/// 2.271e-7. This compares the emitted answer against `f64`, not against a mirror,
-/// because a mirror agreeing with `f64` is the failure `floating-point.md` §8 names.
-#[test]
-fn every_positive_answer_stays_within_two_ulp_of_the_logarithm() {
-    let operands = operands();
-    let answers = emitted(&operands);
-    for (index, &x) in operands.iter().enumerate() {
-        if !(x > 0.0) {
-            continue;
-        }
-        let want = f64::from(x).ln() as f32;
-        assert!(
-            ulps(answers[index], want) <= 2,
-            "ln({x}) is emitted as {}, the logarithm is {want}",
-            answers[index]
-        );
-    }
+#[should_panic(expected = "wasm's MVP has no instruction for one")]
+fn ln_is_refused_by_name_on_the_wasm_backend() {
+    let _ = emitted(&operands());
 }
