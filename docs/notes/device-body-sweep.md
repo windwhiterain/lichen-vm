@@ -420,3 +420,29 @@ production code and nothing else referenced it. **No example file was edited**: 
 reduction bodies were read from `examples/` and substituted in memory, `git diff dev...HEAD --
 examples/` is empty, and no `output =` line moved. **No test was added and no production file was
 touched.**
+
+## The `layernorm` gap, closed: the one-pass identity's accuracy is its condition number
+
+The sweep above says `layernorm` got no independent sweep, because it "shares `rmsnorm`'s arithmetic
+family". Measured, that is right for everything the two families share and wrong for the one thing they do
+not: `rmsnorm` has no mean, and `layernorm`'s variance is the **difference of two computed values**,
+`v = Σx²/n − m·m`.
+
+On a device, that costs **0.25 ulp of the operands' magnitude**: over 4096 rows built as a large mean plus a
+small spread, the worst absolute error was **7.98** on `m² ≈ 2.56e8`, whose ulp is **32**. That is better
+than one ulp — and it is not the interesting number:
+
+| row | `m² / v` | what `v` retains |
+|---|---|---|
+| the example's `1, 2, 3, 4` (`m = 2.5`, `v = 1.25`) | **5** | all of it, which is why that example is exact |
+| the probe's rows (`m` up to `1.6e4`, `v` near `1`) | **~5e8** | about **28 bits**, a relative error near **1e-1** |
+
+**So `layernorm`'s accuracy is its identity's condition number, not the device's arithmetic.** `rmsnorm`
+cannot show this: its divisor is a sum of squares, with no subtraction of two large values. The example's
+`output` line is exact because its row is in the benign regime — the example says so itself, "The value is
+still chosen so the denominator lands on an exact square" — but its surrounding sentences are about `sqrt`,
+not about this.
+
+**What this does not measure:** the `sqrt`'s own distribution on a `v` that is not an exact square. That
+was measured through `rmsnorm` (184 → 220 of 256, worst 1 ulp) and the sequence is shared, so it is
+referenced rather than repeated.
