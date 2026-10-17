@@ -18,9 +18,10 @@
 > named resolve refusal, exit `0` (§11.1). **The mutual value cycle it left open** — `a = b;
 > b = qb * a` — was closed by the user's commit `5a9b97da`, which extends the refusal to a cycle
 > among **scalar** block bindings; measured, it is a named resolve refusal now and no longer
-> overflows (§11.6 has the before/after). **What remains open is not a crash**: §11.4's two
-> `# Invariant` statements are still false (`emit_node` does not exist, nothing in `lichen-compute`
-> is `#[stacksafe]`, and `stacksafe` is an unused dependency), and that is the owner's to decide.
+> overflows (§11.6 has the before/after). **What remained open was not a crash**: §11.4's two
+> `# Invariant` statements were false; the owner approved the truth-fix and it is landed — one
+> budget constant, the sentences name `Lower::value`, and the unused `stacksafe` dependency is gone
+> (§11.7).
 >
 > Everything below §1–§10 is the diagnosis as it was measured at `dev@12425166`, kept as it was
 > written. **Where §5 read the spec and concluded the program is legal, §5 now records that the
@@ -582,13 +583,12 @@ strength of a §11.3 measurement taken on this machine only, and **editing an `#
 the user's permission** — which this slice does not have. **If the user wants option 1, it is one
 annotation and two sentences, and this note names all three places.**
 
-**After `5a9b97da` the recommendation is narrower.** The resolver refuses both cycle shapes, so
-restoring the annotation no longer closes a crash: what is left is that the two sentences are
-**false** — the walk is `Lower::value`, `emit_node` does not exist, and nothing in the crate is
-`#[stacksafe]` — plus the dependency the crate declares and never uses and the `512` defined twice
-(`compute.rs:2927` for the refusal message, `compute/body.rs:161` for the walk). Correcting a
-`# Invariant` still needs the owner's permission, and it is now a truth-of-the-comment change
-rather than a fix.
+**After `5a9b97da` the recommendation was narrower**, and it is now **landed** (§11.7). The resolver
+refuses both cycle shapes, so restoring the annotation no longer closes a crash: what was left was
+that the two sentences were **false** — the walk is `Lower::value`, `emit_node` does not exist, and
+nothing in the crate is `#[stacksafe]` — plus the dependency the crate declared and never used and
+the `512` defined twice (`compute.rs:2927` for the refusal message, `compute/body.rs:161` for the
+walk). The owner approved the truth-fix rather than the annotation.
 
 ### 11.5 What this slice changed, what it deleted, and what the suites say
 
@@ -641,6 +641,28 @@ any lowering. The trip-500 row is §8's first unknown, partly answered: at that 
 checker's own budget stops the program before the walk's depth is reached, so the depth budget's
 value still has no measurement behind it and no measured program reaches it.
 
-**What is not closed, and is the owner's**: §11.4's two `# Invariant` statements are still false, and
-the crate still declares the `stacksafe` dependency it never uses. Both are named there; neither
-blocks a program now.
+**What was left open is now closed too** (§11.7): §11.4's two `# Invariant` statements were false
+and the crate declared the `stacksafe` dependency it never used; the owner approved the truth-fix,
+and both are gone.
+
+### 11.7 The two false sentences, corrected — the owner's decision
+
+**Approved by the owner, and landed**: the comments say what the tree does, and the duplicate is
+gone. No behaviour changed.
+
+- **One budget constant.** `compute/body.rs` holds `pub(super) const MAX_KERNEL_BODY_DEPTH: usize =
+  512` — the one the walk checks — and `compute.rs` imports it for the refusal message, so the
+  message and the budget can no longer disagree. Its `# Invariant` names the walk (`Lower::value`),
+  states that the value is a policy constant never derived from the thread's stack, and records that
+  the walk is **not** `#[stacksafe]` — a stack that cannot hold the depth dies before the refusal.
+- **The two false sentences are gone.** The `compute.rs` copy of the constant (which named
+  `emit_node`) is deleted, and the comments that named `emit_node` now name `Lower::value`.
+- **The unused dependency is removed**: `stacksafe` is no longer in
+  `crates/lichen-compute/Cargo.toml` (the other crates that use it are untouched), and `Cargo.lock`
+  drops the edge.
+
+**Verified**: `cargo check -p lichen-compute --tests` clean; the unit suite **19 passed / 0 failed**;
+`comments-check --config comments-test.toml . --max-violations 0` and
+`cargo fmt --all -- --check` both clean. **No test asserts the depth refusal's text**, and the
+message is unchanged apart from where it reads the constant from, so the acceptance is the comment
+policy rather than a behaviour reading.

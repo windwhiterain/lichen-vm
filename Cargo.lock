@@ -893,7 +893,6 @@ dependencies = [
  "lichen-runtime",
  "lichen-tools",
  "lichen-utils",
- "stacksafe",
  "waffle",
  "wasm-encoder 0.248.0",
  "wasmi",

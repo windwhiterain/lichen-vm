@@ -156,9 +156,15 @@ const SECOND_EXTENT_ORDINAL: usize = 1;
 /// reader is told what to change rather than which of the three it met.
 const ONE_EXTENT_CONFIG: &str = "this launch declares one extent, the count, and `compute.row`/`compute.col` take the lane's coordinates over the **second** one: a row and a column are positions in a shape with two extents, and this parameter has one scalar leaf. Give the config a second — `Par = struct{.n Int, .cols Int, .in In, .out Out}` — or divide the index by the leaf the body already reads, which is the spelling this replaces";
 
-/// The walk's depth ceiling: a refusal, not a panic, and what a deeply **expanded**
-/// recursion runs into.
-const MAX_KERNEL_BODY_DEPTH: usize = 512;
+/// How many levels deep `Lower::value`'s walk may go before it refuses.
+///
+/// # Invariant
+/// The budget is on the walk, and the walk's depth is the trip count: an unmarked
+/// recursion is expanded into a nested chain, so depth is linear in the trips. The
+/// value is a policy constant, never derived from the thread's stack, and the walk is
+/// not `#[stacksafe]`: a stack that cannot hold this depth dies before the refusal
+/// (`docs/notes/self-referential-binding-overflow.md` §11.4).
+pub(super) const MAX_KERNEL_BODY_DEPTH: usize = 512;
 
 impl<'a, P: Program> Lower<'a, P>
 where

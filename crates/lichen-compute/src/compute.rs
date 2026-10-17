@@ -29,7 +29,7 @@ use lichen_lowlevel::{
 use lichen_utils::extend::AsEnum;
 
 mod body;
-use body::Lower;
+use body::{Lower, MAX_KERNEL_BODY_DEPTH};
 pub mod fused;
 pub mod graph;
 pub mod graph_pass;
@@ -2917,15 +2917,6 @@ where
     root
 }
 
-/// How many levels deep [`emit_node`]'s walk may go before it refuses.
-///
-/// # Invariant
-/// The budget is on the walk, and the walk's depth is the trip count: an unmarked
-/// recursion is expanded into a nested chain, so depth is linear in the trips.
-/// `emit_node` is `#[stacksafe]` and this limit is the policy — a constant, never
-/// derived from the thread's stack, and unreachable except by expansion.
-const MAX_KERNEL_BODY_DEPTH: usize = 512;
-
 /// How deep a parameter's field nesting a named read's resolution follows.
 ///
 /// # Invariant
@@ -2934,7 +2925,7 @@ const MAX_KERNEL_BODY_DEPTH: usize = 512;
 /// encoding re-enters from spinning.
 const MAX_PARAMETER_DEPTH: usize = 32;
 
-/// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`].
+/// The refusal the walk gives past [`MAX_KERNEL_BODY_DEPTH`].
 ///
 /// # Invariant
 /// One string rather than a `format!` at the call site, so every refusal of this
@@ -3557,7 +3548,7 @@ where
 /// The scalar literal a term holds, if it is one.
 ///
 /// # Invariant
-/// The value slot answers first, exactly as [`emit_node`] reads it: a node the
+/// The value slot answers first, exactly as `Lower::value` reads it: a node the
 /// checker concretised carries an operation *and* a value, and asking about the
 /// operation first would emit a float value as an integer bit pattern.
 fn scalar_literal<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Option<LowValue>
