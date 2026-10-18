@@ -18,3 +18,4 @@
 - [Compound Values: Tuples and Arrays](ch07-tuples-and-arrays.md)
 - [Structs and Records](ch08-structs-and-records.md)
 - [Tables and Sets](ch09-tables-and-sets.md)
+- [Types as Values](ch10-types-as-values.md)
