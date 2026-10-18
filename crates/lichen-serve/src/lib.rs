@@ -152,19 +152,33 @@ pub struct Stepped {
 }
 
 impl Prepared<'_> {
-    /// Run the held graph once, and leave what it wrote where it wrote it.
+    /// Run the held graph once under this session's schedule, and leave what it wrote where it is.
     ///
     /// # Invariant
     /// The counts are this call's alone, and a `RunResult::Resident` names memory the caller still
     /// has to fetch: a step is one submission and a readback is a separate act with a cost of its
     /// own, which is what [`Session::fetch`] exists for.
     pub fn step(&self, arguments: Vec<RunArgument>) -> Result<Stepped, ServeRefusal> {
+        self.step_with(Policy::Batch, arguments)
+    }
+
+    /// Run the held graph once under `policy`, for a host that wants to compare schedules.
+    ///
+    /// # Invariant
+    /// The only thing `policy` changes is how many submissions the run takes: `Batch` records every
+    /// node into one and waits once, while `Async` takes one per node and does not idle the host
+    /// between them. So the same graph run twice is the same work at two submission counts.
+    pub fn step_with(
+        &self,
+        policy: Policy,
+        arguments: Vec<RunArgument>,
+    ) -> Result<Stepped, ServeRefusal> {
         let before = (
             self.session.context.submissions(),
             self.session.context.fence_waits(),
         );
         let started = Instant::now();
-        let outcome = graph::run(&self.graph, self.backend, arguments, Policy::Batch);
+        let outcome = graph::run(&self.graph, self.backend, arguments, policy);
         let elapsed = started.elapsed();
         let cost = StepCost {
             submissions: self.session.context.submissions().saturating_sub(before.0),

@@ -65,6 +65,22 @@ costs **one**, and the readback becomes the caller's separate act — which is w
 is, and what `Session::prepare`/`Prepared::step`/`Session::fetch` exist for. Everything below is
 about whether a step can be built to hit that.
 
+**And the submissions are most of what the clock is made of at this size.** One recorded graph
+of 16 dispatches, prepared once and stepped 200 times, run under two schedules — same graph,
+same kernel, same extent, no compilation inside the clock
+(`crates/lichen-serve/tests/step_cost.rs`):
+
+| schedule | submissions per step | fences per step | per step |
+|---|---|---|---|
+| `Batch` | 1 | 1 | **1.55 ms** |
+| `Async` | 16 | 30 | 2.66 ms |
+
+So batching saves **1.11 ms of a 2.66 ms step — 41.7%** on identical work. The kernel does almost
+nothing (three elements per dispatch), so this is the *overhead* fraction and not a claim about a
+real layer's compute: as each dispatch grows, the fraction the schedule owns shrinks. `Async` also
+waits **30** fences for its 16 submissions — it pipelines and then settles more than it
+submitted — so the two schedules are not comparable by submission count alone.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough

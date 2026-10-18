@@ -1,6 +1,7 @@
 //! A session installs the backend, counts what its runs ask for, and reports refusals by name.
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
+use lichen_graph_ir::Policy;
 use lichen_kernel_ir::{ScalarClass, ScalarData};
 use lichen_serve::{ServeRefusal, Session};
 
@@ -306,5 +307,122 @@ fn a_prepared_step_runs_without_compiling_again() {
         first.cost.submissions,
         first.cost.fence_waits,
         prepared.nodes()
+    );
+}
+
+/// A step of `nodes` dispatches, each doubling the one before, recorded as a graph value.
+fn layer(nodes: usize) -> String {
+    let mut body = String::new();
+    let mut previous: Option<String> = None;
+    for ordinal in 0..nodes {
+        let source = previous
+            .as_deref()
+            .map(|name| format!("{name}.e"))
+            .unwrap_or_else(|| "s.in.d".to_string());
+        if ordinal + 1 == nodes {
+            body.push_str(&format!(
+                "  compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d {source})))\n"
+            ));
+        } else {
+            let name = if ordinal == 0 {
+                "a".to_string()
+            } else {
+                format!("n{ordinal}")
+            };
+            body.push_str(&format!(
+                "  {name} = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d {source}))) : Out)\n"
+            ));
+            previous = Some(name);
+        }
+    }
+    format!(
+        "{KERNEL}
+GArg = struct{{.n Int, .in Inc}}
+step = (s : GArg) => {{
+{body}}}
+built = compute.graph step
+built
+"
+    )
+}
+
+/// Whether a step's clock is its submissions or its dispatches, on one graph run two ways.
+///
+/// # Invariant
+/// The clock covers `REPEATS` steps of an already-prepared graph, so no compilation is inside it,
+/// and both schedules run **the same graph** — so the only difference is how many submissions the
+/// run takes. The counts are asserted per step, so a schedule change cannot pass as timing noise.
+#[test]
+fn a_schedule_trades_submissions_for_clock() {
+    const REPEATS: usize = 200;
+    const NODES: usize = 16;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_schedule_trades_submissions_for_clock: no device");
+        return;
+    };
+    let arguments = || {
+        vec![
+            RunArgument::Count(3),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&[1.0, 2.0, 3.0]),
+            },
+        ]
+    };
+    let prepared = session
+        .prepare(&layer(NODES))
+        .unwrap_or_else(|refusal| panic!("the step prepares: {refusal}"));
+    assert_eq!(
+        prepared.nodes(),
+        NODES,
+        "the held step has the nodes asked for"
+    );
+
+    let batches = prepared
+        .step_with(Policy::Batch, arguments())
+        .unwrap_or_else(|refusal| panic!("a batched step runs: {refusal}"));
+    assert_eq!(
+        (batches.cost.submissions, batches.cost.fence_waits),
+        (1, 1),
+        "the whole step is one submission and one fence"
+    );
+    let pipelined = prepared
+        .step_with(Policy::Async, arguments())
+        .unwrap_or_else(|refusal| panic!("an async step runs: {refusal}"));
+    assert_eq!(
+        pipelined.cost.submissions, NODES as u64,
+        "under `Async` the same step is one submission per node"
+    );
+    assert!(
+        pipelined.cost.fence_waits >= pipelined.cost.submissions,
+        "`Async` waits at least as many fences as it submits, and this run waited {} for {} \
+         submissions",
+        pipelined.cost.fence_waits,
+        pipelined.cost.submissions
+    );
+
+    let mut clocks: Vec<(Policy, f64)> = Vec::new();
+    for policy in [Policy::Batch, Policy::Async] {
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            let stepped = prepared
+                .step_with(policy, arguments())
+                .unwrap_or_else(|refusal| panic!("a {policy:?} step runs: {refusal}"));
+            std::hint::black_box(&stepped);
+        }
+        clocks.push((
+            policy,
+            started.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64,
+        ));
+    }
+    let batched = clocks[0].1;
+    let asynchronously = clocks[1].1;
+    println!(
+        "step clock over {REPEATS} steps of {NODES} dispatches: Batch 1 submission {batched:.4} ms, \
+         Async {NODES} submissions / {} fences {asynchronously:.4} ms, so batching saved \
+         {:.4} ms per step ({:.1}%)",
+        pipelined.cost.fence_waits,
+        asynchronously - batched,
+        (asynchronously - batched) / asynchronously * 100.0
     );
 }
