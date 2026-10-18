@@ -60,7 +60,7 @@ pub fn module_cache_disk_writes() -> usize {
 /// # Invariant
 /// A sibling of the device's own `artifacts`, because the two hold different things:
 /// an artifact is a compiled package keyed by its source file ID, a kernel is an
-/// assembled launch set keyed by the content digest of the fragment it came from.
+/// assembled launch set keyed by the content digest of every fragment in it.
 const KERNEL_CACHE_DIR: &str = "kernels";
 
 /// The directory `device_root`'s compiler slot assembles its kernels under.
