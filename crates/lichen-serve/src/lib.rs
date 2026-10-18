@@ -27,7 +27,7 @@ pub use model::{
 mod upload;
 
 pub use narrowed::narrowed_projection;
-pub use qwen::{Generated, Qwen, QwenRefusal};
+pub use qwen::{Generated, Qwen, QwenRefusal, Width};
 pub use service::{Served, Service};
 
 /// What one run asked the device for.

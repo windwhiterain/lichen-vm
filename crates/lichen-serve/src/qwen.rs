@@ -56,6 +56,22 @@ pub struct Generated {
     pub per_token: Vec<Duration>,
 }
 
+/// A layer's tensors, held at the width the model runs at.
+enum Tensors {
+    /// The f32 dumps, four bytes an element.
+    Wide(Vec<f32>),
+    /// The checkpoint's halves, two bytes an element, unconverted.
+    Narrowed(Vec<u8>),
+}
+
+/// The numbers a run of halves holds, widened the way the device widens them.
+fn halves_to_floats(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|half| f32::from_bits(u32::from(u16::from_le_bytes([half[0], half[1]])) << 16))
+        .collect()
+}
+
 /// The cache a layer keeps: one key and one value per position seen.
 #[derive(Default)]
 struct Cache {
@@ -69,6 +85,40 @@ fn root() -> Result<PathBuf, QwenRefusal> {
         return Ok(PathBuf::from(found));
     }
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.model"))
+}
+
+/// The width a model runs at: the checkpoint's own halves, or the f32 dumps of them.
+///
+/// # Invariant
+/// A narrowed model reads a `_bf16` file and hands its bytes on **unconverted**, so a layer costs its
+/// read and not a conversion: the numbers are the checkpoint's own, at the width it states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Width {
+    /// The f32 dumps, which the host stores four bytes an element.
+    Wide,
+    /// The checkpoint's `bf16` halves, two bytes an element, which fit in memory where f32 does not.
+    Narrowed,
+}
+
+impl Width {
+    /// The byte a file of this width spends on one element.
+    fn bytes(self) -> usize {
+        match self {
+            Width::Wide => 4,
+            Width::Narrowed => 2,
+        }
+    }
+}
+
+/// The bytes of one flat tensor, unconverted.
+fn flat_bytes(name: &str, width: Width) -> Result<Vec<u8>, QwenRefusal> {
+    let suffix = match width {
+        Width::Wide => "",
+        Width::Narrowed => "_bf16",
+    };
+    let path = root()?.join(format!("{name}{suffix}.bin"));
+    std::fs::read(&path)
+        .map_err(|error| QwenRefusal::Weights(format!("{}: {error}", path.display())))
 }
 
 /// One flat file, read as f32 once.
@@ -89,25 +139,49 @@ struct Steps<'session> {
     rotation: crate::Prepared<'session>,
     attention: crate::Prepared<'session>,
     product: crate::Prepared<'session>,
+    /// The width every payload this step hands over is stored at.
+    width: Width,
 }
 
 impl<'session> Steps<'session> {
-    fn prepare(session: &'session Session) -> Result<Self, QwenRefusal> {
+    fn prepare(session: &'session Session, width: Width) -> Result<Self, QwenRefusal> {
         let prepared = |source: &str| session.prepare(source).map_err(QwenRefusal::Step);
         Ok(Self {
             norm: prepared(RMS_NORM_STEP)?,
-            projection: prepared(MATVEC_STEP)?,
+            projection: match width {
+                Width::Wide => prepared(MATVEC_STEP)?,
+                Width::Narrowed => crate::narrowed_projection(session)?,
+            },
             rotation: prepared(ROPE_STEP)?,
             attention: prepared(ATTEND_CACHE_STEP)?,
             product: prepared(SWIGLU_STEP)?,
+            width,
         })
+    }
+
+    /// A value the step reads, at the width this model runs at.
+    ///
+    /// # Invariant
+    /// A narrowed model hands over the checkpoint's own halves, so a weight it holds is never converted
+    /// on the way to the device; the values a layer computes are f32 here and become halves here.
+    fn payload(&self, values: &[f32]) -> RunArgument {
+        match self.width {
+            Width::Wide => floats(values),
+            Width::Narrowed => RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::BFloat16,
+                data: values
+                    .iter()
+                    .flat_map(|value| ((value.to_bits() >> 16) as u16).to_le_bytes())
+                    .collect(),
+            },
+        }
     }
 
     fn normalised(
         &self,
         session: &Session,
         values: &[f32],
-        gain: &[f32],
+        gain: RunArgument,
         rows: i64,
         width: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
@@ -117,8 +191,8 @@ impl<'session> Steps<'session> {
                 RunArgument::Count(width * rows),
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
-                floats(values),
-                floats(gain),
+                self.payload(values),
+                gain,
             ])
             .map_err(QwenRefusal::Step)?;
         answered(session, &stepped)
@@ -128,7 +202,7 @@ impl<'session> Steps<'session> {
         &self,
         session: &Session,
         values: &[f32],
-        weight: &[f32],
+        weight: RunArgument,
         rows: i64,
         width: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
@@ -137,8 +211,8 @@ impl<'session> Steps<'session> {
             .step(vec![
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
-                floats(values),
-                floats(weight),
+                self.payload(values),
+                weight,
             ])
             .map_err(QwenRefusal::Step)?;
         answered(session, &stepped)
@@ -155,7 +229,7 @@ impl<'session> Steps<'session> {
             .step(vec![
                 RunArgument::Count(values.len() as i64),
                 RunArgument::Count(position),
-                floats(values),
+                self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
         answered(session, &stepped)
@@ -166,8 +240,8 @@ impl<'session> Steps<'session> {
             .product
             .step(vec![
                 RunArgument::Count(INTERMEDIATE),
-                floats(gate),
-                floats(up),
+                self.payload(gate),
+                self.payload(up),
             ])
             .map_err(QwenRefusal::Step)?;
         answered(session, &stepped)
@@ -192,9 +266,9 @@ impl<'session> Steps<'session> {
             .step(vec![
                 RunArgument::Count(HEADS * positions as i64),
                 RunArgument::Count(positions as i64),
-                floats(query),
-                floats(keys),
-                floats(values),
+                self.payload(query),
+                self.payload(keys),
+                self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
         answered(session, &stepped)
@@ -240,16 +314,43 @@ pub struct Qwen<'session> {
     steps: Steps<'session>,
     final_norm: Vec<f32>,
     embedding: Vec<f32>,
+    /// What the weights are held and handed over at.
+    width: Width,
+    /// The embedding's own bytes, which the head reads whole and unconverted when narrowed.
+    embedding_bytes: Option<Vec<u8>>,
 }
 
 impl<'session> Qwen<'session> {
     /// Read the tensors a forward needs in every token, and prepare the steps.
     pub fn open(session: &'session Session) -> Result<Self, QwenRefusal> {
+        Self::open_with(session, Width::Wide)
+    }
+
+    /// Read the tensors at `width`: the f32 dumps, or the checkpoint's own halves.
+    ///
+    /// # Invariant
+    /// A narrowed model keeps the embedding's bytes so its head hands them over unconverted, and reads
+    /// the row it starts from out of those bytes rather than from a second copy of the tensor.
+    pub fn open_with(session: &'session Session, width: Width) -> Result<Self, QwenRefusal> {
+        let (final_norm, embedding, embedding_bytes) = match width {
+            Width::Wide => (flat("final_norm")?, flat("layer0_embed")?, None),
+            Width::Narrowed => {
+                let bytes = flat_bytes("embed_tokens_weight", width)?;
+                let norm = flat_bytes("norm_weight", width)?;
+                (
+                    halves_to_floats(&norm),
+                    halves_to_floats(&bytes[..HIDDEN_SIZE * 2]),
+                    Some(bytes),
+                )
+            }
+        };
         Ok(Self {
             session,
-            steps: Steps::prepare(session)?,
-            final_norm: flat("final_norm")?,
-            embedding: flat("layer0_embed")?,
+            steps: Steps::prepare(session, width)?,
+            final_norm,
+            embedding,
+            width,
+            embedding_bytes,
         })
     }
 
@@ -261,18 +362,29 @@ impl<'session> Qwen<'session> {
         let mut token = start;
         for position in 0..count {
             let started = Instant::now();
-            let mut hidden =
-                self.embedding[token * HIDDEN_SIZE..(token + 1) * HIDDEN_SIZE].to_vec();
+            // The row the token starts from, read out of whichever copy the model holds.
+            let row = match &self.embedding_bytes {
+                None => self.embedding[token * HIDDEN_SIZE..(token + 1) * HIDDEN_SIZE].to_vec(),
+                Some(bytes) => {
+                    halves_to_floats(&bytes[token * HIDDEN_SIZE * 2..(token + 1) * HIDDEN_SIZE * 2])
+                }
+            };
+            let mut hidden = row;
             for layer in 0..LAYERS {
                 hidden = self.layer(layer, hidden, &mut caches[layer], position as i64)?;
             }
-            let normalised =
-                self.steps
-                    .normalised(self.session, &hidden, &self.final_norm, 1, HIDDEN as i64)?;
+            let head = self.head_weight();
+            let normalised = self.steps.normalised(
+                self.session,
+                &hidden,
+                self.steps.payload(&self.final_norm),
+                1,
+                HIDDEN as i64,
+            )?;
             let logits = self.steps.projected(
                 self.session,
                 &normalised,
-                &self.embedding,
+                head,
                 VOCABULARY as i64,
                 HIDDEN as i64,
             )?;
@@ -283,6 +395,36 @@ impl<'session> Qwen<'session> {
         Ok(Generated { tokens, per_token })
     }
 
+    /// The vocabulary head's weight, which is the embedding's own tensor.
+    fn head_weight(&self) -> RunArgument {
+        match &self.embedding_bytes {
+            None => floats(&self.embedding),
+            Some(bytes) => RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::BFloat16,
+                data: bytes.clone(),
+            },
+        }
+    }
+
+    /// The argument one tensor of a layer is handed over as.
+    ///
+    /// # Invariant
+    /// A narrowed layer keeps the file's bytes and hands a **slice** of them on, so a weight is never
+    /// converted; the offsets the layer reads are elements and the file is two bytes to each.
+    fn tensor(&self, tensors: &Tensors, offset: usize, length: usize) -> RunArgument {
+        match tensors {
+            Tensors::Wide(values) => floats(&values[offset..offset + length]),
+            Tensors::Narrowed(bytes) => {
+                let start = offset * self.width.bytes();
+                let end = (offset + length) * self.width.bytes();
+                RunArgument::Buffer {
+                    class: lichen_kernel_ir::ScalarClass::BFloat16,
+                    data: bytes[start..end].to_vec(),
+                }
+            }
+        }
+    }
+
     /// One layer, at one position, with the cache the position needs.
     fn layer(
         &self,
@@ -291,27 +433,32 @@ impl<'session> Qwen<'session> {
         cache: &mut Cache,
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
-        let weights = flat(&format!("layer{layer:02}"))?;
+        let tensors = match self.width {
+            Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
+            Width::Narrowed => {
+                Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?)
+            }
+        };
         let session = self.session;
         let steps = &self.steps;
         let normed = steps.normalised(
             session,
             &hidden,
-            &weights[GAIN..GAIN + HIDDEN_SIZE],
+            self.tensor(&tensors, GAIN, HIDDEN_SIZE),
             1,
             HIDDEN as i64,
         )?;
         let key = steps.projected(
             session,
             &normed,
-            &weights[K..K + 1024 * 2048],
+            self.tensor(&tensors, K, 1024 * 2048),
             KEY_HEADS * HEAD,
             HIDDEN as i64,
         )?;
         let key = steps.normalised(
             session,
             &key,
-            &weights[K_NORM..K_NORM + 128],
+            self.tensor(&tensors, K_NORM, 128),
             KEY_HEADS,
             HEAD,
         )?;
@@ -319,7 +466,7 @@ impl<'session> Qwen<'session> {
         let value = steps.projected(
             session,
             &normed,
-            &weights[V..V + 1024 * 2048],
+            self.tensor(&tensors, V, 1024 * 2048),
             KEY_HEADS * HEAD,
             HIDDEN as i64,
         )?;
@@ -328,18 +475,23 @@ impl<'session> Qwen<'session> {
         let query = steps.projected(
             session,
             &normed,
-            &weights[Q..Q + 2048 * 2048],
+            self.tensor(&tensors, Q, 2048 * 2048),
             HEADS * HEAD,
             HIDDEN as i64,
         )?;
-        let query =
-            steps.normalised(session, &query, &weights[Q_NORM..Q_NORM + 128], HEADS, HEAD)?;
+        let query = steps.normalised(
+            session,
+            &query,
+            self.tensor(&tensors, Q_NORM, 128),
+            HEADS,
+            HEAD,
+        )?;
         let query = steps.rotated(session, &query, position)?;
         let attended = steps.attended(session, &query, &cache.keys, &cache.values)?;
         let out = steps.projected(
             session,
             &attended,
-            &weights[O..O + 2048 * 2048],
+            self.tensor(&tensors, O, 2048 * 2048),
             HIDDEN as i64,
             HIDDEN as i64,
         )?;
@@ -351,21 +503,21 @@ impl<'session> Qwen<'session> {
         let prepared = steps.normalised(
             session,
             &hidden,
-            &weights[POST..POST + HIDDEN_SIZE],
+            self.tensor(&tensors, POST, HIDDEN_SIZE),
             1,
             HIDDEN as i64,
         )?;
         let gate = steps.projected(
             session,
             &prepared,
-            &weights[GATE..GATE + 6144 * 2048],
+            self.tensor(&tensors, GATE, 6144 * 2048),
             INTERMEDIATE,
             HIDDEN as i64,
         )?;
         let up = steps.projected(
             session,
             &prepared,
-            &weights[UP..UP + 6144 * 2048],
+            self.tensor(&tensors, UP, 6144 * 2048),
             INTERMEDIATE,
             HIDDEN as i64,
         )?;
@@ -373,7 +525,7 @@ impl<'session> Qwen<'session> {
         let down = steps.projected(
             session,
             &mixed,
-            &weights[DOWN..DOWN + 2048 * 6144],
+            self.tensor(&tensors, DOWN, 2048 * 6144),
             HIDDEN as i64,
             INTERMEDIATE,
         )?;
