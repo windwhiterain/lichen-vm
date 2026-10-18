@@ -3,11 +3,9 @@
 //!
 //! # Invariant
 //!
-//! A read is named by the binder's **occurrence path**, never by its `BinderId`: ids are
-//! numbered in traversal order, so an insertion before a binding would change the key of a
-//! binding nothing touched.
+//! A read is named by its **occurrence path**: ids renumber on an insertion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lichen_language_parser::ast::{BinderId, Program, Stmt};
 use lichen_language_parser::path::Path;
@@ -25,10 +23,15 @@ const SELF_READ: u64 = 0x7365_6c66_0000_0001;
 /// Each marked binding's key, or `None` where the key cannot be written down.
 ///
 /// # Invariant
-/// `None` means the key would be unsound, not that the value is unchanged: a read of a binder
-/// declared inside a statement is instance-dependent, and a cycle has no base. A `None` must be
-/// read as "changed".
-pub fn binding_keys(program: &Program) -> HashMap<Path, Option<Vec<u64>>> {
+/// `None` means the key would be unsound, not that the value is unchanged: an instance-dependent
+/// read, or a cycle, has no base. A `None` must be read as "changed".
+///
+/// A read the file does not declare folds `external`'s digest when the caller has one — an
+/// import's content identity — and `EXTERNAL` when it does not. See §2 and §9.17.
+pub fn binding_keys(
+    program: &Program,
+    external: &HashMap<BinderId, u64>,
+) -> HashMap<Path, Option<Vec<u64>>> {
     let paths = binder_paths(program);
     let mut owner: HashMap<BinderId, usize> = HashMap::new();
     for (index, statement) in program.statements.iter().enumerate() {
@@ -38,11 +41,23 @@ pub fn binding_keys(program: &Program) -> HashMap<Path, Option<Vec<u64>>> {
             owner.insert(binder, index);
         }
     }
-    let deps = statement_dependencies(program);
+    // A statement's nested binders are its content: a lambda's locals are not its inputs.
+    let deps: Vec<(Vec<BinderId>, Vec<BinderId>)> = statement_dependencies(program)
+        .into_iter()
+        .map(|(declares, reads)| {
+            let inner: HashSet<BinderId> = declares.iter().copied().collect();
+            let free = reads
+                .into_iter()
+                .filter(|read| !inner.contains(read))
+                .collect();
+            (declares, free)
+        })
+        .collect();
     let mut keys = Keys {
         program,
         deps: &deps,
         paths: &paths,
+        external,
         owner,
         memo: HashMap::new(),
         visiting: Vec::new(),
@@ -79,6 +94,7 @@ struct Keys<'a> {
     program: &'a Program,
     deps: &'a [(Vec<BinderId>, Vec<BinderId>)],
     paths: &'a HashMap<BinderId, Path>,
+    external: &'a HashMap<BinderId, u64>,
     owner: HashMap<BinderId, usize>,
     memo: HashMap<usize, Option<Vec<u64>>>,
     visiting: Vec<usize>,
@@ -117,7 +133,7 @@ impl Keys<'_> {
                         break;
                     }
                 },
-                None => digests.push(EXTERNAL),
+                None => digests.push(self.external.get(&binder).copied().unwrap_or(EXTERNAL)),
             }
         }
         self.visiting.pop();

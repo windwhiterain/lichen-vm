@@ -14,13 +14,21 @@ use std::path::{Path as HostPath, PathBuf};
 use lichen_language_parser::path::{Path, Step};
 
 /// The container's own version, separate from the artifact's: it moves only when the framing does.
-const FORMAT: u8 = 1;
+const FORMAT: u8 = 3;
 
 /// One record: a cell's path, the `K_in` it was frozen under, and its artifact bytes.
 pub struct Record {
     pub path: Path,
     /// The artifact's own module key, which its bytes were written with.
     pub module: u64,
+    /// Whether the artifact was frozen ReadOnly, which its wire form does not carry.
+    pub read_only: bool,
+    /// Every dependency the artifact references, as `(module key, artifact hash)`.
+    ///
+    /// # Invariant
+    /// A record is loaded only when every one of these keys is registered with this hash, so
+    /// a dependency that changed is a miss and never a stale value.
+    pub refs: Vec<(u64, [u8; 32])>,
     pub key: Vec<u64>,
     pub artifact: Vec<u8>,
 }
@@ -65,6 +73,12 @@ pub fn write(
         let mut bytes = vec![FORMAT];
         put_path(&mut bytes, &record.path);
         bytes.extend_from_slice(&record.module.to_le_bytes());
+        bytes.push(u8::from(record.read_only));
+        put_u32(&mut bytes, record.refs.len() as u32);
+        for (key, hash) in &record.refs {
+            bytes.extend_from_slice(&key.to_le_bytes());
+            bytes.extend_from_slice(hash);
+        }
         put_u32(&mut bytes, record.key.len() as u32);
         for word in &record.key {
             bytes.extend_from_slice(&word.to_le_bytes());
@@ -106,6 +120,14 @@ fn decode(bytes: &[u8]) -> Option<Record> {
     }
     let path = read_path(bytes, &mut cursor)?;
     let module = u64_of(take(bytes, &mut cursor, 8)?)?;
+    let read_only = take(bytes, &mut cursor, 1)?[0] != 0;
+    let refs_len = u32_of(take(bytes, &mut cursor, 4)?)? as usize;
+    let mut refs = Vec::with_capacity(refs_len.min(64));
+    for _ in 0..refs_len {
+        let key = u64_of(take(bytes, &mut cursor, 8)?)?;
+        let hash: [u8; 32] = take(bytes, &mut cursor, 32)?.try_into().ok()?;
+        refs.push((key, hash));
+    }
     let key_len = u32_of(take(bytes, &mut cursor, 4)?)? as usize;
     let mut key = Vec::with_capacity(key_len.min(1024));
     for _ in 0..key_len {
@@ -116,6 +138,8 @@ fn decode(bytes: &[u8]) -> Option<Record> {
     Some(Record {
         path,
         module,
+        read_only,
+        refs,
         key,
         artifact,
     })

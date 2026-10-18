@@ -439,15 +439,32 @@ where
         };
         for record in crate::cellcache::read(&dir, &self.source_id, std::any::type_name::<P>()) {
             let key = ModuleKey::from_raw(record.module);
-            let mut registry = self
-                .registry
-                .write()
-                .unwrap_or_else(PoisonError::into_inner);
-            if registry.get(key).is_some() {
+            // A record loads only when every dependency it names is registered with its hash.
+            let mut modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> =
+                HashMap::new();
+            let mut sound = true;
+            {
+                let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+                if registry.get(key).is_some() {
+                    continue;
+                }
+                for (raw, hash) in &record.refs {
+                    let dependency = ModuleKey::from_raw(*raw);
+                    match registry.get(dependency) {
+                        Some(package) if package.hash == *hash => {
+                            modules.insert(dependency, package.module.clone());
+                        }
+                        _ => {
+                            sound = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !sound {
                 continue;
             }
-            let modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> = HashMap::new();
-            let Ok((module, export)) = crate::persist::deserialize_artifact_with(
+            let Ok((mut module, export)) = crate::persist::deserialize_artifact_with(
                 &record.artifact,
                 key,
                 [0; 32],
@@ -456,6 +473,12 @@ where
             ) else {
                 continue;
             };
+            // The artifact's wire form does not carry the mode, so the record does.
+            module.read_only = record.read_only;
+            let mut registry = self
+                .registry
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
             registry.insert_module(key, [0; 32], module);
             registry.reserve_cell_key(key);
             drop(registry);
@@ -489,17 +512,30 @@ where
             let Some(package) = registry.get(reference.module) else {
                 continue;
             };
-            // An import's key is process-local and EXTERNAL hides it: such a cell never persists.
-            if package.refs.iter().any(|key| *key != reference.module) {
-                continue;
-            }
-            // The wire form carries no mode, so a reload would lose a ReadOnly refusal.
-            if package.module.read_only {
-                continue;
-            }
+            // Each referenced module travels by key and hash, so a loader can prove the bytes.
             let mut modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> =
                 HashMap::new();
             modules.insert(reference.module, package.module.clone());
+            let mut refs = Vec::new();
+            let mut whole = true;
+            for dependency in &package.refs {
+                if *dependency == reference.module {
+                    continue;
+                }
+                match registry.get(*dependency) {
+                    Some(module) => {
+                        refs.push((dependency.as_raw(), module.hash));
+                        modules.insert(*dependency, module.module.clone());
+                    }
+                    None => {
+                        whole = false;
+                        break;
+                    }
+                }
+            }
+            if !whole {
+                continue;
+            }
             let Ok(artifact) = crate::persist::serialize_artifact_with(
                 &package.module,
                 &modules,
@@ -512,6 +548,8 @@ where
             records.push(crate::cellcache::Record {
                 path: path.clone(),
                 module: reference.module.as_raw(),
+                read_only: package.module.read_only,
+                refs,
                 key,
                 artifact,
             });
@@ -520,6 +558,26 @@ where
         let retained: Vec<Path> = self.cells.paths().cloned().collect();
         let _ =
             crate::cellcache::prune(dir, &self.source_id, std::any::type_name::<P>(), &retained);
+    }
+
+    /// The content digest each import binder's value was computed from, by binder.
+    ///
+    /// # Invariant
+    /// A digest is the imported package's artifact hash — its source folded with its own
+    /// dependencies — so a cell keyed by it names the bytes it read, not a process-local
+    /// module key. A binder with no digest folds EXTERNAL, which is the conservative cut.
+    fn external_digests(
+        &self,
+        resolved: &crate::resolve::Resolved,
+    ) -> HashMap<crate::ast::BinderId, u64> {
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        let mut out = HashMap::new();
+        for import in &resolved.import_binders {
+            if let Some(package) = registry.get(import.export.module) {
+                out.insert(import.binder, digest_bytes(&package.hash));
+            }
+        }
+        out
     }
 
     pub fn compile(&mut self) -> SessionReport<P> {
@@ -683,7 +741,8 @@ where
             .map(|(path, _)| path)
             .collect();
         // The key decides; propagation is the fallback where the key cannot be written.
-        let after = crate::key::binding_keys(&program);
+        let external = self.external_digests(&resolved);
+        let after = crate::key::binding_keys(&program, &external);
         let dirty = match &self.last {
             Some(last) => {
                 let (previous_window, current_window) = windows.unwrap_or_else(|| {
@@ -698,7 +757,7 @@ where
                     previous_window,
                     current_window,
                 );
-                let before = crate::key::binding_keys(&last.program);
+                let before = crate::key::binding_keys(&last.program, &external);
                 after
                     .iter()
                     .filter(|(path, key)| match (before.get(*path), key) {
@@ -1056,6 +1115,13 @@ struct SpliceOut {
     lo: usize,
     old_hi: usize,
     hi: usize,
+}
+
+/// A package's 32-byte artifact hash as one key word.
+fn digest_bytes(hash: &[u8; 32]) -> u64 {
+    hash.iter().fold(0xcbf2_9ce4_8422_2325, |state, byte| {
+        (state ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+    })
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ mod fan_in_merge;
 mod fan_out_merge;
 mod float_leaf;
 mod fold_datum;
+mod frozen_buffer_reuse;
 mod fuse_licence;
 mod fused_kernel;
 mod fused_landing;

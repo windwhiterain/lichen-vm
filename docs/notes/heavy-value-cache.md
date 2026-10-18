@@ -94,6 +94,17 @@ Five properties are contractual, and each one is a decision rather than an accid
   then depend on traversal order. §9.11 is the measurement.
 - **`K_out` is computed after evaluation, from the value.** It is what makes backdating
   free; §4.
+- **A read of an import folds the imported package's artifact hash.** An import's binding is
+  not a statement of this file, so it has no `K_out` here; what it has is a content identity —
+  its source folded with its own dependencies — and that is what the key folds. `EXTERNAL` (a
+  constant) stays as the fallback for a binder with no digest. §9.17 is the measurement that
+  made this necessary, and the cell record's dependency hashes are its evidence on load.
+- **A statement's own nested binders are its content, not its reads.** `dirty.rs`'s walk
+  records every `Name` use in a subtree, including a lambda body's locals, and folding those as
+  inputs refused the key of every binding whose value holds a lambda — which is every kernel of
+  a compute application (§9.17). A read the same statement declares at any depth is subtracted
+  before the key folds, so a lambda's parameter and locals stay part of the hashed expression
+  and stop being mistaken for inputs.
 
 ## 3. Three consumers, three costs
 
@@ -802,17 +813,66 @@ boundary masking used. What was missing was not an operator but the operators' a
 cell at all — and that is the join the two pipelines never made, because their cells only ever fed
 the root.
 
-**A restart still gains nothing, and §9.15's guard is why.** At `512 × 512` the restart reads
-fresh 3356.56 ms, cold 3661.45 ms and warm 3680.10 ms with **0 files written**: every cell of the
-application reads `compute.lichen`, so every cell carries a foreign key in its `refs` and
-`save_cells` skips it. A compute application therefore has *in-process* reuse only, and the
-cross-process half of §9.13 is closed to it until the key's `EXTERNAL` token can say which import
-bytes a cell was computed from. That is a change to §2's key, not a bug fix.
+**A restart stored nothing, and the reason was three layers deep.** The first reading was
+`files 0` with an *empty* key on every cell, and each layer had to be peeled with a measurement:
+
+- **Every cell's key was `None`.** `dirty.rs`'s walk records a statement's reads *including* the
+  locals its own lambda bodies declare, so a cell that reads any helper holding a lambda folded
+  an "external" read and refused. Every kernel of a compute application is such a helper. The fix
+  is §2's free-reads rule, and the probe's temporary `set_key` trace showed thirteen real keys
+  where there had been thirteen `None`s.
+- **The import was invisible to the key.** With keys in hand, the import still folded the
+  constant `EXTERNAL`, so two runs that read different `compute.lichen` bytes computed one key.
+  The fix is §2's import-digest rule; the key material now carries the package's artifact hash.
+- **The artifact codec refuses a compute operation.** The real blocker, and it had been hidden
+  behind the two above: `Portable` keeps every operation (that is what makes its content identity
+  equal to the source's), a launch's node holds a compute operation, and the codec's answer is
+  *"this package is not cached: it holds a compute operation, and a compute operation is a
+  runtime form with no on-disk representation"*. A `ReadOnly` freeze drops a decided node's
+  operation, so a `ReadOnly` cell is storable — and `save_cells` skipped `ReadOnly` cells because
+  the wire form had no mode. That is now in the record (§9.18), so the mode survives a reload and
+  a launch's cell can persist.
+
+With all three, the restart reuses the map and the numbers are the point of the whole exercise:
+**warm 85.30 ms against a fresh 195.34 ms (2.3×), twelve cells reused, one recomputed, values
+identical.** Twelve of the application's thirteen cells write a file; `octave_a` refuses because
+its closure still holds the kernel-creation operation — an undecided compute node — so it is the
+one cell a warm start recomputes.
 
 **One reading not chased.** A reused cell's *type* prints `raw` where the fresh build prints the
 type (`(raw Buffer, raw Int)` against `(raw Buffer, Int)`), because the type slot materializes as
-an artifact-shaped array too. Every value agreed at both sizes, so nothing measured is wrong — but
-nothing yet says a reused cell's type is the one it was computed with.
+an artifact-shaped array too. Every value agreed at both sizes and after the restart, so nothing
+measured is wrong — but nothing yet says a reused cell's type is the one it was computed with.
+
+### 9.18 What the cell record carries, and the restart it bought
+
+The record was a path, the artifact's module key, the `K_in` words and the artifact bytes. It
+carries two more things now, both of which the artifact's own wire form cannot say:
+
+- **`refs` — every referenced module's key and artifact hash.** An artifact's values are handles
+  into the module that filed them, written as `(key, offset, len)`; a loader therefore needs those
+  modules registered under the *same* keys. The record names each one with its hash, and a record
+  loads only when every key is registered with the hash it names. A dependency that changed is a
+  miss, never a stale value.
+- **`read_only` — the freeze mode.** Without it a reloaded `ReadOnly` artifact would answer
+  `Portable`, which is the refusal that is its whole guarantee. The record says the mode, and
+  `load_cells` writes it onto the deserialized module.
+- The container's `FORMAT` is 3. An older container is a miss, which is the container's whole
+  compatibility story.
+
+The restart, with the application's cells opted into `ReadOnly` (its values are buffers, never
+table keys, so the small freeze is the honest mode):
+
+| arm | 128 × 128 ms | 512 × 512 ms | cells |
+|---|---|---|---|
+| a fresh compile | 267.42 | 3894.25 | — |
+| cold: empty cache, compile and write | 260.89 | 4075.05 | frozen 13, files 12 |
+| **warm: load and reuse** | **81.71** | **831.92** | **reused 12, frozen 1** |
+
+So a restart over its own cache is **3.3× cheaper at `128 × 128` and 4.7× at `512 × 512`**, the
+values equal a fresh compile's at both sizes, and twelve of the thirteen cells survive. The one
+that does not is `octave_a`: its closure still holds the kernel-creation operation, an undecided
+compute node the `ReadOnly` freeze keeps, so it is exactly the cell a warm start recomputes.
 
 ## 10. Costs and failure modes
 
@@ -921,14 +981,12 @@ nothing yet says a reused cell's type is the one it was computed with.
   `std::any::type_name::<P>()`, which is not a stable ABI: a rebuild moves it and costs a miss.
   A cache meant to survive a rebuild needs a deliberate key — the artifact store's
   `compiler_slot_key` is the shape — and that is not built.
-- **A `ReadOnly` cell is not persisted.** The wire form carries no mode, so a reloaded
-  `ReadOnly` artifact would answer `Portable` and lose the key refusal that is its whole
-  guarantee; `save_cells` therefore skips one. The mode belongs in the artifact header when a
-  persisted `ReadOnly` cell is actually wanted.
-- **A cell that read an import is not persisted either**, for a different reason: the key's
-  `EXTERNAL` token cannot see the import's content, so the record would outlive the bytes it was
-  computed from. In-process reuse still relies on the session's own import invalidation, and the
-  resolver's re-derivation.
+- **A `ReadOnly` cell persists**, and its mode travels in the cell record rather than in the
+  artifact's wire form; §9.18 is the change and its measurement.
+- **A cell that reads an import persists too**, keyed by the imported package's artifact hash and
+  guarded on load by the record's dependency hashes (§9.18). What is left is the unmeasured half:
+  a *rebuild* moves the package's artifact hash and the record's keys alike, so a cache that
+  should survive a compiler rebuild is §9.16's deliberate scope key away, not this one.
 - **The graph-node axis** — the descriptor `incremental-update.md` §5 promises. Under the key
   ruling it is an accelerator and a reason source, not a soundness requirement, so it is a
   smaller job than that note assumes.
@@ -941,10 +999,11 @@ nothing yet says a reused cell's type is the one it was computed with.
   an edit costing 87 ms against a fresh 57 ms at one heavy cell.
 - **The deep pass is still not separated from the check** (`incremental-evaluation.md` Q9):
   §9.1 splits the frontend from the check, not the check from its evaluation.
-- **A compute application persists no cell at all.** Every cell of `examples/worldgen.lichen` reads
-  the compute import, so §9.15's guard skips all of them and a restart is a full recompute (§9.17).
-  Closing it means the key's `EXTERNAL` token becomes the imported bytes' digest — a change to §2's
-  key, and the largest remaining gap between the mechanism and a real application.
+- **A `Portable` compute cell cannot persist, and one `ReadOnly` cell still refuses.** A launch's
+  node holds a compute operation, which has no on-disk form; `ReadOnly` drops a *decided* node's,
+  which is why the restart works now (§9.18). `octave_a` keeps the kernel-creation operation, an
+  undecided node, so it is the one cell a warm start recomputes. Whether that node can be decided
+  before the freeze — or dropped from a `ReadOnly` closure even undecided — is unmeasured.
 - **A reused cell's type is not restored.** Its value is; its type prints `raw` (§9.17). Nothing
   measured is wrong yet, and nothing says a typed position would be right.
 - **No operator was missing for a real application, and the one §7 predicts is still absent.** The

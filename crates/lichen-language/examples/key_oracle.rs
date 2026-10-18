@@ -127,9 +127,10 @@ fn main() {
             let report = session.compile();
             let current = report.program.clone();
 
+            let external: std::collections::HashMap<usize, u64> = std::collections::HashMap::new();
             let dirty = dirty_marked_paths(&previous, &current, previous_window, current_window);
-            let before = binding_keys(&previous);
-            let after = binding_keys(&current);
+            let before = binding_keys(&previous, &external);
+            let after = binding_keys(&current, &external);
             let mut keyed: Vec<Path> = Vec::new();
             for path in before.keys().chain(after.keys()) {
                 let same = matches!(

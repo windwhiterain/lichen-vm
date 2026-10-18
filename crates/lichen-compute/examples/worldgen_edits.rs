@@ -260,6 +260,13 @@ fn restart(source: &str) -> (Option<String>, f64, Report) {
     let mut session =
         BufferSession::<LangProgram>::with_registry("", "worldgen.lichen", store.registry())
             .with_cell_cache(CELLS);
+    // Buffer stages are no table key, so the small freeze is this application's mode.
+    let names: Vec<String> = source
+        .lines()
+        .filter_map(|line| line.strip_prefix("cache "))
+        .map(|rest| rest.split(' ').next().unwrap_or_default().to_string())
+        .collect();
+    session.set_read_only(names);
     let (code, offset, imports) = prepare(&mut store, source);
     let starts = lichen_language::lex::line_starts(source);
     session.set_view(code, offset, &starts, &imports);
