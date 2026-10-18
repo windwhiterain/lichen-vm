@@ -183,6 +183,18 @@ while `Float` is 4 — so a positions buffer packed from `i32` words declares a 
 it holds and **every read past the first answers `0`**. That reads as a kernel defect because
 position `0` is a plausible answer: pack an `Int` buffer from `i64`.
 
+**The service is `Service`: slots admitted and retired, the cache resident, one submission a step.**
+`Service::open(session, source, sequences, capacity, dim)` prepares the step once and starts every
+slot retired; `admit` hands out a free slot at position zero; `retire` sets its position to
+`capacity`, a value no position inside the cache equals, so its lanes copy themselves and its memory
+waits where it is; and `step(keys, values)` advances every live sequence one position at **one
+submission** (`crates/lichen-serve/tests/service_step.rs` — three slots, one retired and then reused,
+with the resident sequence still advancing from a cache it never uploaded). Two of its invariants are
+the ones a reader must not break: a reused slot keeps the previous sequence's words past position
+zero, which is safe only because a reader reads positions before its own; and `capacity` and `dim`
+are the **source's own literals**, since the kernel divides a lane by their product, so a different
+pair addresses the wrong slots and no run can detect it.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough

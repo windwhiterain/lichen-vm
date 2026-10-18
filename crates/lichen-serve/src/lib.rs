@@ -13,6 +13,10 @@ use lichen_kernel_ir::{
 };
 use lichen_utils::extend::AsEnum;
 
+mod service;
+
+pub use service::{Served, Service};
+
 /// What one run asked the device for.
 ///
 /// # Invariant
