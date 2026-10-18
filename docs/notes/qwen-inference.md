@@ -193,10 +193,11 @@ So half of a layer's time is **making a copy of the file it already holds**: `Te
 dispatch is a second copy. 28 layers of that is 2.7 GB of `memcpy` a token, and it is the largest single
 line in the budget.
 
-The fix is a borrowed payload — `RunArgument::Buffer` holding `&[u8]` or a shared buffer rather than a
-`Vec` — which is an interface change and not a scheduling one. Until it lands, the honest number for a warm
-token at half width is **4.8 s**, and the 3.25 s measured before this profiling was the same code with a
-page cache warm enough to hide part of the copy.
+The first of those two copies is gone: a layer now **borrows** the copy the model keeps, which took a warm
+token from 4.82 s to **2.64 s** — the 2.2 s the timers had attributed to the clone almost exactly. The
+second is still there, because `RunArgument::Buffer` takes its bytes by value, so the slice handed to a
+dispatch is a copy of the slice it borrowed; making that a borrow too is an interface change in
+`lichen-compute` and not a scheduling one, and it is the next 1.2 s.
 
 ## Running it
 
