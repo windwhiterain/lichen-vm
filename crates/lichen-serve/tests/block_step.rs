@@ -30,10 +30,11 @@ fn expected(
     sequences: usize,
     positions: usize,
     units: usize,
+    length: usize,
 ) -> Vec<f32> {
     let mut answered = vec![0.0f32; sequences * units];
     for sequence in 0..sequences {
-        let scores: Vec<f32> = (0..positions)
+        let scores: Vec<f32> = (0..length)
             .map(|position| {
                 (0..units)
                     .map(|column| {
@@ -47,7 +48,7 @@ fn expected(
         let total: f32 = scores.iter().map(|score| (score - top).exp()).sum();
         let attended: Vec<f32> = (0..units)
             .map(|column| {
-                (0..positions)
+                (0..length)
                     .map(|position| {
                         let share = (scores[position] - top).exp() / total;
                         share * values[(sequence * positions + position) * units + column]
@@ -79,6 +80,7 @@ fn arguments(
     values: ResidentBuffer,
     query: &[f32],
     feed: &[f32],
+    lengths: &[i64],
 ) -> Vec<RunArgument> {
     vec![
         RunArgument::Count((sequences * positions * units) as i64),
@@ -92,6 +94,7 @@ fn arguments(
         RunArgument::Resident(values),
         floats(query),
         floats(feed),
+        common::positions(lengths),
     ]
 }
 
@@ -106,6 +109,7 @@ fn both_match(
     values: &[f32],
     query: &[f32],
     feed: &[f32],
+    length: usize,
 ) -> Vec<f32> {
     let cached_keys = session
         .upload(keys)
@@ -116,7 +120,7 @@ fn both_match(
     let prepared = session
         .prepare(BLOCK)
         .unwrap_or_else(|refusal| panic!("the block prepares: {refusal}"));
-    assert_eq!(prepared.nodes(), 12, "the held step is twelve kernels");
+    assert_eq!(prepared.nodes(), 13, "the held step is thirteen kernels");
     let stepped = prepared
         .step(arguments(
             sequences,
@@ -127,6 +131,7 @@ fn both_match(
             cached_values,
             query,
             feed,
+            &vec![length as i64; sequences],
         ))
         .unwrap_or_else(|refusal| panic!("the block runs: {refusal}"));
     assert_eq!(
@@ -136,7 +141,7 @@ fn both_match(
     );
     let answered = read(session, only(&stepped));
     let oracle = expected(
-        state, keys, values, query, feed, sequences, positions, units,
+        state, keys, values, query, feed, sequences, positions, units, length,
     );
     for (index, (got, want)) in answered.iter().zip(oracle.iter()).enumerate() {
         assert!(
@@ -177,6 +182,7 @@ fn a_block_of_twelve_kernels_runs_in_one_submission() {
         &values,
         &[1.0, 1.0, 1.0, 0.0],
         &[1.0, 2.0, 3.0, 1.0],
+        3,
     );
     println!("the block answered {answered:?}");
 }
@@ -208,6 +214,7 @@ fn the_same_block_serves_a_wider_model() {
         &words(30, 0.9),
         &words(10, 1.1),
         &words(25, 0.5),
+        3,
     );
     println!("the five-unit block answered {} words", answered.len());
 }
@@ -248,7 +255,17 @@ fn a_stack_of_six_blocks_costs_six_submissions() {
     let mut submissions: u64 = 0;
     for block in 0..DEPTH {
         let stepped = prepared
-            .step(arguments(2, 3, 2, &words, held, cached, &query, &feed))
+            .step(arguments(
+                2,
+                3,
+                2,
+                &words,
+                held,
+                cached,
+                &query,
+                &feed,
+                &[3, 3],
+            ))
             .unwrap_or_else(|refusal| panic!("block {block} runs: {refusal}"));
         assert_eq!(
             (stepped.cost.submissions, stepped.cost.fence_waits),
@@ -267,7 +284,7 @@ fn a_stack_of_six_blocks_costs_six_submissions() {
 
     let mut oracle = vec![1.0f32, 0.0, 0.0, 1.0];
     for _ in 0..DEPTH {
-        oracle = expected(&oracle, &keys, &values, &query, &feed, 2, 3, 2);
+        oracle = expected(&oracle, &keys, &values, &query, &feed, 2, 3, 2, 3);
     }
     for (index, (got, want)) in words.iter().zip(oracle.iter()).enumerate() {
         assert!(
@@ -281,7 +298,17 @@ fn a_stack_of_six_blocks_costs_six_submissions() {
         let mut state = vec![1.0f32, 0.0, 0.0, 1.0];
         for _ in 0..DEPTH {
             let stepped = prepared
-                .step(arguments(2, 3, 2, &state, held, cached, &query, &feed))
+                .step(arguments(
+                    2,
+                    3,
+                    2,
+                    &state,
+                    held,
+                    cached,
+                    &query,
+                    &feed,
+                    &[3, 3],
+                ))
                 .unwrap_or_else(|refusal| panic!("a stacked block runs: {refusal}"));
             let answered = only(&stepped);
             state = read(&session, answered);
@@ -296,4 +323,37 @@ fn a_stack_of_six_blocks_costs_six_submissions() {
     );
     session.release(held);
     session.release(cached);
+}
+
+/// A length masks the slots past it, so a full cache answers as if it were short.
+///
+/// # Invariant
+/// The cache holds three positions and the length is one, so the block must answer what the host
+/// answers over the first position alone. A block that attended the slots past the length would
+/// average their values in, and those values are far from the first one's.
+#[test]
+fn a_length_masks_the_slots_past_it() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_length_masks_the_slots_past_it: no device");
+        return;
+    };
+    let keys = [
+        1.0f32, 0.0, 9.0, 9.0, 8.0, 8.0, 2.0, 0.0, 7.0, 7.0, 6.0, 6.0,
+    ];
+    let values = [
+        1.0f32, 2.0, 50.0, 60.0, 70.0, 80.0, 1.0, 0.0, 40.0, 30.0, 20.0, 10.0,
+    ];
+    let answered = both_match(
+        &session,
+        2,
+        3,
+        2,
+        &[1.0, 0.0, 0.0, 1.0],
+        &keys,
+        &values,
+        &[1.0, 1.0, 1.0, 0.0],
+        &[1.0, 2.0, 3.0, 1.0],
+        1,
+    );
+    println!("a cache of three answered as if it held one: {answered:?}");
 }

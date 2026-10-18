@@ -38,6 +38,7 @@ fn block_arguments(
     values: ResidentBuffer,
     query: ResidentBuffer,
     projection: ResidentBuffer,
+    lengths: &[i64],
 ) -> Vec<RunArgument> {
     vec![
         RunArgument::Count((SEQUENCES * CAPACITY * COLUMNS) as i64),
@@ -51,6 +52,13 @@ fn block_arguments(
         RunArgument::Resident(values),
         RunArgument::Resident(query),
         RunArgument::Resident(projection),
+        RunArgument::Buffer {
+            class: lichen_kernel_ir::ScalarClass::Int,
+            data: lengths
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect(),
+        },
     ]
 }
 
@@ -133,6 +141,8 @@ fn serve() -> Result<(), String> {
             (Some(keys), Some(values)) => (keys, values),
             _ => (empty_keys, empty_values),
         };
+        let visible = (step + 1).min(CAPACITY) as i64;
+        let lengths = vec![visible; SEQUENCES];
         let mut hidden: Option<ResidentBuffer> = None;
         let mut submissions = 0u64;
         let mut millis = 0.0;
@@ -151,6 +161,7 @@ fn serve() -> Result<(), String> {
                     values,
                     queries[depth],
                     projections[depth],
+                    &lengths,
                 ))
                 .map_err(|refusal| format!("step {step} block {depth} did not run: {refusal}"))?;
             submissions += stepped.cost.submissions;

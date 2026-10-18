@@ -244,6 +244,16 @@ do not change with the tables, because the toy model's greedy pick is dominated 
 handed, so **the per-layer wiring is carried by the block's own tests and not by the demo's output**;
 the demo shows the path and its cost, and the layer difference is the block responding to its tables.
 
+**The attention masks the slots a sequence has not reached, and the mask is a dispatch.** A `length` per
+sequence rides in an `Int` buffer as the positions do, and a `mask` kernel between the score and the
+peak writes `-inf` past it, so the peak, the exponent and the softmax all follow
+(`crates/lichen-serve/tests/block_step.rs`): a cache of three positions with a length of one answers
+`18.0, 24.0, 9.0, 12.0` where the same block over all three answers `42.555138, …`, and the masked
+answer is what the host computes over the first position alone. A block that attended the unwritten
+slots would average them in — the values past the length are far from the first one's. The block is
+**thirteen** kernels now, and the edge case is that a sequence must have a length of at least one: the
+peak of an all-masked row is `-inf`, and its exponent is not a number.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

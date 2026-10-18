@@ -142,6 +142,20 @@ peak_raw = (k : PeakPar) => {
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, ((0.0 - 1.0) / 0.0) ~ "identity"))))
 }
 peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu"
+MaskIn  = struct{.s (compute.Buf Float), .length (compute.Buf Int)}
+MaskPar = struct{.n Int, .cap Int, .in MaskIn, .out Out}
+MaskArg = struct{.n Int, .cap Int, .I MaskIn}
+mask_raw = (k : MaskPar) => {
+  lane = compute.range k.n
+  sequence = lane / k.cap
+  position = lane - sequence * k.cap
+  limit = compute.read ((compute.Read _)(.from k.in.length, .at sequence))
+  visible = position < limit
+  value = compute.read ((compute.Read _)(.from k.in.s, .at lane))
+  hidden = (0.0 - 1.0) / 0.0
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (if visible then value else hidden)))
+}
+mask = compute.parallel mask_raw "gpu"
 ExpoPar = struct{.n Int, .cap Int, .in ExpoIn, .out Out}
 ExpoArg = struct{.n Int, .cap Int, .I ExpoIn}
 expo_raw = (k : ExpoPar) => {
@@ -223,13 +237,14 @@ project_raw = (k : ProjectPar) => {
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
 project = compute.parallel (project_raw ~ "claim:Reduction(combine,identity)") "gpu"
-StepIn = struct{.x (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .q (compute.Buf Float), .w (compute.Buf Float)}
+StepIn = struct{.x (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .q (compute.Buf Float), .w (compute.Buf Float), .length (compute.Buf Int)}
 GArg = struct{.words Int, .slots Int, .sequences Int, .columns Int, .spread Int, .dim Int, .in StepIn}
 step = (s : GArg) => {
   weighted = (compute.plrun weigh ((WeighArg)(.n s.words, .cap 3, .dim s.dim, .I WeighIn(.k s.in.k, .q s.in.q))) : Out)
   summed = (compute.plrun sum ((SumArg)(.n s.slots, .cap 3, .dim s.dim, .I TallyIn(.t weighted.e))) : Out)
-  topped = (compute.plrun peak ((PeakArg)(.n s.sequences, .cap 3, .I PeakIn(.s summed.e))) : Out)
-  shifted = (compute.plrun expo ((ExpoArg)(.n s.slots, .cap 3, .I ExpoIn(.s summed.e, .m topped.e))) : Out)
+  masked = (compute.plrun mask ((MaskArg)(.n s.slots, .cap 3, .I MaskIn(.s summed.e, .length s.in.length))) : Out)
+  topped = (compute.plrun peak ((PeakArg)(.n s.sequences, .cap 3, .I PeakIn(.s masked.e))) : Out)
+  shifted = (compute.plrun expo ((ExpoArg)(.n s.slots, .cap 3, .I ExpoIn(.s masked.e, .m topped.e))) : Out)
   divided = (compute.plrun total ((TotalArg)(.n s.sequences, .cap 3, .I TallyIn(.t shifted.e))) : Out)
   shared = (compute.plrun scale ((ScaleArg)(.n s.words, .cap 3, .dim s.dim, .I ScaleIn(.s shifted.e, .m topped.e, .total divided.e, .v s.in.v))) : Out)
   attended = (compute.plrun positions ((PosArg)(.n s.columns, .cap 3, .I PosIn(.w shared.e))) : Out)
