@@ -130,7 +130,10 @@ its assert conditions move with the collect, a function homed in the released bl
 with its template, a class member's payload is re-allocated in its own arena, a value cycle
 terminates, and a table entry's nodes move. One shape is still open and its repro is
 `#[ignore]`d there: a **parent-block payload naming a non-root scope node** (a node id the
-walk cannot see from its root). See `P1-52` in [code-audit](code-audit.md).
+walk cannot see from its root). The language layer produces that shape itself — `x = [@gc 1,
+2]` builds a parent array naming the scope's value cell, which the boundary pin in
+`block_boundary.rs` measures — so this is `P1-52`'s open decision in
+[code-audit](code-audit.md).
 
 ## What it actually frees, measured
 
@@ -190,7 +193,9 @@ and the tables are pruned in the build that follows it. A host that reads a
   release is not promised for a body whose scope a definition-pass read already
   finished.
 - **An undecided scope is not collected at all**, by the rule above.
-- **A parent-block payload naming a non-root scope node is not kept.** The block boundary
-  says only the scope's root may be named from outside, and nothing enforces it: a parent
-  block's array may name a sibling inside the scope, and the walk cannot see that reference
-  from its root. The repro is `#[ignore]`d in `gc_safety.rs`; open as `P1-52`.
+- **A parent-block payload naming a non-root scope node is not prevented.** The block
+  boundary says only the scope's root may be named from outside, and the language layer
+  does not hold it: `@gc` re-exports the inner's value and type cells as the parent's
+  handles, so `x = [@gc 1, 2]` names the scope's value cell from the parent. The collector
+  keeps such a node only when another edge reaches it. Open as `P1-52`; the language-side
+  boundary pin is `#[ignore]`d in `block_boundary.rs`, the engine repro in `gc_safety.rs`.

@@ -187,13 +187,16 @@ fix the corpus' two collects leave **no** dangling function node, and the closur
 programs are unit tests (`gc_block::a_closure_released_from_a_scope_is_still_callable`).
 
 **Open — a parent-block payload naming a non-root scope node** (`P1-52`). The block boundary
-says only a scope's root may be named from outside, and nothing enforces it: a parent-block
-array can name a sibling inside the scope, and the walk cannot see that reference from its
-root, so the release leaves a live payload naming a dead id (the retired deep trigger panicked
-on exactly this). It is a decision, not a patch: the candidate repairs are the block-boundary
-discipline at the checker (the shape is generated there, in `check_gc`'s pair), a per-block
-incoming-reference count, or a parent-block scan at the collect — the last two cost what this
-collector is built to avoid. The repro is `#[ignore]`d in `gc_safety.rs`.
+says only a scope's root may be named from outside, and the language layer does not hold it:
+`check_gc` re-exports the inner's value and type cells as the parent's handles, so
+`x = [@gc 1, 2]` builds a parent array naming the scope's value cell (measured by the ignored
+`block_boundary` pin). The aliasing repair was tried and rejected by measurement: a parent
+cell unified with the inner's makes `@gc f 41` answer `none` — the engine does not redirect a
+class member's read through its representative — and the declared root as the value handle
+breaks a block scope. So the candidates are a **read-model change** (a class member without a
+value reads the class's value, which makes aliasing sound), a per-block incoming-reference
+count, or a parent-block scan — the last two cost what this collector is built to avoid. The
+repros are `#[ignore]`d in `basic::gc_safety` (engine) and `block_boundary` (language).
 
 ## 9. What the sources do not answer
 
