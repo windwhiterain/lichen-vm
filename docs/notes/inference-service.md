@@ -216,6 +216,17 @@ residency measurement above says would otherwise be 99% of a step. The compile i
 rather than per token, which is what makes the shape right for a weight load, and
 `crates/lichen-serve/tests/upload_step.rs` round-trips eight words through it.
 
+**The service serves the decode step, with the weights resident and the tokens as its answer.**
+`Service::open_decode(session, source, sequences, capacity, dim, rows, weights)` prepares the batched
+decode step over weights the caller uploaded once, and `step` advances every live sequence at **one
+submission**, answering with its tokens (`tokens()`) beside its key and value caches — all three
+residents, so a caller fetches only what it asks for. The two step shapes are told apart by an enum
+rather than a flag, because their argument lists differ in arity and order: the append step is
+`count, k, v, keys, values, positions`, while the decode step is three counts, then the weights, then
+the caches. Measured (`crates/lichen-serve/tests/service_decode.rs`): two sequences in one step at
+`(1, 1)`, the first one's token identical to the one it samples alone, and its neighbour's different
+because the two keys are.
+
 **And a decode-shaped step takes a different argument list from the append-shaped one.** The append
 step is `count, k, v, nk, nv, positions`, while the whole decode step is three counts and six
 buffers, because its three dispatches have three different extents and the weights come before the

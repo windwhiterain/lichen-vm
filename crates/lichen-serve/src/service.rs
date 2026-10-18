@@ -14,18 +14,37 @@ pub struct Served {
     pub cost: StepCost,
 }
 
+/// The argument list the held step takes, which is what a serving step's shape decides.
+///
+/// # Invariant
+/// The two are not a flag apart: an append step is `count, k, v, keys, values, positions`, while a
+/// decode step is `sequences, sequences × rows, sequences × capacity × columns, weights, k, v, keys,
+/// values, positions` — three counts because its three dispatches have three different extents, and
+/// the weights first because the score reads them before the append writes any cache.
+enum Shape {
+    /// One dispatch per cache slot, with the position each sequence holds.
+    Append,
+    /// Score, sample and append over the batch, with the score's weights resident.
+    Decode {
+        weights: ResidentBuffer,
+        rows: usize,
+    },
+}
+
 /// A batch of sequences sharing one cache, admitted and retired by slot.
 ///
 /// # Invariant
 /// A slot's position is its place in its own cache, and a retired slot holds `capacity`, which no
 /// position inside the cache equals, so its lanes copy themselves and its memory waits where it is.
-/// `capacity` and `dim` are the source's own literals, since the kernel divides a lane by them.
+/// `capacity` and `dim` are the **source's own literals**, since the kernel divides a lane by them.
 pub struct Service<'session> {
     session: &'session Session,
     prepared: Prepared<'session>,
+    shape: Shape,
     sequences: usize,
     capacity: usize,
     dim: usize,
+    tokens: Option<ResidentBuffer>,
     keys: Option<ResidentBuffer>,
     values: Option<ResidentBuffer>,
     positions: Vec<i64>,
@@ -43,12 +62,58 @@ impl<'session> Service<'session> {
         capacity: usize,
         dim: usize,
     ) -> Result<Self, ServeRefusal> {
-        Ok(Self {
+        Ok(Self::opened(
             session,
-            prepared: session.prepare(source)?,
+            source,
+            Shape::Append,
             sequences,
             capacity,
             dim,
+        )?)
+    }
+
+    /// Prepare a step that scores, samples and appends, over `sequences` slots.
+    ///
+    /// # Invariant
+    /// `rows` is the score's row count and `weights` its coefficient table, both the **source's own**
+    /// numbers: the weights are a resident the caller uploaded and still owns, so this releases
+    /// neither, and every step reads them from the device rather than uploading them again.
+    pub fn open_decode(
+        session: &'session Session,
+        source: &str,
+        sequences: usize,
+        capacity: usize,
+        dim: usize,
+        rows: usize,
+        weights: ResidentBuffer,
+    ) -> Result<Self, ServeRefusal> {
+        Self::opened(
+            session,
+            source,
+            Shape::Decode { weights, rows },
+            sequences,
+            capacity,
+            dim,
+        )
+    }
+
+    /// The one place a batch is built, so both shapes start retired and empty.
+    fn opened(
+        session: &'session Session,
+        source: &str,
+        shape: Shape,
+        sequences: usize,
+        capacity: usize,
+        dim: usize,
+    ) -> Result<Self, ServeRefusal> {
+        Ok(Self {
+            session,
+            prepared: session.prepare(source)?,
+            shape,
+            sequences,
+            capacity,
+            dim,
+            tokens: None,
             keys: None,
             values: None,
             positions: vec![capacity as i64; sequences],
@@ -89,6 +154,11 @@ impl<'session> Service<'session> {
         }
     }
 
+    /// The tokens the last step sampled, when the step samples any.
+    pub fn tokens(&self) -> Option<ResidentBuffer> {
+        self.tokens
+    }
+
     /// The key cache the last step wrote, which is the one the next step reads.
     pub fn keys(&self) -> Option<ResidentBuffer> {
         self.keys
@@ -118,17 +188,42 @@ impl<'session> Service<'session> {
             )]));
         }
         let lanes = self.lanes();
-        let previous = (self.keys, self.values);
-        let mut arguments = vec![RunArgument::Count(lanes as i64)];
-        for cache in [previous.0, previous.1] {
-            arguments.push(match cache {
-                Some(resident) => RunArgument::Resident(resident),
-                None => RunArgument::Buffer {
-                    class: ScalarClass::Float,
-                    data: vec![0; lanes * ScalarClass::Float.byte_width()],
+        let previous = (self.tokens, self.keys, self.values);
+        let mut arguments = match &self.shape {
+            Shape::Append => {
+                let mut arguments = vec![RunArgument::Count(lanes as i64)];
+                for cache in [previous.1, previous.2] {
+                    arguments.push(match cache {
+                        Some(resident) => RunArgument::Resident(resident),
+                        None => RunArgument::Buffer {
+                            class: ScalarClass::Float,
+                            data: vec![0; lanes * ScalarClass::Float.byte_width()],
+                        },
+                    });
+                }
+                arguments
+            }
+            Shape::Decode { weights, rows } => vec![
+                RunArgument::Count(self.sequences as i64),
+                RunArgument::Count((self.sequences * rows) as i64),
+                RunArgument::Count(lanes as i64),
+                RunArgument::Resident(*weights),
+                match previous.1 {
+                    Some(resident) => RunArgument::Resident(resident),
+                    None => RunArgument::Buffer {
+                        class: ScalarClass::Float,
+                        data: vec![0; lanes * ScalarClass::Float.byte_width()],
+                    },
                 },
-            });
-        }
+                match previous.2 {
+                    Some(resident) => RunArgument::Resident(resident),
+                    None => RunArgument::Buffer {
+                        class: ScalarClass::Float,
+                        data: vec![0; lanes * ScalarClass::Float.byte_width()],
+                    },
+                },
+            ],
+        };
         for fresh in [keys, values] {
             arguments.push(RunArgument::Buffer {
                 class: ScalarClass::Float,
@@ -140,17 +235,27 @@ impl<'session> Service<'session> {
             data: positions_of(&self.positions),
         });
         let stepped = self.prepared.step(arguments)?;
-        let [RunResult::Resident(keys), RunResult::Resident(values)] = &stepped.results[..] else {
-            return Err(ServeRefusal::Program(vec![
-                "a step answers with the two caches it wrote, and this one answered otherwise"
-                    .into(),
-            ]));
+        let (tokens, keys, values) = match &stepped.results[..] {
+            [RunResult::Resident(keys), RunResult::Resident(values)] => (None, *keys, *values),
+            [
+                RunResult::Resident(tokens),
+                RunResult::Resident(keys),
+                RunResult::Resident(values),
+            ] => (Some(*tokens), *keys, *values),
+            _ => {
+                return Err(ServeRefusal::Program(vec![
+                    "a step answers with its caches, or with a token and its caches, and this one \
+                     answered otherwise"
+                        .into(),
+                ]));
+            }
         };
-        for cache in [previous.0, previous.1].into_iter().flatten() {
+        for cache in [previous.0, previous.1, previous.2].into_iter().flatten() {
             self.session.release(cache);
         }
-        self.keys = Some(*keys);
-        self.values = Some(*values);
+        self.tokens = tokens;
+        self.keys = Some(keys);
+        self.values = Some(values);
         let advanced = self.active();
         for position in &mut self.positions {
             if *position < self.capacity as i64 {
