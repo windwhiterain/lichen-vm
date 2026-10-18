@@ -474,7 +474,28 @@ Three readings:
   them — which every real edit does. Measured directly: `base_same true, starts_same false,
   key_eq true`. The `base == 0` arm short-circuits the check, which is exactly why `set_source`
   (the bare-language probe) reuses and `set_view` does not. **Every host that compiles a program
-  with imports takes the view path**, and both target domains do. §13 records the proposed fix.
+  with imports takes the view path**, and both target domains do. Fixed in §9.8.
+
+### 9.8 The gate fix, and what it is worth
+
+Decided by the superior: split the predicate. `view_same` becomes `base_same` — only the
+coordinate space decides whether the snapshot is usable — `previous_starts` is read from the
+snapshot whenever `base_same`, and `Cache::moved` keeps its role as the span-level refusal (a
+check diagnostic that cannot be mapped still forces a recompile).
+
+| edit | before | after |
+|---|---|---|
+| whitespace on the first build | 0.9× `new` | **26.3× `reuse`** |
+| whitespace after another edit | 0.9× `new` | **25.5× `reuse`** |
+| the kernel's constant (all dirty) | 1.0× `new` | 1.0× `new` |
+| the same source again | 12.1× `reuse` | 13.3× `reuse` |
+
+So the whole-build reuse on the view path goes from **unreachable to 26× on a one-byte edit**,
+and the value still agrees element for element in every row. The tests are unchanged by it:
+`lichen-language` 261/1 and `lichen-language-server` 31/1, each failure the one `dev` already
+has (`gc_block::a_gc_block_releases_its_scope`, and
+`analysis::tests::a_prelude_name_use_jumps_into_the_builtins_own_file`).
+
 
 ## 10. Costs and failure modes
 
@@ -560,6 +581,10 @@ Three readings:
   identity in the bytes. The price is one device→host read per freeze — the same read §7 says
   a `K_out` digest of such a value would already cost — and the restored value is a host
   buffer, so a consumer that wants it resident again must re-upload. **Not built.**
+- **The reuse gate is the coordinate space, not the line table.** Decided by the superior after
+  §9.7 named the defect; built and measured in §9.8, which takes a whitespace edit on the view
+  path from unreachable to 26×.
+
 
 ## 13. Open
 
@@ -591,16 +616,6 @@ Three readings:
   path that read a stored operation would have to repeat the check. And a **persisted**
   `ReadOnly` artifact would need the mode in the wire format; today the loader sets
   `read_only: false`, which is right only because `ReadOnly` cells are not persisted yet.
-- **The coarse gate never passes on the view path, and the fix is a split of one predicate**
-  (§9.7). `view_same` conflates two facts: the *coordinate space* is the same (`base` unchanged)
-  and the *line table* is unchanged. Only the first is a correctness requirement for reusing the
-  build; the second matters only to the retained spans, which already have their own refusal
-  (`Cache::moved` returns `None` when a check diagnostic cannot be mapped, and that is the one
-  fatal case). The fix is to gate the build on `base_same && cache.key == key`, derive
-  `previous_starts` from `last` whenever `base_same`, and let `moved` decide the spans — so a
-  whitespace edit reuses the build and maps its spans, and an unmappable diagnostic still
-  recompiles. **Not built**: it rewrites a documented invariant's role, so it waits for the
-  superior.
 - **The measurement** (`incremental-evaluation.md` Q9 is still owed): §9 has the
   frontend-versus-check split now, but not the deep pass separated from the check, and not
   the session's overhead broken out.

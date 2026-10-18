@@ -406,25 +406,26 @@ where
         // The line starts every span is measured against: the original file's.
         let line_starts = view_line_starts(&self.source, self.base, &self.line_starts);
 
-        // Whether the previous snapshot is in the same coordinate space.
-        let view_same = self.last.as_ref().is_some_and(|prev| {
-            prev.base == self.base && (self.base == 0 || prev.line_starts == self.line_starts)
-        });
+        // Only the base decides the coordinate space; a line table moves on every edit.
+        let base_same = self
+            .last
+            .as_ref()
+            .is_some_and(|prev| prev.base == self.base);
 
         // The edit span, when a prior snapshot and a changed source allow it.
         let edit = self
             .last
             .as_ref()
-            .filter(|prev| view_same && prev.source != self.source)
+            .filter(|prev| base_same && prev.source != self.source)
             .map(|prev| edit_span(&prev.source, &self.source));
         // The same edit in the original file's absolute coordinates.
         let absolute_edit =
             edit.map(|(a, b, delta)| (a + self.base as usize, b + self.base as usize, delta));
-        // The line starts the snapshot's spans are in.
+        // The line starts the snapshot's spans are in: its own table, not the current one.
         let previous_starts = self
             .last
             .as_ref()
-            .filter(|_| view_same)
+            .filter(|_| base_same)
             .map(|prev| view_line_starts(&prev.source, prev.base, &prev.line_starts));
 
         // Lex: resume from the snapshot over the edit span, else lex it all.
@@ -493,7 +494,7 @@ where
         let program = Arc::new(program);
 
         // Reuse: the resolved content is unchanged and the build is still right.
-        if view_same
+        if base_same
             && let Some(cache) = &self.cache
             && cache.key == key
             && cache.build.is_some()
