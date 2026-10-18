@@ -1,6 +1,5 @@
 //! A projection the model can run at half width, which is how its weights are meant to travel.
 
-use lichen_compute::automatic_tiling::install_tiling_with_packs;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::placement_pack::read_placement_pack;
 
@@ -46,36 +45,37 @@ out
 }
 
 /// The projection, prepared so a pack states `BFloat16` for its buffers.
+pub fn narrowed_projection(session: &Session) -> Result<Prepared<'_>, QwenRefusal> {
+    narrowed(session, MATVEC_STEP)
+}
+
+/// Prepare `source` with a pack stating `BFloat16` for the classes its first node reads.
 ///
 /// # Invariant
-/// The schema is learned from a **run**, because a pass is installed only when a pack is and the report
-/// is recorded on the path that dispatches: a hash copied from somewhere else would target a node this
-/// build does not have.
-pub fn narrowed_projection(session: &Session) -> Result<Prepared<'_>, QwenRefusal> {
+/// The schema is learned from a **preparation**, not from a run: the pass is asked while the graph is
+/// recorded, so the step a placeholder pack returns already carries the lines that name every node's
+/// schema. A hash learned any other way would target a node this build does not have.
+pub fn narrowed<'session>(
+    session: &'session Session,
+    source: &str,
+) -> Result<Prepared<'session>, QwenRefusal> {
     clear_graph_pass();
     let placeholder = read_placement_pack(&pack_text(&format!("sha256:{}", "0".repeat(64))))
         .map_err(|refusal| QwenRefusal::Weights(format!("the placeholder pack: {refusal}")))?;
-    let mut store = lichen_compute::language::new_store(None)
-        .map_err(|error| QwenRefusal::Weights(error.to_string()))?;
-    let (first, _value, _root) =
-        lichen_language::testing::run_at(&probe_source(), None, &mut store);
-    install_tiling_with_packs(&first, &[placeholder]);
-    let (module, _value, _root) =
-        lichen_language::testing::run_at(&probe_source(), None, &mut store);
-    let lines: Vec<String> = module
-        .extension_diagnostics
-        .iter()
-        .map(|entry| entry.message.clone())
-        .collect();
-    let Some(schema) = reported_schema(&lines) else {
+    let probe = session
+        .prepare_with_packs(source, &[placeholder])
+        .map_err(QwenRefusal::Step)?;
+    let Some(schema) = reported_schema(probe.report()) else {
         return Err(QwenRefusal::Weights(format!(
-            "a running graph prints its node's schema: {lines:?}"
+            "a preparation names its nodes' schemas: {:?}",
+            probe.report()
         )));
     };
+    drop(probe);
     clear_graph_pass();
     let pack = read_placement_pack(&pack_text(&schema))
         .map_err(|refusal| QwenRefusal::Weights(format!("the pack for {schema}: {refusal}")))?;
     session
-        .prepare_with_packs(MATVEC_STEP, &[pack])
+        .prepare_with_packs(source, &[pack])
         .map_err(QwenRefusal::Step)
 }
