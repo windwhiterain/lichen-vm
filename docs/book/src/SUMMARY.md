@@ -26,3 +26,7 @@
 - [Recursive and Dependent Types](ch12-recursive-and-dependent.md)
 - [Attributes and Perspectives](ch13-attributes.md)
 - [Diagnostics and Assertions](ch14-diagnostics.md)
+
+# Building Programs
+
+- [Modules, Imports, and Packages](ch15-modules.md)
