@@ -478,3 +478,40 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// One row of a projection: `y[j] = sum over i of x[i] · w[j][i]`, at the model's own width.
+///
+/// # Invariant
+/// A lane is one row of `w` and folds the whole width, so the kernel is the shape every projection
+/// in a layer has — `q`, `k`, `v`, `o`, `gate`, `up`, `down`, and the 151936-wide vocabulary — with
+/// the row count and the width the caller's. The second dispatch copies the rows across, because a
+/// one-node step cannot hand its answer back.
+pub const MATVEC_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In     = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+Rows   = struct{.y (compute.Buf Float)}
+CopIn  = struct{.d (compute.Buf Float)}
+MatvecPar = struct{.n Int, .dim Int, .in In, .out Rows}
+MatvecArg = struct{.n Int, .dim Int, .I In}
+matvec_raw = (k : MatvecPar) => {
+  row = compute.range k.n
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+CopPar = struct{.n Int, .in CopIn, .out CopIn}
+CopArg = struct{.n Int, .I CopIn}
+copy_raw = (k : CopPar) => {
+  i = compute.range k.n
+  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
+}
+copy = compute.parallel copy_raw "gpu"
+GArg = struct{.n Int, .dim Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Rows)
+  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+}
+built = compute.graph step
+built
+"#;

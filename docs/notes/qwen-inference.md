@@ -39,6 +39,15 @@ folds the row's squares in f32, and one lane per element divides by the root of 
 So a real model tensor reaches a device kernel and comes back the host's number, at the model's own
 width — 2048, not a toy.
 
+## The projection, which is every projection
+
+`MATVEC_STEP` is `y[j] = sum over i of x[i] · w[j][i]`: a lane is one row of `w` and folds the whole
+width. That is the shape of **every** projection a layer has — `q`, `k`, `v`, `o`, `gate`, `up`, `down`,
+and the 151936-wide vocabulary — so one kernel covers them with the row count and the width as the
+caller's. Measured on 2048 rows over 2048 inputs with a pattern that is exact in f32, so a reordered sum
+is the only difference available: rows `0`, `1` and `2047` answer `-0.5`, `-1.84375` and `-1.84375`,
+which are the host's own dot products.
+
 ## What is ahead
 
 The rest of a layer — RoPE, the GQA attention over a growing cache, the SwiGLU — then 28 layers, then
