@@ -426,3 +426,118 @@ fn a_schedule_trades_submissions_for_clock() {
         (asynchronously - batched) / asynchronously * 100.0
     );
 }
+
+/// A batched step: one row of three lanes per sequence, and the sequence's own value after the data.
+const BATCHED: &str = r#"
+ShiftIn = struct{.d (compute.Buf Float)}
+ShiftPar = struct{.n Int, .in ShiftIn, .out Out}
+shift_raw = (k : ShiftPar) => {
+  i = compute.range k.n
+  seq = i / 3
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) + (compute.read ((compute.Read _)(.from k.in.d, .at (k.n + seq)))))))
+}
+shift = compute.parallel shift_raw "gpu"
+GArg = struct{.n Int, .in ShiftIn}
+step = (s : GArg) => {
+  a = (compute.plrun shift ((compute.A ShiftIn)(.n s.n, .I ShiftIn(.d s.in.d))) : Out)
+  compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d a.e)))
+}
+built = compute.graph step
+built
+"#;
+
+/// One prepared step serves any batch size, and the step's own cost is paid once for the batch.
+///
+/// # Invariant
+/// The batch size is the extent **argument**, not a graph constant, so one `Prepared` serves any
+/// batch size. The buffer holds the data first and the per-sequence values after it at `n`, and the
+/// step is `shift` then `double`: four times the data plus twice the sequence's value, so the first
+/// sequence's row is the same at every batch size and the last one's is not.
+#[test]
+fn one_prepared_step_serves_any_batch_size() {
+    const REPEATS: usize = 200;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED one_prepared_step_serves_any_batch_size: no device");
+        return;
+    };
+    let prepared = session
+        .prepare(&format!("{KERNEL}{BATCHED}"))
+        .unwrap_or_else(|refusal| panic!("the batched step prepares: {refusal}"));
+    assert_eq!(
+        prepared.nodes(),
+        2,
+        "the held step is two different dispatches: a repeat of one would be one node"
+    );
+
+    let arguments = |sequences: usize| {
+        let mut buffer = Vec::with_capacity(sequences * 4);
+        for _ in 0..sequences {
+            buffer.extend([1.0f32, 2.0, 3.0]);
+        }
+        for ordinal in 0..sequences {
+            buffer.push(10.0 * (ordinal as f32 + 1.0));
+        }
+        vec![
+            RunArgument::Count((sequences * 3) as i64),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&buffer),
+            },
+        ]
+    };
+
+    let mut clocks: Vec<(usize, f64)> = Vec::new();
+    for sequences in [1usize, 4, 16] {
+        let stepped = prepared
+            .step(arguments(sequences))
+            .unwrap_or_else(|refusal| panic!("a {sequences}-sequence step runs: {refusal}"));
+        assert_eq!(
+            (stepped.cost.submissions, stepped.cost.fence_waits),
+            (1, 1),
+            "a {sequences}-sequence step is one submission and one fence, whatever the batch"
+        );
+        let RunResult::Resident(resident) = &stepped.results[0] else {
+            panic!("a device wrote this value, so it stays a resident id");
+        };
+        let ScalarData::Float(values) = session
+            .fetch(*resident)
+            .unwrap_or_else(|refusal| panic!("the batch is readable: {refusal}"))
+        else {
+            panic!("the step declared a Float buffer");
+        };
+        assert_eq!(values.len(), sequences * 3, "three lanes per sequence");
+        assert_eq!(
+            &values[..3],
+            &[24.0, 28.0, 32.0],
+            "the first sequence answers the same at {sequences} sequences in the batch: four times \
+             1, 2 and 3 plus twice its own 10"
+        );
+        let last = 10.0 * (sequences as f32);
+        assert_eq!(
+            &values[values.len() - 3..],
+            &[4.0 + 2.0 * last, 8.0 + 2.0 * last, 12.0 + 2.0 * last],
+            "and the last sequence read its own value, not the first one's"
+        );
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            let stepped = prepared
+                .step(arguments(sequences))
+                .unwrap_or_else(|refusal| panic!("a {sequences}-sequence step runs: {refusal}"));
+            std::hint::black_box(&stepped);
+        }
+        clocks.push((
+            sequences,
+            started.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64,
+        ));
+    }
+    let alone = clocks[0].1;
+    for (sequences, batched) in &clocks {
+        let separate = alone * *sequences as f64;
+        println!(
+            "{sequences} sequence(s): one batched step {batched:.4} ms against {separate:.4} ms as \
+             {sequences} separate step(s), so batching saved {:.4} ms ({:.0}%)",
+            separate - batched,
+            (separate - batched) / separate * 100.0
+        );
+    }
+}

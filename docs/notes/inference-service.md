@@ -81,6 +81,27 @@ real layer's compute: as each dispatch grows, the fraction the schedule owns shr
 waits **30** fences for its 16 submissions — it pipelines and then settles more than it
 submitted — so the two schedules are not comparable by submission count alone.
 
+**Batching is what that per-step cost is for.** One prepared step serves any batch size, because
+the batch is the extent **argument** and not a graph constant — so a single `Prepared` ran 1, 4 and
+16 sequences through the same graph (`crates/lichen-serve/tests/step_cost.rs`):
+
+| sequences in one step | the batched step | as separate steps | saved |
+|---|---|---|---|
+| 1 | 0.350 ms | 0.350 ms | — |
+| 4 | 0.324 ms | 1.399 ms | 1.075 ms (77%) |
+| 16 | 0.333 ms | 5.597 ms | 5.263 ms (94%) |
+
+The 16-sequence step costs what a 1-sequence step costs: the submission and the fence do not grow
+with the batch, so the fixed cost measured above is exactly what batching buys. The rows double as
+the correctness check — the first sequence's answer is the same at every batch size and the last
+one's is not, so the batch changed the schedule and not the arithmetic.
+
+Two shape facts came out of building it. **A step of two *identical* dispatches is one node**: the
+recorder collapses them, so a step needs genuinely different dispatches before it can hand an answer
+back. And **two buffers under `.in` is still not a working shape** — the program is refused with
+*"no field with this name in the struct type"* — so the batch's per-sequence values ride at the end
+of the data buffer, read at `n + sequence`, instead of in a second buffer.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
