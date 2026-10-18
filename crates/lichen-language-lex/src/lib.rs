@@ -74,7 +74,8 @@ pub enum TokenKind {
     KwGc,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
-    /// The `cache` keyword — a binding whose value is a retained cell
+    /// `@cache` — the binding-retention modifier, at the `@` sigil beside `@loop`:
+    /// a binding whose value is a retained cell
     /// (`docs/notes/incremental-update.md` §3).
     KwCache,
     /// The `array` keyword — a keyword-led array type, `array{T, n}`.
@@ -219,7 +220,7 @@ impl TokenKind {
             TokenKind::Any => "'@any'",
             TokenKind::KwGc => "'@gc'",
             TokenKind::KwPub => "'pub'",
-            TokenKind::KwCache => "'cache'",
+            TokenKind::KwCache => "'@cache'",
             TokenKind::KwArray => "'array'",
             TokenKind::KwTuple => "'tuple'",
             TokenKind::KwInt2Float => "'int2float'",
@@ -337,8 +338,6 @@ enum RawToken {
     KwReturn,
     #[token("pub")]
     KwPub,
-    #[token("cache")]
-    KwCache,
     /// A `@`-prefixed word; an unknown one is a lex error, which reserves `@`.
     #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
     AtNameLit,
@@ -752,12 +751,14 @@ fn raw_to_kind(
             "shallow" => Some(TokenKind::KwShallow),
             "any" => Some(TokenKind::Any),
             "gc" => Some(TokenKind::KwGc),
+            "cache" => Some(TokenKind::KwCache),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
                         "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
-                         `@assert`, `@in`, `@shallow`, `@any` and `@gc` are the ones that exist"
+                         `@assert`, `@in`, `@shallow`, `@any`, `@gc` and `@cache` are the \
+                         ones that exist"
                     ),
                 });
                 None
@@ -777,7 +778,6 @@ fn raw_to_kind(
             "else" => TokenKind::KwElse,
             "return" => TokenKind::KwReturn,
             "pub" => TokenKind::KwPub,
-            "cache" => TokenKind::KwCache,
             "array" => TokenKind::KwArray,
             "tuple" => TokenKind::KwTuple,
             "int2float" => TokenKind::KwInt2Float,
@@ -806,7 +806,6 @@ fn raw_to_kind(
         RawToken::KwElse => Some(TokenKind::KwElse),
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
-        RawToken::KwCache => Some(TokenKind::KwCache),
         RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::KwTuple => Some(TokenKind::KwTuple),
         RawToken::KwInt2Float => Some(TokenKind::KwInt2Float),
