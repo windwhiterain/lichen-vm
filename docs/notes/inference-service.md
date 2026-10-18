@@ -174,6 +174,15 @@ step after the swap advanced **one** sequence because the other's cache was full
 scores only the key it is handed, so its tokens repeat; the demo is the serving mechanics and says
 that in its own module doc.
 
+**A layer of three kernels with three different argument shapes runs as one submission.** Scale,
+summarise and add — a normalisation's two passes — over two sequences, with each dispatch taking **its
+own** input struct (two buffers, one, then two again) while the graph's parameter holds two
+(`crates/lichen-serve/tests/layer_step.rs`): `1..6` scaled by `2, 1, 1` gives `2, 2, 3` and `8, 5, 6`,
+their sums are `7` and `19`, and adding each sum back to its own row is `9, 9, 10` and `27, 24, 25`.
+So **a two-buffer graph parameter with per-dispatch structs records and runs**, which is what round
+2's grey area left open; the warning recorded there still stands for the **one-buffer** case, which
+nothing has re-tested. A layer is therefore expressible — what it costs is its dispatches.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

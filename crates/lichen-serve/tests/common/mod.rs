@@ -3,7 +3,7 @@
 //! # Invariant
 //! Shared by more than one test binary, so an item one of them does not use is not dead code.
 
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};

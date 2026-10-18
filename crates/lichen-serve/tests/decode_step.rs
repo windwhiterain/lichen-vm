@@ -3,7 +3,7 @@
 use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::{ScalarClass, ScalarData};
-use lichen_serve::{ServeRefusal, Session};
+use lichen_serve::Session;
 
 /// `examples/generate.lichen`'s three kernels unchanged on the device, and the step over them.
 ///
