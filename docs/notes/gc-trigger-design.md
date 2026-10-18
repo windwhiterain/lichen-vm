@@ -161,7 +161,7 @@ template's scope may be collected (`2.b`) — and the trigger is **on**:
 | the walk goes into a node outside the vacated subtree, and a class member's payload moves into its own block | `gc.rs` (`garbage_collect_node`, `relocate_class_value`) |
 | the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided`, `basic::gc_safety` (the safety battery), `gc_block::a_closure_*_is_still_callable` |
 
-Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **162 / 0**
+Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **163 / 0**
 plus one ignored repro (`P1-52`), `lichen-highlevel` **136 / 0**, `lichen-compute`'s
 `examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
 under the old trigger). The corpus' two collects released 23 and 8 nodes, and no live node
