@@ -168,42 +168,91 @@ come from. Form B is a real change and it is **not** the one to make first.
 backedge (§3's witness), and U7 proves the trip count can be a buffer read, so a
 step loop needs no scalar channel at all: the position, the write offset and the
 stop flag are block parameters, incremented on the device. **This is the form the
-evidence favours**, and it is blocked not by the emitter but by §6.
+evidence favours**, and §6 records why nothing in the contract blocks it.
 
 The reason C beats B is the cost model, not elegance: B re-runs a subgraph per
 step, so it pays a dispatch per step; C pays one dispatch for the whole chunk. At
 the measured floor of ~0.036 ms that is the difference between a step budget and a
 token budget.
 
-## 6. The one real blocker: a buffer written in place
+## 6. In-place is a backend decision, not a contract change
 
-A KV cache is appended to. Appending needs a body that **reads and writes one
-buffer**, and that is unspellable (§3): outputs are write-only, `.in` and `.out` are
-disjoint, and U1 confirms it from the other side — the output slot is exactly
-`count` long, so an offset write past it is **silently dropped**, with no
-diagnostic. That silence is a landmine of its own and belongs beside the others in
-[compute-graph-jit](compute-graph-jit.md).
+A KV cache is appended to, so one dispatch has to read and write one device buffer.
+This note first filed that as unspellable and called for the buffer-version spine of
+[shared-memory-and-barriers](shared-memory-and-barriers.md) §3. **Both halves of
+that were wrong**, and the correction is worth writing out because it removes a
+whole class of work:
 
-Without it, a cache is one of two bad shapes: a fresh buffer per step, which is
-allocation churn — the tree already measured a one-buffer-per-link chain **three
-times slower** than not fusing at all, all of it in `vkAllocateMemory` — or a full
-copy per step, which is O(n) traffic per token and O(n²) per sequence.
+- **`.in`/`.out` describes a parameter, not where a buffer lives.** The IR states
+  how many outputs a fragment has (`KernelFragment::outputs`); it never states what
+  device memory they occupy, and `BufferSlot` describes inputs only because an
+  output has no id until it is produced. So the disjointness of the two role paths
+  is a fact about the *payload the frontend describes* and says nothing about
+  aliasing in memory.
+- **The backend already decides placement, and already reuses.** `run_chain`
+  allocates **two** buffers for a whole chain, ping-pongs them so link `i` reads what
+  link `i + 2` wrote, and widens the trailing barrier to make that order sound — a
+  placement decision taken in `lichen-compute-gpu` out of the chain's shape alone.
 
-The cure is already designed and staged elsewhere: the **buffer-version spine** of
-[shared-memory-and-barriers](shared-memory-and-barriers.md) §3, where `write`
-returns a new version of the buffer it wrote and `read` consumes it through the
-`.from` field it already has. That note defers the spine to its §9 step 4, landing
-it with the `Workgroup` declaration, on the reasoning that *"nothing needs it until
-shared memory exists"*. **Serving is a second reason, and it is worth recording
-against that sentence**: a cache written in place across a loop's iterations needs
-the readable output whether or not any slice is staged.
+So **output aliasing** — one device buffer under both an input slot and an output
+slot — is that same decision taken one step further, and it dissolves both halves of
+the cache problem at once:
 
-It also fixes the shape of the first real step. A page of K/V for the chunk being
-generated is small enough for `Shared`, and the pages before it are read-only
-inputs — so **chunked decode** (a page's worth of tokens per dispatch, the current
-page staged in workgroup memory, earlier pages reached through a page table by U2's
-indirect address) fits the capability the tree is already building, instead of
-needing a new one.
+- there is no **copy**, because there is nothing to copy into;
+- the **length** stops being the extent. A slot that aliases a resident is as long
+  as that resident, because the backend is the one constructing the descriptor
+  ranges. U1's *"the slot is exactly `count` long"* is a fact about the
+  fresh-allocation path and not about slots at all — which is also why `plrun`'s
+  allocation at `count` and `BatchExtent`'s separate `capacity` were two spellings
+  of one gap: aliasing closes it without either of them moving.
+
+### The rule that makes it sound
+
+An alias lets one dispatch's write reach another of its own reads, so the safety
+condition **is** the barrier question — and the analysis already exists, as
+`barrier_scan` in `crates/lichen-kernel-ir/src/barrier.rs`:
+
+> **A global input may be aliased with a global output iff every read of that input
+> is by the lane that writes the same address.** The scan's fact 2 (the two index
+> operands are the same `ValueId`) proves it, its conservative fact 1 (the address
+> intervals are disjoint) proves the rest, and anything else is **refused**, not
+> aliased.
+
+Two more conditions, both cheap and both refused by name rather than assumed: the
+**element class and width agree** — a slot is read as its class's elements, the same
+reason `Value` carries a class — and the input has **no other live consumer among
+the graph's later nodes**, so an alias cannot clobber a value somebody still reads.
+
+The conservatism runs in the safe direction for exactly this use: the scan
+over-approximates overlap, so "no barrier" is a proof of the aliasing condition
+rather than a guess about it. The failure it must never have — an aliased pair
+called safe that is not — is the shape this repository treats as worst, which is why
+the rule is stated as a refusal first.
+
+### Where the decision lives, and the part that is unmeasured
+
+Three layers, split by what each can see:
+
+| layer | what it contributes |
+|---|---|
+| `lichen-kernel-ir` | the **contract** gains an output placement: today nothing can even *ask* for an alias, because `BufferSlot` is inputs-only and an output is always freshly allocated |
+| `lichen-graph-ir` | **whether** to alias: live ranges are a graph fact, and `Planned` already resolves the whole graph before the first of it is recorded |
+| `lichen-compute-gpu` | **the binding**: one `vk::Buffer` under two descriptor bindings, and the aliased resident's own length as the slot's range |
+
+**None of it is measured yet.** Two descriptor bindings naming one `VkBuffer` is
+ordinary in Vulkan, but this emitter writes through an `OpAccessChain` on a
+per-binding `OpVariable`, and whether such a module answers correctly when the two
+bindings are one allocation is a claim to measure and not to assume. The probe needs
+the contract's output placement to exist before it can be written at all, which is
+why the contract is the first of the three.
+
+And it fixes the shape of the first real step more cheaply than the spine would
+have. A page of K/V for the chunk being generated can now simply **be** the cache
+page, the pages before it are read-only inputs reached through a page table by U2's
+indirect address, and so **chunked decode** — a page's worth of tokens per dispatch
+— needs the aliasing rule and nothing else. `Shared` becomes an optimisation for the
+current page instead of a requirement, which is the better place for it: a
+requirement that only existed because the copy did.
 
 ## 7. The layering, and the decisions this round was given
 
@@ -240,8 +289,11 @@ Three verdicts were given and are recorded here rather than left in a transcript
    node writes `0` and whose second takes it as `Count::Device`: does it dispatch
    zero workgroups, or refuse? `device_extent.rs` holds the machinery. §4's row is
    a code reading until this runs.
-2. **The buffer-version spine**, for the reason in §6. Until it lands, every cache
-   is a copy or a churn.
+2. **Output aliasing, in the three layers §6 names.** The `lichen-kernel-ir` entry
+   first, because nothing can ask for an alias today; then the graph's liveness
+   decision; then the backend's binding. The probe — one `VkBuffer` under two
+   descriptor bindings — cannot be written before that entry exists, which is why
+   §6 puts the contract first.
 3. **A surface for a kernel-level loop with carried state.** The IR expresses it and
    the emitter's module for it is validated
    ([compute-runtime-scalars](compute-runtime-scalars.md), open item 5); what is
@@ -271,10 +323,11 @@ cargo test -p lichen-compute --test lichen_compute -j 3 -- --exact \
   lichen_compute::zz_zero_extent_probe::probe_the_zero_extent --nocapture
 ```
 
-## 9. Two stale claims this round corrected
+## 9. Three claims this round corrected
 
-Both were steering, and both are recorded so the next reader does not re-derive
-them:
+All three were steering, and all three are recorded so the next reader does not
+re-derive them. The first two were stale in the tree; the third was this note's own
+first position, retracted by the reading that `.in`/`.out` is frontend payload.
 
 - **[compute-runtime-scalars](compute-runtime-scalars.md)'s open item 1 is stale.**
   It says a `KernelNode` *"carries its extent and its buffers and nothing else"* and
@@ -289,3 +342,11 @@ them:
   host calls"*, while `Node` has one variant and
   [compute-graph-jit](compute-graph-jit.md) records the host-call node's removal and
   the reason. Both comments were corrected with this round.
+- **This note's own §6 called in-place unspellable and called for the spine.**
+  Retracted where it stood: an output's placement is not in the IR, `run_chain`
+  already decides and reuses placement, and the safety condition is
+  `barrier_scan`'s — so aliasing is a backend decision and neither the contract's
+  role paths nor the spine has to move. The sentence this note had drafted *against*
+  [shared-memory-and-barriers](shared-memory-and-barriers.md) — that serving is a
+  second reason for the spine — is withdrawn with it, and that note was never
+  edited, so nothing there needs undoing.
