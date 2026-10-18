@@ -898,3 +898,91 @@ fn node_submissions(prepared: &lichen_serve::Prepared<'_>, arguments: Vec<RunArg
         .cost
         .submissions
 }
+
+/// A token whose dispatches exceed one submission's cap runs as two scoped steps.
+///
+/// # Invariant
+/// The same prepared graph of forty dispatches is stepped twice and the second reads the first's
+/// resident, so eighty dispatches cross two submissions with no host data between them. The answer
+/// is `1, 2, 3` doubled eighty times, which is exact in binary, so the numbers say both halves ran
+/// and the counts say the two submissions were one token's work.
+#[test]
+fn a_step_too_big_for_one_submission_runs_as_two() {
+    const HALF: usize = 40;
+    const REPEATS: usize = 50;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_step_too_big_for_one_submission_runs_as_two: no device");
+        return;
+    };
+    let seed = || RunArgument::Buffer {
+        class: ScalarClass::Float,
+        data: packed(&[1.0, 2.0, 3.0]),
+    };
+    let prepared = session
+        .prepare(&layer(HALF))
+        .unwrap_or_else(|refusal| panic!("the half step prepares: {refusal}"));
+    assert_eq!(prepared.nodes(), HALF, "the held step has forty dispatches");
+
+    let first = prepared
+        .step(vec![RunArgument::Count(3), seed()])
+        .unwrap_or_else(|refusal| panic!("the first half runs: {refusal}"));
+    assert_eq!(
+        (first.cost.submissions, first.cost.fence_waits),
+        (1, 1),
+        "forty dispatches are one submission"
+    );
+    let half = resident_of(&first);
+    let second = prepared
+        .step(vec![RunArgument::Count(3), RunArgument::Resident(half)])
+        .unwrap_or_else(|refusal| panic!("the second half runs: {refusal}"));
+    assert_eq!(
+        (second.cost.submissions, second.cost.fence_waits),
+        (1, 1),
+        "and the second half is one more, reading a resident rather than host data"
+    );
+    let doubled = resident_of(&second);
+    let ScalarData::Float(values) = session
+        .fetch(doubled)
+        .unwrap_or_else(|refusal| panic!("the answer is readable: {refusal}"))
+    else {
+        panic!("the step declared a Float buffer");
+    };
+    let two_to_eighty = (2.0f32).powi(80);
+    assert_eq!(
+        values,
+        vec![two_to_eighty, two_to_eighty * 2.0, two_to_eighty * 3.0],
+        "eighty doublings of 1, 2 and 3, which no single submission can hold"
+    );
+
+    let whole = session
+        .prepare(&layer(64))
+        .unwrap_or_else(|refusal| panic!("the whole step prepares: {refusal}"));
+    let clock = |held: &lichen_serve::Prepared<'_>, twice: bool| -> f64 {
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            let one = held
+                .step(vec![RunArgument::Count(3), seed()])
+                .unwrap_or_else(|refusal| panic!("a step runs: {refusal}"));
+            let produced = resident_of(&one);
+            if twice {
+                let two = held
+                    .step(vec![RunArgument::Count(3), RunArgument::Resident(produced)])
+                    .unwrap_or_else(|refusal| panic!("the second half runs: {refusal}"));
+                session.release(resident_of(&two));
+            }
+            session.release(produced);
+            std::hint::black_box(&one);
+        }
+        started.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64
+    };
+    let sixty_four = clock(&whole, false);
+    let eighty_in_two = clock(&prepared, true);
+    println!(
+        "64 dispatches in one submission {sixty_four:.4} ms; 80 over two {eighty_in_two:.4} ms, so \
+         the second submission cost {:.4} ms for sixteen more dispatches",
+        eighty_in_two - sixty_four
+    );
+    for resident in [half, doubled] {
+        session.release(resident);
+    }
+}

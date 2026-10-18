@@ -153,6 +153,17 @@ that is 69 ms, or 14 tokens a second, **before any arithmetic**. Batching amorti
 sequences and cannot touch the 0.08 ms per dispatch; only fewer dispatches can, which is what fusion
 is for, and the fusion floor currently refuses both real shapes by name (`llm-operators.md`).
 
+**The 64-dispatch cap is a bookkeeping cost, not a throughput one.** A token whose dispatches exceed
+one submission runs as **scoped steps**: forty dispatches, then forty more, with the state crossing
+as a **resident** and no host data between them (`crates/lichen-serve/tests/step_cost.rs` — eighty
+doublings of `1, 2, 3` over two submissions, answering `2^80`, `2^81` and `3 × 2^80` exactly).
+Measured: **64 dispatches in one submission 5.07 ms, 80 over two 6.07 ms**, so the second submission
+and its sixteen extra dispatches cost **1.00 ms**. A model of `D` dispatches per token therefore runs
+as `⌈D / 64⌉` scoped steps and pays about `0.23 × ⌈D / 64⌉` ms of fixed cost — at `D = 400–580` that
+is 7 to 10 submissions and **1.6 to 2.3 ms out of a 34 to 46 ms token**. So the cap decides **how many
+steps a service issues per token**, not how fast a token is: the dispatches are the cost, and fusion
+is still the only lever on them.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
