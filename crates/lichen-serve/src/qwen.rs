@@ -57,11 +57,16 @@ pub struct Generated {
 }
 
 /// A layer's tensors, held at the width the model runs at.
-enum Tensors {
-    /// The f32 dumps, four bytes an element.
+///
+/// # Invariant
+/// The halves are **borrowed** from the copy the model keeps: a layer is 96 MB and a token reads
+/// twenty-eight of them, so cloning one here costs 2.7 GB of `memcpy` a token, which was measured at half
+/// of a layer's time.
+enum Tensors<'a> {
+    /// The f32 dumps, four bytes an element, read for this layer alone when the model streams them.
     Wide(Vec<f32>),
     /// The checkpoint's halves, two bytes an element, unconverted.
-    Narrowed(Vec<u8>),
+    Narrowed(&'a [u8]),
 }
 
 /// The numbers a run of halves holds, widened the way the device widens them.
@@ -449,10 +454,12 @@ impl<'session> Qwen<'session> {
     /// hold is the caller's to decide — a 4 GB card fit none of the model, an 8 GB one fits all of it.
     pub fn reside(&mut self, layers: usize) -> Result<(), QwenRefusal> {
         for layer in 0..layers.min(LAYERS) {
+            let read: Vec<u8>;
             let tensors = match self.width {
                 Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
                 Width::Narrowed => {
-                    Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?)
+                    read = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    Tensors::Narrowed(&read)
                 }
             };
             let mut held: Vec<crate::ResidentBuffer> = Vec::with_capacity(TENSORS);
@@ -507,7 +514,7 @@ impl<'session> Qwen<'session> {
     /// # Invariant
     /// A narrowed layer keeps the file's bytes and hands a **slice** of them on, so a weight is never
     /// converted; the offsets the layer reads are elements and the file is two bytes to each.
-    fn tensor(&self, tensors: &Tensors, offset: usize, length: usize) -> RunArgument {
+    fn tensor<'a>(&self, tensors: &Tensors<'a>, offset: usize, length: usize) -> RunArgument {
         match tensors {
             Tensors::Wide(values) => floats(&values[offset..offset + length]),
             Tensors::Narrowed(bytes) => {
@@ -529,6 +536,7 @@ impl<'session> Qwen<'session> {
         cache: &mut Cache,
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let read: Vec<u8>;
         let tensors = match self.width {
             Width::Wide => match self.held.get(layer) {
                 Some(bytes) => Tensors::Wide(
@@ -540,8 +548,11 @@ impl<'session> Qwen<'session> {
                 None => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
             },
             Width::Narrowed => match self.held.get(layer) {
-                Some(bytes) => Tensors::Narrowed(bytes.clone()),
-                None => Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?),
+                Some(bytes) => Tensors::Narrowed(bytes),
+                None => {
+                    read = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    Tensors::Narrowed(&read)
+                }
             },
         };
         let session = self.session;
