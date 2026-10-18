@@ -10,6 +10,21 @@
 > the checker cannot check it where it stands, what the engine can and cannot do,
 > and the two designs left. It asks the owner the questions at the end.
 
+## 0. The two spellings at a glance
+
+| fact the written form checks | written | deferred (a parameter callee) |
+|---|---|---|
+| arity (`too many fields` / `missing field`) | yes | **no** — the reorder iterates the arguments, so a short value is built (`P1-46`) |
+| field type | yes | yes, as the lookup key's miss (`P1-45`) |
+| pin (`5 : Int`) | yes | **no** — the instance carries the argument's value (`6`) |
+| perspective (`# n`) | yes (relaxed, `declared ⊑ value`) | **no** |
+| unknown argument name | yes (`no field named z`) | the miss's sentence names the arguments (`P1-47`, fixed) |
+
+The one fact the deferred form does check is the **field type**, and it checks it as
+a *key*: the supply table is keyed by `[name|rank, argument type]`, so a type no
+supplied argument matches is a miss. Everything else the field states — its arity,
+its pin, its perspective — never enters a key.
+
 ## 1. What is measured
 
 All at `dev@ca3bbcb2`. The **written** form checks everything the spec says; the
