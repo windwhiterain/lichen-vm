@@ -1,10 +1,10 @@
-//! A tiny inference service: load a model, admit sequences, and sample token by token.
+//! A tiny inference service: prefill a prompt, then sample token by token.
 //!
 //! # Invariant
-//! A token passes [`BLOCKS`] blocks and then the decode step, and only residents cross between them
-//! — the hidden state, the two caches and the model's tables — so the path brings back one value per
-//! token, the token itself. The toy model scores only the key it is handed, so its tokens repeat;
-//! this demo is the serving path, not a language model's behaviour.
+//! A prompt fills in one submission, and each token after it passes [`BLOCKS`] blocks and then the
+//! decode step, with only residents crossing between them — the hidden state, the caches and the
+//! model's tables — so the path brings back one value per token, the token itself. The toy model
+//! scores only the key it is handed, so its tokens repeat; this demo is the serving path.
 
 use std::process::ExitCode;
 
@@ -12,14 +12,14 @@ use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::ScalarData;
 use lichen_serve::{
-    BLOCK, BLOCKS, CAPACITY, COLUMNS, PROJECTIONS, QUERIES, ROWS, SAMPLE_STEP, Service, Session,
-    WEIGHTS, embedding_of,
+    BLOCK, BLOCKS, CAPACITY, COLUMNS, PREFILL_STEP, PROJECTIONS, QUERIES, ROWS, SAMPLE_STEP,
+    Service, Session, WEIGHTS, embedding_of,
 };
 
-/// How many sequences the demo admits, and how many tokens each of them generates before the cache
-/// is full.
+/// The demo's batch: two sequences, a two-token prompt, then two tokens each.
 const SEQUENCES: usize = 2;
-const TOKENS: usize = CAPACITY;
+const PROMPT: usize = 2;
+const TOKENS: usize = CAPACITY - PROMPT;
 
 fn main() -> ExitCode {
     match serve() {
@@ -29,6 +29,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The floats of `values`, as the bytes an argument carries.
+fn packed(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// The floats of `positions`, as the bytes an `Int` argument carries, eight bytes each.
+fn packed_positions(values: &[i64]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }
 
 /// One step's argument list for the block, whose six counts are the batch's own shape.
@@ -54,10 +70,7 @@ fn block_arguments(
         RunArgument::Resident(projection),
         RunArgument::Buffer {
             class: lichen_kernel_ir::ScalarClass::Int,
-            data: lengths
-                .iter()
-                .flat_map(|value| value.to_le_bytes())
-                .collect(),
+            data: packed_positions(lengths),
         },
     ]
 }
@@ -67,6 +80,14 @@ fn only(stepped: &lichen_serve::Stepped) -> Result<ResidentBuffer, String> {
     match &stepped.results[..] {
         [RunResult::Resident(resident)] => Ok(*resident),
         _ => Err("a block answers with one buffer, and this one answered otherwise".into()),
+    }
+}
+
+/// The two residents a prefill answered with.
+fn caches(stepped: &lichen_serve::Stepped) -> Result<(ResidentBuffer, ResidentBuffer), String> {
+    match &stepped.results[..] {
+        [RunResult::Resident(keys), RunResult::Resident(values)] => Ok((*keys, *values)),
+        _ => Err("a prefill answers with its two caches, and this one answered otherwise".into()),
     }
 }
 
@@ -88,13 +109,9 @@ fn serve() -> Result<(), String> {
     let block = session
         .prepare(BLOCK)
         .map_err(|refusal| format!("the block did not prepare: {refusal}"))?;
-    let zero = vec![0.0f32; SEQUENCES * CAPACITY * COLUMNS];
-    let empty_keys = session
-        .upload(&zero)
-        .map_err(|refusal| format!("the empty key cache did not load: {refusal}"))?;
-    let empty_values = session
-        .upload(&zero)
-        .map_err(|refusal| format!("the empty value cache did not load: {refusal}"))?;
+    let prefill = session
+        .prepare(PREFILL_STEP)
+        .map_err(|refusal| format!("the prefill did not prepare: {refusal}"))?;
     let mut queries = Vec::with_capacity(BLOCKS);
     let mut projections = Vec::with_capacity(BLOCKS);
     for layer in 0..BLOCKS {
@@ -126,8 +143,47 @@ fn serve() -> Result<(), String> {
             .ok_or("the model ran out of slots before the demo was admitted")?;
     }
     println!(
-        "serving {SEQUENCES} sequences, {TOKENS} tokens each, through {BLOCKS} blocks and the \
-         decode step over {CAPACITY} positions"
+        "serving {SEQUENCES} sequences over {CAPACITY} positions: a {PROMPT}-token prompt then \
+         {TOKENS} tokens each, through {BLOCKS} blocks and the decode step"
+    );
+
+    let prompt: Vec<f32> = (0..SEQUENCES)
+        .flat_map(|_| (0..PROMPT).flat_map(|offset| embedding_of(offset as f32).into_iter()))
+        .collect();
+    let empty = vec![0.0f32; SEQUENCES * CAPACITY * COLUMNS];
+    let started = std::time::Instant::now();
+    let filled = prefill
+        .step(vec![
+            RunArgument::Count((SEQUENCES * CAPACITY * COLUMNS) as i64),
+            RunArgument::Count(PROMPT as i64),
+            RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::Float,
+                data: packed(&empty),
+            },
+            RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::Float,
+                data: packed(&empty),
+            },
+            RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::Float,
+                data: packed(&prompt),
+            },
+            RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::Float,
+                data: packed(&prompt),
+            },
+            RunArgument::Buffer {
+                class: lichen_kernel_ir::ScalarClass::Int,
+                data: packed_positions(&vec![0; SEQUENCES]),
+            },
+        ])
+        .map_err(|refusal| format!("the prefill did not run: {refusal}"))?;
+    let (keys, values) = caches(&filled)?;
+    service.adopt(keys, values, PROMPT);
+    println!(
+        "prefilled {PROMPT} positions in {} submission(s), {:.2} ms",
+        filled.cost.submissions,
+        started.elapsed().as_secs_f64() * 1.0e3
     );
     println!("the first token carries the cold start, so its clock is not a token's");
 
@@ -139,10 +195,10 @@ fn serve() -> Result<(), String> {
             .collect();
         let (keys, values) = match (service.keys(), service.values()) {
             (Some(keys), Some(values)) => (keys, values),
-            _ => (empty_keys, empty_values),
+            _ => return Err(format!("step {step} had no cache to attend over")),
         };
         service.set_sampler(4.0, step as f32);
-        let visible = (step + 1).min(CAPACITY) as i64;
+        let visible = (PROMPT + step + 1).min(CAPACITY) as i64;
         let lengths = vec![visible; SEQUENCES];
         let mut hidden: Option<ResidentBuffer> = None;
         let mut submissions = 0u64;
@@ -152,7 +208,7 @@ fn serve() -> Result<(), String> {
                 Some(resident) => RunArgument::Resident(resident),
                 None => RunArgument::Buffer {
                     class: lichen_kernel_ir::ScalarClass::Float,
-                    data: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+                    data: packed(&words),
                 },
             };
             let stepped = block
@@ -185,9 +241,8 @@ fn serve() -> Result<(), String> {
             None => return Err(format!("step {step} sampled nothing")),
         };
         println!(
-            "step {step}: tokens {sampled:?} advanced {}, {submissions} submission(s) over \
-             {} blocks, {millis:.2} ms",
-            served.advanced, BLOCKS
+            "step {step}: tokens {sampled:?} advanced {}, {submissions} submission(s) at {millis:.2} ms",
+            served.advanced
         );
         tokens = sampled;
     }
@@ -204,7 +259,7 @@ fn serve() -> Result<(), String> {
         SEQUENCES
     );
 
-    for resident in [weights, empty_keys, empty_values] {
+    for resident in [weights] {
         session.release(resident);
     }
     for resident in queries.into_iter().chain(projections) {

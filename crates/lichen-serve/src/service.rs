@@ -194,6 +194,31 @@ impl<'session> Service<'session> {
         }
     }
 
+    /// Take the caches a prefill wrote as this batch's own, starting every live sequence past them.
+    ///
+    /// # Invariant
+    /// A live slot's position becomes `positions`, so its next step appends past the prompt, while a
+    /// retired slot stays retired. The residents become the batch's, so the service releases them when
+    /// it replaces them, and `positions` is clamped to the capacity the cache holds.
+    pub fn adopt(&mut self, keys: ResidentBuffer, values: ResidentBuffer, positions: usize) {
+        let after = positions.min(self.capacity) as i64;
+        for position in &mut self.positions {
+            if *position < self.capacity as i64 {
+                *position = after;
+            }
+        }
+        for previous in [
+            self.tokens.take(),
+            self.keys.replace(keys),
+            self.values.replace(values),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.session.release(previous);
+        }
+    }
+
     /// The tokens the last step sampled, when the step samples any.
     pub fn tokens(&self) -> Option<ResidentBuffer> {
         self.tokens

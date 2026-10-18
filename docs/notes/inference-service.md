@@ -282,6 +282,13 @@ written one way and whose second was written the other was refused with *"no fie
 struct type struct{.n Int, .I FillArg}"* — the `compute.A` spelling wraps the argument struct, so the
 second dispatch's `.cap` had no home. Both dispatches use the bare form now.
 
+**A prompt fills in one submission and the service adopts it.** `Service::adopt(keys, values, positions)`
+takes the caches a prefill wrote and starts every live sequence past them, so the next step appends after
+the prompt rather than over it; a retired slot stays retired and `positions` is clamped to the cache.
+Measured (`cargo run -p lichen-serve`): **a two-token prompt in one submission**, then two tokens each at
+three submissions a token, then a slot retired and a new sequence admitted at position zero — the whole
+serving path, prefill included.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
