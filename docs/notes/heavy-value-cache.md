@@ -721,11 +721,13 @@ computed one on the first compile of a process — §13.
 
 ## 13. Open
 
-- **The exact persistence container for a cell.** A cell artifact is a `StaticModule` closure
-  with the closure's own ref set; the package store's six acceptance criteria
-  (round-trip across stores, recovery from a crash between alloc and publish, corruption
-  rejected by the body digest, only the changed chain recompiled, reclamation) were written
-  for the package container and are the template, but a cell's container is not a package's.
+- **The cell cache's file layout, now that the container is settled.** §9.12 shows the container
+  *is* the artifact: the bytes reload into an empty registry and answer the same, so no second
+  format is needed. What is open is where they live, how a loaded key is reserved (done,
+  `Registry::reserve_cell_key`), the save sink inside `freeze_cells` (the pair node is only
+  reachable there), the judge arm that compares a **stored** key against the computed one on a
+  process's first compile, and eviction — the package store's six acceptance criteria are the
+  template and none of the four is answered yet.
 - **Whether the key is computed for unmarked bindings at all in the first build**, or only
   lazily when a marked binding reads one. The former is simpler and costs one hash per
   binding; the latter is cheaper and needs a demand order.
