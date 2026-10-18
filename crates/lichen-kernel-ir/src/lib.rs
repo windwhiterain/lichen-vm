@@ -516,6 +516,16 @@ pub trait ParallelBackend: Send + Sync {
         Err(BatchRefusal::Cannot)
     }
 
+    /// State a resident's extent and class, for a host that placed bytes by copying them.
+    ///
+    /// # Invariant
+    /// Refused by default: a backend that does not keep its buffers' bookkeeping cannot restate one, and a
+    /// silent success would leave a caller reading two-byte elements four bytes at a time. A copy moves
+    /// bytes and does not care what they mean, so the extent and the class are the caller's to state.
+    fn relabel(&self, _id: ResidentId, _count: usize, _class: ScalarClass) -> Result<(), String> {
+        Err("this backend cannot restate a resident's class".to_string())
+    }
+
     /// [`Self::run`], with the index range read from a number the device already holds.
     ///
     /// # Invariant

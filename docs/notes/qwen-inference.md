@@ -142,8 +142,8 @@ That correction changes what to fix. The host has 15.6 GB with about 5 GB free, 
 (6.6 GB) do not fit in memory, but **at bf16 they are 3.3 GB and do**. They are bf16 on disk already, so
 the shape of the fix is to read them once, hold the halves, and upload those.
 
-That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32 and the
-card reports 4 GB, so they cannot be held; at bf16 they are 2.7 GB and they can, which is what the
+That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32, and at
+bf16 they are 2.7 GB, which is what the
 precision path exists for. Reaching it needs two things the interface does not have yet, both measured:
 
 | | |
@@ -204,8 +204,27 @@ eleven slices a layer is split into are handed to dispatches by reference count,
 1.64 s to **1.18 s**. Sharing turned out to be cheaper than borrowing: a shared payload needs no lifetime
 through `Value`, and the forty-one places that build one kept their own constructors.
 
-What is left per layer is the upload of the weights it reads and the dispatches that read them — the
-payload is no longer copied anywhere between the file and the staging buffer.
+What is left per layer is the upload of the weights it reads and the dispatches that read them.
+
+## A weight can stay on the device
+
+The card is **6 GB**, measured with `nvidia-smi`; the 4 GB this work believed for several rounds came from
+WMI's `AdapterRAM`, a 32-bit field that saturates at 4 GiB on every larger card. What a card can actually
+hold is not its size either: on this one, twenty layers (1.9 GB) and the head (0.6 GB) are placed and
+twenty-four are refused by the driver, so the usable budget is around 2.5 GB and not 6.
+
+The upload stopped being a token's cost the day a host could **place** bytes rather than copy them through a
+program: `Session::place(bytes, class)` copies four bytes at a time — a copy does not care what the bytes
+mean — and then restates the resident's extent and class, on the backend and on the handle the caller
+holds. Twelve layers placed took a warm token from 1.18 s to **0.98 s**, and sixteen fit the local card;
+twenty-eight need the 8 GB card this is meant to deploy to.
+
+The restatement is the whole trick and it has two halves. A pack states a class for a node it matches, and
+matching needs a **claim**, which a plain copy does not have — that is why a narrowed upload was not
+expressible before. It did not need to be: the class of a placed buffer is not the copy program's to state,
+it is the caller's to state after the copy. Both records must move together, because a fetch reads the
+handle's count and the dispatcher reads the backend's, and one restated without the other is a buffer read
+four bytes an element by whoever asked the wrong one.
 
 ## Running it
 

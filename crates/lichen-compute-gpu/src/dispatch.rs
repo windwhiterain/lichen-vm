@@ -1795,6 +1795,29 @@ impl GpuContext {
         segment.submit_and_read_back(count, buffer.class)
     }
 
+    /// State a resident's extent and class, which a host does after coping bytes through a copy dispatch.
+    ///
+    /// # Invariant
+    /// Only the record changes: the allocation's byte size is what it was, and a narrower class must not
+    /// claim more bytes than were allocated. The count is the elements the bytes hold at that class, so a
+    /// class that halves the width doubles the count.
+    pub fn relabel(&self, id: ResidentId, count: usize, class: ScalarClass) -> Result<(), String> {
+        let mut resident = self.resident.lock().unwrap();
+        let Some(buffer) = resident.get_mut(&id) else {
+            return Err(format!("buffer {} is not held here", id.0));
+        };
+        let allocated = DeviceBuffer::bytes(buffer.padded, buffer.class);
+        if DeviceBuffer::bytes(count, class) > allocated {
+            return Err(format!(
+                "{} elements of {class:?} are more bytes than buffer {} holds",
+                count, id.0
+            ));
+        }
+        buffer.padded = count;
+        buffer.class = class;
+        Ok(())
+    }
+
     /// Give a resident buffer's device memory back.
     ///
     /// # Invariant
@@ -2252,6 +2275,15 @@ impl Drop for GpuContext {
 }
 
 impl lichen_kernel_ir::ParallelBackend for GpuContext {
+    fn relabel(
+        &self,
+        id: lichen_kernel_ir::ResidentId,
+        count: usize,
+        class: lichen_kernel_ir::ScalarClass,
+    ) -> Result<(), String> {
+        GpuContext::relabel(self, id, count, class)
+    }
+
     fn name(&self) -> &'static str {
         "gpu"
     }
