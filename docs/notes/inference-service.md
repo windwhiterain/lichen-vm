@@ -271,6 +271,17 @@ replaced an `if` with arithmetic was refused the same way, and only carrying the
 value — `fold (rows, drawn, total, index)` — compiled. So the accumulation may carry a fixed value, and
 reading one from the enclosing body is what is not allowed.
 
+**A prompt is one submission, not one per token.** `PREFILL_STEP` appends a **run**: a lane takes the new
+word when its position falls in `[first, first + count)`, reading that word from the run at
+`(sequence × count + offset) × dim + column`. A count of one is the decode append; a count of the prompt
+fills the whole prompt. Measured (`crates/lichen-serve/tests/prefill_step.rs`): two positions of two
+sequences reach their own slots and the positions past them are untouched, at **one submission**.
+
+**`(FillArg)(…)` and `(compute.A FillArg)(…)` are not interchangeable.** A step whose first dispatch was
+written one way and whose second was written the other was refused with *"no field named cap in the
+struct type struct{.n Int, .I FillArg}"* — the `compute.A` spelling wraps the argument struct, so the
+second dispatch's `.cap` had no home. Both dispatches use the bare form now.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

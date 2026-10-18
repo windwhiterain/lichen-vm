@@ -393,3 +393,45 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// A step that appends a **run** of positions at once, which is what a prompt costs.
+///
+/// # Invariant
+/// A lane is one cache slot and takes the new word when its position falls in
+/// `[first, first + count)`, reading it from the run at `(sequence × count + offset) × dim + column`. A
+/// count of one is the decode append and a count of the prompt fills it whole in one submission. The
+/// second dispatch fills nothing, because a one-node step cannot hand an answer back.
+pub const PREFILL_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In     = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
+KVOut  = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+FillPar = struct{.n Int, .cap Int, .dim Int, .count Int, .in In, .out KVOut}
+FillArg = struct{.n Int, .cap Int, .dim Int, .count Int, .I In}
+fill_raw = (k : FillPar) => {
+  lane = compute.range k.n
+  per_sequence = k.cap * k.dim
+  sequence = lane / per_sequence
+  rest = lane - sequence * per_sequence
+  position = rest / k.dim
+  column = rest - position * k.dim
+  first = compute.read ((compute.Read _)(.from k.in.pos, .at sequence))
+  after = 1 * (position >= first)
+  before = 1 * (position < (first + k.count))
+  fresh = (after * before) == 1
+  slot = (sequence * k.count + (position - first)) * k.dim + column
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at slot))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at slot))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
+}
+fill = compute.parallel (fill_raw ~ "claim:Reduction(element)") "gpu"
+StepIn = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
+GArg = struct{.n Int, .count Int, .in StepIn}
+step = (s : GArg) => {
+  a = (compute.plrun fill ((FillArg)(.n s.n, .cap 4, .dim 5, .count s.count, .I In(.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos))) : KVOut)
+  compute.plrun fill ((FillArg)(.n s.n, .cap 4, .dim 5, .count 0, .I In(.k a.k, .v a.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos)))
+}
+built = compute.graph step
+built
+"#;
