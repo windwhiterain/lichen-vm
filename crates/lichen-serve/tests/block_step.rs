@@ -30,11 +30,11 @@ fn expected(
     sequences: usize,
     positions: usize,
     units: usize,
-    length: usize,
+    lengths: &[usize],
 ) -> Vec<f32> {
     let mut answered = vec![0.0f32; sequences * units];
     for sequence in 0..sequences {
-        let scores: Vec<f32> = (0..length)
+        let scores: Vec<f32> = (0..lengths[sequence])
             .map(|position| {
                 (0..units)
                     .map(|column| {
@@ -48,7 +48,7 @@ fn expected(
         let total: f32 = scores.iter().map(|score| (score - top).exp()).sum();
         let attended: Vec<f32> = (0..units)
             .map(|column| {
-                (0..length)
+                (0..lengths[sequence])
                     .map(|position| {
                         let share = (scores[position] - top).exp() / total;
                         share * values[(sequence * positions + position) * units + column]
@@ -109,7 +109,7 @@ fn both_match(
     values: &[f32],
     query: &[f32],
     feed: &[f32],
-    length: usize,
+    lengths: &[usize],
 ) -> Vec<f32> {
     let cached_keys = session
         .upload(keys)
@@ -131,7 +131,10 @@ fn both_match(
             cached_values,
             query,
             feed,
-            &vec![length as i64; sequences],
+            &lengths
+                .iter()
+                .map(|value| *value as i64)
+                .collect::<Vec<i64>>(),
         ))
         .unwrap_or_else(|refusal| panic!("the block runs: {refusal}"));
     assert_eq!(
@@ -141,7 +144,7 @@ fn both_match(
     );
     let answered = read(session, only(&stepped));
     let oracle = expected(
-        state, keys, values, query, feed, sequences, positions, units, length,
+        state, keys, values, query, feed, sequences, positions, units, lengths,
     );
     for (index, (got, want)) in answered.iter().zip(oracle.iter()).enumerate() {
         assert!(
@@ -182,7 +185,7 @@ fn a_block_of_twelve_kernels_runs_in_one_submission() {
         &values,
         &[1.0, 1.0, 1.0, 0.0],
         &[1.0, 2.0, 3.0, 1.0],
-        3,
+        &[3, 3],
     );
     println!("the block answered {answered:?}");
 }
@@ -214,7 +217,7 @@ fn the_same_block_serves_a_wider_model() {
         &words(30, 0.9),
         &words(10, 1.1),
         &words(25, 0.5),
-        3,
+        &[3, 3],
     );
     println!("the five-unit block answered {} words", answered.len());
 }
@@ -284,7 +287,7 @@ fn a_stack_of_six_blocks_costs_six_submissions() {
 
     let mut oracle = vec![1.0f32, 0.0, 0.0, 1.0];
     for _ in 0..DEPTH {
-        oracle = expected(&oracle, &keys, &values, &query, &feed, 2, 3, 2, 3);
+        oracle = expected(&oracle, &keys, &values, &query, &feed, 2, 3, 2, &[3, 3]);
     }
     for (index, (got, want)) in words.iter().zip(oracle.iter()).enumerate() {
         assert!(
@@ -353,7 +356,75 @@ fn a_length_masks_the_slots_past_it() {
         &values,
         &[1.0, 1.0, 1.0, 0.0],
         &[1.0, 2.0, 3.0, 1.0],
-        1,
+        &[1, 1],
     );
     println!("a cache of three answered as if it held one: {answered:?}");
+}
+
+/// Each sequence has its own length, so two of them can read different amounts of one cache.
+///
+/// # Invariant
+/// The first sequence reads one position and the second reads all three, so the answer must be what
+/// the host computes for `[1, 3]` — and it must differ from the `[3, 3]` answer and from the `[1, 1]`
+/// one, which is what tells a per-sequence length from a shared one.
+#[test]
+fn a_length_belongs_to_its_own_sequence() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_length_belongs_to_its_own_sequence: no device");
+        return;
+    };
+    let keys = [
+        1.0f32, 0.0, 9.0, 9.0, 8.0, 8.0, 2.0, 0.0, 7.0, 7.0, 6.0, 6.0,
+    ];
+    let values = [
+        1.0f32, 2.0, 50.0, 60.0, 70.0, 80.0, 1.0, 0.0, 40.0, 30.0, 20.0, 10.0,
+    ];
+    let state = [1.0f32, 0.0, 0.0, 1.0];
+    let query = [1.0f32, 1.0, 1.0, 0.0];
+    let feed = [1.0f32, 2.0, 3.0, 1.0];
+    let mixed = both_match(
+        &session,
+        2,
+        3,
+        2,
+        &state,
+        &keys,
+        &values,
+        &query,
+        &feed,
+        &[1, 3],
+    );
+    let long = both_match(
+        &session,
+        2,
+        3,
+        2,
+        &state,
+        &keys,
+        &values,
+        &query,
+        &feed,
+        &[3, 3],
+    );
+    let short = both_match(
+        &session,
+        2,
+        3,
+        2,
+        &state,
+        &keys,
+        &values,
+        &query,
+        &feed,
+        &[1, 1],
+    );
+    assert_ne!(
+        mixed, long,
+        "a first sequence that reads one position cannot answer what two sequences reading three do"
+    );
+    assert_ne!(
+        mixed, short,
+        "and a second sequence reading three cannot answer what both reading one do"
+    );
+    println!("lengths [1, 3] answered {mixed:?}, unlike [3, 3]'s {long:?} and [1, 1]'s {short:?}");
 }

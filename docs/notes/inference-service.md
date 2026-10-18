@@ -289,6 +289,12 @@ Measured (`cargo run -p lichen-serve`): **a two-token prompt in one submission**
 three submissions a token, then a slot retired and a new sequence admitted at position zero — the whole
 serving path, prefill included.
 
+**A length belongs to one sequence, not to the batch.** With one cache and lengths `[1, 3]` the block
+answers `18.0, 24.0, 265.32782, 368.69687`: the first sequence's half is exactly what `[1, 1]` answers
+for it, the second's exactly what `[3, 3]` answers for it, and neither shared length can produce the mix
+(`crates/lichen-serve/tests/block_step.rs`). So the mask is per sequence — the property continuous
+batching rests on, two sequences in one step at two different points.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
