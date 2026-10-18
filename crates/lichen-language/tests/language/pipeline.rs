@@ -1489,11 +1489,12 @@ fn a_struct_type_application_is_an_instance() {
 
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
-    // arity: two fields, one value
+    // arity: one field, two values — the excess is its own diagnostic (P4-11)
     let d = diags("struct{.f Int}(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Annotation);
+    assert_eq!(check.kind, DiagKind::StructExcessField);
+    assert!(d[0].message.contains("too many fields"), "{}", d[0].message);
     // field types: the tuple's Ints are not Type
     let d = diags("struct{.f Type, .g Type}(1, 2)");
     assert_eq!(d.len(), 1);

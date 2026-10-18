@@ -570,7 +570,31 @@ where
                 }
                 _ => value_ty,
             };
-            (self.value_of(value), value_shape, true)
+            // A positional call gets the structural checks once the type is decided.
+            let mut structural = true;
+            if concrete
+                && shape::is_type_struct_kind_any(
+                    &mut self.module,
+                    self.type_expr,
+                    AnyNodeId::Dynamic(callee_ty),
+                )
+                && shape::struct_names_any(
+                    &mut self.module,
+                    self.type_expr,
+                    AnyNodeId::Dynamic(type_pair),
+                )
+                .is_some()
+                // The pass pairs one name with one element; a hand-built value keeps
+                // the old path.
+                && self
+                    .compound_children(value)
+                    .is_some_and(|children| children.len() == arg_names.len())
+            {
+                let named =
+                    self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
+                structural = named.valid;
+            }
+            (self.value_of(value), value_shape, structural)
         };
         if valid {
             // The definition's field-type list: a shape element is a slot, so the

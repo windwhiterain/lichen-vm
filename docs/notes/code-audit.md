@@ -43,7 +43,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | fixed — the registry's tags are checked at compile time |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | partly fixed — the message names the shared fact and lists the three shapes; the missing apply (a kernel compiled against an applied body) is parked under `compute-jit-low-types.md` |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
-| P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | todo — measured `expected raw[Int, string], found raw[Int, string, Int]`; the structural pass (`StructExcessField`/`StructMissingField`) runs only when an argument is named (`named_instantiate` is gated on `any_named`), so the positional path falls to the field-list unify |
+| P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | fixed — the structural pass now runs for a positional call once the struct type is decided (gated on the argument list matching the name list); `S(1, "a", 3)` reports `too many fields for the struct type …` and `S(1,)` reports `missing field y …` |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
@@ -632,17 +632,21 @@ error: expected raw[Int, string], found raw[Int, string, Int]
   --> 2:1
 ```
 
-The two count-carrying diagnostics exist (`StructExcessField` renders "too many fields
-for the struct type …", `StructMissingField` "missing field … in the struct type …"),
-but `named_instantiate` runs only when `any_named` holds — a purely positional call
-skips the structural pass and its arity falls to the field-list unify, whose two
-sides are internal shape nodes (`raw[…]`). So the actionable sentence exists and is
-not reached on the common spelling. Fix: run the structural pass for a decided
-struct type whatever the argument spelling (its excess/missing guards already record
-before the unify and set `valid = false`, which makes the caller skip it), or carry
-the two counts on the unify's diagnostic. Measured at `8b94e13c`; the spec's
-named-instantiation paragraph now scopes the structural diagnostics to the named case
-and quotes this message.
+The two count-carrying diagnostics existed (`StructExcessField` renders "too many
+fields for the struct type …", `StructMissingField` "missing field … in the struct
+type …") but were unreachable on a purely positional call: `named_instantiate` ran
+only when `any_named` held, so the arity fell to the field-list unify, whose two
+sides are internal shape nodes (`raw[…]`). **Fixed**: the positional branch runs the
+structural pass for a decided struct type, gated on the argument list matching the
+name list (`compound_children(value).len() == arg_names.len()`), so the guards
+record before the field-list unify and clear `valid`, which makes the caller skip it.
+A hand-built value outside that convention keeps the old path. Measured at
+`8b94e13c` and after the fix: `S(1, "a", 3)` reports "too many fields for the struct
+type …" at the offending argument, `S(1,)` reports "missing field y …", and a valid
+positional instance is unchanged. Suites: `lichen-highlevel` 140/0, `lichen-language`
+271/1 (the `gc_block` red). One test's expectation moved with the behaviour, with the
+owner's permission (`pipeline::a_struct_instance_with_mismatched_fields_is_rejected`'s
+excess case now pins `StructExcessField` and the message).
 
 ## Decisions
 
