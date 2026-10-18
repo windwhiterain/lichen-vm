@@ -43,9 +43,14 @@ resident input ([lichen-compute-gpu](lichen-compute-gpu.md)); a whole graph cost
 of each per node; and one submission holds **at most 64 dispatches**
 (`MAX_DISPATCHES_PER_SUBMISSION`, which is the descriptor pool's `max_sets`).
 
-So the cost model a service is held to is: **per step, one submission, one fence,
-and as few crossings as the control logic allows.** Everything below is about
-whether a step can be built to hit it.
+So the cost model a service is held to is: **per step, one submission and one fence for
+the dispatches, plus one of each for every crossing.** Measured on the device through
+`crates/lichen-serve/tests/step_cost.rs`: a dispatch is one submission and one fence, and
+**a readback is a submission and a fence of its own** — one dispatch plus a `collect` is
+`(2, 2)`, and three dispatches plus the same `collect` is `(4, 4)`. So a step that hands
+a token back to the host pays twice unless the readback rides in the same submission as
+the graph, which is a question about `Policy::Batch` and is not yet measured.
+Everything below is about whether a step can be built to hit that.
 
 ## 2. The layers are already split — below the runtime is not where the gap is
 
@@ -356,6 +361,16 @@ Three verdicts were given and are recorded here rather than left in a transcript
    operation"*. An `Int` min-fold works on its own. So a device-side embedding
    lookup needs either a fourth dispatch to convert, or `float2int` at the point of
    use; a host-side readback does not care.
+6. **The recipe a graph step's parameter must follow, and it is narrower than "a step
+   records".** Three shapes were tried for a minimal three-node step and each was refused
+   by the recorder in its own words: with `.in` holding **two** buffers, and with **one**,
+   *"node 0 was given value 0 as a buffer, and that value is a number"* — the extent
+   arriving where a buffer belongs; with **no** buffers at all, *"this function's return is
+   not a value a graph can hand back"*. `decode_step_graph.rs`'s shape — four buffers under
+   `.in`, and dispatches whose own argument structs differ from it — records and runs, and
+   whether a kernel carries a claim made no difference either way. So the difference is in
+   the recording's slot numbering and not in the backend, and it is worth isolating before a
+   service depends on it.
 
 The seven probes, in one command:
 
