@@ -118,6 +118,13 @@ the only host data, and step `k` reads the resident step `k − 1` wrote — the
 are built inside its own source. `Session::release` is the other half of it: a resident a step
 produced is the caller's to hand back, or a service that steps for hours leaks its device memory.
 
+**The decode step's shape runs through the service path.** A graph parameter holding four buffers,
+with each dispatch reading a pair of them through its own struct, is what a decode step looks like
+(`decode_step_graph.rs`). A `Prepared` of that shape takes **five arguments in the parameter's
+order** — one count and the four buffers — runs in **one submission**, and accepts a **resident**
+among a later step's arguments. Both answers were hand-derived and matched (`[63, 96]`, then
+`[497, 848]`), so the ABI a service docks onto is the one the language already records.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough

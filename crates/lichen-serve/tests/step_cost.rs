@@ -709,3 +709,111 @@ fn a_resident_cache_costs_less_than_a_host_one() {
          {host_ms:.4} ms"
     );
 }
+
+/// A step shaped like a decode step: four buffers, three dispatches reading a pair each.
+const QUAD: &str = r#"
+Quad = struct{.alpha (compute.Buf Float), .beta (compute.Buf Float), .gamma (compute.Buf Float), .delta (compute.Buf Float)}
+Sub1 = struct{.p (compute.Buf Float), .q (compute.Buf Float)}
+Sub2 = struct{.p (compute.Buf Float), .q (compute.Buf Float)}
+AddPar = struct{.n Int, .in Sub1, .out Out}
+MulPar = struct{.n Int, .in Sub2, .out Out}
+add_raw = (k : AddPar) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.p, .at i)) + (compute.read ((compute.Read _)(.from k.in.q, .at i))))))
+}
+add = compute.parallel add_raw "gpu"
+mul_raw = (k : MulPar) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.p, .at i)) * (compute.read ((compute.Read _)(.from k.in.q, .at i))))))
+}
+mul = compute.parallel mul_raw "gpu"
+GArg = struct{.n Int, .in Quad}
+step = (s : GArg) => {
+  a = (compute.plrun add ((compute.A Sub1)(.n s.n, .I Sub1(.p s.in.alpha, .q s.in.beta))) : Out)
+  b = (compute.plrun add ((compute.A Sub1)(.n s.n, .I Sub1(.p s.in.gamma, .q a.e))) : Out)
+  compute.plrun mul ((compute.A Sub2)(.n s.n, .I Sub2(.p b.e, .q s.in.delta)))
+}
+built = compute.graph step
+built
+"#;
+
+/// A four-buffer step takes five arguments in its parameter's order, and two of them are residents.
+///
+/// # Invariant
+/// The graph's `.in` holds four buffers and each dispatch reads a pair of them through its own
+/// struct, which is the shape a decode step has. The arguments are one count and then the buffers in
+/// field order, so the host decides the order: `alpha`, `beta`, `gamma`, `delta`. Step `k + 1` reads
+/// the two buffers step `k` answered, so the second step's arguments include residents.
+#[test]
+fn a_four_buffer_step_takes_five_arguments_in_order() {
+    const LANES: usize = 2;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_four_buffer_step_takes_five_arguments_in_order: no device");
+        return;
+    };
+    let prepared = session
+        .prepare(&format!("{KERNEL}{QUAD}"))
+        .unwrap_or_else(|refusal| panic!("the four-buffer step prepares: {refusal}"));
+    assert_eq!(prepared.nodes(), 3, "the held step is three dispatches");
+
+    let float = |values: [f32; LANES]| RunArgument::Buffer {
+        class: ScalarClass::Float,
+        data: packed(&values),
+    };
+    let first = prepared
+        .step(vec![
+            RunArgument::Count(LANES as i64),
+            float([1.0, 2.0]),
+            float([3.0, 4.0]),
+            float([5.0, 6.0]),
+            float([7.0, 8.0]),
+        ])
+        .unwrap_or_else(|refusal| panic!("the first step runs: {refusal}"));
+    assert_eq!(
+        (first.cost.submissions, first.cost.fence_waits),
+        (1, 1),
+        "three dispatches of a four-buffer step are still one submission"
+    );
+    let answered = resident_of(&first);
+    let ScalarData::Float(values) = session
+        .fetch(answered)
+        .unwrap_or_else(|refusal| panic!("the first step is readable: {refusal}"))
+    else {
+        panic!("the step declared a Float buffer");
+    };
+    assert_eq!(
+        values,
+        vec![63.0, 96.0],
+        "1 + 3 = 4, 5 + 4 = 9, 9 x 7 = 63; and 2 + 4 = 6, 6 + 6 = 12, 12 x 8 = 96"
+    );
+
+    let second = prepared
+        .step(vec![
+            RunArgument::Count(LANES as i64),
+            RunArgument::Resident(answered),
+            float([3.0, 4.0]),
+            float([5.0, 6.0]),
+            float([7.0, 8.0]),
+        ])
+        .unwrap_or_else(|refusal| panic!("the second step runs: {refusal}"));
+    assert_eq!(
+        (second.cost.submissions, second.cost.fence_waits),
+        (1, 1),
+        "a step whose first argument is a resident is still one submission"
+    );
+    let next = resident_of(&second);
+    let ScalarData::Float(values) = session
+        .fetch(next)
+        .unwrap_or_else(|refusal| panic!("the second step is readable: {refusal}"))
+    else {
+        panic!("the step declared a Float buffer");
+    };
+    assert_eq!(
+        values,
+        vec![497.0, 848.0],
+        "63 + 3 = 66, 5 + 66 = 71, 71 x 7 = 497; and 96 + 4 = 100, 6 + 100 = 106, 106 x 8 = 848"
+    );
+    session.release(answered);
+    session.release(next);
+    println!("a four-buffer step ran twice, one submission each, with a resident in its arguments");
+}
