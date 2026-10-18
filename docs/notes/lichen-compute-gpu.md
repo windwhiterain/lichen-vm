@@ -60,6 +60,16 @@ back, is a `ControlFlow` refusal naming which. What a loop changes for a
 **dispatch** is the write rule (see the tail-lane obligation below), and that is
 the only place this target is still narrower than the IR.
 
+### `write_atomic` is refused here, for now
+
+The wasm backend lowers `KernelInstr::BufferAtomicAddCall` to an atomic add; this target does
+not. `OpAtomicIAdd` on the storage element needs `OpCapability AtomicInt64` (an integer module's
+storage integers are 64-bit) and the device feature behind it, neither of which this emitter
+declares or the runtime requests, so a `write_atomic` kernel is refused by name here rather than
+emitted as an `OpStore` that would lose an update. Emitting it is the next step; a `Float`
+accumulate needs `OpAtomicFAddEXT` (extension, capability and a per-lane ordering) or a
+compare-exchange loop over the bits, which is the same shape the wasm backend runs.
+
 ### The two type facts the IR does not carry
 
 The IR is untyped, and this target is not: `OpTypeBool` and `OpTypeInt` are

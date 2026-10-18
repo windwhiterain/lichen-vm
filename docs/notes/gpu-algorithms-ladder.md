@@ -159,6 +159,26 @@ determinism caveat in
 ("the one place a result stops being reproducible"), and the ladder
 confirms it is reachable from ordinary-looking code. There are no atomics.
 
+**The ruling (the superior's):** `compute.write` is *disjoint by contract* — a lane names its own
+slot — and nothing checks it; a body that scatters says so with `compute.write_atomic`, an atomic
+accumulate. Where a program goes past what the atomics order (a read of a slot another lane writes,
+an ordering the program itself relies on), that is the program's own problem, not the mechanism's.
+`shared-memory-and-barriers.md` §4's "refuse a contended write" is superseded by this.
+
+**Measured**, 65 536 lanes into 8 buckets, 20 worker threads (`histogram_atomic`):
+
+| write | counts | sum |
+|---|---|---|
+| `write_atomic`, `Int` | 8192 × 8 | 65 536 |
+| `write`, `Int` | 1 × 8 | 8 |
+| `write_atomic`, `Float` | 4096.0 × 8 | 32 768.0 |
+| `write`, `Float` | 0.5 × 8 | 4 |
+
+So the scatter is expressible and correct when it says which write it is, and the plain
+`write` in that shape is the contract violation the ruling defines rather than a bug in the
+runtime. The wasm backend runs both classes; the SPIR-V backend refuses `write_atomic` by name
+until `OpAtomicIAdd` (which needs `AtomicInt64` and the device feature behind it) is emitted.
+
 ### 6. An out-of-range read is undefined, and differs per backend
 
 ```lichen

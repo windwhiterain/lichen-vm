@@ -26,6 +26,12 @@
 > elements are readable by construction because their type says `block[1]`; step 1 is
 > now the reversion itself.
 >
+> **§4's "refuse a contended write" is superseded by the superior's ruling:** `compute.write`
+> states disjointness as a contract and `compute.write_atomic` is the accumulate, so the
+> def-cone/`UP` judgement this note designed for that refusal is no longer a requirement.
+> What an atomic does not order is the program's own problem. The measurement and the new
+> shapes are [gpu-algorithms-ladder](gpu-algorithms-ladder.md) §5.
+>
 > The spike also measured a case that looked like a silently wrong answer on `dev` —
 > a write the codomain does not reach is never emitted and never diagnosed — and it
 > is **not one**. Checking it against the type settled the design instead:

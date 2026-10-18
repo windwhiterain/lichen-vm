@@ -53,10 +53,18 @@ nothing has to declare a kind beside it.
 Buf     = T => struct{.native _, .element T}
 Read    = T => struct{.from (Buf T), .at Int}
 Write   = T => struct{.to (Buf T), .at Int, .value T}
+WriteAtomic = T => struct{.to (Buf T), .at Int, .value T}
 read    = (x : (Read _))  => $read(x.from, x.at): x.from.element
 write   = (x : (Write _)) => $write(x.to, x.at, x.value)
+write_atomic = (x : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
 collect = (b : (Buf _))   => $collect(b)
 ```
+
+- **`write` is disjoint by contract; `write_atomic` accumulates.** A lane's `write` names its own
+  slot, and the contract is the program's, not a checked property; a scatter says
+  `write_atomic`, which is an atomic add. What lies outside what the atomics order — a read of a
+  slot another lane writes, an ordering the program relies on — is the program's own problem.
+  See [gpu-algorithms-ladder](gpu-algorithms-ladder.md) §5 for the ruling and the measurement.
 
 - The ops take the **`Buf` value**, and the engine takes the payload: the path
   the checker resolves for `x.from` is then *the same path* the role walk records
