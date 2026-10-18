@@ -6241,12 +6241,13 @@ fn run_parallel_kernel(
     ))
 }
 
-/// Refuse a run whose input buffers are not the class the fragment reads them as.
+/// Refuse a run whose input buffers disagree with the fragment over the **shape** they hold.
 ///
 /// # Invariant
-/// The one place the two halves of a buffer's class meet before an upload: a
-/// disagreement is a wrong number rather than a wrong shape — the words are the same
-/// 64 bits either way — so it is refused by name rather than reinterpreted.
+/// The declarations are shapes, not precisions: the language's `Float` says real numbers and nothing
+/// about how many bits one takes, because a pack decides that when it compiles the node. Two real
+/// classes therefore agree, and only a real/integer disagreement — the one that would convert nothing —
+/// is refused.
 fn check_input_classes(declared: &[ScalarClass], inputs: &[RunInput]) -> Result<(), String> {
     for (position, input) in inputs.iter().enumerate() {
         let declared = declared.get(position).copied().unwrap_or(ScalarClass::Int);
@@ -6254,7 +6255,7 @@ fn check_input_classes(declared: &[ScalarClass], inputs: &[RunInput]) -> Result<
             RunInput::Host(buffer) => buffer.class,
             RunInput::Resident(resident) => resident.class,
         };
-        if held != declared {
+        if held != declared && !(held.is_real() && declared.is_real()) {
             return Err(format!(
                 "input buffer {position} holds {held:?} elements, but this kernel reads that \
                  position as {declared:?}: Int and Float do not convert"

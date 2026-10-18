@@ -1,8 +1,8 @@
 # Buffer precision: `Buf T` is the payload, the pack file is the precision
 
-> Status: **design settled, not implemented.** The user's verdict is recorded here with the
-> mechanics measured, because where the work lands depends on two facts below that are not
-> obvious from the code.
+> Status: **design settled, and the runtime now reads it that way.** The user's verdict is recorded
+> here with the mechanics measured, because where the work lands depends on two facts below that are
+> not obvious from the code.
 
 ## The verdict
 
@@ -12,7 +12,16 @@ pack file together with the JIT**: the pack states the class, and the JIT compil
 it.
 
 This is why the language needs no `bf16` type, and why Qwen's weights can stay at their own
-width without a third scalar type appearing in `Buf T`.
+width without a third scalar type appearing in `Buf T`. The user put the same sentence a second way
+when the question of a `bf16` buffer came up: **the language's `Float` is a precision-agnostic
+concept** — it says a buffer holds real numbers, and says nothing about how many bits one takes.
+
+`check_input_classes` now enforces exactly that: it compares the **shape** the declaration names with
+the shape the fragment reads, so two real classes agree (`Float` beside `BFloat16`) and only a
+real/integer disagreement is refused, which is the one that would convert nothing and mean nothing.
+Two things follow, and both are the caller's: the fragment's class comes from a pack, and the bytes
+that reach the buffer are the caller's to match — the runtime cannot tell a `bf16` payload from an
+`f32` one, only a real one from an integer one.
 
 ## Why the language cannot spell it today
 
