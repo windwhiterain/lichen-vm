@@ -168,6 +168,34 @@ answer `3` once the type is decided; the tuple-of-Ints control must keep answeri
 struct-literal base (`@loop f = (n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
 working.
 
+**The sixth reading: the topology is right, and the decider still cannot answer.** With
+the carry in place the class is exactly the one the note wants — at the outer bind,
+`codomain=376v1` is in one class with `377v1` (the clone of the decider `174v1`) and
+`375v1` (the clone of `155v1`), and `instantiation.node_of` reports those very clones.
+The engine already has the re-entrancy guard this note was about to add —
+`evaluation.rs`'s `evaluate_class_first`, with `evaluating_classes` holding each class
+while its members are forced — so the member walk is not missing. What is missing is
+that the **decider has nothing to read**: `174v1`'s clone is the derived read, and its
+operand is the *type apply's* parameter clone, which is never bound (the type apply runs
+`instantiate(..., check_parameter = false)`, and it is the value apply — a different
+clone pass — that binds its own parameter). Three attempts measured and reverted:
+running `apply_parameter_check` in the type apply, binding only the parameter's **type**
+half there, and preferring the value apply's codomain (`pair_type_item(node)`) — the repro
+stays `raw none: ?a` in all three.
+
+So the remaining choice is structural, and it is the owner's:
+
+- **A. The read chain reads the apply node's own pair.** `check_app` sets the
+  application's type to a fresh cell bound by the type apply; the value apply's pair —
+  the node's own value — is already decided. A lazy `Index(value_apply, 1)` would read
+  it. Risk: a *chained* apply's callee type (`(f x) y`) becomes a read rather than a
+  decided cell, which touches the force path P1-49's refusal relies on.
+- **B. The type apply binds the value apply's codomain** (checker/runtime channel
+  needed: `apply_type` does not know the value apply's `applied` pair).
+- **C. Accept the annotation as the contract** for struct-state folds and say so in the
+  spec (the compute kernels already annotate; the workaround section below is that
+  rule).
+
 ## 7. The workaround
 
 Annotate the recursive function's **parameter** or its **result type**, or annotate the read's
