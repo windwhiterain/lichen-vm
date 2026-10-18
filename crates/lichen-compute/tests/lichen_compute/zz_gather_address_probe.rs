@@ -34,9 +34,11 @@ gathered = (compute.plrun gather ((PArg)(.n 6, .I PIn(.x x, .tbl tbl))) : POut)
 compute.collect gathered.y : array{Int, 6}
 "#;
 
-/// The gather past a page's end: `tbl` names an index no element answers, so every such
-/// lane reads out of the buffer. An out-of-buffer read answers `0`, which is the padding
-/// a masked batch relies on, so `tbl = [5, 9, 4, 1, 3, 2]` answers `[60, 0, 50, 20, 40, 30]`.
+/// The gather past the buffer's end: one lane names an index no element answers.
+///
+/// # Invariant
+/// An out-of-buffer read answers `0`, which is the padding a masked batch relies on, so
+/// `tbl = [5, 9, 4, 1, 3, 2]` answers `[60, 0, 50, 20, 40, 30]` rather than refusing.
 const PAST_THE_END: &str = r#"
 far = (compute.buffer ([5, 9, 4, 1, 3, 2] : array{Int, 6}) : (compute.Buf Int))
 gathered = (compute.plrun gather ((PArg)(.n 6, .I PIn(.x x, .tbl far))) : POut)

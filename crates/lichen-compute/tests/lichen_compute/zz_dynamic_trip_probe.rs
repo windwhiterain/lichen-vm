@@ -3,11 +3,9 @@
 //! # Invariant
 //!
 //! Print-only. The body is `y[i] = x[0] + … + x[lim - 1]` where `lim` is a read of
-//! `c.in.lim` at `0`, so the same compiled kernel folds a different number of terms
-//! per launch. Two cases differ only in that buffer: `3` answers `7.0` at every lane
-//! and `5` answers `31.0`, over `x = [1, 2, 4, 8, 16, 32]` — every value and both sums
-//! are exact in binary. A trip count that is data is what a decode step's length would
-//! have to be; a trip count that is a launch scalar is what it is today.
+//! `c.in.lim` at `0`, so one compiled kernel folds a different number of terms per
+//! launch: `3` answers `7.0` at every lane and `5` answers `31.0`, over
+//! `x = [1, 2, 4, 8, 16, 32]`, every value and both sums exact in binary.
 
 use super::common;
 
