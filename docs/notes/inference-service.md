@@ -102,6 +102,22 @@ back. And **two buffers under `.in` is still not a working shape** — the progr
 *"no field with this name in the struct type"* — so the batch's per-sequence values ride at the end
 of the data buffer, read at `n + sequence`, instead of in a second buffer.
 
+**And the cache has to stay on the device, or every step is a memory transfer.** A 4 MiB cache
+(1,048,576 `Float` lanes), same graph and same extent, one step per iteration
+(`crates/lichen-serve/tests/step_cost.rs`):
+
+| the cache handed over as | per step |
+|---|---|
+| host data, re-uploaded every step | 53.9 – 104.9 ms |
+| the resident the step before wrote | 0.53 – 1.65 ms |
+
+Those are two runs of the one test, and the ratio (**98–99%**) is the finding while the absolute
+numbers move with the machine's load. **Nothing comes back to the host between steps**: the seed is
+the only host data, and step `k` reads the resident step `k − 1` wrote — the channel
+`RunArgument::Resident` carries and the language surface cannot express, since a program's buffers
+are built inside its own source. `Session::release` is the other half of it: a resident a step
+produced is the caller's to hand back, or a service that steps for hours leaks its device memory.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough

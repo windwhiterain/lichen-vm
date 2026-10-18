@@ -241,4 +241,13 @@ impl Session {
             .fetch(resident.id, resident.count)
             .map_err(|error| ServeRefusal::Device(error.to_string()))
     }
+
+    /// Hand a resident back to the device, so a service that steps for hours does not leak it.
+    ///
+    /// # Invariant
+    /// A resident a step produced is the caller's to release: the session cannot know whether it is
+    /// still an input to the next step, and a released id is one the backend may hand out again.
+    pub fn release(&self, resident: ResidentBuffer) {
+        self.context.release(resident.id);
+    }
 }

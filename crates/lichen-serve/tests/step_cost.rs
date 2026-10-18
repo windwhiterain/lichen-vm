@@ -1,5 +1,6 @@
 //! A session installs the backend, counts what its runs ask for, and reports refusals by name.
 
+use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_graph_ir::Policy;
 use lichen_kernel_ir::{ScalarClass, ScalarData};
@@ -540,4 +541,171 @@ fn one_prepared_step_serves_any_batch_size() {
             (separate - batched) / separate * 100.0
         );
     }
+}
+
+/// A step that adds one to every lane twice, so its answer is the seed plus two per step.
+const RESIDENT: &str = r#"
+BumpPar = struct{.n Int, .in Inc, .out Out}
+bump_raw = (k : BumpPar) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) + 1.0)))
+}
+bump = compute.parallel bump_raw "gpu"
+GArg = struct{.n Int, .in Inc}
+step = (s : GArg) => {
+  a = (compute.plrun bump ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)
+  compute.plrun bump ((compute.A Inc)(.n s.n, .I Inc(.d a.e)))
+}
+built = compute.graph step
+built
+"#;
+
+/// The resident a step answered with, which is what the next step reads.
+fn resident_of(stepped: &lichen_serve::Stepped) -> ResidentBuffer {
+    match &stepped.results[0] {
+        RunResult::Resident(resident) => *resident,
+        other => panic!(
+            "a device wrote this value, so it stays a resident id, and this step answered {}",
+            match other {
+                RunResult::Buffer { data, .. } => format!("host data of {} bytes", data.len()),
+                RunResult::Count(count) => format!("the count {count}"),
+                RunResult::Float(number) => format!("the float {number}"),
+                RunResult::Resident(_) => "another resident".to_string(),
+            }
+        ),
+    }
+}
+
+/// A cache the device wrote is an input to the next step with no host round trip.
+///
+/// # Invariant
+/// The seed is the only host data: every later step reads the previous step's resident, so the value
+/// grows by two per step and the answer says the device carried it. Each step is one submission, and
+/// the resident it read is released only after the step that read it, so no id is handed back while
+/// it is still an input.
+#[test]
+fn a_cache_lives_on_the_device_across_steps() {
+    const LANES: usize = 4;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_cache_lives_on_the_device_across_steps: no device");
+        return;
+    };
+    let prepared = session
+        .prepare(&format!("{KERNEL}{RESIDENT}"))
+        .unwrap_or_else(|refusal| panic!("the bumping step prepares: {refusal}"));
+    assert_eq!(prepared.nodes(), 2, "the held step is two dispatches");
+
+    let seeded = prepared
+        .step(vec![
+            RunArgument::Count(LANES as i64),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&vec![0.0; LANES]),
+            },
+        ])
+        .unwrap_or_else(|refusal| panic!("the seeding step runs: {refusal}"));
+    assert_eq!(
+        (seeded.cost.submissions, seeded.cost.fence_waits),
+        (1, 1),
+        "the seeding step is one submission"
+    );
+    let mut held = resident_of(&seeded);
+    for step in 1..=5 {
+        let next = prepared
+            .step(vec![
+                RunArgument::Count(LANES as i64),
+                RunArgument::Resident(held),
+            ])
+            .unwrap_or_else(|refusal| panic!("step {step} runs: {refusal}"));
+        assert_eq!(
+            (next.cost.submissions, next.cost.fence_waits),
+            (1, 1),
+            "step {step} is one submission, and none of it uploads the cache"
+        );
+        let answered = resident_of(&next);
+        let ScalarData::Float(values) = session
+            .fetch(answered)
+            .unwrap_or_else(|refusal| panic!("step {step} is readable: {refusal}"))
+        else {
+            panic!("the step declared a Float buffer");
+        };
+        assert_eq!(
+            values,
+            vec![2.0 * (step + 1) as f32; LANES],
+            "step {step} read the cache the device wrote the step before, which the seeding step              had already bumped twice"
+        );
+        session.release(held);
+        held = answered;
+    }
+    session.release(held);
+    println!("the cache lived on the device for 5 steps and ended at 12.0");
+}
+
+/// A resident cache costs less per step than the same cache handed over as host data.
+///
+/// # Invariant
+/// Both loops run the same graph the same number of times with the same extent; the only difference
+/// is that one hands the step a host buffer of `LANES` floats and the other a resident the device
+/// wrote. So the difference is what re-uploading the cache costs per step.
+#[test]
+fn a_resident_cache_costs_less_than_a_host_one() {
+    const LANES: usize = 1_048_576;
+    const REPEATS: usize = 50;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_resident_cache_costs_less_than_a_host_one: no device");
+        return;
+    };
+    let prepared = session
+        .prepare(&format!("{KERNEL}{RESIDENT}"))
+        .unwrap_or_else(|refusal| panic!("the bumping step prepares: {refusal}"));
+    let seed = vec![0.0f32; LANES];
+    let seeded = prepared
+        .step(vec![
+            RunArgument::Count(LANES as i64),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&seed),
+            },
+        ])
+        .unwrap_or_else(|refusal| panic!("the seeding step runs: {refusal}"));
+    let cached = resident_of(&seeded);
+
+    let host = std::time::Instant::now();
+    for _ in 0..REPEATS {
+        let stepped = prepared
+            .step(vec![
+                RunArgument::Count(LANES as i64),
+                RunArgument::Buffer {
+                    class: ScalarClass::Float,
+                    data: packed(&seed),
+                },
+            ])
+            .unwrap_or_else(|refusal| panic!("a host-cached step runs: {refusal}"));
+        session.release(resident_of(&stepped));
+    }
+    let host_ms = host.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64;
+
+    let resident = std::time::Instant::now();
+    for _ in 0..REPEATS {
+        let stepped = prepared
+            .step(vec![
+                RunArgument::Count(LANES as i64),
+                RunArgument::Resident(cached),
+            ])
+            .unwrap_or_else(|refusal| panic!("a resident-cached step runs: {refusal}"));
+        session.release(resident_of(&stepped));
+    }
+    let resident_ms = resident.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64;
+    session.release(cached);
+    println!(
+        "{LANES} lanes: host cache {host_ms:.4} ms per step, resident cache {resident_ms:.4} ms, \
+         so keeping it resident saved {:.4} ms ({:.0}%)",
+        host_ms - resident_ms,
+        (host_ms - resident_ms) / host_ms * 100.0
+    );
+    assert!(
+        resident_ms < host_ms,
+        "a resident cache cannot be slower than re-uploading it: {resident_ms:.4} ms against \
+         {host_ms:.4} ms"
+    );
 }
