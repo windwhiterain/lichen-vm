@@ -98,5 +98,18 @@ folding the hidden width. Measured against the host's own dot products over the 
 logits agree within `1.1e-6` and the largest is the **same entry** on both sides (9708, `3.0415757`
 against the host's `3.0415742`) — which is the whole of a greedy sampler: the head names the next token.
 
-What remains is the loop: 28 layers in sequence, and the precision path (built and merged, not yet used —
-everything here runs at f32, which is why the weights are streamed).
+## The whole model, and a token
+
+Twenty-eight layers, streamed a layer at a time because the whole model is 8.13 GB at f32 and the card is
+smaller, answer the host's logits within `2.7e-4` and name the **same token**: entry `25`, `12.312286`
+against the host's `12.312018`. Per-layer the two agree to five decimals — `0.545759` against `0.545759`,
+`335.892` against `335.892`, `66.373` against `66.375`.
+
+That agreement also settles a question the numbers raised: the hidden state's root mean square climbs to
+**335** in the middle layers and drops to 66 at the end. Both implementations do it identically, so it is
+the model's own behaviour — the "massive activations" these checkpoints are known for — not an error.
+
+A forward is 171 s on this machine, which is the number to attack next.
+
+What remains is generation: a forward is one token, so a second token needs the cache and the loop, and
+then the precision path (built and merged, not yet used — everything here runs at f32).
