@@ -574,6 +574,11 @@ pub enum RunArgument {
     /// not a constant, so a run that dropped the class would hand a device integers where the
     /// program computed floats.
     Buffer { class: ScalarClass, data: Vec<u8> },
+    /// The same, sharing bytes the caller keeps: a reference count rather than a copy.
+    BufferShared {
+        class: ScalarClass,
+        data: std::sync::Arc<[u8]>,
+    },
     /// A buffer a previous run left on a device, handed over as the id it is.
     Resident(ResidentBuffer),
     /// A number, which a dispatch may read as its extent.
@@ -627,6 +632,7 @@ pub fn run(
         .into_iter()
         .map(|argument| match argument {
             RunArgument::Buffer { class, data } => Value::host_data(class, data),
+            RunArgument::BufferShared { class, data } => Value::host_shared(class, data),
             RunArgument::Resident(resident) => {
                 Value::device(resident.id, resident.count, resident.class)
             }
@@ -665,7 +671,9 @@ fn aligned(graph: &Graph, arguments: &[RunArgument]) -> Result<Graph, String> {
     for (index, argument) in arguments.iter().enumerate().take(graph.input_count()) {
         if let Some(entry) = classes.get_mut(index) {
             *entry = match argument {
-                RunArgument::Buffer { class, .. } => Some(*class),
+                RunArgument::Buffer { class, .. } | RunArgument::BufferShared { class, .. } => {
+                    Some(*class)
+                }
                 RunArgument::Resident(resident) => Some(resident.class),
                 RunArgument::Count(_) | RunArgument::Float(_) => None,
             };

@@ -65,8 +65,24 @@ pub struct Generated {
 enum Tensors<'a> {
     /// The f32 dumps, four bytes an element, read for this layer alone when the model streams them.
     Wide(Vec<f32>),
-    /// The checkpoint's halves, two bytes an element, unconverted.
-    Narrowed(&'a [u8]),
+    /// The checkpoint's halves, two bytes an element, unconverted, one shared slice a tensor.
+    Narrowed(&'a [std::sync::Arc<[u8]>]),
+}
+
+/// One layer's bytes as one shared slice a tensor, in the order `SHAPES` names them.
+///
+/// # Invariant
+/// The split copies the bytes once per load and never per token: a dispatch is handed a reference, so a
+/// weight a token reads is never copied again.
+fn split_layer(bytes: &[u8], width: Width) -> Vec<std::sync::Arc<[u8]>> {
+    SHAPES
+        .iter()
+        .map(|(offset, length)| {
+            let start = offset * width.bytes();
+            let end = (offset + length) * width.bytes();
+            std::sync::Arc::from(&bytes[start..end])
+        })
+        .collect()
 }
 
 /// The numbers a run of halves holds, widened the way the device widens them.
@@ -329,7 +345,7 @@ pub struct Qwen<'session> {
     /// The page cache made a warm token 2.26 s cheaper than a cold one, which is the operating system
     /// doing this job for 3.2 GB of halves: holding them here is the same saving made deliberate rather
     /// than hoped for, and it is the one that needs no device memory.
-    held: Vec<Vec<u8>>,
+    held: Vec<Vec<std::sync::Arc<[u8]>>>,
     /// The tensors held on the device, one entry per layer that does not stream.
     ///
     /// # Invariant
@@ -449,15 +465,16 @@ impl<'session> Qwen<'session> {
         Ok(Generated { tokens, per_token })
     }
 
-    /// Read every layer's bytes once and keep them, which is what a warm token already costs.
+    /// Read every layer's bytes once, split into one shared slice a tensor, and keep them.
     ///
     /// # Invariant
-    /// The bytes are the width's own, so nothing is converted on the way in or out: a held layer is the
-    /// file's contents and a streamed one is the file, and they answer the same numbers.
+    /// The split is what a dispatch is handed, so a token hands over eleven references rather than copying
+    /// a layer: the bytes are the width's own and nothing converts them on the way in or out, and copying
+    /// them once here is what keeps a token from copying them every time.
     pub fn hold_in_memory(&mut self) -> Result<(), QwenRefusal> {
         for layer in 0..LAYERS {
-            self.held
-                .push(flat_bytes(&format!("layer{layer:02}"), self.width)?);
+            let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+            self.held.push(split_layer(&bytes, self.width));
         }
         Ok(())
     }
@@ -470,28 +487,26 @@ impl<'session> Qwen<'session> {
     /// hold is the caller's to decide — a 4 GB card fit none of the model, an 8 GB one fits all of it.
     pub fn reside(&mut self, layers: usize) -> Result<(), QwenRefusal> {
         for layer in 0..layers.min(LAYERS) {
-            let read: Vec<u8>;
+            let read: Vec<std::sync::Arc<[u8]>>;
             let tensors = match self.width {
                 Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
                 Width::Narrowed => {
-                    read = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    read = split_layer(&bytes, self.width);
                     Tensors::Narrowed(&read)
                 }
             };
             let mut held: Vec<crate::ResidentBuffer> = Vec::with_capacity(TENSORS);
-            for (offset, length) in SHAPES.iter() {
+            for (slot, (offset, length)) in SHAPES.iter().enumerate() {
                 held.push(match &tensors {
                     Tensors::Wide(values) => self
                         .session
                         .upload(&values[*offset..*offset + *length])
                         .map_err(QwenRefusal::Step)?,
-                    Tensors::Narrowed(bytes) => {
-                        let start = offset * self.width.bytes();
-                        let end = (offset + length) * self.width.bytes();
-                        self.session
-                            .upload_narrowed(&bytes[start..end])
-                            .map_err(QwenRefusal::Step)?
-                    }
+                    Tensors::Narrowed(tensors) => self
+                        .session
+                        .upload_narrowed(&tensors[slot])
+                        .map_err(QwenRefusal::Step)?,
                 });
             }
             self.resident[layer] = Some(held);
@@ -510,7 +525,7 @@ impl<'session> Qwen<'session> {
     ) -> RunArgument {
         match &self.resident[layer] {
             Some(held) => RunArgument::Resident(held[slot]),
-            None => self.tensor(tensors, offset, length),
+            None => self.tensor(tensors, slot, offset, length),
         }
     }
 
@@ -530,17 +545,19 @@ impl<'session> Qwen<'session> {
     /// # Invariant
     /// A narrowed layer keeps the file's bytes and hands a **slice** of them on, so a weight is never
     /// converted; the offsets the layer reads are elements and the file is two bytes to each.
-    fn tensor<'a>(&self, tensors: &Tensors<'a>, offset: usize, length: usize) -> RunArgument {
+    fn tensor(
+        &self,
+        tensors: &Tensors<'_>,
+        slot: usize,
+        offset: usize,
+        length: usize,
+    ) -> RunArgument {
         match tensors {
             Tensors::Wide(values) => floats(&values[offset..offset + length]),
-            Tensors::Narrowed(bytes) => {
-                let start = offset * self.width.bytes();
-                let end = (offset + length) * self.width.bytes();
-                RunArgument::Buffer {
-                    class: lichen_kernel_ir::ScalarClass::BFloat16,
-                    data: bytes[start..end].to_vec(),
-                }
-            }
+            Tensors::Narrowed(tensors) => RunArgument::BufferShared {
+                class: lichen_kernel_ir::ScalarClass::BFloat16,
+                data: std::sync::Arc::clone(&tensors[slot]),
+            },
         }
     }
 
@@ -552,21 +569,14 @@ impl<'session> Qwen<'session> {
         cache: &mut Cache,
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
-        let read: Vec<u8>;
+        let read: Vec<std::sync::Arc<[u8]>>;
         let tensors = match self.width {
-            Width::Wide => match self.held.get(layer) {
-                Some(bytes) => Tensors::Wide(
-                    bytes
-                        .chunks_exact(4)
-                        .map(|word| f32::from_le_bytes([word[0], word[1], word[2], word[3]]))
-                        .collect(),
-                ),
-                None => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
-            },
+            Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
             Width::Narrowed => match self.held.get(layer) {
-                Some(bytes) => Tensors::Narrowed(bytes),
+                Some(tensors) => Tensors::Narrowed(tensors),
                 None => {
-                    read = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
+                    read = split_layer(&bytes, self.width);
                     Tensors::Narrowed(&read)
                 }
             },
@@ -576,21 +586,21 @@ impl<'session> Qwen<'session> {
         let normed = steps.normalised(
             session,
             &hidden,
-            self.tensor(&tensors, GAIN, HIDDEN_SIZE),
+            self.weight(layer, &tensors, 0, GAIN, HIDDEN_SIZE),
             1,
             HIDDEN as i64,
         )?;
         let key = steps.projected(
             session,
             &normed,
-            self.tensor(&tensors, K, 1024 * 2048),
+            self.weight(layer, &tensors, 2, K, 1024 * 2048),
             KEY_HEADS * HEAD,
             HIDDEN as i64,
         )?;
         let key = steps.normalised(
             session,
             &key,
-            self.tensor(&tensors, K_NORM, 128),
+            self.weight(layer, &tensors, 5, K_NORM, 128),
             KEY_HEADS,
             HEAD,
         )?;
@@ -598,7 +608,7 @@ impl<'session> Qwen<'session> {
         let value = steps.projected(
             session,
             &normed,
-            self.tensor(&tensors, V, 1024 * 2048),
+            self.weight(layer, &tensors, 3, V, 1024 * 2048),
             KEY_HEADS * HEAD,
             HIDDEN as i64,
         )?;
@@ -607,14 +617,14 @@ impl<'session> Qwen<'session> {
         let query = steps.projected(
             session,
             &normed,
-            self.tensor(&tensors, Q, 2048 * 2048),
+            self.weight(layer, &tensors, 1, Q, 2048 * 2048),
             HEADS * HEAD,
             HIDDEN as i64,
         )?;
         let query = steps.normalised(
             session,
             &query,
-            self.tensor(&tensors, Q_NORM, 128),
+            self.weight(layer, &tensors, 4, Q_NORM, 128),
             HEADS,
             HEAD,
         )?;
@@ -623,7 +633,7 @@ impl<'session> Qwen<'session> {
         let out = steps.projected(
             session,
             &attended,
-            self.tensor(&tensors, O, 2048 * 2048),
+            self.weight(layer, &tensors, 6, O, 2048 * 2048),
             HIDDEN as i64,
             HIDDEN as i64,
         )?;
@@ -635,21 +645,21 @@ impl<'session> Qwen<'session> {
         let prepared = steps.normalised(
             session,
             &hidden,
-            self.tensor(&tensors, POST, HIDDEN_SIZE),
+            self.weight(layer, &tensors, 7, POST, HIDDEN_SIZE),
             1,
             HIDDEN as i64,
         )?;
         let gate = steps.projected(
             session,
             &prepared,
-            self.tensor(&tensors, GATE, 6144 * 2048),
+            self.weight(layer, &tensors, 8, GATE, 6144 * 2048),
             INTERMEDIATE,
             HIDDEN as i64,
         )?;
         let up = steps.projected(
             session,
             &prepared,
-            self.tensor(&tensors, UP, 6144 * 2048),
+            self.weight(layer, &tensors, 9, UP, 6144 * 2048),
             INTERMEDIATE,
             HIDDEN as i64,
         )?;
@@ -657,7 +667,7 @@ impl<'session> Qwen<'session> {
         let down = steps.projected(
             session,
             &mixed,
-            self.tensor(&tensors, DOWN, 2048 * 6144),
+            self.weight(layer, &tensors, 10, DOWN, 2048 * 6144),
             HIDDEN as i64,
             INTERMEDIATE,
         )?;

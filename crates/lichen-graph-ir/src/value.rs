@@ -103,7 +103,11 @@ pub enum Value<'backend> {
     /// The class is here for the same reason it is on a device value: the payload is those
     /// elements packed at [`ScalarClass::byte_width`] bytes each, so dropping the class
     /// would hand a float buffer's four-byte elements to a backend that reads eight.
-    Host { data: Vec<u8>, class: ScalarClass },
+    /// Shared, so a caller holding a weight hands it over without a copy.
+    Host {
+        data: std::sync::Arc<[u8]>,
+        class: ScalarClass,
+    },
     /// A number.
     ///
     /// # Invariant
@@ -155,13 +159,21 @@ impl<'backend> Value<'backend> {
     /// [`Self::host_data`] is the same for a class that is not `Int`.
     pub fn host(data: Vec<i64>) -> Self {
         Value::Host {
-            data: pack(ScalarClass::Int, &data),
+            data: pack(ScalarClass::Int, &data).into(),
             class: ScalarClass::Int,
         }
     }
 
     /// Host data of a class the caller names, as that class's packed bytes.
     pub fn host_data(class: ScalarClass, data: Vec<u8>) -> Self {
+        Value::Host {
+            data: data.into(),
+            class,
+        }
+    }
+
+    /// The same, sharing bytes the caller keeps: a weight handed over here is not copied.
+    pub fn host_shared(class: ScalarClass, data: std::sync::Arc<[u8]>) -> Self {
         Value::Host { data, class }
     }
 

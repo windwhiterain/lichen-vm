@@ -5834,6 +5834,7 @@ fn argument_extent(arguments: &[RunArgument], value: GraphValueId) -> Option<usi
     match arguments.get(value)? {
         RunArgument::Count(count) => usize::try_from(*count).ok(),
         RunArgument::Buffer { class, data } => Some(data.len() / class.byte_width()),
+        RunArgument::BufferShared { class, data } => Some(data.len() / class.byte_width()),
         RunArgument::Resident(resident) => Some(resident.count),
         RunArgument::Float(_) => None,
     }
