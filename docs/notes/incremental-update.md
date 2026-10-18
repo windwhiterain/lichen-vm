@@ -12,6 +12,14 @@
 > cut, the deep-pass measurement and the mutation inventory; where the two meet, this
 > note links there instead of restating.
 >
+> **The "no keys" ruling is withdrawn**, and this note is amended where it depended on it:
+> a content key may now decide reuse, with **the key as the judge and dirty propagation as
+> the accelerator** (§4.5, §8, §10). The design that follows from the withdrawal, the three
+> value tiers it distinguishes, and the heavy values it exists for are
+> [heavy-value-cache](heavy-value-cache.md). Identity for *retention* is unchanged: a cell
+> is still an occurrence path, and §2.4's argument against content identity still holds for
+> retention — see that note's §6 for why it does not apply to a value key.
+>
 > Points at: `crates/lichen-language-parser/src/path.rs`,
 > `crates/lichen-language/src/{cells,compile,dirty,lib,session,spans}.rs`,
 > `crates/lichen-language-lex/src/lib.rs` (`lex_resume`),
@@ -321,8 +329,9 @@ clean lowers to `ExprKind::Static`; a block-wide binding's placeholder *is* that
 read, made in place rather than transplanted from a second node, which would leave that
 node behind in the IR. A marked binding that *was* compiled is frozen **per cell** once
 the build is solved and recorded under its path and its source. The registry's `hash` slot
-is a documented **placeholder** on this path — a cell's reuse is decided by its path and
-by propagation, never by content.
+is **unset** on this path — no cell key is computed yet. That is a gap, not a design:
+[heavy-value-cache](heavy-value-cache.md) §2 puts `K_out` there, and that note's §3 is the
+split that makes in-process reuse, backdating and persistence three separate prices.
 
 The **dirty input** has two cuts. The coarse one is the caller's, and it is the
 granularity chosen for *another* file: `CellStore::invalidate_source(source_id)` drops
@@ -389,7 +398,7 @@ A marked cell that participates in a value cycle is dirty, recomputed and re-fro
 **SCC-atomic** unit; the in-progress assumption the within-build note names is the same
 assumption, at the same place.
 
-### 4.4 Backdating — not built
+### 4.4 Backdating — obtainable from a value key, not built
 
 After a recomputation the new value could be compared with the retained one, and equal
 means the cell keeps its identity *and* its consumers stay clean. That is a refinement,
@@ -406,7 +415,24 @@ A cheaper half exists (compare a recomputed cell's value with the retained artif
 keep the old artifact, saving the freeze and the key churn) but it saves the least
 expensive part of the work.
 
+**Superseded by the key ruling, and the supersession is the point.** The paragraph above
+answers "compare the values", which needs the recompute heap because neither a dependency
+order nor a value-equality oracle exists for arrays (`ValueExt::value_eq` makes two arrays
+equal only when they share an allocation). Under a content key the same effect costs one
+hash: fold `K_out` — the digest of a cell's value — into its consumers' `K_in`, and a
+consumer whose dependency's value did not change has an unchanged key and is never asked.
+No recompute heap, no reversal of the lowering order, and the array-equality gap stops
+being in the way. [heavy-value-cache](heavy-value-cache.md) §3–§4 has it; what remains
+unbuilt is the hash itself.
+
 ### 4.5 Why not recorded reads (pull verification)
+
+> **Two of the three reasons below are withdrawn** by the key ruling
+> ([heavy-value-cache](heavy-value-cache.md) §1): the first because the requirement it
+> cites no longer applies, and the third because a key *is* the cheap "when did this last
+> change". **The second stands, and it is what the key route relies on**: the reads are
+> re-derived from the AST every compile, so nothing is recorded and nothing can go stale.
+> What a key adds is not a recorded read set but one stored digest per binding.
 
 An earlier draft recorded, per cell, **the paths it read** plus a version stamp, and
 *verified* a demanded cell (pull) before recomputing it: resolve each recorded path, ask
@@ -414,16 +440,22 @@ when it last changed, reuse the cell if nothing did. That is Salsa's red-green s
 paths in place of query keys, and it was called "verification (pull), not propagation
 (push)". It is rejected for three reasons:
 
-- **it contradicts the requirement** — the requirement asks for a dirty propagation
-  mechanism, and pull verification is the other thing;
+- ~~**it contradicts the requirement** — the requirement asks for a dirty propagation
+  mechanism, and pull verification is the other thing;~~ **withdrawn**: the requirement
+  that forbade keys is gone, and the key route *is* a pull check — see
+  [heavy-value-cache](heavy-value-cache.md) §2;
 - **recording is redundant**: the resolver's `BinderId` annotations *are* the read set,
   complete and exact, and they are re-derived from the AST every compile. A recorded copy
   is a second source of truth that can go stale, for nothing;
-- **a stamp needs a clock**, and with no keys there is no cheap "when did this last
-  change" — the answer would be the recomputation the stamp was meant to avoid.
+- ~~**a stamp needs a clock**, and with no keys there is no cheap "when did this last
+  change" — the answer would be the recomputation the stamp was meant to avoid;~~
+  **withdrawn**: a key is the stamp, and it costs one hash per binding per build rather
+  than the recomputation it avoids.
 
 The dependency relation the draft stored as paths is still there, and still path-shaped: a
-cell's identity is a path, and what dirties it is the *statement* it sits in.
+cell's identity is a path, and what dirties it is the *statement* it sits in. What survives
+from the draft under the key route is narrower: the edges are not recorded, but the
+*answer* is — one digest per binding, re-derived rather than replayed.
 
 ## 5. The two edit surfaces
 
@@ -681,9 +713,11 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
   match the compiler forces, and each asks a different question of the tree: a step to
   record, a span to shift, a child to rewrite by role, a tag to hash.
 - **`retain_marked` is what keeps the store honest** (§3.3).
-- **The content key carries `cache`** (`KEY_FORMAT_VERSION` 2). Bumping the constant
-  invalidates every key; today that is in-memory only (the session and the tests), so a
-  bump is free — check that before the keys are ever persisted.
+- **The content key carries `cache`** (`KEY_FORMAT_VERSION` 2). **The "bump is free"
+  window is closing**: once a cell key is persisted, a bump retires every cache and becomes
+  the same kind of contract as `ARTIFACT_FORMAT_VERSION`, which carries a written version
+  history for exactly that reason. Start that history when the first persisted key lands,
+  not after ([heavy-value-cache](heavy-value-cache.md) §8).
 - **An annotation on a marked binding is skipped, not mis-read** (§3.3).
 - **A `Parameterized` cell is silently not retained** — by design, but it means a marked
   binding that never solves is recompiled every build (§2.5).
@@ -722,8 +756,14 @@ target, since `7ceee3eb`), and the equality suite's class tests.
 
 ## 10. Decisions taken
 
-- **No keys** — so identity is allocated (§1) and change detection is dirty propagation
-  over the resolver's own read graph (§4) rather than "hash and look up".
+- **~~No keys~~ — WITHDRAWN.** The ruling was: identity is allocated (§1) and change
+  detection is dirty propagation over the resolver's own read graph (§4) rather than "hash
+  and look up". It is replaced by **keys are allowed; the key is the judge and dirty
+  propagation is the accelerator** ([heavy-value-cache](heavy-value-cache.md) §1). What
+  survives from this bullet, and is not reopened: identity for *retention* is still the
+  occurrence path, and §2.4's argument against content identity is still right about
+  retention — [heavy-value-cache](heavy-value-cache.md) §6 states why it does not apply to
+  a value key.
 - **Identity = occurrence path, name-preferred** — chosen over a user-written name only
   (no identity for anonymous nodes, §2.4) and over pure child indices (an insertion
   invalidates the whole suffix, §2.2).
@@ -790,11 +830,15 @@ target, since `7ceee3eb`), and the equality suite's class tests.
 - **A path across an import boundary.** The step vocabulary is settled (§2.2); what is not
   is how a package's file identity prefixes a path — the registry's file identity is
   path-derived (`is_lichen_file_id` / `file_id_hash(file_id: &str)`,
-  `lichen-registry/src/device.rs`), which is a name, not a content hash, and must stay
-  that way.
+  `lichen-registry/src/device.rs`), which is a name, not a content hash, and **stays** that
+  way: under the key ruling a file id is a *name* in a key, and the imported file's content
+  enters through the keys of the bindings read from it, not by hashing the id.
 - **The graph-side descriptor's shape**, and whether a graph node's path is expressed in
-  the same step vocabulary as a source node's (§5).
-- **Backdating** (§4.4).
+  the same step vocabulary as a source node's (§5). Under the key ruling this is a smaller
+  question than §5 assumes: the descriptor becomes an accelerator and a reason source, not
+  the thing that makes invalidation exact — [heavy-value-cache](heavy-value-cache.md) §11.
+- **Backdating** — designed, not built: it falls out of folding a value key into consumers'
+  keys rather than out of a recompute heap ([heavy-value-cache](heavy-value-cache.md) §3–§4).
 - **Per-revision diagnostics and budget semantics** — inherited from
   `incremental-evaluation.md` §7's pending list, since recomputation is observable through
   the budgets.

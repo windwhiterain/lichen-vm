@@ -174,7 +174,7 @@ fn freeze_cells<P>(
             continue;
         }
         let key = registry.allocate_cell_key();
-        // The hash is a placeholder: reuse is decided by path, never content.
+        // The hash is unset on this path: no cell key is computed yet (heavy-value-cache §3).
         let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);
         let index = freeze.node_map[&pair];
         cells.record(path, source_id, StaticNodeId { module: key, index });
