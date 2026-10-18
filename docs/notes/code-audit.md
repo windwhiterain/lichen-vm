@@ -675,13 +675,22 @@ g S                        -- accepted: `(1,): struct{.a Int # 4}`, the requirem
 A *type* mismatch through the same callee does reach the reorder's lookup
 (`table lookup missed — no entry for this key`, which names no field), and a
 placeholder callee is refused earlier (`the callee of an instantiation must be a
-struct type`). Fix direction: compare the field's slot (its requirement and its pin)
-against the supplying argument where the reorder resolves, where both the field and
-the argument are decided. The written form's walk cannot be reused as it stands: it
-pairs **expressions** (`schema_tail`, `unify_type_attributes`), and the deferred path
-has only nodes (the field's slot out of the callee's lazy shape, the argument's
-[value, type, attr] pair), so the comparison must be a runtime unify or a registered
-assert at the reorder's resolution. A regression test belongs with the fix (`D3`).
+struct type`). **Route measured, and both halves are the same trap.** The requirement is a
+**Perspective attribute** (`# n` parses as `AnnPiece::Perspective`;
+`Perspective::unify_slots` is `check_unify_relaxed` with the divisibility subtype),
+so "the field's `# 4` against the argument's `# 2`" is an attribute-slot unify; the
+pin (`5 : Int`) is `check_element_pair_values`, the element-value walk. Both are
+**checker-time** and both are syntactic (`check_element_pair_attributes` /
+`check_element_pair_values` take `ExprId`s, and the field's slot only exists as a
+lazy runtime read when the callee is a parameter), so a per-field unify inserted at
+the resolution would merge into the undecided read instead of refusing — the trap
+P4-12 measured. Note the *type* half is already covered: a field-type mismatch is a
+typed-key miss (P1-45's sentence), so only the perspective and the spelled pin are
+silent. Two routes remain, both runtime: (a) give `Perspective` (and the pin walk) a
+`constraint`-style assert that compares the two slots once the reorder resolves — the
+`AttrExt::constraint` hook already exists and the perspective ext does not implement
+it; (b) an engine-side slot compare where a struct instance crosses an apply, shared
+with P1-46's arity check. A regression test belongs with the fix (`D3`).
 
 ### P1-45 — An instantiation through a parameter reports a type mismatch as an opaque table miss `verified`
 
