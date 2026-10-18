@@ -199,7 +199,13 @@ interface change at all: `graph::run` took its arguments **by value** and then c
 them, so moving the bytes instead of copying them took the token to **1.61 s**. Two copies of a 96 MB file,
 one line each, were worth three seconds.
 
-What is left per layer is the upload of the weights it reads and the dispatches that read them.
+The third copy was the last one: a payload is now **shared** (`Arc<[u8]>`) rather than owned, so the
+eleven slices a layer is split into are handed to dispatches by reference count, and the token fell from
+1.64 s to **1.18 s**. Sharing turned out to be cheaper than borrowing: a shared payload needs no lifetime
+through `Value`, and the forty-one places that build one kept their own constructors.
+
+What is left per layer is the upload of the weights it reads and the dispatches that read them — the
+payload is no longer copied anywhere between the file and the staging buffer.
 
 ## Running it
 
