@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use lichen_graph_ir::{Count, Node, Policy};
 use lichen_highlevel::ir::{ExprId, Loc};
@@ -875,7 +876,19 @@ pub enum ComputeOperator {
     /// `[buffer, index]` — read one buffer element → `?b`.
     Read,
     /// `[length, index, value]` — a pending parallel write; kernel-only.
+    ///
+    /// # Invariant
+    /// The write is **disjoint** by contract: a lane names its own slot, so no two lanes
+    /// write one element. A body that scatters needs [`Self::WriteAtomic`] instead.
     Write,
+    /// `[length, index, value]` — a pending parallel **atomic add**; kernel-only.
+    ///
+    /// # Invariant
+    /// One read-modify-write per lane, so a scatter accumulates. The order of the adds is
+    /// the implementation's, so a `Float` accumulator's answer is a sum whose order is not
+    /// the program's — the synchronization this primitive provides is the add's atomicity
+    /// and nothing beyond it.
+    WriteAtomic,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
     /// `[array]` operand — a copy of the array's elements as a `Buf` payload.
@@ -1025,6 +1038,7 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Col
             | ComputeOperator::Read
             | ComputeOperator::Write
+            | ComputeOperator::WriteAtomic
             | ComputeOperator::Graph
             | ComputeOperator::GraphRun
             | ComputeOperator::Buffer
@@ -1601,7 +1615,8 @@ where
                 ComputeOperator::Range
                 | ComputeOperator::Row
                 | ComputeOperator::Col
-                | ComputeOperator::Write => {
+                | ComputeOperator::Write
+                | ComputeOperator::WriteAtomic => {
                     // Kernel-only operators: none of them reaches the VM as a
                     // standalone apply — stay lazy.
                     None
@@ -1776,6 +1791,7 @@ where
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
             | ComputeOperator::Write
+            | ComputeOperator::WriteAtomic
             // A buffer's element class comes from the array it was made of, which the
             // operator answers rather than this table.
             | ComputeOperator::Buffer
@@ -2648,7 +2664,7 @@ where
         if let Some(operation) = module.node_operation(current)
             && matches!(
                 AsEnum::<ComputeOperator>::as_enum(&operation.operator),
-                Some(ComputeOperator::Write)
+                Some(ComputeOperator::Write | ComputeOperator::WriteAtomic)
             )
         {
             return Some(current);
@@ -5897,11 +5913,11 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
 /// The execution state a parallel kernel's host imports read and write against.
 ///
 /// # Invariant
-/// A worker owns one contiguous span of every output buffer and no two workers
-/// overlap, so the `write` import is a plain store into a slice it exclusively
-/// borrows — no lock on the write path. The state borrows its buffers, so the caller
-/// keeps them back; the base offset lives here because `Linker::func_new` needs a
-/// `'static` host function.
+/// Every output buffer is **shared** by all workers and its words are atomic: a `write` is a
+/// relaxed store into the slot its lane names, and an atomic add is a read-modify-write. The
+/// disjointness a scatter would break is `compute.write`'s contract, so the runner partitions
+/// lane ranges and never buffer storage. The state borrows its buffers, so the caller keeps
+/// them back.
 struct ParallelState<'a> {
     /// The input buffers, indexed by the input position the role walk records.
     ///
@@ -5909,16 +5925,12 @@ struct ParallelState<'a> {
     /// Never partitioned: a read is by a global index, so every worker reads the
     /// whole buffer. A float input's words are its `f32` bits.
     inputs: &'a [BufferWords],
-    /// This worker's span of each output buffer, indexed by the ordinal.
+    /// The output buffers, shared across workers, indexed by the ordinal.
     ///
     /// # Invariant
-    /// One span per output the index function declares — the count is the fragment's
-    /// `outputs`, never which slots happened to be written — and the words are one per
-    /// element in both classes.
-    outputs: Vec<&'a mut [i64]>,
-    /// The global index of this partition's first element, which the `write`
-    /// import adds to the index the kernel passes.
-    base: usize,
+    /// One buffer per output the index function declares — the count is the fragment's
+    /// `outputs`, never which slots happened to be written — each `count` words long.
+    outputs: &'a [Vec<AtomicI64>],
     /// The class the whole fragment is lowered in: the type of the imports and of
     /// the kernel's own parameters and result.
     class: ScalarClass,
@@ -6159,37 +6171,36 @@ fn run_parallel_kernel(
     }
     let inputs = host_inputs;
     let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
-    let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
+    // Shared atomic words: a write stores its slot, an atomic add read-modify-writes it.
+    let outputs: Vec<Vec<AtomicI64>> = (0..outputs)
+        .map(|_| (0..count).map(|_| AtomicI64::new(0)).collect())
+        .collect();
     let workers = parallel_worker_count(count);
     PARALLEL_LAUNCH_WORKERS.set(workers);
     if workers == 1 {
-        // The sequential run *is* the one-worker run: the calling thread owns
-        // every slot, and nothing is spawned.
+        // The sequential run *is* the one-worker run: the calling thread runs every lane,
+        // and nothing is spawned.
         let state = ParallelState {
             inputs: &inputs,
-            outputs: output_spans(&mut outputs),
-            base: 0,
+            outputs: &outputs,
             class,
             leaves: &leaves,
             leaf_classes: &leaf_classes,
         };
         run_parallel_range(&engine, &module, state, 0, count)?;
     } else {
-        // Contiguous chunk bounds, a function of the count and worker count alone:
-        // the leading chunks carry the remainder.
+        // Lane bounds, not storage bounds: the worker count partitions indices only.
         let bounds = chunk_bounds(count, workers);
-        let partitions = partition_outputs(output_spans(&mut outputs), &bounds);
         let mut failures: Vec<Option<Result<(), String>>> = (0..workers).map(|_| None).collect();
-        // Scoped, not detached: the scope joins every worker before the borrowed
+        // Scoped, not detached: the scope joins every worker before the shared
         // buffers are read back.
         std::thread::scope(|scope| {
-            for ((failure, partition), window) in
-                failures.iter_mut().zip(partitions).zip(bounds.windows(2))
-            {
+            for (failure, window) in failures.iter_mut().zip(bounds.windows(2)) {
                 let (base, end) = (window[0], window[1]);
                 let engine = &engine;
                 let module = &module;
                 let inputs = &inputs;
+                let outputs = &outputs;
                 let leaves = &leaves;
                 let leaf_classes = &leaf_classes;
                 let run = move || {
@@ -6198,8 +6209,7 @@ fn run_parallel_kernel(
                         module,
                         ParallelState {
                             inputs,
-                            outputs: partition,
-                            base,
+                            outputs,
                             class,
                             leaves,
                             leaf_classes,
@@ -6228,6 +6238,11 @@ fn run_parallel_kernel(
             }
         }
     }
+    // Read back after the scope joins: the scope is the ordering.
+    let outputs: Vec<Vec<i64>> = outputs
+        .into_iter()
+        .map(|buffer| buffer.into_iter().map(AtomicI64::into_inner).collect())
+        .collect();
     Ok(RunOutcome::Host(
         outputs
             .into_iter()
@@ -6318,58 +6333,6 @@ fn chunk_bounds(count: usize, workers: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Every output buffer as a mutable span, in output-ordinal order — the whole
-/// buffer, for a worker that owns every slot.
-fn output_spans(outputs: &mut [Vec<i64>]) -> Vec<&mut [i64]> {
-    outputs
-        .iter_mut()
-        .map(|buffer| buffer.as_mut_slice())
-        .collect()
-}
-
-/// Cut every buffer of `spans` into one contiguous chunk per worker.
-///
-/// # Invariant
-/// Each split consumes the spans by value: a `&mut` reborrowed through a vector element
-/// cannot outlive the vector borrow, so moving each span's ownership out first is what
-/// makes the partition possible without `unsafe`.
-fn partition_outputs<'a>(
-    mut spans: Vec<&'a mut [i64]>,
-    bounds: &[usize],
-) -> Vec<Vec<&'a mut [i64]>> {
-    let mut partitions: Vec<Vec<&'a mut [i64]>> = Vec::with_capacity(bounds.len() - 1);
-    for index in 0..bounds.len() - 1 {
-        // The last chunk is what is left, so it is not split again.
-        if index + 1 == bounds.len() - 1 {
-            partitions.push(spans);
-            break;
-        }
-        let (heads, tails) = split_spans(
-            std::mem::take(&mut spans),
-            bounds[index + 1] - bounds[index],
-        );
-        partitions.push(heads);
-        spans = tails;
-    }
-    partitions
-}
-
-/// Cut the leading `len` elements off every span of `spans` — the same length in
-/// each.
-fn split_spans<'a>(
-    spans: Vec<&'a mut [i64]>,
-    len: usize,
-) -> (Vec<&'a mut [i64]>, Vec<&'a mut [i64]>) {
-    let mut heads = Vec::with_capacity(spans.len());
-    let mut tails = Vec::with_capacity(spans.len());
-    for span in spans {
-        let (head, tail) = span.split_at_mut(len);
-        heads.push(head);
-        tails.push(tail);
-    }
-    (heads, tails)
-}
-
 /// Run one worker's index range `[base, end)`: the store, linker, instance and the
 /// per-index call loop.
 ///
@@ -6425,25 +6388,67 @@ fn run_parallel_range(
             .func_new(
                 "env",
                 &buffer_import_name(element_class, "write"),
-                write_ty,
-                move |mut caller: wasmi::Caller<'_, ParallelState<'_>>,
+                write_ty.clone(),
+                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
                       params: &[wasmi::Val],
                       _results: &mut [wasmi::Val]| {
                     let out_pos = position_of(params.first());
                     let idx = position_of(params.get(1));
                     let value = params.get(2).map_or(0, |v| value_word(element_class, v));
-                    let state = caller.data_mut();
-                    // The rebase: a global index into the worker's own span is the
-                    // store at `idx - base`.
-
-                    // A write outside the span is dropped rather than aliasing
-                    // another worker's slots.
-                    if let Some(slot) = state
+                    // A relaxed store: `compute.write`'s disjointness contract is what
+                    // makes the store the whole of a write.
+                    if let Some(word) = caller
+                        .data()
                         .outputs
-                        .get_mut(out_pos)
-                        .and_then(|buffer| buffer.get_mut(idx.checked_sub(state.base)?))
+                        .get(out_pos)
+                        .and_then(|buffer| buffer.get(idx))
                     {
-                        *slot = value;
+                        word.store(value, Ordering::Relaxed);
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        linker
+            .func_new(
+                "env",
+                &buffer_import_name(element_class, "atomic"),
+                write_ty.clone(),
+                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
+                      params: &[wasmi::Val],
+                      _results: &mut [wasmi::Val]| {
+                    let out_pos = position_of(params.first());
+                    let idx = position_of(params.get(1));
+                    let value = params.get(2).map_or(0, |v| value_word(element_class, v));
+                    let Some(word) = caller
+                        .data()
+                        .outputs
+                        .get(out_pos)
+                        .and_then(|buffer| buffer.get(idx))
+                    else {
+                        return Ok(());
+                    };
+                    match element_class {
+                        ScalarClass::Int => {
+                            word.fetch_add(value, Ordering::Relaxed);
+                        }
+                        // The float add is a compare-exchange loop over the word bits.
+                        _ => {
+                            let addend = f32::from_bits(value as u32);
+                            let mut current = word.load(Ordering::Relaxed);
+                            loop {
+                                let next = f32::from_bits(current as u32) + addend;
+                                match word.compare_exchange_weak(
+                                    current,
+                                    i64::from(next.to_bits()),
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => break,
+                                    Err(actual) => current = actual,
+                                }
+                            }
+                        }
                     }
                     Ok(())
                 },
@@ -6971,33 +6976,6 @@ mod parallel_launch_tests {
         }
     }
 
-    /// The partition the workers get: every output buffer cut into the same
-    /// disjoint spans.
-    #[test]
-    fn the_partitions_are_a_disjoint_cover_of_every_output_buffer() {
-        let count = 100;
-        let workers = 4;
-        let mut outputs: Vec<Vec<i64>> = (0..3).map(|_| (0..count as i64).collect()).collect();
-        let bounds = chunk_bounds(count, workers);
-        let partitions = partition_outputs(output_spans(&mut outputs), &bounds);
-        assert_eq!(partitions.len(), workers);
-        for (worker, partition) in partitions.iter().enumerate() {
-            assert_eq!(partition.len(), 3, "one span per output buffer");
-            let expected: Vec<i64> = (bounds[worker]..bounds[worker + 1])
-                .map(|index| index as i64)
-                .collect();
-            for span in partition {
-                assert_eq!(
-                    &span[..],
-                    &expected[..],
-                    "worker {worker} must own exactly indices [{}, {})",
-                    bounds[worker],
-                    bounds[worker + 1]
-                );
-            }
-        }
-    }
-
     /// The host buffers of a "cpu" run: a resident outcome here is a routing bug.
     fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {
         match run_parallel_kernel(id, Backend::Cpu, vec![count as i64], vec![])
@@ -7082,6 +7060,7 @@ macro_rules! compute_native_ops {
         static COL: $crate::ColOp = $crate::ColOp;
         static READ: $crate::ReadOp = $crate::ReadOp;
         static WRITE: $crate::WriteOp = $crate::WriteOp;
+        static WRITE_ATOMIC: $crate::WriteAtomicOp = $crate::WriteAtomicOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
         static BUFFER: $crate::BufferOp = $crate::BufferOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
@@ -7097,6 +7076,10 @@ macro_rules! compute_native_ops {
             ("col", &COL as &dyn $crate::NativeOp<$program>),
             ("read", &READ as &dyn $crate::NativeOp<$program>),
             ("write", &WRITE as &dyn $crate::NativeOp<$program>),
+            (
+                "write_atomic",
+                &WRITE_ATOMIC as &dyn $crate::NativeOp<$program>,
+            ),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
             ("buffer", &BUFFER as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
@@ -7242,6 +7225,13 @@ pub struct ReadOp;
 /// # Invariant
 /// Which buffer is decided by the write's position in the codomain, not here.
 pub struct WriteOp;
+
+/// `$write_atomic(n, i, val)` — a pending parallel **atomic add** into the output at `i`.
+///
+/// # Invariant
+/// Same operand shape as [`WriteOp`], and the same codomain position decides the buffer: the
+/// difference is the instruction the body lowers to, not how the write reaches its output.
+pub struct WriteAtomicOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
 pub struct BufferCollectOp;
@@ -7484,6 +7474,39 @@ where
         let val = &args[2];
         let operands = ctx.array_node(&[n.value, i.value, val.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Write), Some(operands));
+        NativeApply {
+            value: op,
+            decided: false,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for WriteAtomicOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$write_atomic(n, i, val)` — a pending atomic add into the output at `i`.
+    ///
+    /// # Invariant
+    /// The operands are `write`'s, in the same order, so the codomain walk reads the buffer
+    /// and the value from the same positions it reads a write's from.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        let n = &args[0];
+        let i = &args[1];
+        let val = &args[2];
+        let operands = ctx.array_node(&[n.value, i.value, val.value]);
+        let op = ctx.op_node(
+            P::Operator::from(ComputeOperator::WriteAtomic),
+            Some(operands),
+        );
         NativeApply {
             value: op,
             decided: false,

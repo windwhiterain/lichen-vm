@@ -759,6 +759,7 @@ where
             ComputeOperator::Col => self.coordinate(KernelBin::Rem),
             ComputeOperator::Read => self.buffer_read(operand),
             ComputeOperator::Write => self.buffer_write(operand),
+            ComputeOperator::WriteAtomic => self.buffer_write_atomic(operand),
             other => Err(format!(
                 "unsupported compute operator in kernel body: {other:?}"
             )),
@@ -1724,6 +1725,16 @@ where
     /// output position. A target that is itself a write is emitted first — the previous
     /// version of this same output, written in the order the chain spells.
     fn buffer_write(&mut self, operand: NodeId) -> Result<ValueId, String> {
+        self.write_call(operand, false)
+    }
+
+    /// The atomic add's lowering: [Self::buffer_write]'s walk, a different instruction.
+    fn buffer_write_atomic(&mut self, operand: NodeId) -> Result<ValueId, String> {
+        self.write_call(operand, true)
+    }
+
+    /// One pending write's lowering, whichever instruction it becomes.
+    fn write_call(&mut self, operand: NodeId, atomic: bool) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
             return Err(format!(
@@ -1754,15 +1765,23 @@ where
             })?;
         // The element a write fills is the parameter's own declaration where it states one.
         let element = self.declared_output_class(ordinal, value_node);
+        if atomic && element == ScalarClass::BFloat16 {
+            return Err(
+                "write_atomic of a bf16 element has no atomic add: the half's stored \
+                        word is not a float either backend can add in"
+                    .to_string(),
+            );
+        }
         self.tally.record_write(ordinal, element);
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
         let value = self.value(value_node)?;
-        Ok(self.emit(
-            KernelInstr::BufferWriteCall(element),
-            vec![position, index, value],
-            element,
-        ))
+        let instruction = if atomic {
+            KernelInstr::BufferAtomicAddCall(element)
+        } else {
+            KernelInstr::BufferWriteCall(element)
+        };
+        Ok(self.emit(instruction, vec![position, index, value], element))
     }
 
     /// The element class the parameter declares for write ordinal `ordinal`.

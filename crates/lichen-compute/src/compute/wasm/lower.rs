@@ -323,7 +323,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         }
         KernelInstr::BufferReadCall(class) => Some(super::assemble::value_type(class)),
         // A write leaves nothing, so it has no type to decide.
-        KernelInstr::BufferWriteCall(_) => None,
+        KernelInstr::BufferWriteCall(_) | KernelInstr::BufferAtomicAddCall(_) => None,
         // Refused at the instruction walk; the version's class is the element class the IR states.
         KernelInstr::SliceReadCall(class) | KernelInstr::SliceWriteCall(class) => {
             Some(super::assemble::value_type(class))
@@ -523,12 +523,17 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             );
             walk.values.insert(instr, (value, result));
         }
-        KernelInstr::BufferWriteCall(class) => {
+        KernelInstr::BufferWriteCall(class) | KernelInstr::BufferAtomicAddCall(class) => {
             let (position, _) = operands[0];
             let (index, _) = operands[1];
             let (value, _) = operands[2];
-            let function_index = *walk.context.imports.write.get(&class).ok_or_else(|| {
-                format!("compute.wasm: no `write` import was declared for {class:?} elements")
+            // The atomic add takes the write's shape, so only the import table differs.
+            let imports = match op {
+                KernelInstr::BufferAtomicAddCall(_) => &walk.context.imports.atomic,
+                _ => &walk.context.imports.write,
+            };
+            let function_index = *imports.get(&class).ok_or_else(|| {
+                format!("compute.wasm: no buffer import was declared for {class:?} elements")
             })?;
             let block = walk.blocks[walk.current].0;
             walk.builder.add_op(

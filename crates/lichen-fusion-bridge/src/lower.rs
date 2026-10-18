@@ -249,9 +249,11 @@ impl Walk<'_> {
             KernelInstr::BufferReadCall(ScalarClass::Int) => {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
-            KernelInstr::BufferWriteCall(_) => Err(BridgeRefusal::BufferWrite {
-                position: self.read_position(args)?,
-            }),
+            KernelInstr::BufferWriteCall(_) | KernelInstr::BufferAtomicAddCall(_) => {
+                Err(BridgeRefusal::BufferWrite {
+                    position: self.read_position(args)?,
+                })
+            }
             KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => {
                 Err(BridgeRefusal::SliceAccess {
                     slice: self.read_position(args)?,

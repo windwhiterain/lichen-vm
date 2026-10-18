@@ -40,6 +40,7 @@ pub(super) struct BufferImports {
     pub(super) base: u32,
     pub(super) read: HashMap<ScalarClass, Func>,
     pub(super) write: HashMap<ScalarClass, Func>,
+    pub(super) atomic: HashMap<ScalarClass, Func>,
 }
 
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
@@ -136,6 +137,7 @@ fn declare_buffer_imports(module: &mut Module, classes: &[ScalarClass]) -> Buffe
         base: 0,
         read: HashMap::new(),
         write: HashMap::new(),
+        atomic: HashMap::new(),
     };
     for class in classes {
         // The position and the index are `i64` in every class; only the element's own
@@ -158,6 +160,17 @@ fn declare_buffer_imports(module: &mut Module, classes: &[ScalarClass]) -> Buffe
         imports.write.insert(
             *class,
             declare_import(module, signature, buffer_import_name(*class, "write")),
+        );
+    }
+    // The atomic add's import takes `write`'s shape: position, index, value.
+    for class in classes {
+        let signature = module.signatures.push(SignatureData {
+            params: vec![Type::I64, Type::I64, value_type(*class)],
+            returns: Vec::new(),
+        });
+        imports.atomic.insert(
+            *class,
+            declare_import(module, signature, buffer_import_name(*class, "atomic")),
         );
     }
     // Every function entity pushed so far is an import, and no defined function
@@ -190,7 +203,8 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
         for instruction in fragment.body.instrs() {
             let class = match instruction {
                 lichen_kernel_ir::KernelInstr::BufferReadCall(class)
-                | lichen_kernel_ir::KernelInstr::BufferWriteCall(class) => *class,
+                | lichen_kernel_ir::KernelInstr::BufferWriteCall(class)
+                | lichen_kernel_ir::KernelInstr::BufferAtomicAddCall(class) => *class,
                 _ => continue,
             };
             if !classes.contains(&class) {

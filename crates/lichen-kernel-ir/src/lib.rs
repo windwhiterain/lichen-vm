@@ -881,6 +881,14 @@ pub enum KernelInstr {
     /// The class is the element class, as in [`Self::BufferReadCall`]; the position and the
     /// index are `Int`.
     BufferWriteCall(ScalarClass),
+    /// Atomically add one element of one output buffer: `[position, index, value]`.
+    ///
+    /// # Invariant
+    /// The class is the element class, as in [`Self::BufferWriteCall`]; the position and the
+    /// index are `Int`. The add is an atomic read-modify-write, so two lanes naming one slot
+    /// accumulate rather than overwrite — what a scatter needs, where [`Self::BufferWriteCall`]
+    /// states disjointness and nothing more.
+    BufferAtomicAddCall(ScalarClass),
     /// Write one element of one slice: `[slice, index, value]`.
     ///
     /// # Invariant
@@ -959,7 +967,7 @@ impl KernelInstr {
     /// against its declaration.
     pub fn produces(&self) -> usize {
         match self {
-            KernelInstr::BufferWriteCall(_) => 0,
+            KernelInstr::BufferWriteCall(_) | KernelInstr::BufferAtomicAddCall(_) => 0,
             _ => 1,
         }
     }
@@ -986,7 +994,7 @@ impl KernelInstr {
             | KernelInstr::Sin
             | KernelInstr::Cos => 1,
             KernelInstr::Fma | KernelInstr::Select => 3,
-            KernelInstr::BufferWriteCall(_) => 3,
+            KernelInstr::BufferWriteCall(_) | KernelInstr::BufferAtomicAddCall(_) => 3,
             KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
         })
@@ -1011,9 +1019,9 @@ impl KernelInstr {
             | KernelInstr::Cos => Some(ScalarClass::Float),
             KernelInstr::Negate => Some(ScalarClass::Float),
             KernelInstr::Fma => Some(ScalarClass::Float),
-            KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
-                Some(*class)
-            }
+            KernelInstr::BufferReadCall(class)
+            | KernelInstr::BufferWriteCall(class)
+            | KernelInstr::BufferAtomicAddCall(class) => Some(*class),
             KernelInstr::SliceReadCall(class) | KernelInstr::SliceWriteCall(class) => Some(*class),
             KernelInstr::I32WrapI64 | KernelInstr::Select | KernelInstr::CallKernel(_) => None,
         }

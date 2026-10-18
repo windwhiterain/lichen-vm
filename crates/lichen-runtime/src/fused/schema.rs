@@ -177,6 +177,12 @@ pub enum KernelInstr {
         /// The buffer's element class.
         class: ScalarClass,
     },
+    /// Atomically add one element of one output buffer.
+    #[facet(rename = "buffer_atomic_add_call")]
+    BufferAtomicAddCall {
+        /// The buffer's element class.
+        class: ScalarClass,
+    },
     /// Write one element of one slice.
     #[facet(rename = "slice_write_call")]
     SliceWriteCall {

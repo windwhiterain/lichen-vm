@@ -338,6 +338,12 @@ pub enum SpirvRefusal {
     ResultArity { results: usize, left: usize },
     /// A buffer write inside a loop body: the trip count is per lane and may be zero.
     WriteInsideLoop { at: usize },
+    /// A `write_atomic` the emitter does not emit yet.
+    ///
+    /// # Invariant
+    /// Refused rather than emitted as a plain store, which would drop the atomicity the
+    /// program asked for and answer a contested scatter with a lost update.
+    AtomicAddNotOnThisBackend { class: ScalarClass, at: usize },
     /// A body the target has no way to structure.
     ///
     /// # Invariant
@@ -489,6 +495,12 @@ impl fmt::Display for SpirvRefusal {
                  a register and can be zero, so a lane that never runs the body would leave its \
                  output element as whatever a fresh allocation held — `dispatch` allocates output \
                  buffers without initialising them. Move the write out of the loop."
+            ),
+            SpirvRefusal::AtomicAddNotOnThisBackend { class, at } => write!(
+                f,
+                "instruction {at} adds atomically to a {class:?} buffer, and this backend does not \
+                 emit an atomic add yet: the wasm backend does, so a `write_atomic` kernel runs on \
+                 \"cpu\" and is refused here rather than emitted as a store that loses updates."
             ),
             SpirvRefusal::ControlFlow { detail } => write!(
                 f,
@@ -1957,6 +1969,10 @@ fn emit_function(
                             };
                             slots.insert(definition, scalar(id, read_as));
                         }
+                        KernelInstr::BufferAtomicAddCall(class) => {
+                            // The next step: `OpAtomicIAdd` needs `AtomicInt64` and its feature.
+                            return Err(SpirvRefusal::AtomicAddNotOnThisBackend { class, at });
+                        }
                         KernelInstr::BufferWriteCall(_) => {
                             // **The one place a loop changes what `dispatch` may assume**: a
                             // zero trip count never runs the body.
@@ -2551,7 +2567,9 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
         KernelInstr::Select => None,
         KernelInstr::BufferReadCall(_) => (position == 0).then_some(ScalarClass::Int),
         KernelInstr::SliceReadCall(_) => (position == 0).then_some(ScalarClass::Int),
-        KernelInstr::BufferWriteCall(class) => (position == 2).then_some(class),
+        KernelInstr::BufferWriteCall(class) | KernelInstr::BufferAtomicAddCall(class) => {
+            (position == 2).then_some(class)
+        }
         KernelInstr::SliceWriteCall(class) => (position == 2).then_some(class),
         KernelInstr::CallKernel(callee) => {
             let (_, target) = launch.callee(callee)?;
