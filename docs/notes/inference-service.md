@@ -195,6 +195,18 @@ zero, which is safe only because a reader reads positions before its own; and `c
 are the **source's own literals**, since the kernel divides a lane by their product, so a different
 pair addresses the wrong slots and no run can detect it.
 
+**A batched decode step runs, and a sequence's answer does not depend on its batch.** The whole step —
+the score GEMV, the greedy sampler and the cache append — over three sequences at once, in **one
+submission**, returning its tokens and both caches as a three-tuple
+(`crates/lichen-serve/tests/batched_decode.rs`). The assertion is a differential rather than a hand
+derivation: the first sequence's token and its whole twenty-word cache slot are **identical** to the
+ones it got running alone through the same prepared graph, and its neighbours have distinct keys, so
+a slot that read another sequence's work would have scored differently. Two mechanics made it fit:
+**a step can hand back a tuple**, one value per element in the tuple's own order; and each dispatch's
+extent is **one of the step's arguments**, because an extent cannot be computed — the score is
+`sequences × rows` lanes, the sampler `sequences`, the append `sequences × capacity × columns`, so
+the step takes three counts and the host passes all three.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
