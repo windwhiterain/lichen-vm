@@ -14,7 +14,8 @@ use lichen_fusion::{Reduction, normalize};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    KernelClaim, KernelFragment, KernelId, Plan, Slice, Space, Staging, fragment_digest,
+    KernelClaim, KernelFragment, KernelId, Plan, ScalarClass, Slice, Space, Staging,
+    fragment_digest,
 };
 
 use crate::fused::{
@@ -171,7 +172,67 @@ impl GraphPass for AutomaticTiling {
                 &self.packs,
             ));
         }
+        // A pack that states a class lands a node it does not tile: a tiled node has a new digest.
+        let mut classed: Vec<(usize, Instance, ScalarClass)> = Vec::new();
+        for (position, node) in rewritten.nodes().iter().enumerate() {
+            let Node::Kernel(kernel) = node;
+            let Some(Ok(instance)) = instances.get(&fragment_digest(&kernel.fragment)) else {
+                continue;
+            };
+            let Decision::Fires(pack, _) =
+                decision(&self.packs, &instance.schema.hash(), &kernel.fragment)
+            else {
+                continue;
+            };
+            if let Some(class) = pack.class() {
+                classed.push((position, instance.clone(), class));
+            }
+        }
+        for (position, instance, class) in classed {
+            lines.push(classed_node(&mut rewritten, position, &instance, class));
+        }
         Some(rewritten)
+    }
+}
+
+/// Set the element class a pack states on the node's first input buffer.
+///
+/// # Invariant
+/// Applied only when both sides are real numbers: a pack that would cross a float with an integer
+/// names a buffer whose body was not written for it, so the program's own class stands.
+fn states_the_class(fragment: &mut KernelFragment, class: ScalarClass) {
+    if !class.is_real() {
+        return;
+    }
+    if let Some(held) = fragment.input_classes.first_mut()
+        && held.is_real()
+    {
+        *held = class;
+    }
+}
+
+/// Land a node again with the class its pack states, and say what happened.
+///
+/// # Invariant
+/// The body is the program's and only the precision is the pack's, so the artifact carries the
+/// node's own claim and no plan: a pack that steers no staging steers this node's placement.
+fn classed_node(
+    graph: &mut Graph,
+    position: usize,
+    instance: &Instance,
+    class: ScalarClass,
+) -> String {
+    let Node::Kernel(node) = &graph.nodes()[position];
+    let mut fragment = node.fragment.clone();
+    states_the_class(&mut fragment, class);
+    let artifact = write_fused_kernel(&FusedKernel {
+        fragment,
+        claim: Some(instance.claim.clone()),
+        plan: Plan::default(),
+    });
+    match land_fused_kernel(graph, position, &artifact) {
+        Ok(_) => format!("node {position}: the pack states {class:?}"),
+        Err(refusal) => format!("node {position}: refused: {}", landing_reason(&refusal)),
     }
 }
 
@@ -323,6 +384,11 @@ fn tile(
         Err(refusal) => return declined(position, &hash, decision, &refusal.to_string()),
     };
     let mut fragment = node.fragment.clone();
+    if let Decision::Fires(pack, _) = decision
+        && let Some(class) = pack.class()
+    {
+        states_the_class(&mut fragment, class);
+    }
     fragment.body = tiled.body().clone();
     let (space, plan, marks) = match decision {
         Decision::Fires(pack, staging) => (

@@ -122,6 +122,15 @@ impl PlacementPack {
         &self.name
     }
 
+    /// The element class this pack states for the node's first input buffer.
+    ///
+    /// # Invariant
+    /// The pack's sentence about precision, not a fact read off the fragment: a node whose pack
+    /// states one is compiled for it, which is what makes `Buf T` the payload's shape alone.
+    pub fn class(&self) -> Option<ScalarClass> {
+        self.requires.class
+    }
+
     /// The plan this pack hands over.
     pub fn plan(&self) -> &Plan {
         &self.plan

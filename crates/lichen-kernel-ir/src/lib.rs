@@ -69,6 +69,15 @@ impl ScalarClass {
         }
     }
 
+    /// Whether an element of this class is a real number.
+    ///
+    /// # Invariant
+    /// The shape a payload keeps when its precision narrows: a `BFloat16` is a narrower `Float`,
+    /// and neither is an `Int`, so a class may replace another here only by staying on its side.
+    pub fn is_real(self) -> bool {
+        matches!(self, ScalarClass::Float | ScalarClass::BFloat16)
+    }
+
     /// A dense index for this class, so a backend can key a per-class table on it.
     ///
     /// # Invariant
