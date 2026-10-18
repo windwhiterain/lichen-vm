@@ -103,6 +103,17 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    the lazy route carries (a silently short value, an unchecked pin and perspective,
    `P1-46`/`P1-44`) are the reason: a deferred check is absent, not late.
 
+   What this does **not** retire, so a reader does not over-generalize: a **read** is
+   not a check. `f = x => x.a` is legal and answers at the read (measured: `f 5` is
+   `this value is not a container — it has no element to read` at run), because a read
+   produces a value and the language states what it does with a wrong container; only
+   when the container is **decided** wrong does the checker refuse it
+   (`x[0]` on `5` is `expected an array type, found Int`). An instantiation is a check
+   with no value to compute, which is why it is refused at the normalize instead. The
+   same line puts the assert channel outside this ruling: a registered condition is
+   re-evaluated per apply clone, which is the language's runtime checking (the apply's
+   subject is the user's own predicate), not a type check the checker deferred.
+
 ## 4. What this corrected
 
 The class-read investigation called the decide "an apply clone's run-time

@@ -875,8 +875,11 @@ maps every span back to the original file.
   checker can resolve.  The tree still accepts the undetermined form through a **lazy
   reorder resolved at the apply** — a measured defect, `P1-49` — and that route is
   being retired: it silently accepts a short value and an unchecked pin and
-  perspective (`P1-46`, `P1-44`).  A **duplicate** name is refused at check time: one
-  name supplying two positions is a structural mismatch whatever the field list is.
+  perspective (`P1-46`, `P1-44`).  This is a **check**, not a **read**: `f = x => x.a`
+  stays legal and answers at the read (`f 5` is `this value is not a container`), while
+  only a container the checker has already decided wrong is refused there.  A
+  **duplicate** name is refused at check time: one name supplying two positions is a
+  structural mismatch whatever the field list is.
 - **Dependent array types (pinning).**  The length of `array{T, n}` is an arbitrary
   expression, so `array{Int, n}` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an

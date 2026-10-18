@@ -904,6 +904,17 @@ returns, so nothing downstream builds a reorder for an undetermined callee.
 sentences that read them (`P1-45`'s field-naming miss and `P1-47`'s argument-name
 sentence) — their rows are `retired:P1-49`.
 
+**The residual audit**, because the ruling says the lazy checking is retired and a
+reader must know what stays: the seven remaining `lazy_index_path` sites
+(`indexing.rs`'s array/tuple kind reads, `structs.rs`'s container-kind and name-table
+reads) all build the **read machinery**, not a check — a read produces a value, so an
+undecided container is answered at run (`f = x => x.a ; f 5` is `this value is not a
+container — it has no element to read`), and a *decided* wrong one is refused at check
+(`x[0]` on `5` is `expected an array type, found Int`). Measured after the refusal:
+`f = x => x.a` still checks, `x[0]` and `x <== 1` on `5` still name the expected
+container, and only the instantiation form is refused. The boundary is recorded in
+[function-normalization](function-normalization.md) §3.7 and in the spec paragraph.
+
 Measured: `g = c => c(.a 1, .b 2)` and the positional `g = c => c(1, 2)` are refused at
 the definition; `S(.a 1, .b 2)` and `(S(.a 1)).a` are unchanged; a placeholder callee
 still answers `the callee of an instantiation must be a struct type`. `D3`'s smallest
