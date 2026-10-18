@@ -920,6 +920,12 @@ pub struct Module<P: Program> {
     /// Empty between collects: [`Module::garbage_collect`] clears it, and a walk
     /// never re-enters another, so the set only ever holds one collect's classes.
     gc_classes: HashSet<NodeId>,
+    /// The nodes one [`Module::garbage_collect`] walk has entered.
+    ///
+    /// # Invariant
+    /// Empty between collects: a node is walked once, so a value cycle terminates and a
+    /// node reached twice is not relocated twice.
+    gc_visited: HashSet<NodeId>,
     /// The equality classes whose member-first evaluation walk is in progress.
     ///
     /// # Invariant

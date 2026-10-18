@@ -34,6 +34,7 @@ impl<P: Program> Module<P> {
             return self.nodes[block_root].value; // root block: nothing to move or release
         };
         self.gc_classes.clear();
+        self.gc_visited.clear();
         let value = self.garbage_collect_node(block_root, source, target);
         // A pending assert's condition is a root: the assert pass drains later.
         let pending: Vec<NodeId> = self.asserts.iter().map(|entry| entry.condition).collect();
@@ -74,6 +75,14 @@ impl<P: Program> Module<P> {
         members
     }
 
+    /// One node's part of the walk, and every edge it owns.
+    ///
+    /// # Invariant
+    ///
+    /// A node outside the vacated subtree is walked too: a live node may name one inside,
+    /// or owe an answer whose operand is inside, and neither is reachable from the root.
+    /// Its block stays put; only an inside node moves, into `target`. A node is walked once
+    /// per collect, so a value cycle terminates.
     #[stacksafe]
     fn garbage_collect_node(
         &mut self,
@@ -81,19 +90,25 @@ impl<P: Program> Module<P> {
         source: BlockId,
         target: BlockId,
     ) -> Option<P::Value> {
+        if !self.gc_visited.insert(node) {
+            return self.nodes[node].value;
+        }
         // A reader's answer lives in the class it read into, so every
         // member the node aliases is as live as the node is.
         let members = self.class_walk(node);
-        if !self.descends_from(self.nodes[node].block, source) {
-            for member in members {
-                self.garbage_collect_node(member, source, target);
-            }
-            return self.nodes[node].value; // lives outside the vacated subtree — stays put
+        let inside = self.descends_from(self.nodes[node].block, source);
+        if inside {
+            self.nodes[node].block = target;
+            self.blocks[target].nodes.push(node);
         }
-        self.nodes[node].block = target;
-        self.blocks[target].nodes.push(node);
         for member in members {
+            let member_inside = self.descends_from(self.nodes[member].block, source);
             self.garbage_collect_node(member, source, target);
+            if !member_inside {
+                // The class's value may live in the arena this collect releases: a class
+                // write hands every member the same payload.
+                self.relocate_class_value(member);
+            }
         }
         let current = self.nodes[node].value;
         let operation = self.nodes[node].operation;
@@ -122,9 +137,13 @@ impl<P: Program> Module<P> {
                 }
                 // The whole payload moves into the target arena, so a
                 // compacted array keeps its markers.
-                P::Value::from(LowValue::Array(
-                    self.alloc_array(unsafe { array.items() }, target),
-                ))
+                if inside {
+                    P::Value::from(LowValue::Array(
+                        self.alloc_array(unsafe { array.items() }, target),
+                    ))
+                } else {
+                    value
+                }
             }
             Some(LowValue::Table(AnyHandle::Static(_))) => {
                 // A static payload lives in the frozen module's arena: no
@@ -146,27 +165,34 @@ impl<P: Program> Module<P> {
                 }
                 // The whole payload moves into the target arena, so a
                 // compacted table keeps its order and hashes.
-                P::Value::from(LowValue::Table(
-                    self.alloc_table(unsafe { table.items() }, target),
-                ))
+                if inside {
+                    P::Value::from(LowValue::Table(
+                        self.alloc_table(unsafe { table.items() }, target),
+                    ))
+                } else {
+                    value
+                }
             }
             // A static function value is frozen in the static module — no
             // scope to walk, no home block to re-point.
             Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                // The template's nodes and asserts must outlive the closing
-                // block, so each is mapped like an array element.
-                let ids = self.functions[function].nodes.clone();
-                for &id in &ids {
-                    self.garbage_collect_node(id, source, target);
-                }
-                let assert_ids = self.functions[function].asserts.clone();
-                for &id in &assert_ids {
-                    self.garbage_collect_node(id, source, target);
-                }
-                if self.descends_from(self.functions[function].block, source) {
-                    self.functions[function].block = target;
-                    self.blocks[target].functions.push(function);
+                // Only a function reached from inside the subtree is walked.
+                if inside {
+                    // The template's nodes and asserts must outlive the closing
+                    // block, so each is mapped like an array element.
+                    let ids = self.functions[function].nodes.clone();
+                    for &id in &ids {
+                        self.garbage_collect_node(id, source, target);
+                    }
+                    let assert_ids = self.functions[function].asserts.clone();
+                    for &id in &assert_ids {
+                        self.garbage_collect_node(id, source, target);
+                    }
+                    if self.descends_from(self.functions[function].block, source) {
+                        self.functions[function].block = target;
+                        self.blocks[target].functions.push(function);
+                    }
                 }
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
@@ -180,15 +206,51 @@ impl<P: Program> Module<P> {
                     // table arms': only the node's block changes.
                     self.garbage_collect_node(node, source, target);
                 }
-                Self::copy_ext(self, value, target)
+                if inside {
+                    Self::copy_ext(self, value, target)
+                } else {
+                    value
+                }
             }
             _ => value,
         });
         // The slot is rewritten by a value it already holds: the one licensed rewrite.
-        if let Some(value) = value {
+        if inside && let Some(value) = value {
             self.relocate_node_value(node, value);
         }
         value
+    }
+
+    /// Re-allocate `node`'s payload into **its own** block, keeping the value itself.
+    ///
+    /// # Invariant
+    ///
+    /// A class write gives every member the same payload, so a member outside the vacated
+    /// subtree can hold a payload the collect is about to release; its own block is the one
+    /// arena that certainly outlives it. The slot is rewritten by a value it already holds —
+    /// GC's one licensed rewrite — and the payload is moved, not replaced: it is
+    /// re-allocated from the same items.
+    fn relocate_class_value(&mut self, node: NodeId) {
+        let Some(value) = self.nodes[node].value else {
+            return;
+        };
+        let home = self.nodes[node].block;
+        let relocated = match value.as_enum() {
+            Some(LowValue::Array(AnyHandle::Static(_))) => return,
+            // SAFETY: `array` is a live node's payload, and `home` outlives the node.
+            Some(LowValue::Array(array)) => P::Value::from(LowValue::Array(
+                self.alloc_array(unsafe { array.items() }, home),
+            )),
+            Some(LowValue::Table(AnyHandle::Static(_))) => return,
+            // SAFETY: `table` is a live node's payload, and `home` outlives the node.
+            Some(LowValue::Table(table)) => P::Value::from(LowValue::Table(
+                self.alloc_table(unsafe { table.items() }, home),
+            )),
+            // A scalar, a function or the wildcard owns no arena payload.
+            Some(_) => return,
+            None => Self::copy_ext(self, value, home),
+        };
+        self.relocate_node_value(node, relocated);
     }
 
     /// Splice every member homed in `dropped` out of the class rooted at
