@@ -379,16 +379,22 @@ Three verdicts were given and are recorded here rather than left in a transcript
    `scalars ++ inputs ++ outputs`, sorted by path**, over **the kernel's own parameter**, and
    `place` hands that number to the graph unchanged as a value id. So a step works only when
    its own parameter presents the same cells as the dispatch's, in the same order, and each
-   is read. Two measured rules follow, and both were confirmed by making the sentence
-   disappear:
+   is read. One rule is established by making the sentence disappear, and a second candidate is
+   recorded beside it with the evidence against it:
    - **Read the extent argument (`s.n`).** A body that passes a literal `.n` never reads that
      cell, the step's cell list loses it, every buffer input shifts down one slot, and node 0
      is handed the extent — *"node 0 was given value 0 as a buffer, and that value is a
      number"*.
-   - **The dispatch's argument struct must be the graph's `.in` struct.** With a different
-     struct the ranks still disagree and the same sentence stays, even with `s.n` read.
+   - **The graph must register the cells the dispatch names.** A dispatch whose argument was a
+     *different* struct still failed in the probe with `s.n` read — but
+     `decode_step_graph.rs`'s real three-kernel step, whose graph parameter holds **four**
+     buffers and whose three dispatches each read a subset through **its own** struct, records
+     and runs. So this second rule is **narrower than the evidence**: what is established is the
+     first rule and the node-count one below, and the exact cell-matching condition is still to
+     be pinned down. It is recorded here as a warning rather than as a rule, because a reader who
+     took it as one would exclude the shape that already works.
    A **one-node** step fails separately, with *"two answers met on one node"*, so a step needs
-   at least two nodes. With both rules obeyed `zz_graph_step_shape_probe.rs` prints
+   at least two nodes. With the first rule obeyed `zz_graph_step_shape_probe.rs` prints
    `[4.0, 8.0, 12.0]` for a two-node step. **The defect to file is the conflation itself**: a
    kernel's parameter cell is not a graph input slot, and the recording treats one as the
    other; the fix belongs there and not in the backend.
