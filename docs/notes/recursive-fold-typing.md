@@ -145,6 +145,24 @@ from the first attempt in place, is `174v1` cloned (present in the pass's `remap
 its clone evaluated? The next probe answers that and tells whether the fix is
 "carry the members" (already written) or "carry **and evaluate** them at the apply".
 
+**The fifth reading: the carry reaches the operation, and evaluating it fixes the repro
+— but breaks the deep budget.** With the carry in place, `174v1` and `155v1` **are**
+cloned (`377v1`/`375v1`), and the clones arrive open, so the missing half is indeed the
+evaluation. Adding it — after the bind, evaluate the codomain's class members whose
+operand is decided — makes the repro answer **`3: Int`**, the annotated and
+struct-literal controls unchanged, and the un-annotated `gcd` improve from
+`raw 6: ?a` to **`6: Int`**. But it also makes
+`recursion::deep_evaluating_an_infinite_stream_records_the_deep_budget` **hang** (killed
+at 300 s; the deep budget never fires), and gating it to shallow passes only
+(`deep_depth == 0`) makes the repro regress to `raw none: ?a` — the fix fires **in the
+deep pass**, which is exactly where that test's budget discipline lives. So route A's
+second half is not "evaluate the members": it must decide the class **without
+re-entering the deep pass** — either by a re-entrancy guard on the class (a class being
+decided is skipped), or by deciding only the *shown* member's shallow evaluation, with
+the deep budget's accounting untouched. Both are owner-visible choices about the deep
+pass, and they are the next step; the code above was reverted, so the repro still
+answers `raw none` at the tree's tip.
+
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
 struct-literal base (`@loop f = (n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
