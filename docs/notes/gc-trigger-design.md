@@ -1,11 +1,12 @@
 # The `@gc` trigger: what decides a scope is done
 
-> Status: **research — measured, not merged.** The maintainer's question: the retired
-> read path triggered the collect by deep-evaluating the scope root, which forces work and
-> so has side effects; could an **in-block undecided reference count** trigger it instead?
-> Answer: **no as stated** (§3), and the forcing is not needed at all — a plain read of the
-> root answers the same question without running anything (§4). What blocks the trigger is
-> not the signal but **two collector defects** (§5, §6).
+> Status: **landed — the trigger is the read of a scope root, evaluated shallowly.** The
+> maintainer's question was whether an **in-block undecided reference count** could trigger
+> the collect instead: **no as stated** (§3), because laziness keeps the count permanently
+> nonzero for every scope that contains an application, and the root's own **slot** answers
+> the same question without forcing anything (§4). What blocked the trigger was never the
+> signal but the collector's edges (§5, §6), and what the maintainer decided is §7. One
+> collector item is still open (§8).
 
 ## 1. What the trigger must decide
 
@@ -34,7 +35,8 @@ names (2) in the wild.
 ## 2. The shape of a scope, measured
 
 Every construct the checker compiles a `@gc` with, and what the block ends up holding
-(probe `zz_gc_probe`, `src` from the language's own tests):
+(measured with a probe that was removed once the investigation closed, `src` from the
+language's own tests):
 
 | source | block nodes | undecided after the run | root decided |
 |---|---|---|---|
@@ -78,7 +80,7 @@ the descent died on is a **decided** array node (§5), not an undecided one.
 `root.value` holds a decided value that is not the wildcard. No deep pass, so nothing is
 forced and no side effect runs. Measured, with the trigger reading that:
 
-| suite | shipped (the disable) | deep (old) | shallow (proposed) |
+| suite | disabled (before this change) | deep (old trigger) | shallow (the trigger that landed) |
 |---|---|---|---|
 | `lichen-language` `language` | 263 / 1 | — | **264 / 0** with §6's fix |
 | `lichen-lowlevel` `basic` | 143 / 13 | 155 / 1 | 154 / 2 (153 / 3 with §6's fix) |
@@ -145,26 +147,47 @@ condition before the collect, the same loss happens. Treating pending assert con
 collect roots fixes it (measured: the deep trigger's false assert is reported again), at the
 cost of the lowlevel test that states the opposite contract.
 
-## 7. Recommendation
+## 7. What landed
 
-1. **No refcount.** The observable the collect needs is the scope's answer (its root slot),
-   not a count of the block's unresolved nodes; laziness guarantees the count stays nonzero.
-2. **Collect on the read, from a shallow evaluation.** It is the same point the retired
-   design collected at, but it forces nothing; measured above.
-3. **Repair the collector first**: the class-carried value of §5 and the assert policy of
-   §6. Either defect alone makes an enabled trigger unsound or semantically visible.
-4. **Decide the template question.** A `@gc` inside a body whose value does not depend on
-   the parameters decides during the definition pass, and a trigger on the read then
-   collects the *template's* scope block — measured: `f = n => @gc { a = 1; a }` leaves 7
-   blocks / 5 declared scopes before the run and 2 / 0 after, so the per-instantiation
-   scopes are gone. [gc-block](gc-block.md) states the template is never collected; the
-   rule needs to be implemented (skip a block whose parent is a function's template body)
-   rather than assumed.
+The maintainer ruled on the two policy questions — assert conditions are roots (`1.a`) and a
+template's scope may be collected (`2.b`) — and the trigger is **on**:
 
-## 8. What the sources do not answer
+| piece | where |
+|---|---|
+| the trigger: shallow read, root's slot decides, marker kept while undecided | `evaluation.rs` (`evaluate_block`, `is_scope_root_read`) |
+| the verdict cache does not answer for a scope-root read | `evaluate_node_deep_inner` |
+| a pending assert's condition is a collect root | `gc.rs` (`garbage_collect`) |
+| the walk goes into a node outside the vacated subtree, and a class member's payload moves into its own block | `gc.rs` (`garbage_collect_node`, `relocate_class_value`) |
+| the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided` |
 
-- Whether an assert inside a `@gc` scope *should* die with it: the lowlevel test says yes,
-  the marker's "computes nothing" says no. The maintainer owns the verdict.
+Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **156 / 0**,
+`lichen-highlevel` **136 / 0**, `lichen-compute`'s
+`examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
+under the old trigger), and the example corpus' two collects release 23 and 8 nodes with
+**no live node naming a released one** in their operand, array, table or function edges.
+
+The template decision (`2.b`) is measured too: `f = n => @gc { a = 1; a }` leaves 7 blocks /
+5 declared scopes after compile and 2 / 0 after the run — a definition-pass read decides the
+template's scope, so it is released there and the calls have none of their own. Skipping a
+block whose parent is a function's template body was the alternative; it would keep a scope
+alive for the module's lifetime to serve calls that may never come.
+
+## 8. The collector item that is still open
+
+A **surviving function's template list can name released nodes**. Measured on the example
+corpus: `FunctionId(3v1)`, homed in block `4v1`, listed **23 nodes of the released block
+`5v1`** after the collect. The cause is that a function's home and its nodes diverge today: a
+per-call closure is homed at the call site while its nodes land in the call's fresh scope
+block, so the collect can release the nodes while the function stays. The walk does not enter
+an outside function's template (that is why the corpus still passes), and a later clone of
+such a function would name released nodes.
+
+That needs the **function-home invariant** — a function and its template nodes are one unit,
+either both kept or both released — and it is a collector design change, not a trigger
+decision. Recorded as `P1-51` in [code-audit](code-audit.md).
+
+## 9. What the sources do not answer
+
 - Whether a lazy statement inside a scope should be freed without ever running: with a
   decided root the walk keeps whatever the value reaches, and a statement the value does not
   reach is freed unrun — the same outcome the program has without `@gc`, so it looks right,

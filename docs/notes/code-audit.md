@@ -55,6 +55,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
+| P1-51 | high | lowlevel | A surviving function's template list names released nodes after a collect | todo — measured on the example corpus: `FunctionId(3v1)`, homed in block `4v1`, listed 23 nodes of the released block `5v1`; a function's home and its nodes diverge (a per-call closure is homed at the call site, its nodes in the call's fresh scope block), so the walk skips an outside function's template and the list dangles. Fix needs the function-home invariant; readings in [gc-trigger-design](gc-trigger-design.md) §8 |
 
 ## P1 — correctness
 
@@ -992,7 +993,7 @@ is the whole regression: the S-state fold must answer `3` once fixed, the
 tuple-of-Ints control must keep answering `7`, and the struct-literal base must keep
 working.
 
-## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions
+## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
@@ -1527,3 +1528,20 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   `recursion::deep_evaluating_an_infinite_stream_records_the_deep_budget`, and gating it
   to shallow passes regressed the repro — both recorded in
   [recursive-fold-typing](recursive-fold-typing.md), not carried forward.
+
+- **D19 — Does a released scope keep its pending asserts? — DECIDED: yes; the condition is a
+  collect root.** `check_asserts` drains after the pass that collects, so the old lowlevel
+  contract "an assert's condition dies with its block" (`gc_prunes_asserts_of_dropped_blocks`)
+  let `@gc` change a program's verdict: measured, `x = @gc { @assert (1 > 2); 3 }; x` built
+  `ok=true` under the retired deep trigger, while the same program with the collection
+  disabled reported `assertion failed`. The condition survives the release now, and the test
+  states the new contract (`gc_moves_a_pending_assert_condition_out_of_a_dropped_block`).
+  *Rejected — asserts die with their scope:* that is the one semantic change `@gc` was
+  documented not to have ("it computes nothing").
+- **D20 — May a template's own scope be collected at compile time? — DECIDED: yes, and the
+  per-call scope is then not promised.** A body whose `@gc` value does not depend on its
+  parameters decides during the definition pass, so a trigger on the read releases the
+  template scope there: measured, `f = n => @gc { a = 1; a }` leaves 7 blocks / 5 declared
+  scopes after compile and 2 / 0 after the run. *Rejected — skip a block whose parent is a
+  function's template body:* it keeps a whole scope alive for the module's lifetime to serve
+  calls that may never come.

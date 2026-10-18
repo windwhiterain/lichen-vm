@@ -330,13 +330,19 @@ graph fact — a 2-element array one of whose elements points back at its own cl
   following the block's reachable nodes and dropping the rest; the static arena is
   never moved or compacted. A block ends at **its declared root** when a layer says
   which node that is (`Module::mark_scope_root`, the language's `@gc`), and at
-  whichever node the parent block reads when no layer did. A scope whose root the
-  deep pass leaves **undecided** is not collected: some reachable slot is still
-  empty, so nothing in it is proven unreachable. The walk follows the **equality
-  classes** a node aliases into as well as its value's items, because a reader's
-  answer lives in the class it read into rather than in its own slot; a class is
-  entered once per collect, so the walk is linear in the scope. See
-  [gc-block](gc-block.md).
+  whichever node the parent block reads when no layer did. The read is **shallow**:
+  the root's own slot decides whether the scope is done, so a collected scope
+  releases what its value does not reach without forcing anything. The walk follows
+  the **equality classes** a node aliases into as well as its value's items, because
+  a reader's answer lives in the class it read into rather than in its own slot; a
+  class is entered once per collect, so the walk is linear in the scope. A node
+  **outside** the vacated subtree is walked too — a live node may name one inside it,
+  and a class write hands an outside member the same payload, which then moves into
+  that member's own block — and a pending assert's condition is a second root,
+  because the assert pass drains after the collect. A function value reached from
+  inside is walked with its template; one reached only from outside is not, because a
+  function's home and its nodes must be one unit (an open item, see
+  [gc-block](gc-block.md)).
 - **Tables** (`table(…)` / `t <== k`) are immutable and built once (`build_table`).
   Each entry stores its key's precomputed deep-content hash, the items are sorted
   by that hash, and a read binary-searches and verifies the equal-hash run with

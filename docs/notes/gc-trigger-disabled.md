@@ -1,14 +1,16 @@
-# The read-path collection is disabled
+# The read-path collection was disabled — the ruling and the trace
+
+> **Superseded.** The collection is enabled again with a repaired trigger: the read is
+> shallow and the root's own slot decides, a pending assert's condition is a collect root,
+> and the walk goes on into a node outside the vacated subtree. See
+> [gc-trigger-design](gc-trigger-design.md) for the design and the readings, and
+> [gc-block](gc-block.md) for the shipped contract. This note keeps the ruling and the trace
+> that motivated it.
 
 **The maintainer's ruling.** The engine-side trigger of garbage collection has a defect, so it is off until
 the person who owns the collector repairs it: a scope read no longer compacts its scope away. The collector
 itself — `Module::garbage_collect`, `Module::drop_block`, and the tests that call them directly — is
 untouched; only the automatic call from the read path (`evaluation.rs`'s scope read) is gone.
-
-> The trigger's own research — the in-block undecided count measured and rejected, the shallow read
-> that replaces the deep pass, and the two collector defects that gate any trigger — is
-> [gc-trigger-design](gc-trigger-design.md). This note keeps the ruling and the trace that motivated
-> it.
 
 ## What was measured
 

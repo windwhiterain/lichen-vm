@@ -1,26 +1,23 @@
 # `@gc e` — an expression in a scope of its own, released when it decides
 
-> Status: **current — the scope compiles, but its automatic release is
-> disabled.** `@gc` marks an expression; the checker compiles it into a **child**
-> lowlevel block and declares the node that ends the scope
-> (`Module::mark_scope_root`). The scope's value is `inner`'s and nothing is
-> computed differently. **The release does not happen today**: the maintainer
-> ruled the read path's collection trigger off until the collector's owner
-> repairs it ([gc-trigger-disabled](gc-trigger-disabled.md)), so a marked scope
-> is not compacted automatically and `gc_block::a_gc_block_releases_its_scope` is
-> the known red that names it. The collector itself (`Module::garbage_collect`,
-> `Module::drop_block`, `prune_released_failures`) is untouched and its
-> direct-call tests pass; this note still describes **that** contract, which is
-> what a repaired trigger restores. The `@`-led keyword list is
-> `docs/language-spec.md` §2; the mechanism is
-> [`lowlevel-vm.md`](lowlevel-vm.md) §"Block GC".
+> Status: **current — the scope compiles and releases automatically.** `@gc` marks an
+> expression; the checker compiles it into a **child** lowlevel block and declares the
+> node that ends the scope (`Module::mark_scope_root`). The scope's value is `inner`'s and
+> nothing is computed differently. The release happens at the **read** of that root: the
+> read is shallow, the root's own slot says whether the scope is done, and the collect then
+> keeps what the value reaches. The collector itself is `Module::garbage_collect`,
+> `Module::drop_block` and `prune_released_failures`. The trigger's design, the readings
+> behind it, the two collector defects it had to repair and the one that is still open are
+> [gc-trigger-design](gc-trigger-design.md); the retired read-path collection is
+> [gc-trigger-disabled](gc-trigger-disabled.md).
 >
 > Points at: `crates/lichen-language-lex` (`KwGc`),
 > `crates/lichen-language-parser` (`gc_marked`, `Expr::Gc`),
 > `crates/lichen-highlevel/src/checker/gc.rs` (`check_gc`),
 > `crates/lichen-lowlevel/src/gc.rs` (`garbage_collect`, `class_walk`,
-> `prune_released_failures`), `crates/lichen-lowlevel/src/evaluation.rs`
-> (`evaluate_block`), `crates/lichen-lowlevel/src/function.rs` (`clone_target`).
+> `relocate_class_value`, `prune_released_failures`),
+> `crates/lichen-lowlevel/src/evaluation.rs` (`evaluate_block`, `is_scope_root_read`),
+> `crates/lichen-lowlevel/src/function.rs` (`clone_target`).
 
 ## What it is
 
@@ -42,9 +39,7 @@ marker adds is the block boundary.
 What it buys is **a lifetime**. Every node the marked expression allocates —
 its cells, its array and table payloads, its apply clones — is homed in one
 block with its own bump arena, and the whole of it goes when the expression has
-decided its value **once the trigger is on** (the status line above says it is
-off today; everything below is the contract the trigger restores). The place it
-pays is a scope that runs more than once:
+decided its value. The place it pays is a scope that runs more than once:
 
 ```lichen
 f = n => @gc { a = n + 1; b = a * 2; b }   -- each call gets its own scope
@@ -68,12 +63,21 @@ the tail's value is a scalar, and `Index`'s element read passes the *element's
 own block* as the referer, so no parent-to-scope read ever happens. A scope that
 a layer declared has one node that ends it, and the checker says which.
 
-`evaluate_block` then refuses to collect an **undecided** root. Some reachable
-slot is still empty, so nothing in the scope is proven unreachable and a release
-would take a node a later read names. The mark is put back in that case, so a
-root that decides later still collects; it is cleared on the way in, because the
-deep pass below reads the root again and the mark is what would send it straight
-back.
+`evaluate_block` reads that root **shallowly** — `evaluate_node`, never
+`evaluate_node_deep` — and collects only when the root's own slot holds a real
+value (not the wildcard). The read is the signal, so nothing is forced to find
+out whether the scope is done, and an unread expression never runs because of the
+marker. An undecided root puts the mark back, so a later read retries; the value
+the reader receives is the collect's own relocation, so it never holds a payload
+from the released arena. The deep pass must not answer for such a read out of its
+verdict cache, which is why `evaluate_node_deep_inner` asks
+`is_scope_root_read` first.
+
+The walk keeps a **pending assert's condition** as a second root. The assert pass
+(`check_asserts`) drains after the pass that collects, so a condition released
+here would silently unregister its assert: measured before the fix, a failing
+`@assert` inside a scope made its build pass. See
+[gc-trigger-design](gc-trigger-design.md).
 
 ## What the walk keeps
 
@@ -85,6 +89,14 @@ class it read into rather than in the reader's own slot (`Module::alias_read`
 joins them), so walking values alone would release the very node the reader
 answers from. A class is entered once per collect, so the walk visits each member
 once and stays linear in the scope's size.
+
+**A node outside the vacated subtree is walked too.** A live node may name a node
+inside it, or owe an answer whose operand is inside, and neither is reachable from
+the root — measured: a parent block's array named the scope's own array node,
+which the collect then released, and the next deep frame died on it. Such a node
+keeps its block; only a class member's payload moves into that member's own block,
+because a class write hands every member the same payload and that payload may
+live in the arena this collect releases (`relocate_class_value`).
 
 **The class walk starts at the representative.** The member list is headed by it,
 so entering at a member behind the head reached only the members behind *that* and
@@ -102,6 +114,15 @@ container it reads out of — which is exactly the garbage a scope wants. What
 still has to follow is the operand of a node whose run stamp is zero, because a
 value written by a unification is not that operator's answer and the operator
 still reads the operand for its own.
+
+**A function value reached from inside is walked with its template; one reached
+only from outside is not.** A function's home block and its template's nodes must
+be one unit, and today they can diverge (a per-call closure is homed at the call
+site while its nodes land in the call's fresh scope block), so a surviving
+function can keep a template list naming released nodes. Measured on the example
+corpus: one surviving function named 23 released nodes after a collect. That is an
+open collector item, not a trigger decision; see
+[gc-trigger-design](gc-trigger-design.md) §6.
 
 ## What it actually frees, measured
 
@@ -153,6 +174,15 @@ and the tables are pruned in the build that follows it. A host that reads a
   released when the module that wrote it was checked; the importer materializes
   what survived.
 - **A lambda's body block is not a scope.** `check_lam` opens a parentless
-  block, because a function outlives the expression that built it, so `@gc`
-  inside a body collects per *instantiation* (below) and never the template.
+  block, because a function outlives the expression that built it, so a scope
+  inside a body is collected per *instantiation* (below) while the template's own
+  scope is still undecided at compile time.
+- **A template scope that decides at compile time is released then**, and its
+  calls then have no scope of their own — the maintainer's decision: the per-call
+  release is not promised for a body whose scope a definition-pass read already
+  finished.
 - **An undecided scope is not collected at all**, by the rule above.
+- **A surviving function's template list is not kept when the function is reached
+  only from outside the block.** The walk does not enter an outside function's
+  template nodes (their home and the function's home must be one unit, an open
+  collector item), so such a list can name released nodes.

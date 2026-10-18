@@ -574,17 +574,16 @@ maps every span back to the original file.
   expression, at the `@assert` level, so it takes the whole application rather
   than one atom of it (`@gc f 41`, and `@gc { … }` for the block form — a block
   is one expression).  It computes nothing and changes no type: the scope's
-  value is `e`'s value.  What it would change is `e`'s **lifetime** — `e` is
-  compiled into a block of its own, and once `e` has decided its value the
-  block is released, keeping only what that value still reaches (a block form
-  releases no nodes of its own, so the scope pays on a per-call basis, and a
-  scope inside a function body is one scope **per call**).  **The automatic
-  release is disabled today**, by the maintainer's ruling on the engine-side
-  trigger: a marked scope is not compacted automatically, and
-  `gc_block::a_gc_block_releases_its_scope` is the known red that names it. The
-  collector's own contract stands and is what a repaired trigger restores. See
-  [gc-trigger-disabled](notes/gc-trigger-disabled.md) and
-  [gc-block](notes/gc-block.md).
+  value is `e`'s value.  What it changes is `e`'s **lifetime** — `e` is compiled
+  into a block of its own, and once `e`'s value is decided the block is
+  released, keeping only what that value still reaches (a block form releases no
+  nodes of its own, so the scope pays on a per-call basis).  The read that
+  collects is **shallow**: the parent's read of the scope's root answers what it
+  answers, and nothing is evaluated just to find out whether the scope is done,
+  so a marker never makes an unread expression run.  A scope inside a function
+  body is one scope **per call** while the body's own scope is still undecided at
+  compile time; a body whose scope already decided there is released then, and its
+  calls have no scope of their own.  See [gc-block](notes/gc-block.md).
 - **Every lambda is automatically let-polymorphic.**  Each application
   instantiates the parameter fresh — the lowlevel apply machinery clones the
   parameter per call site — so `(x => x) 5 : Int` and `(x => x) Type : Type`
