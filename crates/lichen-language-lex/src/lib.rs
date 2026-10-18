@@ -74,8 +74,7 @@ pub enum TokenKind {
     KwGc,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
-    /// `@cache` — the binding-retention modifier, at the `@` sigil beside `@loop`:
-    /// a binding whose value is a retained cell
+    /// `@cache` — a retained cell, at the `@` sigil beside `@loop`
     /// (`docs/notes/incremental-update.md` §3).
     KwCache,
     /// The `array` keyword — a keyword-led array type, `array{T, n}`.
