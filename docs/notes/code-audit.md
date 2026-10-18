@@ -53,6 +53,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
 | P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
+| P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | todo — [recursive-fold-typing](recursive-fold-typing.md) has the mechanism, the author's ruling, the measured negative routes and the open fix: `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` answers `raw none: ?a` (re-measured at `dev@064436d6`), and the annotated form answers `3: Int` |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -964,7 +965,28 @@ The predicate's **label** is not named: the sentence is deliberately source-blin
 spelling carries no node, so the same template answers the same words on every clone),
 which keeps the invariant that a spelling is a fact of the annotation.
 
-## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions
+### P1-50 — An un-annotated recursive fold's struct-state read answers `none` `verified`
+
+Re-measured at `dev@064436d6` while auditing the spec's recursion-typing paragraphs;
+the whole record — mechanism, the author's `if`-desugar ruling, the four measured
+negative routes, the handover and the workaround — is in
+[recursive-fold-typing](recursive-fold-typing.md). The row exists because that defect
+was the only measured type-system defect not in this queue, and the queue is the
+thing a slice reads first.
+
+What the spec says, and what holds: an annotated recursive function's result is
+decided (`gcd = (…) : tuple{Int, Int} -> Int` answers `6: Int`), without the
+annotation the function's cells stay open (`raw 6: ?a`), the fold form annotates the
+same way (`… : tuple{Int, S} -> S` answers `3: Int`), a struct-literal base keeps
+working (`7: Int`), `Int : Type` / `string : Type` / `Type : Type` hold, and
+`array{Int, 3} : Type` is refused `expected Type, found TypeArray` — every claim
+measured here holds; the gap is exactly the un-annotated struct-state fold of this
+row. The open fix is an engine change (the owner's call), and the note's test surface
+is the whole regression: the S-state fold must answer `3` once fixed, the
+tuple-of-Ints control must keep answering `7`, and the struct-literal base must keep
+working.
+
+## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
