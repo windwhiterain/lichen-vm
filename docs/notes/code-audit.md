@@ -45,6 +45,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
 | P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | fixed — the structural pass now runs for a positional call once the struct type is decided (gated on the argument list matching the name list); `S(1, "a", 3)` reports `too many fields for the struct type …` and `S(1,)` reports `missing field y …` |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
+| P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | todo — measured `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6, and a `# n` argument requirement is accepted likewise |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -647,6 +648,33 @@ positional instance is unchanged. Suites: `lichen-highlevel` 140/0, `lichen-lang
 271/1 (the `gc_block` red). One test's expectation moved with the behaviour, with the
 owner's permission (`pipeline::a_struct_instance_with_mismatched_fields_is_rejected`'s
 excess case now pins `StructExcessField` and the message).
+
+### P1-44 — A field's requirement or pin is silently unchecked through a parameter `verified`
+
+Found while auditing the spec's field-requirement paragraph. When the struct type
+arrives through a **parameter**, the instantiation's reorder is deferred and resolved
+at the apply by a lookup keyed by name and type; the field's `# n` requirement and
+its `v : T` pin are **not** among the keys, and the attribute/value walk
+(`unify_named_instantiate_elements`) runs only when the callee's type expression is a
+written `struct{…}` (`written_struct_fields` is syntactic). Measured at `8b94e13c`:
+
+```lichen
+S = struct{.a 5 : Int}
+g = c => c(.a 6)
+g S                        -- accepted: `(6,): struct{.a 5 : Int}`, the pin violated
+
+S = struct{.a Int # 4}
+g = c => c(.a 1 # 2)
+g S                        -- accepted: `(1,): struct{.a Int # 4}`, the requirement unmet
+```
+
+A *type* mismatch through the same callee does reach the reorder's lookup
+(`table lookup missed — no entry for this key`, which names no field), and a
+placeholder callee is refused earlier (`the callee of an instantiation must be a
+struct type`). Fix direction: compare the field's slot (its requirement and its pin)
+against the supplying argument where the reorder resolves, where both the field and
+the argument are decided — the same walk the written form already runs, ordered after
+the type key. A regression test belongs with the fix (`D3`).
 
 ## Decisions
 

@@ -836,8 +836,12 @@ maps every span back to the original file.
   `S = struct{.a 5 : Int, .b 7 : Int}`, `S(.b 8, .a 6)` is refused on `.a`.  A
   callee the checker never saw at the source — a parameter, a placeholder, a
   nested instantiation — spells no field requirement, so there is nothing to
-  check there and the argument's own requirement travels with it through the
-  apply.
+  check there — **nothing is compared**: `S = struct{.a 5 : Int}` ; `g = c => c(.a
+  6)` ; `g S` is accepted with `6`, and a `# n` argument requirement is accepted
+  likewise (measured; filed as `P1-44`).  A *type* mismatch through such a callee
+  reaches the reorder's lookup instead (`table lookup missed — no entry for this
+  key`), and a placeholder callee is refused earlier (`the callee of an
+  instantiation must be a struct type`).
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct{…}` definition
   uses: `S = struct{.x Int, .y Type}; S(.y Int, .x 1)`.  The names ride the
