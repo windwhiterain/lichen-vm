@@ -30,3 +30,4 @@
 # Building Programs
 
 - [Modules, Imports, and Packages](ch15-modules.md)
+- [Verifying a Program](ch16-verifying.md)
