@@ -188,6 +188,8 @@ where
     user_asserts: HashSet<NodeId>,
     /// How a failed assert of each registered condition should read.
     assert_spellings: HashMap<NodeId, AssertSpelling>,
+    /// A deferred reorder's supply keys: a miss on one names the field it wanted.
+    supply_keys: HashSet<NodeId>,
     /// The value node of every lambda in the program.
     ///
     /// # Invariant
@@ -354,6 +356,8 @@ where
     /// How a failed assert of each registered condition should read (see
     /// [`AssertSpelling`]).
     pub assert_spellings: HashMap<NodeId, AssertSpelling>,
+    /// A deferred reorder's supply keys: a miss on one names the field it wanted.
+    pub supply_keys: HashSet<NodeId>,
     /// The top-level statements the definition pass found non-terminating.
     pub nonterminating: Vec<NonTerminating>,
     pub ok: bool,
@@ -508,6 +512,7 @@ where
             read_site: None,
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
+            supply_keys: HashSet::new(),
             lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
             force_failed: false,
@@ -679,6 +684,7 @@ where
             node_edges: checker.node_edges,
             user_asserts: checker.user_asserts,
             assert_spellings: checker.assert_spellings,
+            supply_keys: checker.supply_keys,
             nonterminating: checker.nonterminating,
             ok,
             lowerings: OnceLock::new(),

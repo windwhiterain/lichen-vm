@@ -1473,6 +1473,19 @@ fn an_annotation_against_a_struct_type_conflicts() {
 }
 
 #[test]
+fn a_deferred_instantiation_names_the_field_its_arguments_missed() {
+    // The reorder resolves at the apply, and its miss names the field (P1-45).
+    let d = diags("s = struct{.a Int}; g = c => c(.a \"x\"); g s");
+    assert_eq!(d.len(), 1);
+    assert!(
+        d[0].message.contains("no argument supplies field a"),
+        "{}",
+        d[0].message
+    );
+    assert!(d[0].message.contains("Int"), "{}", d[0].message);
+}
+
+#[test]
 fn a_struct_type_application_is_an_instance() {
     // Applied to a positional tuple, the struct type compiles to
     // Instantiate; the element types meet the field types.

@@ -988,6 +988,7 @@ where
                 tag
             };
             self.node_edges.insert(key, self.loc(elem_ids[i], 0));
+            self.supply_keys.insert(key);
             let slot = self.table_get(supply, key);
             order.push(self.index(call_values, slot));
         }
