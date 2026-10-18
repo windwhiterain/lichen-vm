@@ -1,14 +1,15 @@
 # The deferred instantiation: what the reorder checks, and what it cannot
 
-> Status: **proposed — an owner-level design, no code changed by this note.** Three
-> audit items are one missing check: when a struct type reaches an instantiation
-> through a **parameter**, the reorder that places the arguments resolves at the
-> apply, and only the argument's **type** takes part (`P1-45`'s lookup key). The
-> field's **arity** (`P1-46`), its **spelling pin** and its **perspective**
-> (`P1-44`), and the argument **names** against the field names (`P1-47`, fixed on
-> the sentence side) are not compared. This note states the measured behaviour, why
-> the checker cannot check it where it stands, what the engine can and cannot do,
-> and the two designs left. It asks the owner the questions at the end.
+> Status: **superseded — decided by the maintainer's ruling, and both designs are
+> rejected.** The ruling (recorded in
+> [function-normalization](function-normalization.md) §3.7): *"normalize时函数类型检查
+> 就应当确定。旧的依赖lazy的检查方式要被淘汰了。"* An instantiation whose callee
+> struct type is not determined at normalize — `g = c => c(.a 1, .b 2)` — is
+> **refused**; the lazy reorder that resolves at the apply is retired, not extended.
+> So the designs below (§4) are moot, the questions (§5) are answered by the ruling,
+> and the measured matrix (§0–§3) is kept as the reason: every defect this note
+> records exists because a deferred check is absent, not late. The refusal itself is
+> filed as `P1-49` in [code-audit](code-audit.md).
 
 ## 0. The two spellings at a glance
 
@@ -84,49 +85,36 @@ engine-side check can compare **values** (its `key_eq`/`value_eq`, the wildcard
 `LowValue::Any` is known there too), but it cannot apply `declared ⊑ value` or a
 pin's type-level rule without help.
 
-## 4. The two designs left
+## 4. What the ruling decides, and the two designs it removed
 
-**Design A — the engine validates a struct instance crossing an apply.** In
-`apply_parameter_check`, when the parameter's type is a struct kind: walk the
-parameter's type shape (the field slots) and the argument's value array by position.
-Skip a slot whose value element is the wildcard (`@any` — the rule
-`compound-element-slots.md` states). A field whose value element is spelled is a
-**pin**: compare it with the argument's element by content (`key_eq`); a difference is
-a new `UnifyError`-style record whose sentence names the field and the two values —
-the first engine-side diagnostic kind, so the *shape* of this record is the owner's
-call. Arity falls out of the same walk (the array's length against the shape's).
-Attributes need the checker: the engine can *report* "element j differs" only for the
-value elements it is allowed to read, so the perspective half would remain the
-checker's.
+The ruling removes the problem rather than repairing the lazy route: the callee's
+name table must be decided at normalize, and an instantiation that needs it earlier
+is **refused there**. That makes the two designs this note had carried moot:
 
-**Design B — the checker registers a per-call assert that the engine evaluates once
-the reorder resolves.** For each argument, build a condition over the *supplied*
-argument's attribute slot against the field's attribute slot at the reorder's
-resolution (the argument's slot is chosen at run by the reorder's table, so the
-condition's operands are lazy). The attribute comparison itself cannot be a plain
-`Eq`: `Perspective`'s relation is `declared ⊑ value`, so the condition must be a node
-that computes the divisibility test (`Rem` + `Eq` are `TypeOperator`s) or a new
-numeric operator. This is more work than A and still needs a sentence; its advantage
-is that the attribute semantics stay in the checker layer.
+- **Design A (the engine validates a struct instance crossing an apply)** is not
+  needed: no undetermined instance reaches an apply. It would also have asked the
+  engine for a semantic role it has never had (a diagnostic naming a field) and it
+  could not have checked the perspective, which needs `AttrExt`.
+- **Design B (a per-call divisibility assert)** is not needed either: the perspective
+  is checked in the written form, and the spelling that would need the runtime node
+  is refused.
 
-**Recommendation**: A for the pin and the arity (both are pure structural facts the
-engine already has), and the **written form only** for the perspective — i.e. state
-in the spec that a perspective on a deferred instantiation's argument is not checked,
-which is the current behaviour, rather than invent a runtime divisibility grammar.
-If the owner wants the perspective checked too, B is the only route that keeps
-`Perspective`'s meaning in one place.
+The work left is the refusal: the checker must diagnose an instantiation whose
+callee struct type is undetermined at its normalize, and `lazy_named_instantiate`
+(and the lazy reads it builds) must be retired. `P1-49` carries it.
 
-## 5. Questions for the owner
+## 5. What this note asked, and the ruling's answer
 
-1. Does the engine own **structural validation of a struct instance** (Design A), or
-   is that the checker's contract to keep, with the deferred spelling left unchecked?
-2. Is a **new engine-side diagnostic kind** (naming a field and the two values)
-   acceptable? No engine-side diagnostic currently names a field.
-3. If the perspective must be checked (Design B), is a runtime divisibility node
-   acceptable — and does it belong with `Perspective`'s `AttrExt` as a `constraint`?
+1. *Does the engine own structural validation of a struct instance?* — No: the
+   checker refuses the undetermined spelling, so there is no instance to validate.
+2. *Is a new engine-side diagnostic name acceptable?* — Not needed.
+3. *Must the perspective be checked at run time?* — No: the written form checks it
+   ([attributes](attributes.md)'s `declared ⊑ value`), and the undetermined spelling
+   is refused instead of checked lazily.
 
 ## 6. What this note changes
 
-Nothing: it records the design. The three items keep their own sections in
-[code-audit](code-audit.md) (`P1-44`, `P1-46`, `P1-47`) and point here for the
-shared route; `P1-45` and `P1-47`'s sentence side are fixed.
+Nothing in code; it records the design and now the ruling. The three items keep their
+own sections in [code-audit](code-audit.md): `P1-44` and `P1-46` are subsumed by
+`P1-49` (the refusal removes the silent acceptances), `P1-45` and `P1-47`'s sentence
+side are fixed, and the ruling itself is `P1-49`.

@@ -834,13 +834,13 @@ maps every span back to the original file.
   this reconciliation is the whole of the check.  A **named** argument is checked
   against the field it supplies, not against the position it was written at: in
   `S = struct{.a 5 : Int, .b 7 : Int}`, `S(.b 8, .a 6)` is refused on `.a`.  A
-  callee the checker never saw at the source — a parameter, a placeholder, a
-  nested instantiation — spells no field requirement, so there is nothing to
-  check there — **nothing is compared**: `S = struct{.a 5 : Int}` ; `g = c => c(.a
-  6)` ; `g S` is accepted with `6`, and a `# n` argument requirement is accepted
-  likewise (measured; filed as `P1-44`).  A *type* mismatch through such a callee
-  reaches the reorder's lookup instead (`table lookup missed — no entry for this
-  key`), and a placeholder callee is refused earlier (`the callee of an
+  callee the checker never saw at the source spells no field requirement, and an
+  instantiation whose callee is not determined at normalize is **refused** (next
+  bullet, [function-normalization](notes/function-normalization.md) §3.7) — so this
+  is not a silent gap.  The tree still accepts the undetermined form with a lazy
+  reorder and compares nothing there: `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ;
+  `g S` is accepted with `6` (measured; `P1-44`, retired with the reorder by
+  `P1-49`).  A placeholder callee is refused earlier (`the callee of an
   instantiation must be a struct type`).
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct{…}` definition
@@ -854,9 +854,7 @@ maps every span back to the original file.
   once the struct type is known — measured: `S(1, "a", 3)` over a two-field `S`
   reports `too many fields for the struct type …`, and `S(1,)` reports
   `missing field y …`), each pointing at the offending argument: an unknown field
-  (`StructUnknownField`; through a *parameter* the supplied names are named by the
-  miss's sentence — `no argument is named a — the arguments are named z` — rather than
-  by the written form's diagnostic), a duplicate
+  (`StructUnknownField`), a duplicate
   (`StructDuplicateField`), a field left unsupplied (`StructMissingField` —
   not reported when another argument's name is unknown, because that name
   explains the gap; one typo yields one diagnostic),
@@ -868,21 +866,17 @@ maps every span back to the original file.
   usual, and a mismatch names the two types — `S = struct{.a Int, .b string}` ;
   `S("x", 1)` is `expected Int, found string` (one diagnostic, the first field at
   fault).
-  When the struct type is **not statically known** — an undecided callee (a
-  parameter) or a placeholder — nothing is refused: the instantiation is
-  unresolved too, and the reorder is a **lazy read** that resolves at the
-  unification binding the callee's type.  `f = s => s(.y Int, .x 1); f (S)`
-  and `f (_(.x 1, .y 2))` reorder at the apply (with `f = x: S => x` and
-  `S = struct{.x Int, .y Int}`), the same order the positional form already
-  defers in.  The supplying argument is found by a lookup keyed by the
-  field's own name — or, for a positional argument, by its rank among the
-  positional ones — and, when every argument's type is decided, by that type
-  too, so a field whose declared type no supplying argument matches is a
-  lookup miss (`TableMiss`) at the moment the type resolves, whose sentence names the
-  field and the type the struct states, and the arity is
-  the field-list unify's, as for a positional instantiation.  A **duplicate**
-  name is refused at check time: one name supplying two positions is a
-  structural mismatch whatever the field list is.
+  When the struct type is **not determined at normalize** — an undecided callee (a
+  parameter) or a placeholder — the instantiation is **refused**: its fields cannot
+  be checked there, and a check the checker can only perform at the apply is not a
+  check ([function-normalization](notes/function-normalization.md) §3.7).  `f = c => c(.y
+  Int, .x 1)` is a diagnostic, and so is `f (_(.x 1, .y 2))`; a spelling that works
+  names the struct type where the instantiation is written, or binds it to a name the
+  checker can resolve.  The tree still accepts the undetermined form through a **lazy
+  reorder resolved at the apply** — a measured defect, `P1-49` — and that route is
+  being retired: it silently accepts a short value and an unchecked pin and
+  perspective (`P1-46`, `P1-44`).  A **duplicate** name is refused at check time: one
+  name supplying two positions is a structural mismatch whatever the field list is.
 - **Dependent array types (pinning).**  The length of `array{T, n}` is an arbitrary
   expression, so `array{Int, n}` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an

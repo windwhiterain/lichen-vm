@@ -89,6 +89,19 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    birth normalize, and an apply's runtime unify, nothing creates a unification
    dynamically. "Normalize the type term when it is cloned" would be such a fourth
    site: it needs a ruling, not an implementation detail.
+7. **The check is determined at normalize, not at the apply.** The maintainer's
+   ruling: *"normalize时函数类型检查就应当确定。旧的依赖lazy的检查方式要被淘汰了。"*
+   The example that settled it — `g = c => c(.a 1, .b 2)` — passes today only because
+   the checker builds a **lazy** reorder and resolves it at the apply; `c`'s **name
+   table is undetermined during the normalize**, so the fields cannot be checked
+   there. Under this ruling that is not a check the checker may defer: an
+   instantiation whose callee struct type (hence its name table, field count, field
+   types and attributes) is not determined at normalize is **refused**, and the
+   lazy-resolution route is retired, not extended. Ruling 1 says the types are
+   determined at normalize; this ruling says the *check* is, and a check that would
+   need the apply is a construct the checker must not accept. The measured defects
+   the lazy route carries (a silently short value, an unchecked pin and perspective,
+   `P1-46`/`P1-44`) are the reason: a deferred check is absent, not late.
 
 ## 4. What this corrected
 

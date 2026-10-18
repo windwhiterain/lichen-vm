@@ -46,11 +46,12 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | fixed — the structural pass now runs for a positional call once the struct type is decided (gated on the argument list matching the name list); `S(1, "a", 3)` reports `too many fields for the struct type …` and `S(1,)` reports `missing field y …` |
 | P4-12 | low | highlevel, language | A struct instantiation's field-type mismatch renders the two field lists as raw shapes | fixed — a per-field guard runs before the list unify with the field's type read forced first: `S("x", 1)` is `expected Int, found string`, `struct{.f Type, .g Type}(1, 2)` `expected Type, found Int`, one diagnostic at the first field at fault |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
-| P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | todo — measured `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6, and a `# n` argument requirement is accepted likewise |
+| P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | subsumed:P1-49 — the ruling refuses the undetermined callee, so no instance is built there; measured: `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6 |
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
-| P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | todo — measured `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, and a later `.b` read panics the run with `index 1 out of bounds (array length 1)` |
+| P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | subsumed:P1-49 — the ruling refuses the undetermined callee; measured: `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, a later `.b` read panics with `index 1 out of bounds (array length 1)` |
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | fixed — the miss now carries the argument names the checker recorded, so `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument is named a — the arguments are named z` |
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
+| P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | todo — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7): *"normalize时函数类型检查就应当确定。旧的依赖lazy的检查方式要被淘汰了。"* `g = c => c(.a 1, .b 2)` must be **refused**, because `c`'s name table is undetermined at the normalize; the lazy reorder (`lazy_named_instantiate`) is retired, and `P1-44`/`P1-46` are subsumed |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -856,7 +857,46 @@ letter), and the instantiation cases are unchanged. `D3`'s smallest test is
 Suites: lowlevel 146/13 (the GC ruling's baseline), language 273/1 (the `gc_block`
 red), highlevel 140/0, compute 229/2/2 (the two known reds).
 
-## Decisions## Decisions## Decisions## Decisions
+### P1-49 — An instantiation through an undetermined callee is accepted with a lazy reorder `verified`
+
+The maintainer's ruling, recorded in
+[function-normalization](function-normalization.md) §3.7: *"normalize时函数类型检查
+就应当确定。旧的依赖lazy的检查方式要被淘汰了。"* The example that settled it:
+
+```lichen
+g = c => c(.a 1, .b 2)   -- must be REFUSED, not accepted
+```
+
+`c` is a parameter, so its **name table is undetermined during the normalize**; the
+checker cannot check the fields there. Today it does not try: it builds a **lazy
+reorder** (`lazy_named_instantiate`) whose lookup keys are the field names and the
+argument's type, and resolves the whole thing at the apply. The measured cost is
+[deferred-instantiation-checks](deferred-instantiation-checks.md) §0: the arity, the
+pin and the perspective are never compared, so an under-supplied call is accepted with
+a short value (`P1-46`), a pin-violating call is accepted (`P1-44`), and the type
+mismatch surfaces as a lookup miss (`P1-45`).
+
+What the ruling changes: an instantiation whose callee struct type is not determined
+at normalize is **refused** where it stands (the callee is force-evaluated first, so
+"undetermined" means genuinely so — a `_` hole or a parameter; a placeholder callee is
+already refused as `the callee of an instantiation must be a struct type`). The
+lazy-reorder route and the reads it builds are **retired**, not extended: the refusal
+removes `P1-44`'s and `P1-46`'s silent acceptances, and `P1-45`'s and `P1-47`'s
+sentences become unreachable from source (kept until the machinery is deleted, then
+removed with it).
+
+Fix direction: in `check_instantiate`'s `!concrete` branch, replace the kind pin and
+the lazy reorder with a diagnostic at the callee (the same place the placeholder
+refusal is recorded); delete `lazy_named_instantiate` and its keys, with the
+`Checker::supply_keys`/`supply_argument_names` and `Diag::supplied_names` plumbing
+(`P1-47`) that only the lazy miss used. The diagnostic's sentence is the one design
+question left — it should say the callee's struct type is not determined here and name
+the spelling that would be (`S = struct{…}` at the instantiation, or a name the checker
+can resolve). A regression test belongs with the fix (`D3`): `g = c => c(.a 1)` must be
+refused, and every test or example that relies on the lazy form must be rewritten to
+name its struct type.
+
+## Decisions## Decisions## Decisions## Decisions## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
