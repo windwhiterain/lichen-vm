@@ -520,10 +520,10 @@ maps every span back to the original file.
   `let name = expr` is the *restrictive* form: the
   value compiles before the name enters scope, so the name is visible only to
   later statements (`let a = a` resolves `a` to the outer binding — the
-  sequential, non-recursive case).  `cache name = expr` marks the binding as a
+  sequential, non-recursive case).  `@cache name = expr` marks the binding as a
   **retained cell**: its value is meant to survive a rebuild, identified by the
   binding's occurrence path from the program root.  The mark is independent of
-  `let` and the two may appear together (`cache let a = …`); it is accepted in
+  `let` and the two may appear together (`@cache let a = …`); it is accepted in
   every scope and emits no diagnostic.  The retention mechanism is complete and
   wired into the incremental session (`BufferSession` lowers a clean cell to a
   static read of its frozen value and drops only the cells an edit reached), and

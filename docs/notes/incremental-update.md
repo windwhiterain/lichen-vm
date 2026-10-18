@@ -206,7 +206,7 @@ of §8 is the item that has to be settled before that changes.
 
 The boundary is the *lambda*, not nesting: a mark in a **block** is solved (it has no
 free variable) and is retained at its nested path, exactly like a top-level one —
-`cache a = { cache i = 1 + 2; i + 4 }` retains two cells and reads both back on an edit
+`@cache a = { @cache i = 1 + 2; i + 4 }` retains two cells and reads both back on an edit
 outside them. A mark in a **lambda** body is a template, so its pair is not solved and
 nothing is retained.
 
@@ -411,7 +411,7 @@ After a recomputation the new value could be compared with the retained one, and
 means the cell keeps its identity *and* its consumers stay clean. That is a refinement,
 not a correction: propagation dirties more than necessary and never less, so its absence
 costs work, never correctness. It would pay where an edit changes a marked binding's
-*bytes* without changing its *value* (`cache a = 1 + 2` → `1 + 1 + 2`), which the
+*bytes* without changing its *value* (`@cache a = 1 + 2` → `1 + 1 + 2`), which the
 byte-position seed cannot see through.
 
 **It is not a local addition to `dirty.rs`.** Today the dirty set is computed *before* the
@@ -548,7 +548,7 @@ while still holding a report dangles.**
 
 When does one artifact reference another? Only when a cell's value *is* a static payload
 shared from another cell's arena — an array, a table, a function, an ext handle. A scalar
-is just a value: `cache b = a + 4` copies nothing and holds no ref, so the whole chain is
+is just a value: `@cache b = a + 4` copies nothing and holds no ref, so the whole chain is
 free to go. The sharing needs two builds: cells are frozen *after* a build, so within one
 build a later binding never reads an earlier one's cell — it compiles the body and gets
 its own copy. A *later* build, with `b` recompiled while `a`'s cell is clean, is what
