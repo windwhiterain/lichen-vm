@@ -38,6 +38,21 @@ pub enum RunError {
     NoDevice { detail: String },
     /// The device cannot represent the fragment's declared integer width.
     MissingInt64 { device: String },
+    /// The device cannot add to a 64-bit integer atomically, and the launch set asks it to.
+    ///
+    /// # Invariant
+    /// **Refused rather than emulated**: a compare-exchange loop around a plain load and store
+    /// would answer a contested scatter with an update it may lose, so a device without the
+    /// primitive runs nothing rather than something else.
+    MissingAtomicInt64 { device: String },
+    /// The device cannot add to a float atomically, and the launch set asks it to.
+    ///
+    /// # Invariant
+    /// The same ruling as [`Self::MissingAtomicInt64`], and it names the extension as well as
+    /// the feature because a float atomic has no core spelling: the feature bit belongs to
+    /// `VK_EXT_shader_atomic_float` and the opcode to `SPV_EXT_shader_atomic_float_add`, and a
+    /// device may offer one spelling without the other.
+    MissingAtomicFloatAdd { device: String },
     /// The fragment is outside what this backend emits.
     Emit(SpirvRefusal),
     /// A run over no indices: Vulkan has no zero-sized allocation to give it.
@@ -132,6 +147,25 @@ impl fmt::Display for RunError {
                  are 64-bit integers. Narrowing the values would change what the program \
                  computes, so this is refused rather than converted. A fragment whose values are \
                  floats does not need the feature: its integers are 32-bit indices."
+            ),
+            RunError::MissingAtomicInt64 { device } => write!(
+                f,
+                "the launch set adds atomically to a 64-bit integer buffer and the device \
+                 {device:?} does not offer `shaderBufferInt64Atomics`. The add is a hardware \
+                 read-modify-write or it is nothing: a compare-exchange loop around a load and \
+                 a store would answer a contested scatter with an update it may lose, so this \
+                 is refused rather than emulated. Run this fragment on \"cpu\", or on a device \
+                 that reports the feature."
+            ),
+            RunError::MissingAtomicFloatAdd { device } => write!(
+                f,
+                "the launch set adds atomically to a float buffer and the device {device:?} does \
+                 not offer `shaderBufferFloat32Atomics` through `VK_EXT_shader_atomic_float` \
+                 (the instruction itself is the SPIR-V extension \
+                 `SPV_EXT_shader_atomic_float_add`). A float atomic add has no core spelling, and \
+                 a compare-exchange loop around a load and a store would answer a contested \
+                 scatter with an update it may lose, so this is refused rather than emulated. Run \
+                 this fragment on \"cpu\", or on a device that reports the feature."
             ),
             RunError::EmptyRun => write!(
                 f,
@@ -363,10 +397,7 @@ fn subgroup_width(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
 ) -> Option<u32> {
-    let loader = unsafe { entry.try_enumerate_instance_version() }
-        .ok()
-        .flatten()?;
-    if loader < vk::API_VERSION_1_1 {
+    if !loader_has_features2(entry) {
         return None;
     }
     let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
@@ -375,6 +406,93 @@ fn subgroup_width(
     unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
     Some(subgroup.subgroup_size)
 }
+
+/// The two hardware atomic adds this target emits, as the device's own answers.
+///
+/// # Invariant
+/// **Each fact is the device's feature bit and not its extension's presence alone**: the
+/// `VK_EXT_shader_atomic_float` extension can be listed by a device that answers
+/// `shaderBufferFloat32Atomics` false, and the SPIR-V opcode is then declared by a module the
+/// device would refuse at pipeline creation. An integer atomic is asked for at 64 bits, so it is
+/// only meaningful beside `shaderInt64` — the capability `Int64Atomics` builds on.
+fn atomic_facts(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    shader_int64: bool,
+) -> (bool, bool) {
+    if !loader_has_features2(entry) {
+        return (false, false);
+    }
+    let mut int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default();
+    let mut float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default()
+        .push_next(&mut int64)
+        .push_next(&mut float);
+    // SAFETY: both structs are chained into `features` and outlive the call.
+    unsafe { instance.get_physical_device_features2(physical, &mut features) };
+    let int64 = shader_int64 && int64.shader_buffer_int64_atomics != 0;
+    // **Both halves of the float fact**: the feature bit says the device performs the add, and
+    // the extension list says it accepts the struct that enables it.
+    let float = float.shader_buffer_float32_atomics != 0
+        && has_extension(instance, physical, ATOMIC_FLOAT_EXTENSION);
+    (int64, float)
+}
+
+/// Whether the loader exports the 1.1 features query.
+///
+/// # Invariant
+/// **The loader decides, not the driver**: a Vulkan 1.1 loader exports the 1.1 points whatever
+/// instance version was asked for, and this crate asks for none, so a 1.0 loader leaves the fact
+/// unreachable. An unreadable fact is `false` — the run is then refused by name rather than
+/// dispatched against a guess.
+fn loader_has_features2(entry: &ash::Entry) -> bool {
+    unsafe { entry.try_enumerate_instance_version() }
+        .ok()
+        .flatten()
+        .is_some_and(|loader| loader >= vk::API_VERSION_1_1)
+}
+
+/// Whether the device lists `name` among its extensions.
+///
+/// # Invariant
+/// **One query per fact, and a failure is `false`**: an extension list this loader cannot answer
+/// is a device whose features cannot be told from the ones it advertises, so the atomic is refused
+/// by name instead of requested and failing at pipeline creation.
+fn has_extension(instance: &ash::Instance, physical: vk::PhysicalDevice, name: &[u8]) -> bool {
+    let Ok(properties) = (unsafe { instance.enumerate_device_extension_properties(physical) })
+    else {
+        return false;
+    };
+    properties.iter().any(|property| {
+        property
+            .extension_name_as_c_str()
+            .is_ok_and(|listed| listed.to_bytes().eq_ignore_ascii_case(name))
+    })
+}
+
+/// One physical device as device selection sees it.
+///
+/// # Invariant
+/// **Every feature fact a module can ask for is here**, so selection compares whole candidates
+/// rather than a tuple the next fact would widen: a device is chosen on discrete-then-`shaderInt64`,
+/// and the atomic facts ride along because a chosen device has to answer for all of them.
+struct Candidate {
+    physical: vk::PhysicalDevice,
+    properties: vk::PhysicalDeviceProperties,
+    family: u32,
+    shader_int64: bool,
+    atomic_int64: bool,
+    atomic_float_add: bool,
+}
+
+/// `VK_EXT_shader_atomic_float`, the device extension that owns `shaderBufferFloat32Atomics`.
+///
+/// # Invariant
+/// **Both halves of the fact are asked for**: the SPIR-V opcode is registered by
+/// `SPV_EXT_shader_atomic_float_add` and the device feature that permits it is spelled by this
+/// extension, so a module needs the device to offer this as well as the bit itself.
+const ATOMIC_FLOAT_EXTENSION: &[u8] = b"VK_EXT_shader_atomic_float";
 
 /// A device, its compute queue, and the pipelines built on it.
 ///
@@ -397,6 +515,21 @@ pub struct GpuContext {
     /// fragment needs the feature, a float one's integers are 32-bit indices. So it is recorded
     /// here and checked where a fragment is compiled, rather than rejecting the device.
     shader_int64: bool,
+    /// Whether the device offers `shaderBufferInt64Atomics`, and this backend enables it.
+    ///
+    /// # Invariant
+    /// **A property of the launch set decides whether it matters, not of the device**: a module
+    /// that emits `OpAtomicIAdd` needs it, a module that emits no atomic does not. So it is
+    /// recorded and enabled here, and checked where a fragment is compiled — never a reason to
+    /// reject the device.
+    atomic_int64: bool,
+    /// Whether the device offers `shaderBufferFloat32Atomics` and this backend enables it.
+    ///
+    /// # Invariant
+    /// The same shape as [`Self::atomic_int64`], and separately recorded because the two are
+    /// separately absent: a device with 64-bit integer atomics and none over a float is common,
+    /// and a float run must not be refused for a primitive the integer one did not ask for.
+    atomic_float_add: bool,
     /// The most push-constant bytes this device offers.
     ///
     /// # Invariant
@@ -593,8 +726,7 @@ impl GpuContext {
             });
         }
 
-        let mut chosen: Option<(vk::PhysicalDevice, vk::PhysicalDeviceProperties, u32, bool)> =
-            None;
+        let mut chosen: Option<Candidate> = None;
         let seen = devices.len();
         for physical in devices {
             let properties = unsafe { instance.get_physical_device_properties(physical) };
@@ -610,30 +742,47 @@ impl GpuContext {
             else {
                 continue;
             };
+            let (atomic_int64, atomic_float_add) =
+                atomic_facts(&entry, &instance, physical, supports_int64);
             let discrete = properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
             let better = match &chosen {
                 None => true,
-                Some((_, current, _, current_int64)) => {
+                Some(current) => {
                     let current_discrete =
-                        current.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
+                        current.properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
                     match (discrete, current_discrete) {
                         // A discrete device wins outright; among equals the lowest index.
                         (true, false) => true,
                         (false, true) => false,
-                        _ => supports_int64 && !current_int64,
+                        _ => supports_int64 && !current.shader_int64,
                     }
                 }
             };
             if better {
-                chosen = Some((physical, properties, family as u32, supports_int64));
+                chosen = Some(Candidate {
+                    physical,
+                    properties,
+                    family: family as u32,
+                    shader_int64: supports_int64,
+                    atomic_int64,
+                    atomic_float_add,
+                });
             }
         }
 
-        let Some((physical, properties, family, shader_int64)) = chosen else {
+        let Some(candidate) = chosen else {
             return Err(RunError::NoDevice {
                 detail: format!("none of the {seen} device(s) offers a compute queue"),
             });
         };
+        let Candidate {
+            physical,
+            properties,
+            family,
+            shader_int64,
+            atomic_int64,
+            atomic_float_add,
+        } = candidate;
         let name = device_name(&properties);
         let push_constant_bytes = properties.limits.max_push_constants_size;
         let facts = device_facts(&entry, &instance, physical, &properties, shader_int64);
@@ -647,12 +796,31 @@ impl GpuContext {
             p_queue_priorities: priorities.as_ptr(),
             ..Default::default()
         };
+        // **The atomics are enabled, not merely recorded**: a module declaring `Int64Atomics` or
+        // `AtomicFloat32AddEXT` is only legal on a device whose corresponding feature was enabled
+        // at creation, and a module that does neither pays nothing for asking.
+        let mut atomic_int64_features = vk::PhysicalDeviceShaderAtomicInt64Features::default()
+            .shader_buffer_int64_atomics(atomic_int64);
+        let mut atomic_float_features = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
+            .shader_buffer_float32_atomics(atomic_float_add)
+            .shader_buffer_float32_atomic_add(atomic_float_add);
+        // `shaderBufferInt64Atomics` builds on `shaderInt64`, and enabling one without the other
+        // is what the spec forbids — so the type feature is enabled beside it, which is also what
+        // an integer module's `Int64` capability has always needed here.
+        let enabled = vk::PhysicalDeviceFeatures::default().shader_int64(shader_int64);
+        // The queue infos outlive the create-info too, for the same reason the priorities do.
+        let queue_create_infos = [priority];
+        let mut create = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_create_infos)
+            .enabled_features(&enabled);
+        if atomic_int64 {
+            create = create.push_next(&mut atomic_int64_features);
+        }
+        if atomic_float_add {
+            create = create.push_next(&mut atomic_float_features);
+        }
         let device = check("device creation", unsafe {
-            instance.create_device(
-                physical,
-                &vk::DeviceCreateInfo::default().queue_create_infos(&[priority]),
-                None,
-            )
+            instance.create_device(physical, &create, None)
         })?;
         let queue = unsafe { device.get_device_queue(family, 0) };
 
@@ -682,6 +850,8 @@ impl GpuContext {
             physical,
             name,
             shader_int64,
+            atomic_int64,
+            atomic_float_add,
             push_constant_bytes,
             facts,
             pipelines: Mutex::new(HashMap::new()),
@@ -1967,6 +2137,28 @@ impl GpuContext {
             return Err(RunError::MissingInt64 {
                 device: self.name.clone(),
             });
+        }
+        // **The same gate, one query per primitive**: an atomic add is emitted as a hardware
+        // read-modify-write, so a device without the feature runs nothing rather than something
+        // that emulates one. Each fact is asked for by its own class, and only by the class the
+        // set actually uses.
+        for class in spirv::atomic_classes(launch) {
+            match class {
+                // A `BFloat16` atomic falls through to the emitter, which refuses it by name: it
+                // has no primitive to ask a device about at all, so there is no feature here to
+                // report it as missing.
+                ScalarClass::Int if !self.atomic_int64 => {
+                    return Err(RunError::MissingAtomicInt64 {
+                        device: self.name.clone(),
+                    });
+                }
+                ScalarClass::Float if !self.atomic_float_add => {
+                    return Err(RunError::MissingAtomicFloatAdd {
+                        device: self.name.clone(),
+                    });
+                }
+                _ => {}
+            }
         }
         let key = (
             launch
