@@ -204,10 +204,15 @@ fn states_the_class(fragment: &mut KernelFragment, class: ScalarClass) {
     if !class.is_real() {
         return;
     }
-    if let Some(held) = fragment.input_classes.first_mut()
-        && held.is_real()
-    {
-        *held = class;
+    for held in fragment.input_classes.iter_mut() {
+        if held.is_real() {
+            *held = class;
+        }
+    }
+    for held in fragment.output_classes.iter_mut() {
+        if held.is_real() {
+            *held = class;
+        }
     }
 }
 
