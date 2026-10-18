@@ -554,6 +554,14 @@ impl<P: Program> Module<P> {
             Dyn(node) => node,
             AnyNodeId::Static(_) => unreachable!(),
         };
+        // RESEARCH: a released node reached by a descent names itself instead of panicking.
+        if std::env::var_os("LICHEN_GC_DEBUG").is_some() && !self.nodes.contains_key(node) {
+            eprintln!(
+                "DEEP DEAD NODE {node:?} visiting-frame depth={}",
+                self.deep_depth
+            );
+            return None;
+        }
         // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
         // again (late-writes-map.md §11).
         if let Some(deep) = self.nodes[node].evaluated_deep
@@ -695,18 +703,61 @@ impl<P: Program> Module<P> {
         // mark is what would send it straight back here.
         let block = self.nodes[root].block;
         self.blocks[block].scope_root = None;
-        let value = self.evaluate_node_deep(root, None);
+        // RESEARCH: the trigger under measurement. See docs/notes/gc-trigger-design.md.
+        let mode = std::env::var("LICHEN_GC_TRIGGER").unwrap_or_default();
+        let value = if mode == "shallow" {
+            self.evaluate_node(Dyn(root), None)
+        } else {
+            self.evaluate_node_deep(root, None)
+        };
+        let decided = if mode == "shallow" {
+            self.nodes[root]
+                .value
+                .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)))
+        } else {
+            self.nodes[root]
+                .evaluated_deep
+                .is_some_and(|deep| !deep.undecided)
+        };
         // An undecided root has an open slot, so nothing in the scope is proven
         // unreachable; a later read may decide it.
-        let decided = self.nodes[root]
-            .evaluated_deep
-            .is_some_and(|deep| !deep.undecided);
-        if !decided {
+        if !decided || mode.is_empty() {
             self.blocks[block].scope_root = Some(root);
             return value;
         }
-        // Off while its trigger is under repair. See docs/notes/gc-trigger-disabled.md.
-        let _ = root;
-        value
+        if std::env::var_os("LICHEN_GC_DEBUG").is_some() {
+            let named: Vec<(NodeId, crate::AnyNodeId)> = self
+                .asserts
+                .iter()
+                .filter(|entry| self.nodes.contains_key(entry.condition))
+                .filter(|entry| self.nodes[entry.condition].block == block)
+                .map(|entry| (entry.condition, entry.template))
+                .collect();
+            let snapshot: Vec<(NodeId, bool, bool)> = self.blocks[block]
+                .nodes
+                .iter()
+                .map(|&node| {
+                    (
+                        node,
+                        self.nodes[node].visiting,
+                        self.nodes[node].value.is_some(),
+                    )
+                })
+                .collect();
+            eprintln!(
+                "GC DEBUG mode={mode} collect block={block:?} root={root:?} asserts-in-block={named:?} blocks={} nodes={}",
+                self.blocks.len(),
+                self.nodes.len()
+            );
+            let value = self.garbage_collect(root).or(value);
+            let released: Vec<(NodeId, bool, bool)> = snapshot
+                .iter()
+                .copied()
+                .filter(|(node, _, _)| !self.nodes.contains_key(*node))
+                .collect();
+            eprintln!("GC DEBUG released (node, visiting, has_value): {released:?}");
+            return value;
+        }
+        self.garbage_collect(root).or(value)
     }
 }

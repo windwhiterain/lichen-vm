@@ -5,6 +5,11 @@ the person who owns the collector repairs it: a scope read no longer compacts it
 itself — `Module::garbage_collect`, `Module::drop_block`, and the tests that call them directly — is
 untouched; only the automatic call from the read path (`evaluation.rs`'s scope read) is gone.
 
+> The trigger's own research — the in-block undecided count measured and rejected, the shallow read
+> that replaces the deep pass, and the two collector defects that gate any trigger — is
+> [gc-trigger-design](gc-trigger-design.md). This note keeps the ruling and the trace that motivated
+> it.
+
 ## What was measured
 
 `crates/lichen-compute`'s `examples::every_example_runs_and_prints_what_it_declares` panicked with

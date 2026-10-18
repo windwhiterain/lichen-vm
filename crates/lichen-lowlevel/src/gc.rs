@@ -7,6 +7,38 @@ use crate::{
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
+/// RESEARCH: one line naming a value for the collect's debug trace.
+fn describe_value<P: Program>(value: Option<P::Value>) -> String {
+    match value.and_then(|value| value.as_enum()) {
+        Some(LowValue::Array(array)) => {
+            // SAFETY: the payload belongs to a live node of this module.
+            let items: Vec<String> = unsafe { array.items() }
+                .iter()
+                .map(|item| {
+                    format!(
+                        "{:?}{}",
+                        item.node.dynamic(),
+                        if item.shallow { "'" } else { "" }
+                    )
+                })
+                .collect();
+            format!("array{}", items.join(","))
+        }
+        Some(LowValue::Table(table)) => {
+            // SAFETY: the slice is built from the handle, and only its length is read.
+            format!("table[{}]", unsafe { table.items() }.len())
+        }
+        Some(LowValue::USize(number)) => format!("usize({number})"),
+        Some(LowValue::Float(number)) => format!("float({number})"),
+        Some(LowValue::Str(_)) => "string".to_string(),
+        Some(LowValue::None) => "unit".to_string(),
+        Some(LowValue::Error) => "error".to_string(),
+        Some(LowValue::Any) => "any".to_string(),
+        Some(LowValue::Function(_)) => "function".to_string(),
+        None => "none".to_string(),
+    }
+}
+
 impl<P: Program> Module<P> {
     /// Whether `node` still names a live node; a static ref is in the frozen
     /// module's arena, which no block owns.
@@ -33,8 +65,111 @@ impl<P: Program> Module<P> {
             return self.nodes[block_root].value; // root block: nothing to move or release
         };
         self.gc_classes.clear();
+        // RESEARCH: what the collect released and who still references it.
+        let debug = std::env::var_os("LICHEN_GC_DEBUG").is_some();
+        let before: Vec<NodeId> = if debug {
+            self.blocks[source].nodes.clone()
+        } else {
+            Vec::new()
+        };
+        // RESEARCH: what each node of the block is, before the walk moves or releases it.
+        let described: Vec<(NodeId, String)> = if debug {
+            before
+                .iter()
+                .map(|&node| {
+                    let entry = &self.nodes[node];
+                    let value = describe_value::<P>(entry.value);
+                    let operation = entry.operation.map(|operation| format!("{:?}", operation));
+                    (
+                        node,
+                        format!(
+                            "value={value} operation={operation:?} visiting={} block={:?}",
+                            entry.visiting, entry.block
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let value = self.garbage_collect_node(block_root, source, target);
+        // A pending assert's condition is a root: the assert pass drains after this collect.
+        let pending: Vec<NodeId> = self.asserts.iter().map(|entry| entry.condition).collect();
+        for condition in pending {
+            if self
+                .nodes
+                .get(condition)
+                .is_some_and(|node| self.descends_from(node.block, source))
+            {
+                self.garbage_collect_node(condition, source, target);
+            }
+        }
         self.drop_block(source);
+        if debug {
+            let released: Vec<NodeId> = before
+                .into_iter()
+                .filter(|&node| !self.nodes.contains_key(node))
+                .collect();
+            for node in released {
+                let description = described
+                    .iter()
+                    .find(|(id, _)| *id == node)
+                    .map(|(_, text)| text.clone())
+                    .unwrap_or_default();
+                let mut referrers = Vec::new();
+                for (source, _) in self.nodes.iter() {
+                    let mut names = Vec::new();
+                    if let Some(operand) = self.nodes[source]
+                        .operation
+                        .and_then(|operation| operation.operand)
+                        && operand == node
+                    {
+                        names.push("operand");
+                    }
+                    if let Some(value) = self.nodes[source].value {
+                        match value.as_enum() {
+                            Some(LowValue::Array(array)) => {
+                                // SAFETY: a live payload of this module.
+                                if unsafe { array.items() }
+                                    .iter()
+                                    .any(|item| item.node.dynamic() == Some(node))
+                                {
+                                    names.push("array item");
+                                }
+                            }
+                            Some(LowValue::Table(table)) => {
+                                // SAFETY: a live payload of this module.
+                                if unsafe { table.items() }.iter().any(|item| {
+                                    item.key.dynamic() == Some(node)
+                                        || item.value.dynamic() == Some(node)
+                                }) {
+                                    names.push("table entry");
+                                }
+                            }
+                            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                                if self
+                                    .functions
+                                    .get(function)
+                                    .is_some_and(|function| function.nodes.contains(&node))
+                                {
+                                    names.push("function node");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !names.is_empty() {
+                        referrers.push((
+                            source,
+                            self.nodes[source].block,
+                            describe_value::<P>(self.nodes[source].value),
+                            names,
+                        ));
+                    }
+                }
+                eprintln!("GC DEBUG released {node:?} [{description}] referenced by {referrers:?}");
+            }
+        }
         value
     }
 
