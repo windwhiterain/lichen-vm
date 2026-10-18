@@ -94,3 +94,151 @@ pub fn embedding_of(token: f32) -> [f32; COLUMNS] {
     word.copy_from_slice(&EMBEDDING[row * COLUMNS..(row + 1) * COLUMNS]);
     word
 }
+
+/// The block a real model repeats, over whatever width its host passes as `dim`.
+///
+/// # Invariant
+/// Twelve kernels because a fold's body reads one buffer: every stage that multiplies two values does
+/// it elementwise and binds both, so each fold sums a single buffer. The scale writes transposed and
+/// the feed-forward spreads before it projects, which keeps both folds contiguous. Every extent is one
+/// of the six counts, so **one source serves a model of any width**.
+pub const BLOCK: &str = r#"
+--- compute = import "compute.lichen" ---
+Out     = struct{.e (compute.Buf Float)}
+WeighIn = struct{.k (compute.Buf Float), .q (compute.Buf Float)}
+TallyIn = struct{.t (compute.Buf Float)}
+PeakIn  = struct{.s (compute.Buf Float)}
+ExpoIn  = struct{.s (compute.Buf Float), .m (compute.Buf Float)}
+ScaleIn = struct{.s (compute.Buf Float), .m (compute.Buf Float), .total (compute.Buf Float), .v (compute.Buf Float)}
+PosIn   = struct{.w (compute.Buf Float)}
+AddIn   = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+MixIn   = struct{.h (compute.Buf Float), .m (compute.Buf Float)}
+SpreadIn = struct{.n (compute.Buf Float), .w (compute.Buf Float)}
+WeighPar = struct{.n Int, .cap Int, .dim Int, .in WeighIn, .out Out}
+WeighArg = struct{.n Int, .cap Int, .dim Int, .I WeighIn}
+weigh_raw = (k : WeighPar) => {
+  i = compute.range k.n
+  sequence = i / (k.cap * k.dim)
+  column = i - (i / k.dim) * k.dim
+  value = compute.read ((compute.Read _)(.from k.in.k, .at i))
+  query = compute.read ((compute.Read _)(.from k.in.q, .at (sequence * k.dim + column)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value * query)))
+}
+weigh = compute.parallel weigh_raw "gpu"
+SumPar = struct{.n Int, .cap Int, .dim Int, .in TallyIn, .out Out}
+SumArg = struct{.n Int, .cap Int, .dim Int, .I TallyIn}
+sum_raw = (k : SumPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+sum = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity)") "gpu"
+PeakPar = struct{.n Int, .cap Int, .in PeakIn, .out Out}
+PeakArg = struct{.n Int, .cap Int, .I PeakIn}
+peak_raw = (k : PeakPar) => {
+  lane = compute.range k.n
+  base = lane * k.cap
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, ((0.0 - 1.0) / 0.0) ~ "identity"))))
+}
+peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu"
+ExpoPar = struct{.n Int, .cap Int, .in ExpoIn, .out Out}
+ExpoArg = struct{.n Int, .cap Int, .I ExpoIn}
+expo_raw = (k : ExpoPar) => {
+  i = compute.range k.n
+  sequence = i / k.cap
+  value = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  top = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  shifted = value - top
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (exp shifted)))
+}
+expo = compute.parallel expo_raw "gpu"
+TotalPar = struct{.n Int, .cap Int, .in TallyIn, .out Out}
+TotalArg = struct{.n Int, .cap Int, .I TallyIn}
+total_raw = (k : TotalPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.cap + (s(0) - 1))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, 0.0 ~ "identity"))))
+}
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+ScalePar = struct{.n Int, .cap Int, .dim Int, .in ScaleIn, .out Out}
+ScaleArg = struct{.n Int, .cap Int, .dim Int, .I ScaleIn}
+scale_raw = (k : ScalePar) => {
+  i = compute.range k.n
+  sequence = i / (k.cap * k.dim)
+  column = i - (i / k.dim) * k.dim
+  position = (i / k.dim) - sequence * k.cap
+  weight = compute.read ((compute.Read _)(.from k.in.s, .at (sequence * k.cap + position)))
+  divisor = compute.read ((compute.Read _)(.from k.in.total, .at sequence))
+  value = compute.read ((compute.Read _)(.from k.in.v, .at i))
+  share = weight / divisor
+  compute.write ((compute.Write _)(.to k.out.e, .at ((sequence * k.dim + column) * k.cap + position), .value (share * value)))
+}
+scale = compute.parallel scale_raw "gpu"
+PosPar = struct{.n Int, .cap Int, .in PosIn, .out Out}
+PosArg = struct{.n Int, .cap Int, .I PosIn}
+pos_raw = (k : PosPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.cap + (s(0) - 1))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, 0.0 ~ "identity"))))
+}
+positions = compute.parallel (pos_raw ~ "claim:Reduction(combine,identity)") "gpu"
+AddPar = struct{.n Int, .in AddIn, .out Out}
+AddArg = struct{.n Int, .I AddIn}
+add_raw = (k : AddPar) => {
+  i = compute.range k.n
+  left = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  right = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (left + right)))
+}
+add = compute.parallel add_raw "gpu"
+MixPar = struct{.n Int, .dim Int, .in MixIn, .out Out}
+MixArg = struct{.n Int, .dim Int, .I MixIn}
+mix_raw = (k : MixPar) => {
+  i = compute.range k.n
+  sequence = i / k.dim
+  value = compute.read ((compute.Read _)(.from k.in.h, .at i))
+  summary = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value + summary)))
+}
+mix = compute.parallel mix_raw "gpu"
+SpreadPar = struct{.n Int, .dim Int, .in SpreadIn, .out Out}
+SpreadArg = struct{.n Int, .dim Int, .I SpreadIn}
+spread_raw = (k : SpreadPar) => {
+  i = compute.range k.n
+  sequence = i / (k.dim * k.dim)
+  rest = i - sequence * (k.dim * k.dim)
+  column = rest / k.dim
+  inner = rest - column * k.dim
+  hidden = compute.read ((compute.Read _)(.from k.in.n, .at (sequence * k.dim + inner)))
+  weight = compute.read ((compute.Read _)(.from k.in.w, .at (column * k.dim + inner)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (hidden * weight)))
+}
+spread = compute.parallel spread_raw "gpu"
+ProjectPar = struct{.n Int, .dim Int, .in PosIn, .out Out}
+ProjectArg = struct{.n Int, .dim Int, .I PosIn}
+project_raw = (k : ProjectPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+project = compute.parallel (project_raw ~ "claim:Reduction(combine,identity)") "gpu"
+StepIn = struct{.x (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .q (compute.Buf Float), .w (compute.Buf Float)}
+GArg = struct{.words Int, .slots Int, .sequences Int, .columns Int, .spread Int, .dim Int, .in StepIn}
+step = (s : GArg) => {
+  weighted = (compute.plrun weigh ((WeighArg)(.n s.words, .cap 3, .dim s.dim, .I WeighIn(.k s.in.k, .q s.in.q))) : Out)
+  summed = (compute.plrun sum ((SumArg)(.n s.slots, .cap 3, .dim s.dim, .I TallyIn(.t weighted.e))) : Out)
+  topped = (compute.plrun peak ((PeakArg)(.n s.sequences, .cap 3, .I PeakIn(.s summed.e))) : Out)
+  shifted = (compute.plrun expo ((ExpoArg)(.n s.slots, .cap 3, .I ExpoIn(.s summed.e, .m topped.e))) : Out)
+  divided = (compute.plrun total ((TotalArg)(.n s.sequences, .cap 3, .I TallyIn(.t shifted.e))) : Out)
+  shared = (compute.plrun scale ((ScaleArg)(.n s.words, .cap 3, .dim s.dim, .I ScaleIn(.s shifted.e, .m topped.e, .total divided.e, .v s.in.v))) : Out)
+  attended = (compute.plrun positions ((PosArg)(.n s.columns, .cap 3, .I PosIn(.w shared.e))) : Out)
+  held = (compute.plrun add ((AddArg)(.n s.columns, .I AddIn(.a s.in.x, .b attended.e))) : Out)
+  summarised = (compute.plrun sum ((SumArg)(.n s.sequences, .cap 3, .dim s.dim, .I TallyIn(.t held.e))) : Out)
+  normalised = (compute.plrun mix ((MixArg)(.n s.columns, .dim s.dim, .I MixIn(.h held.e, .m summarised.e))) : Out)
+  spread_out = (compute.plrun spread ((SpreadArg)(.n s.spread, .dim s.dim, .I SpreadIn(.n normalised.e, .w s.in.w))) : Out)
+  compute.plrun project ((ProjectArg)(.n s.columns, .dim s.dim, .I PosIn(.w spread_out.e)))
+}
+built = compute.graph step
+built
+"#;

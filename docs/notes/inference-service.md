@@ -221,6 +221,13 @@ cent**, and at a real depth of thirty-two blocks it predicts **38 ms a token** (
 second) — which is where the 32 to 46 ms estimate above comes from, now with a measurement at each end
 of it.
 
+**The block's width is a count, so one source serves any model.** `BLOCK` moved into the crate with
+`dim` as one of the six counts its host passes, and the same program answers at width two — exactly
+the `42.555138, 56.740185, 12.516237, 15.980333` it answered before the move — and at width five,
+checked against the host's own block rather than against hand-picked numbers
+(`crates/lichen-serve/tests/block_step.rs`). Nothing in the program names a width, which is what lets
+one block serve the demo's five-column decode step and a narrower test alike.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
