@@ -183,6 +183,16 @@ So **a two-buffer graph parameter with per-dispatch structs records and runs**, 
 2's grey area left open; the warning recorded there still stands for the **one-buffer** case, which
 nothing has re-tested. A layer is therefore expressible — what it costs is its dispatches.
 
+**An attention score reads the resident cache inside a recorded step.** Two sequences of three
+positions of two columns, each query dotted with its own sequence's three slots — `1, 1, 2` for the
+first and `2, 0, 1` for the second — at **one submission**, with the cache handed in as the resident
+`upload` produced (`crates/lichen-serve/tests/attend_step.rs`). It is two kernels: one weighs every
+cache word by its sequence's query, one lane per word, and the second folds over a slot's columns and
+sums it, so every fold reads a single buffer. **Softmax and the value mix are not here**, and the
+reason is structural rather than a gap in the language: each needs a **per-sequence reduction** that is
+its own dispatch, so a full attention step is five kernels — weigh, sum, max, exponentiate-and-sum,
+mix — where this is two.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
