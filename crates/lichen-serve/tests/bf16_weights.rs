@@ -91,8 +91,6 @@ fn a_narrowed_projection_answers_the_same_numbers() {
     let plain = session
         .prepare(MATVEC_STEP)
         .unwrap_or_else(|refusal| panic!("the projection prepares: {refusal}"));
-    let reference = run(&session, &plain, floats(&values), floats(&weights));
-    println!("in f32: {reference:?}");
 
     // The schema, learned from a run: only a dispatch makes the pass report.
     clear_graph_pass();
@@ -119,9 +117,11 @@ fn a_narrowed_projection_answers_the_same_numbers() {
     let narrowed = session
         .prepare_with_packs(MATVEC_STEP, &[pack])
         .unwrap_or_else(|refusal| panic!("the narrowed projection prepares: {refusal}"));
-    // The pack narrows every real buffer of its node: the vector, the weights, and the answer.
+    // The narrowed run goes first: a wrong answer here rules out a cached module per kernel id.
     let narrowed_answer = run(&session, &narrowed, halves(&values), halves(&weights));
     println!("in bf16: {narrowed_answer:?}");
+    let reference = run(&session, &plain, floats(&values), floats(&weights));
+    println!("in f32: {reference:?}");
     for (index, (wide, narrow)) in reference.iter().zip(&narrowed_answer).enumerate() {
         assert!(
             (wide - narrow).abs() < 1.0e-1,

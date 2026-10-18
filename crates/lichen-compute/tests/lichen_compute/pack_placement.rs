@@ -565,3 +565,58 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
         "the landed fragment writes the class the pack states"
     );
 }
+
+/// The class a landed fragment reads is the class its module's buffer stride declares.
+///
+/// # Invariant
+/// The stride is the one reading that connects the two halves: a fragment class that the emitter's type
+/// chain does not follow is a class nothing reads, and `ArrayStride 4` here is the whole of "the pack's
+/// class was stated and the bytes were read as floats anyway".
+#[test]
+fn the_landed_fragment_emits_the_stride_its_class_declares() {
+    let Some((_context, _device)) =
+        device("the_landed_fragment_emits_the_stride_its_class_declares")
+    else {
+        return;
+    };
+    clear_graph_pass();
+    let source = declared();
+    let (module, _value, _root) = common::run(&source);
+    let recorded = registered(&module);
+    install_tiling(&module);
+    let (floor_module, _value, _root) = common::run(&source);
+    let schema = reported_schema(&pass_report(&floor_module));
+    let pack = read_placement_pack(&pack_text(
+        &schema,
+        "narrow",
+        "bfloat16",
+        "shared",
+        LOCAL_SIZE_X,
+    ))
+    .expect("the pack reads");
+    install_tiling_with_packs(&module, &[pack]);
+    let (landed, _lines) = landed(&recorded, COUNT);
+    let words = lichen_compute_gpu::spirv::compile(
+        &lichen_kernel_ir::LaunchSet::single(&landed),
+        lichen_compute_gpu::spirv::Binding {
+            inputs: 1,
+            outputs: 1,
+        },
+    )
+    .unwrap_or_else(|refusal| panic!("the landed fragment is emitted: {refusal}"));
+    // OpDecorate is 71 and ArrayStride 6, both in the instruction's low half.
+    let mut strides: Vec<u32> = Vec::new();
+    let mut at = 5;
+    while at < words.len() {
+        let (count, opcode) = ((words[at] >> 16) as usize, (words[at] & 0xffff) as u32);
+        if opcode == 71 && count >= 4 && words[at + 2] == 6 {
+            strides.push(words[at + 3]);
+        }
+        at += count.max(1);
+    }
+    assert_eq!(
+        strides,
+        vec![2],
+        "a BFloat16 buffer is two bytes an element, and the landed class is what the module declares"
+    );
+}
