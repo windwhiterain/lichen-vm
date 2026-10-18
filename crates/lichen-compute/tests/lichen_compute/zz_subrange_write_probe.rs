@@ -44,6 +44,20 @@ out = (compute.plrun append ((PArg)(.n 4, .off 4, .I PIn(.x x))) : POut)
 compute.collect out.y : array{Int, 4}
 "#;
 
+/// (d) A control for (b): an offset that lands **half** inside the extent, so an offset that is
+/// applied and one that is dropped answer differently. Hand answer `[0, 0, 1, 2]`.
+const OFFSET_TWO: &str = r#"
+out = (compute.plrun append ((PArg)(.n 4, .off 2, .I PIn(.x x))) : POut)
+compute.collect out.y : array{Int, 4}
+"#;
+
+/// (e) A control for the declared length: offset 0 collected at eight, which is the same four
+/// numbers under a longer annotation.
+const OFFSET_ZERO_WIDE: &str = r#"
+out = (compute.plrun append ((PArg)(.n 4, .off 0, .I PIn(.x x))) : POut)
+compute.collect out.y : array{Int, 8}
+"#;
+
 /// What the raw runner renders for `body`, or how it refused.
 fn rendered(body: &str) -> String {
     let source = format!("{KERNEL}{body}");
@@ -66,4 +80,6 @@ fn probe_the_subrange_write() {
     println!("[a off0_at4] {}", rendered(OFFSET_ZERO));
     println!("[b off4_at8] {}", rendered(OFFSET_FOUR_WIDE));
     println!("[c off4_at4] {}", rendered(OFFSET_FOUR_NARROW));
+    println!("[d off2_at4] {}", rendered(OFFSET_TWO));
+    println!("[e off0_at8] {}", rendered(OFFSET_ZERO_WIDE));
 }
