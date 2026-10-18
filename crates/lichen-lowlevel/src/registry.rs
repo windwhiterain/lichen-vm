@@ -33,6 +33,21 @@ impl<P: Program> Registry<P> {
         ModuleKey::from_raw(CELL_KEY_BIT | self.next_cell_key)
     }
 
+    /// Mark a cell key a load has filed, so the allocator never hands it out again.
+    ///
+    /// # Invariant
+    /// Only a key in the cell space is accepted: a device key comes from the device allocator,
+    /// whose holes the registry itself reclaims, and a loaded artifact is filed under the key
+    /// its bytes name — so a later `allocate_cell_key` must start past it.
+    pub fn reserve_cell_key(&mut self, key: ModuleKey) {
+        let raw = key.as_raw();
+        assert!(
+            raw & CELL_KEY_BIT != 0,
+            "reserving {key:?}, which is not a cell key — a loaded cell must not name the device space"
+        );
+        self.next_cell_key = self.next_cell_key.max(raw & !CELL_KEY_BIT);
+    }
+
     /// An executing module bound to this registry: every static ref it touches
     /// resolves through `self`.
     ///

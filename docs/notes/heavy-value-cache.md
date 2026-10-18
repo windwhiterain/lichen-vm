@@ -597,6 +597,36 @@ self-reference folds to a constant; a longer cycle still refuses. The oracle is 
 
 
 
+### 9.12 A cell reloads into an empty registry and answers the same
+
+The persistence-critical property, measured before any file layout exists
+(`crates/lichen-language/examples/cell_persist.rs`, temporary): a **cell's** artifact — the
+`[value, type]` closure, not a bare buffer — serializes with the artifact codec, reloads into a
+registry that was **empty**, is restored into a `CellStore`, and a compile that reads it back
+answers the value the freezing compile answered.
+
+For `cache a = 1 + 2` / `cache b = a + 3` / `a + b`: `a`'s artifact is **841 bytes**, `b`'s is
+**1 073**, and the restored compile's root is `USize(9)` — equal to the original's.
+
+Two things the experiment established, and one it refuted:
+
+- **A loaded cell's key must be reserved in the allocator.** A cell key is
+  `CELL_KEY_BIT | counter`, so a fresh registry's first allocation is the same key a loaded
+  artifact already holds — and `freeze_closure_mapped` asserts the key is free, so the restored
+  compile panicked on its first freeze. `Registry::reserve_cell_key` is the answer: filing a
+  loaded artifact moves the counter past it, and it refuses a key outside the cell space. This
+  is a requirement the design did not have until it was built.
+- **A cell artifact is self-contained.** Its refs are absolute from birth, so the empty
+  registry needed nothing but the cell itself — no dependency map, no retargeting.
+- **Comparing the pair values directly is meaningless**, and the first version of the probe did
+  it: a pair is an array, and array equality is *allocation identity*, so two artifacts can
+  never compare equal that way. The check has to be the compile's answer, which is what the
+  probe now measures. Worth recording because it is the obvious wrong test.
+
+What persistence still needs: a save sink inside `freeze_cells` (the pair node is only reachable
+there), the on-disk layout, and the judge arm that compares a **stored** key against the
+computed one on the first compile of a process — §13.
+
 ## 10. Costs and failure modes
 
 - **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
