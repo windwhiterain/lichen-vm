@@ -52,6 +52,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | retired:P1-49 — the sentence landed and its plumbing (`Diag::supplied_names`, the supply-key map) was deleted with the lazy reorder; the refusal removes the miss entirely |
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
+| P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | todo — measured `Num = set(Int, Float)` ; `in_num = t => t @in Num` ; `f = (x : (_ ! in_num)) => x` ; `f "a"` answers `assertion failed: expected 1, found 0`, the assert channel's generic sentence, though the program has no `@assert` and the value's class is what the contract is about; the `AssertSpelling::Refinement { domain }` sentence exists but only the arithmetic domain check registers it (`operators.rs`), not the user refinement's `Refinement::constraint` |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -924,7 +925,40 @@ owner permitted deleting the tests that encoded the retired behaviour (13 in
 red), highlevel 138/0, lowlevel 146/13 (the GC ruling's baseline), LSP 54/0, compute
 236/2/2 (the two known reds).
 
-## Decisions## Decisions## Decisions## Decisions## Decisions
+### P4-13 — A user refinement's failure is reported as an `@assert` the program never wrote `verified`
+
+A refinement rides the assert channel, so its failure carries the channel's generic
+sentence. Measured:
+
+```lichen
+Num = set(Int, Float)
+in_num = t => t @in Num
+f = (x : (_ ! in_num)) => x
+f "a"        -- assertion failed: expected 1, found 0
+```
+
+The program wrote no `@assert`; what it states is that the parameter's **class** must be
+one of `Num`'s members, and the sentence names neither the refinement nor the set. The
+same shape answers `f ("a", 2)` for the tuple-element refinement
+(`x : tuple{(_ ! in_num), (_ ! in_num)}`), so the element walk inherits it.
+
+What is already there, and why it does not cover this: [`AssertSpelling::Refinement {
+domain }`](../../crates/lichen-highlevel/src/diagnostic.rs) renders the *class domain*
+sentence, and only the arithmetic **domain check** registers it
+(`operators.rs`'s `InDomain` over `[Int, Float]`) — the set the language itself
+enforces, so the checker knows it. A **user** predicate is an arbitrary function: the
+checker cannot list its accepted set, and `Refinement::constraint` registers its
+condition with no spelling.
+
+Fix direction: `Refinement::constraint` passes a spelling that names the refinement
+without claiming a set it cannot read — e.g. *"the refinement's predicate answered 0 —
+the value does not satisfy the refined type"* — and the render arm uses the predicate's
+label (the same `pair_label` walk a class set's members would use) so a reader knows
+which `!` failed. The contract sentence stays the channel's `expected 1, found 0` form
+for an explicit `@assert`; the two spellings must differ, or the refinement reads as an
+assertion the user never wrote.
+
+## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
