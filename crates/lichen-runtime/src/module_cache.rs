@@ -70,12 +70,10 @@ const KERNEL_CACHE_DIR: &str = "kernels";
 /// the package manager and the shipping compiler read too, because this assembler is
 /// one of those binaries: bytes another assembler wrote are bytes this one cannot
 /// vouch for, and the key is what says the two differ.
-pub fn kernel_disk_cache_dir(
-    device_root: &Path,
-    core_repo: &str,
-    plugins: &[String],
-) -> PathBuf {
-    device_root.join(KERNEL_CACHE_DIR).join(lichen_utils::cache::compiler_slot_key(core_repo, plugins))
+pub fn kernel_disk_cache_dir(device_root: &Path, core_repo: &str, plugins: &[String]) -> PathBuf {
+    device_root
+        .join(KERNEL_CACHE_DIR)
+        .join(lichen_utils::cache::compiler_slot_key(core_repo, plugins))
 }
 
 /// The kernel disk cache this process reads and writes; `None` while no host named one.
@@ -192,11 +190,10 @@ mod cache {
     ///
     /// # Invariant
     /// One entry per kernel id, and no mode beside it: both launch paths assemble the
-    /// root's relative launch set, so the id decides the module. The disk file is read
-    /// only after this map misses, so a kernel this process holds never touches the
-    /// filesystem. `assemble` is a closure because it reads the process kernel registry,
-    /// which is the language side's to read; the miss is counted before it runs, so a
-    /// refusal is a miss that stayed a refusal.
+    /// root's relative launch set. The disk file is read only after this map misses,
+    /// so a kernel this process holds never touches the filesystem. `assemble` is a
+    /// closure because it reads the process kernel registry, which is the language
+    /// side's to read; the miss is counted first, so a refusal stays a refusal.
     pub fn cached_module(
         root: KernelId,
         assemble: impl FnOnce() -> Result<Vec<u8>, String>,
@@ -205,9 +202,7 @@ mod cache {
         if let Some(cached) = modules().lock().unwrap().get(key) {
             return Ok(cached);
         }
-        // A file this engine refuses is the same miss an absent file is, so the disk
-        // layer answers a module or nothing, and the assembler below is the only
-        // other thing that can.
+        // A file this engine refuses is the miss an absent file is.
         if let Some(cached) = super::disk::load(key) {
             modules()
                 .lock()

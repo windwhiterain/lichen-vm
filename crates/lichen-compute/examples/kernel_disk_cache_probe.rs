@@ -1,9 +1,5 @@
-//! The kernel disk cache, measured: one directory, three processes.
-//!
-//! `cold` empties it, `warm` reuses what is there, and `heal` overwrites one cached
-//! payload with junk before running. Each run evaluates the same two programs, twice
-//! apiece, and prints the counters and the value beside every step — so a run that
-//! assembled nothing and a run that answered wrongly cannot read alike.
+//! The kernel disk cache, measured over three processes against one directory.
+//! See docs/notes/kernel-disk-cache.md.
 
 use std::path::{Path, PathBuf};
 
@@ -93,7 +89,10 @@ fn evaluate(store: &mut PackageStore<LangProgram>, source: &str) -> String {
 fn report(root: &Path, step: &str, value: &str) {
     let files = listing(root);
     let total: u64 = files.iter().map(|(_, len)| len).sum();
-    let modules = files.iter().filter(|(name, _)| name.ends_with(".wasm")).count();
+    let modules = files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".wasm"))
+        .count();
     println!(
         "{step:<26} value {value:<6} misses {}  disk hits {}  disk writes {}  files {} \
          ({modules} module(s), {total} bytes)",
@@ -108,7 +107,9 @@ fn report(root: &Path, step: &str, value: &str) {
 }
 
 fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "warm".to_string());
+    let mode = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "warm".to_string());
     let root = probe_root();
     match mode.as_str() {
         "cold" => {

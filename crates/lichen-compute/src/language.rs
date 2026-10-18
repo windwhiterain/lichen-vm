@@ -140,9 +140,8 @@ fn configure_kernel_disk_cache(cache_root: &Path) -> PathBuf {
 /// `cache_root` `None` keeps the store in memory, so nothing this sub-language
 /// compiles is ever serialized; a rooted store writes under the same shipping
 /// slot the compiler reads (`persist::shipping_cache_root`) and names the kernel
-/// disk cache beside it. The first rooted store in a process wins that, so a host
-/// holding two roots reads the one that took effect off
-/// [`configure_kernel_disk_cache`] rather than assuming its own.
+/// disk cache beside it. The first rooted store wins that, and
+/// [`configure_kernel_disk_cache`] reports which.
 pub fn new_store(cache_root: Option<PathBuf>) -> Result<PackageStore<LangProgram>, String> {
     let mut store = match cache_root {
         Some(root) => {
