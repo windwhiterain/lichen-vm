@@ -50,7 +50,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
 | P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | todo — measured `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, and a later `.b` read panics the run with `index 1 out of bounds (array length 1)` |
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | fixed — the miss now carries the argument names the checker recorded, so `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument is named a — the arguments are named z` |
-| P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | todo — measured `f = (x : Int # 4) => x` ; `f (1 # 4)` is refused at the argument, while `S = struct{.a Int # 4}` ; `S(.a 1 # 4)` is accepted; the perspective rule (`attributes.md` line 172) says `declared ⊑ value`, so equal perspectives must pass, and the message prints the two types as equal |
+| P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -837,14 +837,24 @@ the perspective unify's `expected 4, found 2` either: the failing unify is a typ
 unify over two `Int`s, and the perspective-annotated argument's pair reaches it with
 something the plain one does not.
 
-Fix direction: the apply's parameter slot unify must compare the perspective element
-the way the instantiation does (`Perspective::unify_slots`, relaxed by
-`is_subtype`), and a failure must print the two perspectives, never two equal types.
-The first step is to find which unify refuses: the apply's `argument_pair` carries the
-perspective as element 2 (`lambda.rs`'s `parameter/argument` slots), so a plain unify
-of the two pairs meets `[1, Int, 4]` against a parameter slot whose attribute cell is
-still undecided — the trap P4-12 and P1-44 both measured. A regression test belongs
-with the fix (`D3`).
+**Fixed.** Induced and measured: the refusing unify is the **engine's** apply-time
+parameter check (`apply_parameter_check`: `self.unify(cloned_param, argument)`), and
+the clash it records is the pair's attribute element —
+`USize(0)` against `USize(4)` after two descent steps, printed as the two *types* of
+those values, which is why the sentence read `expected Int, found Int`. The checker's
+relaxed `Perspective::unify_slots` had already accepted the pair (a probe showed its
+unify-error delta is zero), so the two checks disagreed on the same contract, and the
+engine's side is the wrong one twice over: the *clone's* parameter attribute is the
+absent `0`, not the declared `4`, and attribute reconciliation is the checker's.
+The fix compares the **value and type** elements when either pair carries an attribute
+tail, leaving plain pairs on the whole-pair unify exactly as before. Measured after:
+`f (1 # 4)` and `f (1 # 8)` are accepted (`1: Int`), `f (1 # 2)` answers
+`expected 4, found 2`, `f 1` and a bound `y = 1 # 4; f y` are accepted, a plain
+parameter with a `# 4` argument still answers `expected 0, found 4` (the rule's
+letter), and the instantiation cases are unchanged. `D3`'s smallest test is
+`struct_element_attributes::a_perspective_parameter_takes_a_value_that_refines_it`.
+Suites: lowlevel 146/13 (the GC ruling's baseline), language 273/1 (the `gc_block`
+red), highlevel 140/0, compute 229/2/2 (the two known reds).
 
 ## Decisions## Decisions## Decisions## Decisions
 

@@ -75,7 +75,35 @@ impl<P: Program> Module<P> {
         // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
-        self.unify(cloned_param, argument);
+        // The attribute tail is the checker's reconciliation, not the engine's.
+        let lengths = (
+            unsafe { self.array_items(cloned_param) }.map(|items| items.len()),
+            unsafe { self.array_items(argument) }.map(|items| items.len()),
+        );
+        match lengths {
+            (Some(parameter), Some(supplied)) if parameter > 2 || supplied > 2 => {
+                // SAFETY: both nodes are live members of this module; the unify
+                // below only reads them.
+                let parameters: Vec<_> = unsafe { self.array_items(cloned_param) }
+                    .map(|items| items.iter().map(|item| item.node).collect())
+                    .unwrap_or_default();
+                let supplieds: Vec<_> = unsafe { self.array_items(argument) }
+                    .map(|items| items.iter().map(|item| item.node).collect())
+                    .unwrap_or_default();
+                for slot in 0..2 {
+                    let (Some(&left), Some(&right)) = (parameters.get(slot), supplieds.get(slot))
+                    else {
+                        continue;
+                    };
+                    let left = self.as_dynamic(left, block);
+                    let right = self.as_dynamic(right, block);
+                    self.unify(left, right);
+                }
+            }
+            _ => {
+                self.unify(cloned_param, argument);
+            }
+        };
         if self.unify_errors.len() == pre_unify_errors {
             return false;
         }
