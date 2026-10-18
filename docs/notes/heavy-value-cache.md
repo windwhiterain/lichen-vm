@@ -162,7 +162,7 @@ value shape, and the key ruling moves two of the three:
 | tier | value shape | in-process reuse | backdating | persistence | why |
 |---|---|---|---|---|---|
 | **T1** | a solved host value (scalar, string, host array, table, struct) | yes | yes | **yes** | `LowValue` codec tags `0,1,5,6,8`; the arena is already flat bytes |
-| **T2** | a packed host buffer `Buffer(AnyHandle<[u8]>, ScalarClass)` | yes | yes | **yes, after lifting a refusal** | the bytes are in the block arena, but the codec refuses the value *by name*; the element class rides on the value, so it must travel with it |
+| **T2** | a packed host buffer `Buffer(AnyHandle<[u8]>, ScalarClass)` | yes | yes | **yes, lifted (§9.6)** | the bytes are in the block arena, so the codec files them like an array: tag, element class, relocated handle; framing is a constant 179 bytes |
 | **T3** | device-resident `DeviceBuffer` / `Graph` / `Kernel` / `ParKernel` | **yes** | **at a cost** | **no** | see below |
 
 **T3 is not moved by the key ruling, and the reason is worth stating exactly.** `ResidentId`'s
@@ -415,6 +415,31 @@ Three readings:
 side. A real `cache out = …` binding carries a `[value, type]` pair, and the type graph is
 where the classes are; so a language-level buffer cell's closure is larger than one node. The
 claim measured here is about the value, not about the whole cell.
+
+### 9.6 T2's persistence half, lifted and measured
+
+`ComputeValue::write_value` refused every arm by name, `Buffer` included. It no longer does:
+a `Buffer` is host bytes in the arena, so it files like an array — tag `9` of that leaf, the
+element class byte (which the payload cannot say), and the relocated handle through the
+lowlevel's `write_relocated_handle`. `read_value` gained the matching arm; the other five arms
+keep their refusals, because their ids name process-local registries.
+`ARTIFACT_FORMAT_VERSION` moved `10 → 11` with its history entry, as
+[artifact-cache](artifact-cache.md) requires.
+
+The probe now round-trips the artifact through `serialize_artifact_with` /
+`deserialize_artifact_with` and compares element for element:
+
+| payload | arena bytes | artifact bytes | framing | reloaded |
+|---|---|---|---|---|
+| 512 B (64 Int) | 520 | 699 | 179 | 64 elements, equal |
+| 32 KB (4 096) | 32 776 | 32 955 | 179 | 4 096, equal |
+| 2 MB (262 144) | 2 097 160 | 2 097 339 | 179 | 262 144, equal |
+| 8 MB (1 048 576) | 8 388 616 | 8 388 795 | 179 | 1 048 576, equal |
+
+So **framing is a constant 179 bytes and the rest is the value**: a persisting heavy buffer
+costs its own size plus a header, and reloads byte-identical. That makes T2 closed on both
+halves — in-process retention and persistence — and it is the first value tier where a heavy
+compute result survives a process.
 
 ## 10. Costs and failure modes
 

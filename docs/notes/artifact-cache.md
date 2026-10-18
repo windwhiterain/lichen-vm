@@ -311,6 +311,11 @@ version check and recompile; there is no compatibility path.
   not quite: the old byte collapsed "the pass never ran" with "the pass ran and
   could not decide", which the materialize pass's carry rule tests apart, so a v9
   artifact would materialize differently from the source it was frozen from.
+- `11` gave the compute vocabulary a value encoding: `ComputeValue::Buffer` (tag `9` of
+  that leaf) writes its element class and a relocated handle, so a collected buffer
+  persists. A v10 reader would meet tag `9` inside the `ComputeValue` leaf and refuse it
+  as an unknown tag, which is a recompile rather than a wrong answer — but the leaf had no
+  readable arm at all before this, so the version had to move with the arm.
 
 ### Reader obligations
 

@@ -152,7 +152,7 @@ fn relocated_handle<Item>(
 /// The owner's arena is the reader's own for `self_key`, else the
 /// dependency module named by the key — the one lookup the array and
 /// the table leaf share, so the two cannot drift.
-fn read_relocated_handle<Item, P: Program>(
+pub fn read_relocated_handle<Item, P: Program>(
     r: &mut Reader<'_>,
     self_key: ModuleKey,
     self_arena: &[u8],
@@ -176,7 +176,7 @@ fn read_relocated_handle<Item, P: Program>(
 
 /// The write half of [`read_relocated_handle`]: owner key, payload byte
 /// offset, element count.
-fn write_relocated_handle<Item, P: Program>(
+pub fn write_relocated_handle<Item, P: Program>(
     w: &mut Writer,
     modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     module_key: ModuleKey,

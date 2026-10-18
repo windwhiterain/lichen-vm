@@ -6,11 +6,13 @@
 //! No device is opened: a `Buffer` is a packed payload in the block arena, so the question
 //! "does a heavy compute value survive a cell freeze" is answerable without one.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use lichen_compute::ComputeValue;
-use lichen_compute::language::{LangProgram, LangValue};
+use lichen_compute::language::{LangProgram, LangValue, ProgramCodec};
 use lichen_kernel_ir::ScalarClass;
+use lichen_language::persist::{deserialize_artifact_with, serialize_artifact_with};
 use lichen_lowlevel::{AnyNodeId, FreezeMode, Module, StaticNodeId};
 use lichen_utils::extend::AsEnum;
 
@@ -92,5 +94,46 @@ fn main() {
             artifact.1,
             back.map_or("no".to_string(), |back| format!("{} elements", back.len())),
         );
+    }
+
+    // The persistence half: a collected buffer is host bytes, so it may file as an artifact.
+    let (key, artifact, index) = {
+        let mut registry = registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = registry.allocate_cell_key();
+        let freeze =
+            registry.freeze_closure_mapped(&module, key, &[node], [0; 32], FreezeMode::Portable);
+        let index = freeze.node_map[&node];
+        let package = registry
+            .get(key)
+            .expect("the freeze registered the artifact");
+        (key, package.module.clone(), index)
+    };
+    let mut modules: HashMap<_, _> = HashMap::new();
+    modules.insert(key, artifact);
+    match serialize_artifact_with(&modules[&key], &modules, [0; 32], index, ProgramCodec) {
+        Err(reason) => println!("round trip: refused: {reason}"),
+        Ok(bytes) => {
+            let reloaded = deserialize_artifact_with(&bytes, key, [0; 32], &modules, ProgramCodec);
+            match reloaded {
+                Err(reason) => println!(
+                    "round trip: {} bytes, reload refused: {reason}",
+                    bytes.len()
+                ),
+                Ok((reloaded, export)) => {
+                    let back = reloaded.nodes[export.index]
+                        .value
+                        .and_then(|value| items(&value));
+                    println!(
+                        "round trip: {} artifact bytes, reloaded {}, equal {}",
+                        bytes.len(),
+                        back.as_ref()
+                            .map_or("no".to_string(), |back| format!("{} elements", back.len())),
+                        back.as_ref().is_some_and(|back| *back == before),
+                    );
+                }
+            }
+        }
     }
 }

@@ -882,16 +882,51 @@ pub enum ComputeOperator {
     GraphRun,
 }
 
-// Compute values are runtime-only: a frozen module is a type artifact, and
-// these arms refuse rather than panic.
+// A collected buffer is host bytes and persists; every other arm names a process handle.
+
+/// The artifact tag of [`ComputeValue::Buffer`], private to this leaf's value encoding.
+const BUFFER_TAG: u8 = 9;
+
+/// A collected buffer's element class on the wire: the payload cannot say it, so it travels.
+fn write_class(w: &mut Writer, class: ScalarClass) -> Result<(), String> {
+    let tag = match class {
+        ScalarClass::Int => 0,
+        ScalarClass::Float => 1,
+    };
+    w.u8(tag);
+    Ok(())
+}
+
+fn read_class(r: &mut Reader<'_>) -> Result<ScalarClass, String> {
+    match r.u8()? {
+        0 => Ok(ScalarClass::Int),
+        1 => Ok(ScalarClass::Float),
+        other => Err(format!("unknown buffer element class {other}")),
+    }
+}
 
 impl ValueCodec for ComputeValue {
     fn write_value<P: Program>(
-        _w: &mut Writer,
+        w: &mut Writer,
         value: Self,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<(), String> {
         match value {
+            // Files like an array: the handle relocates and the class tags along.
+            ComputeValue::Buffer(AnyHandle::Static(handle), class) => {
+                w.u8(BUFFER_TAG);
+                write_class(w, class)?;
+                lichen_lowlevel::codec::write_relocated_handle(
+                    w,
+                    modules,
+                    handle.module,
+                    handle.as_ptr(),
+                );
+                Ok(())
+            }
+            ComputeValue::Buffer(AnyHandle::Dynamic(_), _) => {
+                Err("cannot serialize a module carrying a dynamic buffer payload".into())
+            }
             // The value's own name, so a reader can tell which of the three it
             // met without a debugger.
             ComputeValue::Kernel(_) => {
@@ -905,13 +940,6 @@ impl ValueCodec for ComputeValue {
                 return Err(
                     "this package is not cached: it holds a jit'd parallel kernel at its top \
                      level, and a kernel is a runtime value with no on-disk form"
-                        .into(),
-                );
-            }
-            ComputeValue::Buffer(..) => {
-                return Err(
-                    "this package is not cached: it holds a live buffer at its top level, \
-                     and a buffer is a runtime value with no on-disk form"
                         .into(),
                 );
             }
@@ -946,14 +974,21 @@ impl ValueCodec for ComputeValue {
 
     fn read_value<P: Program>(
         r: &mut Reader<'_>,
-        _self_key: ModuleKey,
-        _self_arena: &[u8],
-        _self_base: *const u8,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+        self_key: ModuleKey,
+        self_arena: &[u8],
+        self_base: *const u8,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<Self, String> {
-        // No tag reaches here: every compute value is runtime-only, and
-        // `write_value` refuses each of them.
-        Err(format!("unknown compute-value tag {}", r.u8()?))
+        match r.u8()? {
+            BUFFER_TAG => {
+                let class = read_class(r)?;
+                let handle = lichen_lowlevel::codec::read_relocated_handle::<u8, P>(
+                    r, self_key, self_arena, self_base, modules,
+                )?;
+                Ok(ComputeValue::Buffer(AnyHandle::Static(handle), class))
+            }
+            other => Err(format!("unknown compute-value tag {other}")),
+        }
     }
 }
 
