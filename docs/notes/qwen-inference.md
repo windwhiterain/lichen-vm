@@ -77,8 +77,14 @@ Two measurements of the interface came out of it, both committed as tests:
 | **A struct's fields arrive in descending name order.** | `{.a, .b, .c}` passed `1, 2, 3` answers `321` — `abi_order`. |
 | **A struct of twelve buffer fields binds two of them.** | The same probe with the layer's own twelve field names answers with only `.x` and `.k` bound; the other ten read zero. So the whole layer cannot be **one** step yet, and the fused program is ignored rather than deleted, so the limit stays visible. |
 
-## What is ahead
+## Attention over a cache
 
-The rest of a layer — RoPE, the GQA attention over a growing cache, the SwiGLU — then 28 layers, then
-the 151936-wide vocabulary projection and sampling. The precision path is built and merged but not used
-here: this milestone runs at f32, which is why the model is streamed.
+`ATTEND_STEP` is the first place the query and the key decide anything: every query head scores the
+cached positions against its **grouped** key head (sixteen queries over eight keys, so two share), the
+scores become a softmax, and the answer mixes the values by it. Measured over two positions, where the
+queries make the softmax sharp — the first head weights them `0.998` against `0.002` — the answer is the
+host's within `1e-5`, and both sides sum to `82.973585`.
+
+That closes the last shape a layer needs. What remains is the loop around it: 28 layers in sequence, the
+151936-wide vocabulary projection and sampling, and the precision path (built and merged, not yet used —
+everything here runs at f32, which is why the weights are streamed).
