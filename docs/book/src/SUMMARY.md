@@ -33,3 +33,12 @@
 - [Verifying a Program](ch16-verifying.md)
 - [Kernels and the Compute Layer](ch17-compute.md)
 - [The Toolchain](ch18-toolchain.md)
+- [Advanced Features: Extending the Language](ch19-advanced.md)
+- [A Final Project: Mean-centering, End to End](ch20-final-project.md)
+
+# Appendices
+
+- [Appendix A: Keywords and Syntax Forms](appendix-a-grammar.md)
+- [Appendix B: The Operators, by Signature](appendix-b-operators.md)
+- [Appendix C: The Documentation Map](appendix-c-documentation.md)
+- [Appendix D: Glossary](appendix-d-glossary.md)
