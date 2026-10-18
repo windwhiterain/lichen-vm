@@ -493,6 +493,10 @@ where
             if package.refs.iter().any(|key| *key != reference.module) {
                 continue;
             }
+            // The wire form carries no mode, so a reload would lose a ReadOnly refusal.
+            if package.module.read_only {
+                continue;
+            }
             let mut modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> =
                 HashMap::new();
             modules.insert(reference.module, package.module.clone());

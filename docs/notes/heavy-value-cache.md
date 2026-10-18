@@ -1,9 +1,16 @@
 # Heavy values across edits: keys as the judge, propagation as the accelerator
 
-> Status: **proposed for the key half; nothing here is implemented.** This note records a
-> decision that replaces one half of [incremental-update](incremental-update.md): that note's
-> **"no keys"** ruling is **withdrawn**, and a content key may now decide reuse. What the
-> decision does *not* touch is stated in §5, and what it does not *solve* is in §7.
+> Status: **landed for the mechanism and for T1/T2 values; T3 is decided and not built.** This
+> note records a decision that replaces one half of
+> [incremental-update](incremental-update.md): that note's **"no keys"** ruling is
+> **withdrawn**, and a content key now decides reuse. What the decision does *not* touch is
+> stated in §5, and what it does not *solve* is in §7.
+>
+> What is built, in one line each: the per-binding key and its oracle (§9.9, §9.10), the
+> `Portable`/`ReadOnly` freeze modes (§9.4), the compute value's artifact form (§9.6), a cell
+> that reloads into an empty registry (§9.12), cells that persist across processes with
+> reclamation and two guards (§9.13, §9.15), a cache scoped by the vocabulary (§9.16), and the
+> measurements that decide each of them (§9.1–§9.14). What is not built is named in §13.
 >
 > This is the plan for two application domains — data-science dependency graphs and
 > procedural-content dependency graphs — where a long-lived graph is edited by an agent and
@@ -13,10 +20,12 @@
 > resolver's read graph. **This note does not restate any of that**; it records only what the
 > key ruling changes.
 >
-> Points at: `crates/lichen-language/src/{cells,dirty,session,compile}.rs`,
+> Points at: `crates/lichen-language/src/{cells,cellcache,key,dirty,session,compile}.rs`,
 > `crates/lichen-language/src/lib.rs` (`freeze_cells`), `crates/lichen-language/src/resolve/content_key.rs`,
-> `crates/lichen-lowlevel/src/registry.rs` (`freeze_closure_mapped`), `crates/lichen-registry/src/device.rs`
-> (`artifact_hash`, `verify`, `publish`), `crates/lichen-compute/src/compute.rs` (the value codec),
+> `crates/lichen-lowlevel/src/registry.rs` (`freeze_closure_mapped`, `reserve_cell_key`),
+> `crates/lichen-lowlevel/src/static_module/freeze.rs` (`FreezeMode`),
+> `crates/lichen-registry/src/device.rs` (`artifact_hash`, `verify`, `publish`),
+> `crates/lichen-compute/src/compute.rs` (the value codec),
 > and the notes [incremental-update](incremental-update.md), [artifact-cache](artifact-cache.md),
 > [incremental-evaluation](incremental-evaluation.md), [code-audit](code-audit.md) (`D1`, `D15`).
 
@@ -840,38 +849,59 @@ store's `compiler_slot_key` is that shape) instead of a type name; that is not b
   are both conservative. A `None` key is read as changed.
 
 
+
 ## 13. Open
 
-- **The cell cache's file layout, now that the container is settled.** §9.12 shows the container
-  *is* the artifact: the bytes reload into an empty registry and answer the same, so no second
-  format is needed. What is open is where they live, how a loaded key is reserved (done,
-  `Registry::reserve_cell_key`), the save sink inside `freeze_cells` (the pair node is only
-  reachable there), the judge arm that compares a **stored** key against the computed one on a
-  process's first compile, and eviction — the package store's six acceptance criteria are the
-  template and none of the four is answered yet.
-- **Whether the key is computed for unmarked bindings at all in the first build**, or only
-  lazily when a marked binding reads one. The former is simpler and costs one hash per
-  binding; the latter is cheaper and needs a demand order.
-- **How a graph node's key folds its edges** — the descriptor that
-  `incremental-update.md` §5 promises becomes an accelerator and a reason source under this
-  ruling, not a soundness requirement, which is a smaller job than that note assumes.
+- **T3 — a device-resident value — is decided and not built.** The ruling is to materialize on
+  freeze: the cell reads back to the host and persists as T2's `Buffer`, priced at one
+  device→host read per freeze. What blocks it is a **fixture**: no language-level program yields
+  a `DeviceBuffer` (`plrun` collects to host; only a graph run keeps a value resident), and a
+  hand-built `ResidentId` would meet a release obligation naming an id that no backend issued.
+  The safety basis is verified even so: the indexed read, the whole read and the run-input path
+  each accept a `Buffer` beside a `DeviceBuffer`, so materialization changes the representation
+  and not what a consumer can do.
+- **The scope key for the cache directory is a type name.** §9.16 scopes by
+  `std::any::type_name::<P>()`, which is not a stable ABI: a rebuild moves it and costs a miss.
+  A cache meant to survive a rebuild needs a deliberate key — the artifact store's
+  `compiler_slot_key` is the shape — and that is not built.
+- **A `ReadOnly` cell is not persisted.** The wire form carries no mode, so a reloaded
+  `ReadOnly` artifact would answer `Portable` and lose the key refusal that is its whole
+  guarantee; `save_cells` therefore skips one. The mode belongs in the artifact header when a
+  persisted `ReadOnly` cell is actually wanted.
+- **A cell that read an import is not persisted either**, for a different reason: the key's
+  `EXTERNAL` token cannot see the import's content, so the record would outlive the bytes it was
+  computed from. In-process reuse still relies on the session's own import invalidation, and the
+  resolver's re-derivation.
+- **The graph-node axis** — the descriptor `incremental-update.md` §5 promises. Under the key
+  ruling it is an accelerator and a reason source, not a soundness requirement, so it is a
+  smaller job than that note assumes.
 - **What replaces the removed work bound** (§8.2). The count conflated "too much work" with
-  "does not terminate"; removing it unblocked heavy helper-side generation and left a
-  non-nesting divergence unguarded, so an endless `@loop` hangs the compiler and the language
-  server's worker. The shape to choose is a *wall-clock deadline* recorded as its own refusal,
-  which bounds the compiler without refusing honest work. Its limit is a policy (seconds, not
-  counts), and it must be one the editor path can set lower than a batch host's.
-- **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
-  and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
-  around it.
-- **The freeze's granularity is built (§9.4), and what remains is its enforcement.** The mode
-  is per cell, by binding name, defaulting to `Portable`; the key hash refuses a `ReadOnly`
-  node it meets in template mode instead of mis-hashing it. What is *not* settled: the refusal
-  covers the template unfolding (where the operation was the content), not every way a value
-  can be compared — `key_eq` compares values, which the two modes agree on, but a future key
-  path that read a stored operation would have to repeat the check. And a **persisted**
-  `ReadOnly` artifact would need the mode in the wire format; today the loader sets
-  `read_only: false`, which is right only because `ReadOnly` cells are not persisted yet.
-- **The measurement** (`incremental-evaluation.md` Q9 is still owed): §9 has the
-  frontend-versus-check split now, but not the deep pass separated from the check, and not
-  the session's overhead broken out.
+  "does not terminate"; removing it left a non-nesting divergence unguarded, so an endless
+  `@loop` hangs the compiler and the language server's worker. The shape to choose is a
+  wall-clock deadline recorded as its own refusal, with a limit the editor path can set lower
+  than a batch host's.
+- **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on a first compile, and
+  an edit costing 87 ms against a fresh 57 ms at one heavy cell.
+- **The deep pass is still not separated from the check** (`incremental-evaluation.md` Q9):
+  §9.1 splits the frontend from the check, not the check from its evaluation.
+- **No real domain application is integrated.** The validation is a target-shaped pipeline and a
+  compute-vocabulary pipeline (§9.2, §9.7, §9.11, §9.14), not a whiting scene or a data-science
+  notebook. What that leaves open is whether real edits dirty the fraction these shapes assume
+  (§11's last falsifier).
+
+## 14. Probes
+
+Every reading in §9 comes from one of these. They print and assert nothing, and each one's
+module doc says what it is for; the note is the durable record, so a probe is deleted once the
+question it serves stops moving.
+
+| probe | question |
+|---|---|
+| `lichen-language/examples/cache_timing` | the session against a fresh compile, per edit kind |
+| `lichen-language/examples/pipeline_edits` | the tuned pipeline's edit loop and its restart (§9.2, §9.11, §9.14) |
+| `lichen-language/examples/view_reuse` | whether a whitespace edit reuses through `set_view` (§9.7) |
+| `lichen-language/examples/key_oracle` | the key against propagation, by path set (§9.9, §9.10) |
+| `lichen-language/examples/cell_persist` | a cell's artifact into an empty registry (§9.12) |
+| `lichen-language/examples/cell_reload` | four sessions over one cache directory (§9.13, §9.15) |
+| `lichen-compute/examples/cache_buffer` | a compute value's retention cost and round trip (§9.5, §9.6) |
+| `lichen-compute/examples/cache_pipeline` | buffer cells on a real compute program (§9.7, §9.16) |
