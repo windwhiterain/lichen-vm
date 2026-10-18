@@ -162,3 +162,62 @@ fn a_refused_program_answers_with_its_diagnostics() {
         ),
     }
 }
+
+/// `steps` recorded steps in one program, the answer threaded through the recursion's state.
+fn looped(steps: usize) -> String {
+    format!(
+        "{KERNEL}
+GArg = struct{{.n Int, .in Inc}}
+step = (s : GArg) => {{
+  a = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)
+  b = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d a.e))) : Out)
+  compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d b.e)))
+}}
+built = compute.graph step
+@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.graphrun built (3, s(1))))) : tuple{{Int, compute.Buf Float}} -> compute.Buf Float)
+compute.collect (march ({steps}, data)) : array{{Float, 3}}
+"
+    )
+}
+
+/// Each further recorded step is one more submission, and a program's readback is one.
+///
+/// # Invariant
+/// The two runs differ only in how many times the same recorded step is run, so the difference is
+/// the steps' and the shared part is the readback's. Each step is three doublings of `1, 2, 3`, so
+/// the answer says the loop ran as many times as it was asked to.
+#[test]
+fn each_further_recorded_step_is_one_more_submission() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED each_further_recorded_step_is_one_more_submission: no device");
+        return;
+    };
+    let one = session
+        .run(&looped(1))
+        .unwrap_or_else(|refusal| panic!("one step runs: {refusal}"));
+    let three = session
+        .run(&looped(3))
+        .unwrap_or_else(|refusal| panic!("three steps run: {refusal}"));
+    assert_eq!(
+        one.answer, "[8.0, 16.0, 24.0]: array{Float, 3}",
+        "one step is three doublings of 1, 2 and 3"
+    );
+    assert_eq!(
+        three.answer, "[512.0, 1024.0, 1536.0]: array{Float, 3}",
+        "three steps are nine doublings, which is what says the loop ran three times"
+    );
+    assert_eq!(
+        (one.cost.submissions, one.cost.fence_waits),
+        (2, 2),
+        "one step and the program's own readback"
+    );
+    assert_eq!(
+        (three.cost.submissions, three.cost.fence_waits),
+        (4, 4),
+        "three steps and the same readback, so each further step is one submission and one fence"
+    );
+    println!(
+        "one step {}/{}, three steps {}/{}",
+        one.cost.submissions, one.cost.fence_waits, three.cost.submissions, three.cost.fence_waits
+    );
+}

@@ -45,12 +45,22 @@ of each per node; and one submission holds **at most 64 dispatches**
 
 So the cost model a service is held to is: **per step, one submission and one fence for
 the dispatches, plus one of each for every crossing.** Measured on the device through
-`crates/lichen-serve/tests/step_cost.rs`: a dispatch is one submission and one fence, and
-**a readback is a submission and a fence of its own** — one dispatch plus a `collect` is
-`(2, 2)`, and three dispatches plus the same `collect` is `(4, 4)`. So a step that hands
-a token back to the host pays twice unless the readback rides in the same submission as
-the graph, which is a question about `Policy::Batch` and is not yet measured.
-Everything below is about whether a step can be built to hit that.
+`crates/lichen-serve/tests/step_cost.rs`, where every count is a delta read from the
+installed context and every program answers a hand-derived number:
+
+| the program | submissions | fence waits |
+|---|---|---|
+| one dispatch, then a `collect` | 2 | 2 |
+| three dispatches, then the same `collect` | 4 | 4 |
+| one **recorded step** (three dispatches), then the same `collect` | 2 | 2 |
+| three **recorded steps**, then the same `collect` | 4 | 4 |
+
+So a dispatch is one submission and one fence; a **recorded step is one of each however many
+dispatches it holds**; and **a readback is a submission and a fence of its own** — it does not
+ride along in the graph's submission, `Batch` or not. A step that hands a token back therefore
+costs **two**, and a generation of `N` tokens costs **`N + 1`** where the same work as a direct
+chain costs **`N × dispatches-per-step + 1`**. Everything below is about whether a step can be
+built to hit that.
 
 ## 2. The layers are already split — below the runtime is not where the gap is
 
