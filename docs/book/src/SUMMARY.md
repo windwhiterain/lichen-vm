@@ -17,3 +17,4 @@
 - [Laziness, Sharing, and Scope](ch06-laziness.md)
 - [Compound Values: Tuples and Arrays](ch07-tuples-and-arrays.md)
 - [Structs and Records](ch08-structs-and-records.md)
+- [Tables and Sets](ch09-tables-and-sets.md)
