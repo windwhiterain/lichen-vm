@@ -164,8 +164,9 @@ template's scope may be collected (`2.b`) — and the trigger is **on**:
 Measured on the merged change: `lichen-language` **262 / 0**, `lichen-lowlevel` **156 / 0**,
 `lichen-highlevel` **136 / 0**, `lichen-compute`'s
 `examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
-under the old trigger), and the example corpus' two collects release 23 and 8 nodes with
-**no live node naming a released one** in their operand, array, table or function edges.
+under the old trigger). The corpus' two collects released 23 and 8 nodes, and no live node
+named a released one through its operand, array or table edge — the function-list scan is
+the open item of §8.
 
 The template decision (`2.b`) is measured too: `f = n => @gc { a = 1; a }` leaves 7 blocks /
 5 declared scopes after compile and 2 / 0 after the run — a definition-pass read decides the
