@@ -78,6 +78,11 @@ Five properties are contractual, and each one is a decision rather than an accid
 - **`vocabulary_key` participates** because a `jit`/`parallel` leaf's meaning is the
   plugin's, and the artifact store already scopes per plugin set for exactly that reason
   ([artifact-cache](artifact-cache.md), "the artifact store is scoped per plugin set").
+- **A direct self-reference folds to a constant.** A recursive binding reads itself, so
+  recursing to build its key has no base and refusing has no use: the first realistic pipeline
+  measurement showed the key inert on **all seven** cells, because every stage reads one
+  recursive `step`. A *longer* cycle still refuses (`None`), because the members' keys would
+  then depend on traversal order. §9.11 is the measurement.
 - **`K_out` is computed after evaluation, from the value.** It is what makes backdating
   free; §4.
 
@@ -561,6 +566,35 @@ with 5 of 5 values, and `lichen-language` is 262 passed / 0 failed. The oracle's
 uses the window its own edit implies, while the session computes its window from the splice —
 which is why one boundary-append row drops a cell the oracle's narrow window calls clean
 (§4.2's widened-window rule, not the key).
+
+### 9.11 The pipeline under the key judge, and the cycle it exposed
+
+The tuned pipeline (§9.2's shape) gained an **unmarked** `bias` the tail reads, so a single
+`set_source` can carry a whitespace edit *inside* a cell and a real change the build key sees
+while no cell's content moves. Release build:
+
+| edit | fresh ms | session ms | speedup | reused | frozen | dropped |
+|---|---|---|---|---|---|---|
+| edit upstream `s0` | 63.88 | 193.00 | **0.3×** | 0 | 6 | 6 |
+| edit middle `s3` | 93.92 | 45.16 | 2.1× | 3 | 3 | 3 |
+| edit leaf `s5` | 194.06 | 36.06 | 5.4× | 5 | 1 | 1 |
+| append a stage | 218.27 | **2.21** | 99× | 6 | 1 | 0 |
+| **combined: cell + bias** | 209.23 | **0.47** | **444×** | **7** | 0 | **0** |
+| whitespace only | 207.60 | **0.23** | 887× | 0 | 0 | 0 |
+| **six edits** | **986.96** | **277.15** | **3.6×** | | | |
+
+Value agreement is **6 of 6**. The combined row is the key's verdict reaching a realistic
+pipeline: propagation's byte window spans from the edited cell to `bias`, so it would drop all
+seven, and the key drops none — 0.47 ms against a 209 ms fresh compile.
+
+**The first run of that row disagreed in the other direction, and it was the finding.** It read
+`reused 0, frozen 7, dropped 7` at 0.5×, because every stage reads the recursive `step`, and the
+key walk treated a read of the enclosing statement as a cycle — so every stage's key was `None`
+and the fallback dirtied everything. A key that refuses recursion is inert for every heavy
+program, which is exactly the population it exists for. The fix is §2's rule: a **direct**
+self-reference folds to a constant; a longer cycle still refuses. The oracle is unchanged by it
+(8 of 13 agree, the same two classes), and `lichen-language` stays 262 passed / 0 failed.
+
 
 
 ## 10. Costs and failure modes

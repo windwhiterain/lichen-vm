@@ -25,6 +25,8 @@ struct Pipeline {
     depths: Vec<usize>,
     /// Append one more stage before the tail.
     append: bool,
+    /// An **unmarked** binding the tail reads, so an edit to it changes the build but no cell.
+    bias: usize,
 }
 
 impl Pipeline {
@@ -42,10 +44,12 @@ impl Pipeline {
             let n = self.depths.len();
             source.push_str(&format!("cache s{n} = s{} + step {APPEND_DEPTH}\n", n - 1));
         }
+        source.push_str(&format!("bias = {}\n", self.bias));
         let mut terms: Vec<String> = (0..self.depths.len()).map(|i| format!("s{i}")).collect();
         if self.append {
             terms.push(format!("s{}", self.depths.len()));
         }
+        terms.push("bias".to_string());
         source.push_str(&terms.join(" + "));
         source.push('\n');
         source
@@ -96,6 +100,7 @@ fn main() {
     let mut pipeline = Pipeline {
         depths: (0..stages).map(|i| base.saturating_sub(i)).collect(),
         append: false,
+        bias: 7,
     };
     let mut session =
         BufferSession::<LangProgram>::with_source_id(pipeline.source(), "pipeline.lichen");
@@ -156,6 +161,15 @@ fn main() {
         &mut session,
         &pipeline.source(),
         "append a stage".into(),
+    ));
+
+    // Whitespace inside a cell *and* a real change to the unmarked binding: no cell moved.
+    pipeline.bias = 8;
+    let combined = pipeline.source().replace("cache s0", "cache  s0");
+    rows.push(measure(
+        &mut session,
+        &combined,
+        "combined: cell + bias".into(),
     ));
 
     // A whitespace-only edit: no resolved structure moves at all.

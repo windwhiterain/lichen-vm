@@ -19,6 +19,9 @@ use crate::resolve::content_key::binding_key;
 /// A token for an input the file does not define: the prelude, or an import's binding.
 const EXTERNAL: u64 = 0x6578_7465_726e_0001;
 
+/// A token for a statement's read of itself, so a recursive function has a base.
+const SELF_READ: u64 = 0x7365_6c66_0000_0001;
+
 /// Each marked binding's key, or `None` where the key cannot be written down.
 ///
 /// # Invariant
@@ -105,6 +108,8 @@ impl Keys<'_> {
                 break;
             }
             match declared {
+                // A self-reference folds to a constant: refusing is inert for recursion.
+                Some(owner) if owner == index => digests.push(SELF_READ),
                 Some(owner) => match self.of(owner) {
                     Some(key) => digests.push(digest(&key)),
                     None => {
