@@ -59,6 +59,7 @@ fn a_real_embedding_row_normed_by_the_device_matches_the_host() {
     let stepped = prepared
         .step(vec![
             RunArgument::Count(HIDDEN as i64),
+            RunArgument::Count(1),
             RunArgument::Count(HIDDEN as i64),
             floats(&row),
             floats(&gain),

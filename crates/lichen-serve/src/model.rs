@@ -453,8 +453,9 @@ Normed  = struct{.y (compute.Buf Float)}
 SquarePar = struct{.n Int, .dim Int, .in In, .out Squared}
 SquareArg = struct{.n Int, .dim Int, .I In}
 squares_raw = (k : SquarePar) => {
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.s, .at 0, .value (fold (k.dim, 0.0 ~ "identity"))))
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) * compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
 squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
 ScaleIn  = struct{.s (compute.Buf Float), .x (compute.Buf Float), .w (compute.Buf Float)}
@@ -462,17 +463,19 @@ ScalePar = struct{.n Int, .dim Int, .in ScaleIn, .out Normed}
 ScaleArg = struct{.n Int, .dim Int, .I ScaleIn}
 scale_raw = (k : ScalePar) => {
   i = compute.range k.n
-  total = compute.read ((compute.Read _)(.from k.in.s, .at 0))
+  head = i / k.dim
+  j = i - head * k.dim
+  total = compute.read ((compute.Read _)(.from k.in.s, .at head))
   mean = total / (int2float k.dim)
   divisor = sqrt (mean + 0.000001)
   value = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  weight = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  weight = compute.read ((compute.Read _)(.from k.in.w, .at j))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((value * weight) / divisor)))
 }
 scale = compute.parallel scale_raw "gpu"
-GArg = struct{.n Int, .dim Int, .in In}
+GArg = struct{.n Int, .rows Int, .dim Int, .in In}
 step = (s : GArg) => {
-  a = (compute.plrun squares ((SquareArg)(.n 1, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Squared)
+  a = (compute.plrun squares ((SquareArg)(.n s.rows, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Squared)
   compute.plrun scale ((ScaleArg)(.n s.n, .dim s.dim, .I ScaleIn(.s a.s, .x s.in.x, .w s.in.w)))
 }
 built = compute.graph step
@@ -560,6 +563,44 @@ GArg = struct{.n Int, .position Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun rope ((RopeArg)(.n s.n, .position s.position, .I In(.x s.in.x))) : Out)
   compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+}
+built = compute.graph step
+built
+"#;
+
+/// SwiGLU's product: `silu(gate) · up`, which is the elementwise half of the feed-forward.
+///
+/// # Invariant
+/// `silu(x) = x / (1 + exp(-x))`, and the two inputs are the two projections' answers over the same
+/// element, so a lane reads both at its own index. The second dispatch copies across, because a
+/// one-node step cannot hand its answer back.
+pub const SWIGLU_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In     = struct{.g (compute.Buf Float), .u (compute.Buf Float)}
+Out    = struct{.m (compute.Buf Float)}
+CopIn  = struct{.d (compute.Buf Float)}
+GluePar = struct{.n Int, .in In, .out Out}
+GlueArg = struct{.n Int, .I In}
+glue_raw = (k : GluePar) => {
+  i = compute.range k.n
+  gate = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  up = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  open = gate / (1.0 + (exp (0.0 - gate)))
+  compute.write ((compute.Write _)(.to k.out.m, .at i, .value (open * up)))
+}
+glue = compute.parallel glue_raw "gpu"
+CopPar = struct{.n Int, .in CopIn, .out CopIn}
+CopArg = struct{.n Int, .I CopIn}
+copy_raw = (k : CopPar) => {
+  i = compute.range k.n
+  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
+}
+copy = compute.parallel copy_raw "gpu"
+GArg = struct{.n Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun glue ((GlueArg)(.n s.n, .I In(.g s.in.g, .u s.in.u))) : Out)
+  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.m)))
 }
 built = compute.graph step
 built

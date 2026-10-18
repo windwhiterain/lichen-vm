@@ -42,6 +42,7 @@ fn the_real_width_norm_answers_what_the_host_answers() {
     let stepped = prepared
         .step(vec![
             RunArgument::Count(HIDDEN as i64),
+            RunArgument::Count(1),
             RunArgument::Count(HIDDEN as i64),
             floats(&row()),
             floats(&gain()),
