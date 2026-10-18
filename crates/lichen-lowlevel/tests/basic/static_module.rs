@@ -263,7 +263,6 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let mut imp = Module::new();
     let root = imp.add_block(None);
     imp.apply_depth_limit = 200;
-    imp.apply_total_limit = 10_000;
     let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 3);
@@ -287,7 +286,6 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let mut imp = Module::new();
     let root = imp.add_block(None);
     imp.apply_depth_limit = 20;
-    imp.apply_total_limit = 1_000;
     let key = freeze(&mut imp, &m, 1);
     let g = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 0);

@@ -405,9 +405,6 @@ where
             Some(BudgetExhausted::ApplyDepth { limit }) => format!(
                 "the checker stopped on its apply-depth budget: nested applications exceeded {limit} levels. The program may still terminate when run."
             ),
-            Some(BudgetExhausted::ApplyTotal { limit }) => format!(
-                "the checker stopped on its work budget: it applied a function more than {limit} times. The program may still terminate when run."
-            ),
             Some(BudgetExhausted::EvaluateDepth { limit }) => format!(
                 "the checker stopped on its evaluate-depth budget: its value grows deeper than {limit} levels. The program may still terminate when run."
             ),

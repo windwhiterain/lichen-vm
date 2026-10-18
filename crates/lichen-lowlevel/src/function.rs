@@ -116,27 +116,24 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
-        self.with_apply_frame(|module| {
-            let Some(instantiation) = module.instantiate(function, argument, block, node, true)
-            else {
-                // A failed parameter check leaves the apply's result unknown:
-                // the body must not run under a mismatched argument.
-                return None;
-            };
-            let result = module.evaluate_node(Dyn(instantiation.applied), Some(block));
-            // A closure's type cell is the call's own; the pair sync below owns the verdict.
-            if let Some(cell) = cell
-                && let Some(codomain) = module.pair_type_item(instantiation.applied)
-            {
-                let codomain = module.as_dynamic(codomain, block);
-                module.evaluate_node(Dyn(codomain), Some(block));
-                if !module.is_function_type(codomain) {
-                    let (_, recorded) = module.try_unify(cell, codomain);
-                    module.unify_errors.truncate(recorded.start);
-                }
+        let Some(instantiation) = self.instantiate(function, argument, block, node, true) else {
+            // A failed parameter check leaves the apply's result unknown:
+            // the body must not run under a mismatched argument.
+            return None;
+        };
+        let result = self.evaluate_node(Dyn(instantiation.applied), Some(block));
+        // A closure's type cell is the call's own; the pair sync below owns the verdict.
+        if let Some(cell) = cell
+            && let Some(codomain) = self.pair_type_item(instantiation.applied)
+        {
+            let codomain = self.as_dynamic(codomain, block);
+            self.evaluate_node(Dyn(codomain), Some(block));
+            if !self.is_function_type(codomain) {
+                let (_, recorded) = self.try_unify(cell, codomain);
+                self.unify_errors.truncate(recorded.start);
             }
-            module.wire_apply_result(node, result, instantiation.applied, block)
-        })
+        }
+        self.wire_apply_result(node, result, instantiation.applied, block)
     }
 
     /// Apply a function's **type** where its value is not concrete yet.

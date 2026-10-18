@@ -183,36 +183,55 @@ Two consequences, and the second is the one that is easy to miss:
   and gives up backdating and persistence, which is a coherent choice for a value that is
   expensive to read back and cheap to recompute.
 
-## 8. The work budget is the first constraint on heavy data, and it is measured
+## 8. The work budget: found, measured, and removed by decision
 
-This was not in the plan until a probe found it, and it reorders the stages. `WorkBudget`'s
-default is `apply_depth_limit: 500` / `apply_total_limit: 2_000`
-(`crates/lichen-highlevel/src/checker.rs:396-401`), and **every language-level caller gets
+This was not in the plan until a probe found it. `WorkBudget`'s default was
+`apply_depth_limit: 500` / `apply_total_limit: 2_000`, and **every language-level caller got
 it**: `build_in_attr_native` is what `compile`, `BufferSession`, `compile_with_cells` and the
-language server all reach, and it passes `WorkBudget::default()` literally
-(`checker.rs:463`). The lowlevel's own `Module::MAX_APPLY_TOTAL` is **100 000**, so the
-checker overrides the VM's bound by a factor of fifty, and `reset_apply_budget` has no
-caller — the count is cumulative over the whole build.
+language server all reach, and it passed `WorkBudget::default()` literally. The lowlevel's own
+`Module::MAX_APPLY_TOTAL` was **100 000**, so the checker overrode the VM's bound by a factor
+of fifty, and `reset_apply_budget` had no caller — the count was cumulative over the build.
 
-Two measured consequences:
+Two measured consequences, and then the decision they forced:
 
-- **A heavy node overruns it almost immediately.** The naive `fib` this probe uses costs
+- **A heavy node overran it almost immediately.** The naive `fib` this probe uses costs
   ~2·fib(n+1)−1 applications because the array literal evaluates both arms, so `fib 16` is
   ~3 193 applications against a 2 000 budget.
-- **An overrun costs the whole program its cache, not part of it.** `freeze_cells` returns on
-  `!build.ok` (`crates/lichen-language/src/lib.rs:165-167`), and a `NonTerminating` budget
-  refusal makes `build.ok` false. Measured: one `fib 16` cell gives `build ok false`,
-  1 diagnostic, **`frozen 0`, `retained 0`**.
+- **An overrun cost the whole program its cache, not part of it.** `freeze_cells` returns on
+  `!build.ok`, and a `NonTerminating` budget refusal made `build.ok` false. Measured: one
+  `fib 16` cell gave `build ok false`, 1 diagnostic, **`frozen 0`, `retained 0`**.
 
-So heavy computation **cannot happen at check time** under today's budget, which means the
-heavy values these two domains need are the compute layer's — `$parallel`/`$jit` results,
-where one dispatch is one application however many elements it produces. That makes §7's
-tiers the main line rather than an addendum: **T2 and T3 are where a data-science or PCG
-program's heavy data actually lives**, and T1 is the cheap case.
+### 8.1 The decision, and what it removes
 
-Whether the budget should be raisable per host is a decision, not a measurement:
-`Checker::build_with_budget` is public, but it does not take a cell store, so a host cannot
-raise the budget and keep the cell path through the same call. §13 records it as open.
+**Decided: the cumulative bound is removed.** `WorkBudget` keeps one field,
+`apply_depth_limit`; `BudgetExhausted::ApplyTotal`, `Module::apply_total_limit`,
+`Module::apply_total`, `Module::MAX_APPLY_TOTAL` and the counter charge in `apply.rs` and
+`loop_run.rs` are gone, as is `reset_apply_budget` (which had no caller). The depth guard
+stays, because it is also the stack guard.
+
+**What it buys, measured**: the shape that used to be refused — `cheap` 8 plus **4 cells of
+`fib 16`**, ~12 800 applications — now gives `build ok true`, 0 diagnostics, **`frozen 12`,
+`retained 12`**. Heavy host-side work is possible for the first time, which is what both
+domains need for a fold that is naturally recursive.
+
+### 8.2 What it costs, stated plainly
+
+- **The only guard against a divergence that does not nest is gone.** Two tests were the
+  evidence and both were deleted with it: `a_marked_loop_that_never_reaches_its_base_is_refused_by_the_work_budget`,
+  whose own comment was *"The work budget turns an endless loop into a diagnostic instead of a
+  hang"*, and `flattened_recursion_records_the_total_apply_budget`, whose program *"stays at
+  depth 1, invisible to the depth guard"*. An endless `@loop` now hangs the compiler — and the
+  language server's compile worker with it, since that worker catches panics but not hangs.
+- **Nothing bounds a heavy compile any more.** The same shape costs **80 s in a debug build**
+  (measured under `HEAVY16`). A release build is faster by a constant factor, not
+  asymptotically, and a data-science program's real work is larger.
+- **The depth guard remains** — 500 at the checker, 10 000 as the module default — and it
+  catches a *nesting* divergence only. A recursion that widens instead of deepening is
+  exactly the shape it cannot see.
+
+The honest replacement would be a **wall-clock deadline recorded as a refusal**, which
+separates "this is too much work" from "this does not terminate" — the conflation of those two
+in one counter was the original defect. §13 records it as open.
 
 ## 9. Recovered measurements
 
@@ -325,13 +344,12 @@ Three readings, and the third is a caveat rather than a win:
 - **How a graph node's key folds its edges** — the descriptor that
   `incremental-update.md` §5 promises becomes an accelerator and a reason source under this
   ruling, not a soundness requirement, which is a smaller job than that note assumes.
-- **Whether the work budget is raisable per host** (§8). `Checker::build_with_budget` is
-  public, but the language-level path hard-wires `WorkBudget::default()` and no cell-store
-  call takes a budget, so "a host that needs heavy checker-time generation" has no route
-  today. Three shapes, none of them free: thread a budget through the cell path; let a
-  `cache` mark raise the bound for that binding only (a per-binding budget, which is a new
-  semantic); or keep the bound and require heavy work to be compute-layer. **The third is a
-  decision the plan can live with**; the first is the smallest mechanical change.
+- **What replaces the removed work bound** (§8.2). The count conflated "too much work" with
+  "does not terminate"; removing it unblocked heavy helper-side generation and left a
+  non-nesting divergence unguarded, so an endless `@loop` hangs the compiler and the language
+  server's worker. The shape to choose is a *wall-clock deadline* recorded as its own refusal,
+  which bounds the compiler without refusing honest work. Its limit is a policy (seconds, not
+  counts), and it must be one the editor path can set lower than a batch host's.
 - **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
   and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
   around it.

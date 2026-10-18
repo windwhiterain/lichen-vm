@@ -377,26 +377,18 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkBudget {
     /// Nested applications permitted before the guard refuses.
-    pub apply_depth_limit: usize,
-    /// Cumulative applications permitted before the guard refuses.
     ///
     /// # Invariant
-    /// A converted `@loop` iteration is one application, so this bound covers
-    /// loops and expansions alike: raising it is what a large trip count asks
-    /// for, since a loop never spends the nesting bound.
-    pub apply_total_limit: usize,
+    /// Depth is the applied node's own, so an expansion reaches the bound at its trip
+    /// count while a converted loop's iterations never do. A loop spends no count and is
+    /// therefore unbounded: the guard is a stack bound, not a work bound.
+    pub apply_depth_limit: usize,
 }
 
 impl Default for WorkBudget {
-    /// The checker's tuned pair.
-    ///
-    /// # Invariant
-    /// The two numbers are matched, so an unmarked recursion reaches the total
-    /// bound around the count it would have reached the nesting one.
     fn default() -> Self {
         WorkBudget {
             apply_depth_limit: 500,
-            apply_total_limit: 2_000,
         }
     }
 }
@@ -482,7 +474,6 @@ where
         // The definition pass runs the whole program, so the limits must be set
         // before it starts.
         module.apply_depth_limit = work_budget.apply_depth_limit;
-        module.apply_total_limit = work_budget.apply_total_limit;
 
         let root_block = module.add_block(None);
         let n = ir.expr.len();

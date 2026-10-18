@@ -410,33 +410,3 @@ fn deep_evaluating_an_infinite_stream_records_the_deep_budget() {
         m.budget_exhausted
     );
 }
-#[test]
-fn flattened_recursion_records_the_total_apply_budget() {
-    let mut m = Module::new();
-    let root = m.add_block(None);
-    // Each apply returns the cached pair, so applies stay at depth 1, invisible to the depth guard.
-
-    // The total-application budget is the work bound that catches it.
-    let body = m.add_block(None);
-    let param = m.add_node(body, None, None);
-    let func_node = m.add_node(body, None, None);
-    let ops = array_node(&mut m, body, &[func_node, param], None);
-    let call = op_node(
-        &mut m,
-        body,
-        TestOperator::LowOperator(LowOperator::Apply),
-        Some(ops),
-    );
-    let zero = u128_node(&mut m, body, 0);
-    let ret = array_node(&mut m, body, &[call, zero], None);
-    let _function = finish_function(&mut m, body, ret, param, func_node);
-    m.apply_total_limit = 4;
-    let arg = u128_node(&mut m, root, 1);
-    let call = call_node(&mut m, root, func_node, arg);
-    m.evaluate_node_deep(call, None);
-    assert_eq!(
-        m.budget_exhausted,
-        Some(BudgetExhausted::ApplyTotal { limit: 4 }),
-        "the total-apply guard must record its budget instead of panicking"
-    );
-}

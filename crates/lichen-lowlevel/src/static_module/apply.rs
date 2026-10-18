@@ -20,8 +20,8 @@ impl<P: Program> Module<P> {
         }
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(node) + 1;
-        let result = self.with_apply_frame(|module| {
-            let static_module = module.static_module(function.module);
+        let result = 'frame: {
+            let static_module = self.static_module(function.module);
             let (r#return, parameter, assert_count) = {
                 let f = &static_module.functions[function.index.0];
                 (f.r#return, f.parameter, f.asserts.len())
@@ -32,22 +32,22 @@ impl<P: Program> Module<P> {
                 remap: HashMap::new(),
                 applied: function.index,
                 branch_top: None,
-                tag: module.nodes[node].function,
+                tag: self.nodes[node].function,
                 // The caller-side node every clone is attributed through: the apply or
                 // the template it was cloned from.
-                origin: module.nodes[node].origin.unwrap_or(node),
+                origin: self.nodes[node].origin.unwrap_or(node),
             };
-            let applied = module.static_node_apply(r#return, &mut ctx);
+            let applied = self.static_node_apply(r#return, &mut ctx);
             // The parameter is a walk entry point: an ignored one is still satisfied.
-            module.static_node_apply(parameter, &mut ctx);
+            self.static_node_apply(parameter, &mut ctx);
             // Each assert instantiates through the shared remap; a baked
             // condition is not re-registered.
             for index in 0..assert_count {
                 let condition = ctx.module.functions[function.index.0].asserts[index];
                 let baked = !ctx.module.nodes[condition.index].undecided();
-                let instantiated = module.static_node_apply(condition, &mut ctx);
+                let instantiated = self.static_node_apply(condition, &mut ctx);
                 if !baked {
-                    module.asserts.push(PendingAssert {
+                    self.asserts.push(PendingAssert {
                         condition: instantiated,
                         template: static_ref(&ctx.module, condition),
                     });
@@ -64,10 +64,10 @@ impl<P: Program> Module<P> {
                         |template| static_find(&ctx.module.nodes, template),
                     );
                     crate::apply::unify_clone_groups(groups, |first, clone| {
-                        module.unify(first, clone);
+                        self.unify(first, clone);
                     });
                 }
-                if module.apply_parameter_check(
+                if self.apply_parameter_check(
                     cloned_param,
                     argument,
                     block,
@@ -75,22 +75,22 @@ impl<P: Program> Module<P> {
                     AnyFunctionId::Static(function),
                     cloned_param,
                 ) {
-                    return None;
+                    break 'frame None;
                 }
             }
-            let result = module.evaluate_node(Dyn(applied), Some(block));
+            let result = self.evaluate_node(Dyn(applied), Some(block));
             // A static callee's type is static too, which the dynamic guard refuses.
             if let Some(cell) = cell
-                && let Some(codomain) = module.pair_type_item(applied)
+                && let Some(codomain) = self.pair_type_item(applied)
             {
                 // A decided codomain stays the frozen ref the clone walk carried; a
                 // leaf in this block gives the bind its value.
-                let codomain = module.as_dynamic(codomain, block);
-                module.evaluate_node(Dyn(codomain), Some(block));
-                module.unify(cell, codomain);
+                let codomain = self.as_dynamic(codomain, block);
+                self.evaluate_node(Dyn(codomain), Some(block));
+                self.unify(cell, codomain);
             }
-            module.wire_apply_result(node, result, applied, block)
-        });
+            self.wire_apply_result(node, result, applied, block)
+        };
         self.stamp_depth = stamp;
         result
     }

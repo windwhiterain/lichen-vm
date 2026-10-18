@@ -232,21 +232,26 @@ fn main() {
         );
     }
 
-    // Past `apply_total_limit` the whole build is refused, so nothing is retained.
-    println!("\n== over budget: one cell of fib 16 against the 2 000 apply budget ==");
-    let over = Shape::base(cheap, 1, 16);
-    let over_source = over.source();
-    let mut session = BufferSession::<LangProgram>::with_source_id(over_source, "probe.lichen");
-    let t = Instant::now();
-    let report = session.compile();
-    println!(
-        "compile {:8.2} ms, build ok {}, diagnostics {}, frozen {}, retained {}",
-        ms(t.elapsed()),
-        report.build.as_ref().is_some_and(|b| b.ok),
-        report.diagnostics.len(),
-        report.cells.frozen,
-        session.retained_cells(),
-    );
+    // `fib 16` is ~3 193 applies, which the 2 000 bound refused. Opt in: it takes minutes.
+    if std::env::var("HEAVY16").is_ok() {
+        println!("\n== heavy: {heavy} cells of fib 16, past the removed 2 000 apply budget ==");
+        let heavy_source = Shape::base(cheap, heavy, 16).source();
+        let mut session =
+            BufferSession::<LangProgram>::with_source_id(heavy_source.clone(), "probe.lichen");
+        let t = Instant::now();
+        let report = session.compile();
+        let session_ms = ms(t.elapsed());
+        let tf = Instant::now();
+        let _fresh = compile(&heavy_source);
+        let fresh_ms = ms(tf.elapsed());
+        println!(
+            "session {session_ms:8.2} ms, fresh {fresh_ms:8.2} ms, build ok {}, diagnostics {}, frozen {}, retained {}",
+            report.build.as_ref().is_some_and(|b| b.ok),
+            report.diagnostics.len(),
+            report.cells.frozen,
+            session.retained_cells(),
+        );
+    }
 }
 
 fn measure(session: &mut BufferSession<LangProgram>, source: &str, label: &'static str) -> Reading {

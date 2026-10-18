@@ -93,34 +93,6 @@ fn a_marked_loop_answers_what_the_unroll_answers() {
 }
 
 #[test]
-fn the_loop_spends_one_application_per_iteration() {
-    // Each iteration is one application, the same unit an unwound level would have cost.
-
-    // `count 17` therefore spends 18 applications; one fewer is refused, so the loop went round.
-    let short = run(
-        |m| m.apply_total_limit = 18,
-        |m| {
-            let (function, id, _, _, _) = countdown(m, true);
-            (function, id)
-        },
-        17,
-    );
-    assert_eq!(
-        short,
-        (None, Some(BudgetExhausted::ApplyTotal { limit: 18 }))
-    );
-    let exact = run(
-        |m| m.apply_total_limit = 19,
-        |m| {
-            let (function, id, _, _, _) = countdown(m, true);
-            (function, id)
-        },
-        17,
-    );
-    assert_eq!(exact, (Some(0), None));
-}
-
-#[test]
 fn a_marked_loop_runs_a_count_the_unroll_cannot_afford() {
     // Both paths apply once per count, but the expansion nests and the loop does not.
     let count = 50u128;
@@ -149,18 +121,6 @@ fn a_marked_loop_runs_a_count_the_unroll_cannot_afford() {
         looped,
         (Some(0), None),
         "the loop must run at one level however many iterations it takes"
-    );
-}
-
-#[test]
-fn a_marked_loop_that_never_reaches_its_base_is_refused_by_the_work_budget() {
-    // The work budget turns an endless loop into a diagnostic instead of a hang.
-
-    // The expansion's nesting guard never fires here, which is why the total bound has to.
-    let refused = run(|m| m.apply_total_limit = 5, |m| stuck_loop(m, true), 5);
-    assert_eq!(
-        refused,
-        (None, Some(BudgetExhausted::ApplyTotal { limit: 5 }))
     );
 }
 

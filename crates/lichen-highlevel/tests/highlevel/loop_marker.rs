@@ -6,7 +6,7 @@
 //! loop is emitted is the reader's fact, and the reader reports the sites it
 //! declines.
 
-use lichen_highlevel::checker::{Build, Checker, WorkBudget};
+use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::diagnostic::{Diag, DiagKind};
 use lichen_highlevel::ir::BinOp;
 use lichen_highlevel::program::ProgramImpl;
@@ -194,33 +194,5 @@ fn an_undecided_marked_site_leaves_the_build_ok() {
         build.ok,
         "an undecided marked site is the reader's question, not the build's: {:?}",
         build.diagnostics()
-    );
-}
-
-/// A host raises the work total to answer a count the default total refuses.
-#[test]
-fn a_host_that_wants_a_large_trip_count_raises_the_work_bound() {
-    // The default work bound is one application per count, for the loop as for
-    // the unroll.
-    let default: Build<ProgramImpl> = build(countdown(true, Some(3_000)));
-    assert!(
-        !default.ok,
-        "3_000 applications must exceed the checker's default work bound"
-    );
-
-    let budget = WorkBudget {
-        apply_depth_limit: 500,
-        apply_total_limit: 100_000,
-    };
-    let program = countdown(true, Some(3_000));
-    let looped: Build<ProgramImpl> = Checker::build_with_budget(program.ir, budget);
-    assert!(
-        looped.ok,
-        "the raised work bound must let the loop run: {:?}",
-        looped.diagnostics()
-    );
-    assert_eq!(
-        looped.module.budget_exhausted, None,
-        "and nothing refused along the way"
     );
 }

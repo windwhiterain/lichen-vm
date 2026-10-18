@@ -831,8 +831,6 @@ impl<P: Program> StaticNode<P> {
 pub enum BudgetExhausted {
     /// Nested applications ran deeper than [`Module::apply_depth_limit`]; measured on the node.
     ApplyDepth { limit: usize },
-    /// The cumulative application count passed [`Module::apply_total_limit`], the work bound.
-    ApplyTotal { limit: usize },
     /// [`Module::evaluate_node_deep`] nested deeper than [`Module::evaluate_depth_limit`].
     EvaluateDepth { limit: usize },
 }
@@ -855,13 +853,6 @@ pub struct Module<P: Program> {
     /// Depth is [`Self::node_depth`], so an expansion reaches the bound at its trip count
     /// while a converted loop's iterations never do. Defaults to [`Self::MAX_APPLY_DEPTH`].
     pub apply_depth_limit: usize,
-    /// Total-application guard: refuses when cumulative applications exceed this.
-    ///
-    /// # Invariant
-    /// The nesting guard alone cannot bound a run — a wide recursion is never deep — so the
-    /// work is bounded by its own counter, which a converted loop spends per iteration.
-    /// Defaults to [`Self::MAX_APPLY_TOTAL`].
-    pub apply_total_limit: usize,
     /// Deep-evaluation guard: refuses when [`Self::evaluate_node_deep`] nests deeper than this.
     ///
     /// # Invariant
@@ -936,7 +927,6 @@ pub struct Module<P: Program> {
     /// The guard, not the union-find's finiteness, is what bounds that walk: reading a
     /// member re-enters the same class, so an unguarded walk never returns.
     evaluating_classes: HashSet<NodeId>,
-    apply_total: usize,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,

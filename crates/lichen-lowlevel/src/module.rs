@@ -10,9 +10,6 @@ impl<P: Program> Default for Module<P> {
 
 impl<P: Program> Module<P> {
     pub const MAX_APPLY_DEPTH: usize = 10_000;
-    /// The default total-application budget: each application clones its
-    /// function's body, so this also bounds module size.
-    pub const MAX_APPLY_TOTAL: usize = 100_000;
     pub const MAX_DEEP_DEPTH: usize = 300_000;
 
     pub fn new() -> Self {
@@ -27,7 +24,6 @@ impl<P: Program> Module<P> {
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
-            apply_total_limit: Self::MAX_APPLY_TOTAL,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
@@ -41,7 +37,6 @@ impl<P: Program> Module<P> {
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
             evaluating_classes: HashSet::new(),
-            apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,
             budget_exhausted: None,
@@ -65,20 +60,6 @@ impl<P: Program> Module<P> {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .freeze_mapped(source, key, hash)
-    }
-
-    /// Reset the per-run evaluation budgets for a host driving the module in a loop.
-    ///
-    /// # Invariant
-    ///
-    /// The budgets guard *one* run; the limits are unchanged, and the nesting guard needs
-    /// no reset — it reads a node's [`depth`](Module::node_depth), a fact of the graph.
-    /// [`Self::budget_exhausted`] resets with them: it is a per-run verdict, so a new run
-    /// must not read the previous one's refusal.
-    pub fn reset_apply_budget(&mut self) {
-        self.apply_total = 0;
-        self.deep_depth = 0;
-        self.budget_exhausted = None;
     }
 
     pub fn add_block(&mut self, parent: Option<BlockId>) -> BlockId {

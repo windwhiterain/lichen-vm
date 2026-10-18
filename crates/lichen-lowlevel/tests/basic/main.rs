@@ -712,37 +712,3 @@ fn countdown(
     }
     (func_node, function, condition, decrement, param)
 }
-
-/// Build `stuck n = if n < 1 then n else stuck n`, a **convertible** recursion
-/// whose step never changes its state.
-///
-/// # Invariant
-/// The shape makes it a loop; an argument that fails the test makes it endless.
-fn stuck_loop(m: &mut Module<TestProgram>, marked: bool) -> (NodeId, FunctionId) {
-    let body = m.add_block(None);
-    let param = m.add_node(body, None, None);
-    let func_node = m.add_node(body, None, None);
-    let one = u128_node(m, body, 1);
-    let call_ops = array_node(m, body, &[func_node, param], None);
-    let call = op_node(
-        m,
-        body,
-        TestOperator::LowOperator(LowOperator::Apply),
-        Some(call_ops),
-    );
-    let condition_ops = array_node(m, body, &[param, one], None);
-    let condition = op_node(m, body, TestOperator::Lt, Some(condition_ops));
-    let branches = array_node(m, body, &[call, param], None);
-    let index_ops = array_node(m, body, &[branches, condition], None);
-    let ret = op_node(
-        m,
-        body,
-        TestOperator::LowOperator(LowOperator::Index),
-        Some(index_ops),
-    );
-    let function = finish_function(m, body, ret, param, func_node);
-    if marked {
-        m.mark_looping(function);
-    }
-    (func_node, function)
-}

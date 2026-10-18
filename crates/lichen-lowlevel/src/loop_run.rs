@@ -4,8 +4,8 @@
 use lichen_utils::extend::AsEnum;
 
 use crate::{
-    AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, BudgetExhausted, FunctionId, LoopArm,
-    LoopConversion, LowValue, Module, NodeId, Program,
+    AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, FunctionId, LoopArm, LoopConversion, LowValue,
+    Module, NodeId, Program,
 };
 
 /// What one iteration decided.
@@ -40,11 +40,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> Option<P::Value> {
-        // **The entering call is one application**: the apply budget and one
-        // level of nesting, whatever the iteration count.
-        self.with_apply_frame(|module| {
-            module.loop_body(conversion, function, argument, block, node, cell)
-        })
+        self.loop_body(conversion, function, argument, block, node, cell)
     }
 
     /// The iterations, from `argument` to a base.
@@ -59,17 +55,6 @@ impl<P: Program> Module<P> {
     ) -> Option<P::Value> {
         let mut argument = argument;
         loop {
-            // **An iteration is an application**, as the level it replaces is:
-            // one counter, so the host's limit bounds both paths.
-            self.apply_total += 1;
-            if self.apply_total > self.apply_total_limit {
-                if self.budget_exhausted.is_none() {
-                    self.budget_exhausted = Some(BudgetExhausted::ApplyTotal {
-                        limit: self.apply_total_limit,
-                    });
-                }
-                return None;
-            }
             match self.loop_iteration(conversion, function, argument, block, node) {
                 Iteration::Step(next) => {
                     // The state crosses the backedge **lazily**, through the

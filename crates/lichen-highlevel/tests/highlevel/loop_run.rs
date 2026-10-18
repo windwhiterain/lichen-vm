@@ -78,13 +78,3 @@ fn a_marked_reduction_runs_a_count_the_expansion_cannot_afford() {
         "the same program unmarked must be refused by the *nesting* guard"
     );
 }
-
-#[test]
-fn a_marked_reduction_past_the_work_bound_is_refused_too() {
-    // The loop is not exempt from work: an iteration is one application.
-    let looped = sum_to(true, 3_000);
-    assert_eq!(
-        refusal(&looped),
-        BudgetExhausted::ApplyTotal { limit: 2_000 },
-    );
-}

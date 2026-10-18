@@ -7,35 +7,6 @@ use crate::{
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// Run `body` inside one application frame: charge the work counter and enforce
-    /// its bound.
-    ///
-    /// # Invariant
-    /// An exceeded budget is **recorded, not unwound**: the body is refused,
-    /// [`Module::budget_exhausted`] keeps the budget and its limit, and the frame
-    /// returns the undecided marker.  Only the **work** counter is charged here;
-    /// the nesting guard reads the applied node's [`Self::node_depth`] instead,
-    /// so it holds however the expansion was forced.
-    pub(super) fn with_apply_frame(
-        &mut self,
-        body: impl FnOnce(&mut Self) -> Option<P::Value>,
-    ) -> Option<P::Value> {
-        self.apply_total += 1;
-        let exhausted =
-            (self.apply_total > self.apply_total_limit).then_some(BudgetExhausted::ApplyTotal {
-                limit: self.apply_total_limit,
-            });
-        if let Some(exhausted) = exhausted {
-            if self.budget_exhausted.is_none() {
-                self.budget_exhausted = Some(exhausted);
-            }
-            // The body never ran, so the answer is unknown: `None`, not an `Error`
-            // the postlude caches as decided.
-            return None;
-        }
-        body(self)
-    }
-
     /// Whether applying `node` would instantiate a body deeper than [`Self::apply_depth_limit`].
     ///
     /// # Invariant
