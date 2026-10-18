@@ -142,8 +142,13 @@ none: Int
 
 The marker carries a type, `Int`, because the division's type is known
 even though its value is not. It also carries a *reason* — here
-`operator.divide_by_zero` — which tools can read. A program that prints
-`none` did not fail; it printed the marker.
+`operator.divide_by_zero` — which the compiler reports on standard error:
+
+```text
+operator.divide_by_zero: the divisor of this division evaluated to 0, and there is no value for a division by zero
+```
+
+A program that prints `none` did not fail; it printed the marker.
 
 The marker flows through computations that read it:
 

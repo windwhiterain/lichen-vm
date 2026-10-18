@@ -99,7 +99,7 @@ f 20
 ```
 
 ```text
-error: assertion failed: expected 1, found 0
+error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
   --> 2:6
    |
  2 | f = (x ! small) => x
@@ -109,9 +109,12 @@ error: assertion failed: expected 1, found 0
 The refinement is checked through the same channel as `@assert`
 (Chapter 14): a predicate that does not answer `1` fails the program, and
 the diagnostic points at the refinement rather than at the call. The
-failure sentence is the channel's; the core prelude's operators add the
-class they expected (`does not satisfy {Int, Float}`), because their
-contracts name the set.
+sentence names the refinement — `the refinement's predicate did not
+answer 1 — the value does not satisfy the refined type` — where an
+`@assert` reports the channel's plain `expected 1, found 0`. A class
+contract can say more still: the core prelude's operators name the set the
+value missed (`does not satisfy {Int, Float}`), because their contracts
+name the class domain.
 
 ### Refinements on types
 
@@ -142,7 +145,7 @@ keep string
 ```
 
 ```text
-error: assertion failed: expected 1, found 0
+error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
   --> 3:14
    |
  3 | keep = (x : (_ ! in_num)) => x
@@ -177,7 +180,7 @@ f (1, "a")
 ```
 
 ```text
-error: assertion failed: expected 1, found 0
+error: the refinement's predicate did not answer 1 — the value does not satisfy the refined type
   --> 3:31
    |
  3 | f = (p : tuple{(_ ! in_num), (_ ! in_num)}) => p
@@ -268,9 +271,9 @@ declaration states the rule, and the note points at the use that broke it.
 - A refinement on a type receives the type value; `x : (_ ! in_num)` is the
   class contract, and it is re-checked per application while the class is
   open.
-- A refinement failure uses the assert channel's sentence and points at the
-  refinement; the prelude's contracts name the class set and add a `note`
-  at the failing use.
+- A refinement failure names the refinement and points at it; a class
+  contract names the class set, and the prelude adds a `note` at the failing
+  use.
 - The core prelude writes the operators' contracts in the language itself.
 
 ## Exercises

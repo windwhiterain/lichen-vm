@@ -137,7 +137,7 @@ E()
 ```
 
 The missing or extra argument is refused at the instance. A field left
-unsupplied is named:
+unsupplied is refused, naming the field and the struct type:
 
 ```lichen
 S = struct{.x Int, .y Type}
@@ -145,15 +145,14 @@ S(.x 1)
 ```
 
 ```text
-error: missing field y in struct instantiation
+error: missing field y in the struct type struct{.x Int, .y Type}#11
   --> 2:1
    |
  2 | S(.x 1)
    | ^
 ```
 
-and an unknown name is refused at the argument, with the missing field
-reported too, because one typo explains the gap:
+and an unknown name is refused at the argument:
 
 ```lichen
 S = struct{.x Int, .y Type}
@@ -166,11 +165,6 @@ error: no field named z in the struct type struct{.x Int, .y Type}#11
    |
  2 | S(.z 1, .x 2)
    |      ^
-error: missing field y in struct instantiation
-  --> 2:1
-   |
- 2 | S(.z 1, .x 2)
-   | ^
 ```
 
 Instances of a struct with a pinned field (`struct{.a 5 : Int}`, Chapter

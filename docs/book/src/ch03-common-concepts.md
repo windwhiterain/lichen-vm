@@ -202,8 +202,16 @@ none: Int
 ```
 
 The computation is refused, but the program's type is still known —
-`Int` — and evaluation continues lazily. Chapter 6 explains what the
-marker means; for now, read `none` as "there is no value here".
+`Int` — and evaluation continues lazily. The line above is the program's
+standard output. The compiler also writes a **report** to standard error,
+naming the reason:
+
+```text
+operator.divide_by_zero: the divisor of this division evaluated to 0, and there is no value for a division by zero
+```
+
+Chapter 6 explains what the marker means; for now, read `none` as "there
+is no value here".
 
 ### `Float`
 
@@ -276,6 +284,11 @@ float2int (0.0 - 1.0)
 ```text
 none: Int
 ```
+
+The reason is reported on standard error:
+`operator.out_of_range: this float2int operand is negative, and this
+language's Int is unsigned, and there is no Int for it to truncate
+toward`.
 
 ### `string`
 

@@ -257,8 +257,13 @@ undecided when the definition is checked is not triggered then; the apply
 clone re-checks it against each call's argument.
 
 `@assert` and the refinement of Chapter 11 share one channel: both
-require a condition to answer `1`, and both fail with the same sentence.
-The difference is where the condition comes from.
+require a condition to answer `1`. They differ in what they say. An
+`@assert` reports the channel's plain sentence, `assertion failed:
+expected 1, found 0`; a refinement names itself (`the refinement's
+predicate did not answer 1 — the value does not satisfy the refined
+type`), and a class contract names the set it expected (`does not satisfy
+{Int, Float}`). The difference is in the spelling the condition was
+registered with, and the position is always the condition's own.
 
 ## Errors, refusals, and the difference
 
@@ -279,10 +284,11 @@ A refused computation is not a diagnostic (Chapter 6):
 (none, 1): tuple{Int, Int}
 ```
 
-`1 / 0` has no value, so it answers `none` — with a recorded reason, which
-tools can read — and the program carries on. The distinction is sharp and
-worth remembering: a failed *check* is the compiler refusing to build; a
-*refusal* is a value that could not be computed.
+`1 / 0` has no value, so it answers `none` — with a reason the compiler
+reports on standard error when the computation is forced — and the
+program carries on. The distinction is sharp and worth remembering: a
+failed *check* is the compiler refusing to build; a *refusal* is a value
+that could not be computed.
 
 ## One honest limit
 

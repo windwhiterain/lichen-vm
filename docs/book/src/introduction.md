@@ -79,7 +79,9 @@ The book uses these conventions:
 - Code in a `lichen` block is a complete program unless the text says
   otherwise. Save it to a file ending in `.lichen` and run it.
 - Output in a `text` block is what the compiler printed, character for
-  character.
+  character. A program's answer is its standard output; the compiler's own
+  reports (a refused computation's reason, for example) go to standard
+  error and are quoted separately where they matter.
 - A `console` block contains a shell command and its output. `$` is the
   prompt; do not type it.
 - Three dots (`…`) mean "genuinely elided text", and are explained in the
