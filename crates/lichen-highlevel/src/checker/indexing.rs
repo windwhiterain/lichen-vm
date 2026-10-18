@@ -202,12 +202,17 @@ where
     /// stored key is deep-content-equal to `k`.
     ///
     /// # Invariant
-    /// The container's type is pinned to a fresh table type, so a non-table
-    /// fails here and an undecided one resolves at the call site's argument
-    /// unify. The read's type is the pinned shape's value-type cell.
+    /// The container's type must be decided at the read; it is then pinned to a
+    /// fresh table type, so a non-table fails here. The read's type is the
+    /// pinned shape's value-type cell.
     pub(super) fn check_table_find(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
+        let container_ty = self.state[container].ty.unwrap();
+        self.module.evaluate_node_deep(container_ty, None);
+        if !self.type_is_concrete(container_ty) && !self.is_loop_state(container) {
+            return self.refuse_undecided_container(e, container, container_ty, "table read");
+        }
         let key_cell = self.fresh_cell();
         let value_cell = self.fresh_cell();
         // The two positions are slots, so the pin's shape is `[key, value]`.
@@ -217,7 +222,7 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let table_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
-            self.state[container].ty.unwrap(),
+            container_ty,
             table_ty,
             self.loc(container, 1),
             DiagKind::Guard,

@@ -268,7 +268,10 @@ farg     := '.' name expr                         -- named instantiation argumen
   **table type** is the braced `table{K, V}` — the key slot and the value slot,
   the same shape the value form builds, so a table value checks against a
   `table{Int, string}` annotation exactly as it did against the printer's old
-  `table<K, V>` notation.
+  `table<K, V>` notation.  The read needs its container's type decided at the
+  read: a table read on an undecided container is refused
+  (`this table read cannot be checked: the container's type is not decided
+  here — annotate the container's type`).
 - **Sets.**  `set(a, b, …)` is a set of ordinary values — a *value* form led by a
   word, exactly like the table value, because a set's members are values.  The
   members are full
@@ -681,7 +684,10 @@ maps every span back to the original file.
   language's reserved words live — and it sits at the **comparison level**,
   left-associative, so `x @in S == 1` is `(x @in S) == 1`.  Its right operand is
   checked to be a set: a membership test against anything else is a check-time
-  refusal, the same container pin `e[i]` applies.  **Nothing unifies against
+  refusal, the same container pin `e[i]` applies.  Its right operand's type must
+  be decided at the read — an undecided one is refused (`this set membership
+  cannot be checked: the container's type is not decided here — annotate the
+  container's type`).  **Nothing unifies against
   either operand**: a membership test is a fact about a *value*, so it is
   answered by evaluating the value, never by reconciling types.
 

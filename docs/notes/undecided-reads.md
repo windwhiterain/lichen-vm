@@ -70,7 +70,8 @@ type, so nothing reconciled the two slots. The table read did not have the
 hole: `check_table_find` pins the container's whole type to
 `table{?, ?}`, and the apply's argument unify checks the pinned value type
 (measured: `f = x => { a = x <== 1; a : Int; a }; f (table(1 ==> "a"))` is
-refused with `expected table{?a, Int}, found table{Int, string}`).
+refused with `expected table{?a, Int}, found table{Int, string}`). It was a
+deferral nonetheless, and the author strictified it with its set sibling (§4).
 
 The access-caused `raw` answers were the same failure: before the ruling,
 `addpair = p => p(0) + p(1); addpair (1, 2)` printed
@@ -79,7 +80,8 @@ The access-caused `raw` answers were the same failure: before the ruling,
 ## 3. What the checker does now
 
 - `check_field` / `check_index` / `check_named_field` /
-  `check_named_type_access` / `check_type_access` test the container's type
+  `check_named_type_access` / `check_type_access` / `check_table_find` and the
+  `@in` arm test the container's type
   for being decided (a type-function annotation is *deep-evaluated* first, so
   a written `(k : K _)` is decided), and refuse otherwise with
   `DiagKind::UndecidedContainer`, whose `field` slot names the read form.
@@ -88,8 +90,11 @@ The access-caused `raw` answers were the same failure: before the ruling,
 - A lambda parameter's written type is deep-evaluated **before the body**
   (`checker/lambda.rs`), so a body's read on an annotated parameter is
   checked against a decided type. This is what makes annotations like
-  `(k : compute.K _)` and `(s : tuple{Int, _})` usable without changing the
+  `(k : compute.K _)` usable without changing the
   annotation language.
+- The `@loop` state read is the one deferral: the conversion derives the
+  state tuple's element types from the recursive call, so `s(0)` in a marked
+  fold needs no annotation (§4).
 - The `IsTupleType`/`IsArrayType` kind-assert registrations are gone with the
   tier; the `AssertSpelling::StructKind`/`TupleKind`/`ArrayKind` variants are
   registered nowhere now (removing them is a follow-up cleanup).
@@ -98,21 +103,21 @@ The rule is *language-level*: the spec says a read needs its container's type
 decided at the read, and an undecided one must be annotated. The diagnostic's
 position is the container.
 
-## 4. What still defers, and why
+## 4. The one deferral left, and the call result
 
-`check_table_find` keeps its **pin**: the container's type is unified with a
-fresh `table{key, value}` type whose value cell is the read's type, so the
-apply's argument unify checks the *whole* container (measured in §2). The set
-membership `@in` is a `TypeOperator::InDomain` check whose result type is
-always `Int`; its container's requirement is checked where the set's type is
-read, and a wrong-kind set is refused by the apply. Neither can print a
-value/type disagreement.
+The author strictified the two copies too: a **table read** and a **set
+membership** now refuse an undecided container at the read (`this table read
+cannot be checked: …`, `this set membership cannot be checked: …`). The pins
+stay for the decided case: the container's type is unified with a fresh
+`table{key, value}` (whose value cell is the read's type) or `set{element}`,
+so a decided non-table/non-set is still refused by the pin. Measured:
+`f = t => t <== 1` and `f = s => 1 @in s` are refused at the read; a literal
+container or an annotated parameter is checked as before.
 
-If the author wants every read on an undecided container refused, including
-these two, they are the same kind of gate and can be strictified; the reason
-they were kept is that their *check is guaranteed at the apply* by a full
-type unify, which is the property the ruling asks for. The reads in §3 did
-not have that property.
+The `@loop` state read is the remaining deferral: the conversion derives the
+state tuple's element types from the recursive call and unifies them after
+the body, so a marked fold's `s(0)` is read against the conversion's type
+without an annotation (the author's choice, §3).
 
 A read's container is not always a parameter. A **call's result** is a cell,
 and the read takes the call's type only when that type is decided. The
@@ -173,3 +178,6 @@ open cells instead of the shared cut; the spec's §5 states that.
   count after the raw section's removal).
 - `lichen-compute`: 245 tests pass, and the serve suite is green; both take the
   new read/parallel ABI.
+- the table read and set membership strictification (§4) needed one TestKit
+  test to build a typed table parameter; every suite is otherwise unchanged,
+  and the book's ch09 table/set blocks were re-run with the strict compiler.

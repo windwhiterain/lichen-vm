@@ -46,6 +46,10 @@ where
             // Invariant: the left operand is unconstrained, not even with the
             // set's element cell (operator-polymorphism.md §2-§3).
             BinOp::In => {
+                self.module.evaluate_node_deep(right_ty, None);
+                if !self.type_is_concrete(right_ty) && !self.is_loop_state(right) {
+                    return self.refuse_undecided_container(e, right, right_ty, "set membership");
+                }
                 let element_cell = self.fresh_cell();
                 // A set's element position is a slot, as an array's is.
                 let element = self.element_slot(None, Some(element_cell), None);

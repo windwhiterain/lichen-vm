@@ -156,12 +156,15 @@ fn a_table_flows_through_a_function() {
 
 #[test]
 fn a_table_behind_a_parameter_reads_through_tableget() {
-    // The lookup's pin fixes `t`'s undecided type; the argument unify binds it.
+    // The parameter's type is decided at the read; the pin checks it is a table.
     let answer = value_of(
         |w| {
             let t = w.param("t");
             let body = w.find("body", t, w.int("key", 1));
-            let get = w.lam("get", t, body);
+            let key_ty = w.int_type("key_ty");
+            let value_ty = w.int_type("value_ty");
+            let table_ty = w.type_table("table_ty", key_ty, value_ty);
+            let get = w.lam_typed("get", t, Some(table_ty), body, false);
             let table = w.table("table", &[(w.int("key", 1), w.int("seven", 7))]);
             w.app("call", get, table)
         },

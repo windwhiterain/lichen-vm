@@ -47,6 +47,11 @@ t = table((1, 2) ==> "pair", (3, 4) ==> "other")
 ("pair", "other"): tuple{string, string}
 ```
 
+The read needs the table's type decided at the read: a literal table or an
+annotated container is decided, while a read through an unannotated parameter
+is refused (`this table read cannot be checked: the container's type is not
+decided here — annotate the container's type`).
+
 Keys are compared by the language's own value equality: scalars, tuples
 and arrays compare by **content**, a nested table compares by
 **identity**, and a function compares by its **id**. So two content-equal
@@ -165,6 +170,11 @@ is not an array: it is not indexable, and it cannot flow into an
 ```text
 (1, 0): tuple{Int, Int}
 ```
+
+The right operand's type must be decided at the read: a set literal is
+decided, while a membership test through an unannotated parameter `s` is
+refused (`this set membership cannot be checked: the container's type is not
+decided here — annotate the container's type`).
 
 The keyword sits at the comparison level, so `2 @in set(1, 2) == 1` is
 `(2 @in set(1, 2)) == 1`, and its right operand must be a set:
