@@ -435,3 +435,46 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// A real width: the hidden size every layer of Qwen3-1.7B computes at.
+pub const HIDDEN: usize = 2048;
+
+/// Qwen3's RMSNorm: two kernels, because one lane cannot reduce a row and scale it at once.
+///
+/// # Invariant
+/// The first kernel is a single lane folding the row's squares into one word, and the second is one
+/// lane per element dividing by the root of that mean. The sum is the row's and the scale is the
+/// element's, so the two are separate dispatches over the same two buffers.
+pub const RMS_NORM_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In      = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+Squared = struct{.s (compute.Buf Float)}
+Normed  = struct{.y (compute.Buf Float)}
+SquarePar = struct{.n Int, .dim Int, .in In, .out Squared}
+SquareArg = struct{.n Int, .dim Int, .I In}
+squares_raw = (k : SquarePar) => {
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.s, .at 0, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+ScaleIn  = struct{.s (compute.Buf Float), .x (compute.Buf Float), .w (compute.Buf Float)}
+ScalePar = struct{.n Int, .dim Int, .in ScaleIn, .out Normed}
+ScaleArg = struct{.n Int, .dim Int, .I ScaleIn}
+scale_raw = (k : ScalePar) => {
+  i = compute.range k.n
+  total = compute.read ((compute.Read _)(.from k.in.s, .at 0))
+  mean = total / (int2float k.dim)
+  divisor = sqrt (mean + 0.000001)
+  value = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  weight = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((value * weight) / divisor)))
+}
+scale = compute.parallel scale_raw "gpu"
+GArg = struct{.n Int, .dim Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun squares ((SquareArg)(.n 1, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Squared)
+  compute.plrun scale ((ScaleArg)(.n s.n, .dim s.dim, .I ScaleIn(.s a.s, .x s.in.x, .w s.in.w)))
+}
+built = compute.graph step
+built
+"#;
