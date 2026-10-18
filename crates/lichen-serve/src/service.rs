@@ -187,6 +187,29 @@ impl<'session> Service<'session> {
                 values.len()
             )]));
         }
+        self.step_arguments(
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(keys),
+            },
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(values),
+            },
+        )
+    }
+
+    /// Advance every live sequence one position, appending the words the two arguments carry.
+    ///
+    /// # Invariant
+    /// A `Resident` keeps a word on the device and a `Buffer` uploads it, so a step can take its input
+    /// from the step before it without a host round trip. The step's count is the whole cache's lanes,
+    /// retired slots included, and the positions advance only after the run succeeded.
+    pub fn step_arguments(
+        &mut self,
+        keys: RunArgument,
+        values: RunArgument,
+    ) -> Result<Served, ServeRefusal> {
         let lanes = self.lanes();
         let previous = (self.tokens, self.keys, self.values);
         let mut arguments = match &self.shape {
@@ -225,10 +248,7 @@ impl<'session> Service<'session> {
             ],
         };
         for fresh in [keys, values] {
-            arguments.push(RunArgument::Buffer {
-                class: ScalarClass::Float,
-                data: packed(fresh),
-            });
+            arguments.push(fresh);
         }
         arguments.push(RunArgument::Buffer {
             class: ScalarClass::Int,

@@ -242,3 +242,15 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// How many blocks one token passes through, which is the depth the demo serves.
+pub const BLOCKS: usize = 2;
+
+/// The query every sequence attends with, one row of five per sequence.
+pub const QUERY: [f32; 10] = [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0];
+
+/// The block's feed-forward projection, five rows of five.
+pub const PROJECTION: [f32; 25] = [
+    1.0, 2.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 3.0, 1.0,
+    0.0, 0.0, 0.0, 0.0, 1.0, 4.0,
+];

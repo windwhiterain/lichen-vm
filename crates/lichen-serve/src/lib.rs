@@ -16,7 +16,10 @@ use lichen_utils::extend::AsEnum;
 mod model;
 mod service;
 
-pub use model::{BLOCK, CAPACITY, COLUMNS, DECODE_STEP, EMBEDDING, ROWS, WEIGHTS, embedding_of};
+pub use model::{
+    BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, EMBEDDING, PROJECTION, QUERY, ROWS, WEIGHTS,
+    embedding_of,
+};
 
 mod upload;
 

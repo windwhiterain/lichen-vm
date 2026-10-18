@@ -1,14 +1,20 @@
 //! A tiny inference service: load a model, admit sequences, and sample token by token.
 //!
 //! # Invariant
-//! The toy model scores only the key it is handed, so a sequence's tokens repeat once its key
-//! repeats: this demo shows the *serving* mechanics — one submission a step, the cache on the device,
-//! a slot retired and reused — and not a language model's behaviour.
+//! A token passes [`BLOCKS`] blocks and then the decode step, and only residents cross between them
+//! — the hidden state, the two caches and the model's tables — so the path brings back one value per
+//! token, the token itself. The toy model scores only the key it is handed, so its tokens repeat;
+//! this demo is the serving path, not a language model's behaviour.
 
 use std::process::ExitCode;
 
+use lichen_compute::compute::ResidentBuffer;
+use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::ScalarData;
-use lichen_serve::{CAPACITY, COLUMNS, DECODE_STEP, ROWS, Service, Session, WEIGHTS, embedding_of};
+use lichen_serve::{
+    BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, PROJECTION, QUERY, ROWS, Service, Session,
+    WEIGHTS, embedding_of,
+};
 
 /// How many sequences the demo admits, and how many tokens each of them generates before the cache
 /// is full.
@@ -16,21 +22,79 @@ const SEQUENCES: usize = 2;
 const TOKENS: usize = CAPACITY;
 
 fn main() -> ExitCode {
-    let session = match Session::open() {
-        Ok(session) => session,
-        Err(refusal) => {
-            eprintln!("this demo needs a device: {refusal}");
-            return ExitCode::FAILURE;
+    match serve() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
         }
-    };
-    let weights = match session.upload(&WEIGHTS) {
-        Ok(resident) => resident,
-        Err(refusal) => {
-            eprintln!("the weights did not load: {refusal}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut service = match Service::open_decode(
+    }
+}
+
+/// One step's argument list for the block, whose six counts are the batch's own shape.
+fn block_arguments(
+    state: RunArgument,
+    keys: ResidentBuffer,
+    values: ResidentBuffer,
+    query: ResidentBuffer,
+    projection: ResidentBuffer,
+) -> Vec<RunArgument> {
+    vec![
+        RunArgument::Count((SEQUENCES * CAPACITY * COLUMNS) as i64),
+        RunArgument::Count((SEQUENCES * CAPACITY) as i64),
+        RunArgument::Count(SEQUENCES as i64),
+        RunArgument::Count((SEQUENCES * COLUMNS) as i64),
+        RunArgument::Count((SEQUENCES * COLUMNS * COLUMNS) as i64),
+        RunArgument::Count(COLUMNS as i64),
+        state,
+        RunArgument::Resident(keys),
+        RunArgument::Resident(values),
+        RunArgument::Resident(query),
+        RunArgument::Resident(projection),
+    ]
+}
+
+/// The one resident a single-return step answered with.
+fn only(stepped: &lichen_serve::Stepped) -> Result<ResidentBuffer, String> {
+    match &stepped.results[..] {
+        [RunResult::Resident(resident)] => Ok(*resident),
+        _ => Err("a block answers with one buffer, and this one answered otherwise".into()),
+    }
+}
+
+/// The floats a resident holds.
+fn read(session: &Session, resident: ResidentBuffer) -> Result<Vec<f32>, String> {
+    match session.fetch(resident) {
+        Ok(ScalarData::Float(values)) => Ok(values),
+        Ok(other) => Err(format!("a Float buffer was read as {other:?}")),
+        Err(refusal) => Err(format!("the answer is not readable: {refusal}")),
+    }
+}
+
+fn serve() -> Result<(), String> {
+    let session =
+        Session::open().map_err(|refusal| format!("this demo needs a device: {refusal}"))?;
+    let weights = session
+        .upload(&WEIGHTS)
+        .map_err(|refusal| format!("the weights did not load: {refusal}"))?;
+    let block = session
+        .prepare(BLOCK)
+        .map_err(|refusal| format!("the block did not prepare: {refusal}"))?;
+    let zero = vec![0.0f32; SEQUENCES * CAPACITY * COLUMNS];
+    let empty_keys = session
+        .upload(&zero)
+        .map_err(|refusal| format!("the empty key cache did not load: {refusal}"))?;
+    let empty_values = session
+        .upload(&zero)
+        .map_err(|refusal| format!("the empty value cache did not load: {refusal}"))?;
+    let query = session
+        .upload(&QUERY)
+        .map_err(|refusal| format!("the query did not load: {refusal}"))?;
+    let projection = session
+        .upload(&PROJECTION)
+        .map_err(|refusal| format!("the projection did not load: {refusal}"))?;
+
+    let mut service = Service::open_decode(
         &session,
         DECODE_STEP,
         SEQUENCES,
@@ -38,91 +102,84 @@ fn main() -> ExitCode {
         COLUMNS,
         ROWS,
         weights,
-    ) {
-        Ok(service) => service,
-        Err(refusal) => {
-            eprintln!("the model did not prepare: {refusal}");
-            return ExitCode::FAILURE;
-        }
-    };
+    )
+    .map_err(|refusal| format!("the model did not prepare: {refusal}"))?;
     for _ in 0..SEQUENCES {
-        if service.admit().is_none() {
-            eprintln!("the model ran out of slots before the demo was admitted");
-            return ExitCode::FAILURE;
-        }
+        service
+            .admit()
+            .ok_or("the model ran out of slots before the demo was admitted")?;
     }
     println!(
-        "serving {SEQUENCES} sequences, {TOKENS} tokens each, over {} slots of {CAPACITY} positions",
-        service.lanes() / (CAPACITY * COLUMNS)
+        "serving {SEQUENCES} sequences, {TOKENS} tokens each, through {BLOCKS} blocks and the \
+         decode step over {CAPACITY} positions"
     );
-    println!("the first step carries the cold start, so its clock is not a step's");
+    println!("the first token carries the cold start, so its clock is not a token's");
 
     let mut tokens: Vec<f32> = (0..SEQUENCES).map(|sequence| sequence as f32).collect();
     for step in 0..TOKENS {
-        tokens = match step_once(&session, &mut service, &tokens, step) {
-            Ok(sampled) => sampled,
-            Err(message) => {
-                eprintln!("{message}");
-                return ExitCode::FAILURE;
-            }
+        let words: Vec<f32> = tokens
+            .iter()
+            .flat_map(|token| embedding_of(*token))
+            .collect();
+        let (keys, values) = match (service.keys(), service.values()) {
+            (Some(keys), Some(values)) => (keys, values),
+            _ => (empty_keys, empty_values),
         };
+        let mut hidden: Option<ResidentBuffer> = None;
+        let mut submissions = 0u64;
+        let mut millis = 0.0;
+        for depth in 0..BLOCKS {
+            let state = match hidden {
+                Some(resident) => RunArgument::Resident(resident),
+                None => RunArgument::Buffer {
+                    class: lichen_kernel_ir::ScalarClass::Float,
+                    data: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+                },
+            };
+            let stepped = block
+                .step(block_arguments(state, keys, values, query, projection))
+                .map_err(|refusal| format!("step {step} block {depth} did not run: {refusal}"))?;
+            submissions += stepped.cost.submissions;
+            millis += stepped.cost.elapsed.as_secs_f64() * 1.0e3;
+            let answered = only(&stepped)?;
+            if let Some(previous) = hidden {
+                session.release(previous);
+            }
+            hidden = Some(answered);
+        }
+        let hidden = hidden.ok_or("a token with no blocks has no hidden state")?;
+        let served = service
+            .step_arguments(RunArgument::Resident(hidden), RunArgument::Resident(hidden))
+            .map_err(|refusal| format!("step {step} did not sample: {refusal}"))?;
+        submissions += served.cost.submissions;
+        millis += served.cost.elapsed.as_secs_f64() * 1.0e3;
+        session.release(hidden);
+        let sampled = match service.tokens() {
+            Some(resident) => read(&session, resident)?,
+            None => return Err(format!("step {step} sampled nothing")),
+        };
+        println!(
+            "step {step}: tokens {sampled:?} advanced {}, {submissions} submission(s) over \
+             {} blocks, {millis:.2} ms",
+            served.advanced, BLOCKS
+        );
+        tokens = sampled;
     }
 
     service.retire(0);
     println!("retired slot 0, and the cache waits where it was");
     match service.admit() {
         Some(slot) => println!("admitted a new sequence in slot {slot}, at position zero"),
-        None => {
-            eprintln!("a retired slot was not free again");
-            return ExitCode::FAILURE;
-        }
-    }
-    let fresh = vec![3.0f32; SEQUENCES];
-    if let Err(message) = step_once(&session, &mut service, &fresh, TOKENS) {
-        eprintln!("{message}");
-        return ExitCode::FAILURE;
+        None => return Err("a retired slot was not free again".into()),
     }
     println!(
-        "{} of {} slots are live after the swap, and every step was one submission",
+        "{} of {} slots are live after the swap",
         service.active(),
         SEQUENCES
     );
 
-    session.release(weights);
-    ExitCode::SUCCESS
-}
-
-/// One step of the batch, and the tokens it sampled.
-fn step_once(
-    session: &Session,
-    service: &mut Service<'_>,
-    tokens: &[f32],
-    step: usize,
-) -> Result<Vec<f32>, String> {
-    let words: Vec<f32> = tokens
-        .iter()
-        .flat_map(|token| embedding_of(*token))
-        .collect();
-    let served = service
-        .step(&words, &words)
-        .map_err(|refusal| format!("step {step} did not run: {refusal}"))?;
-    let sampled = match service.tokens() {
-        Some(resident) => match session.fetch(resident) {
-            Ok(ScalarData::Float(sampled)) => sampled,
-            Ok(other) => return Err(format!("step {step} answered with {other:?}, not tokens")),
-            Err(refusal) => return Err(format!("step {step} could not be read: {refusal}")),
-        },
-        None => {
-            return Err(format!(
-                "step {step} sampled nothing, so the step does not decode"
-            ));
-        }
-    };
-    println!(
-        "step {step}: tokens {sampled:?} advanced {}, {} submission(s), {:.2} ms",
-        served.advanced,
-        served.cost.submissions,
-        served.cost.elapsed.as_secs_f64() * 1.0e3
-    );
-    Ok(sampled)
+    for resident in [weights, empty_keys, empty_values, query, projection] {
+        session.release(resident);
+    }
+    Ok(())
 }

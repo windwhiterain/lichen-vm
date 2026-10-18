@@ -228,6 +228,14 @@ checked against the host's own block rather than against hand-picked numbers
 (`crates/lichen-serve/tests/block_step.rs`). Nothing in the program names a width, which is what lets
 one block serve the demo's five-column decode step and a narrower test alike.
 
+**The demo serves a model of blocks, and a token is three submissions.** Two blocks and the decode
+step, from `cargo run -p lichen-serve`: `step 0` carries the cold start at 69.78 ms, then a token costs
+**2.36 to 3.25 ms over 3 submissions** and 27 dispatches — the fit puts that at 2.85 ms, inside the
+measured spread. What crosses the blocks is residents only: the hidden state, both caches and the
+model's tables, so a token's path brings back one value, the token itself. The block attends over the
+cache the decode step wrote, so the context is the sequence's own, and `Service::step_arguments` is
+what lets the decode step take its words from a resident instead of from the host.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
