@@ -178,6 +178,26 @@ into one graph of nine dispatches was measured correct (the same tokens) and **s
 still pays is the bytes: the weights it hands over, and the file it no longer reads because the halves are
 held in memory.
 
+## What the token's seconds are
+
+Read off per-stage timers on the held model, two tokens at half width:
+
+| stage | two tokens | per token |
+|---|---|---|
+| the layer loop | 9.82 s | 4.91 s |
+| — of which reading a layer's tensors | 5.02 s | 2.51 s |
+| — of which reading an answer back | 0.13 s | 0.07 s |
+
+So half of a layer's time is **making a copy of the file it already holds**: `Tensors::Narrowed` clones the
+96 MB a layer is stored in, and `RunArgument::Buffer` takes its bytes by value, so the slice handed to a
+dispatch is a second copy. 28 layers of that is 2.7 GB of `memcpy` a token, and it is the largest single
+line in the budget.
+
+The fix is a borrowed payload — `RunArgument::Buffer` holding `&[u8]` or a shared buffer rather than a
+`Vec` — which is an interface change and not a scheduling one. Until it lands, the honest number for a warm
+token at half width is **4.8 s**, and the 3.25 s measured before this profiling was the same code with a
+page cache warm enough to hide part of the copy.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
