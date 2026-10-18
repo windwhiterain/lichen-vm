@@ -193,6 +193,16 @@ reason is structural rather than a gap in the language: each needs a **per-seque
 its own dispatch, so a full attention step is five kernels — weigh, sum, max, exponentiate-and-sum,
 mix — where this is two.
 
+**Softmax attention runs as seven kernels in one submission.** Weigh, sum, peak, exponentiate,
+total, scale, sum again — over two sequences of three slots of two columns, with both caches handed in
+as residents (`crates/lichen-serve/tests/softmax_step.rs`). Measured: the step answered
+`3.7283485, 4.7283487, 1.1546986, 0.5794886` against the host's own softmax
+`3.7283504, 4.7283506, 1.1546978, 0.5794875`, agreement to six significant digits at an `1e-4`
+tolerance because `exp` is an approximation on both sides. The count is not free: **a fold's body
+reads one buffer**, so weigh, exponentiate and scale each bind what they combine and write once, and
+the scale writes transposed so the last fold reads a contiguous run. That rule is what made the
+earlier two-kernel and one-kernel attempts fail.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
