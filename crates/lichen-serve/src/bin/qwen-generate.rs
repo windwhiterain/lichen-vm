@@ -1,6 +1,6 @@
 //! Generate tokens from Qwen3-1.7B; the weights come from LICHEN_MODEL_DIR.
 
-use lichen_serve::{Qwen, Session};
+use lichen_serve::{Qwen, Session, Width};
 
 /// A refusal ends the run: a token nobody computed is worse than no token.
 fn main() {
@@ -13,6 +13,7 @@ fn main() {
         .next()
         .and_then(|value| value.parse().ok())
         .unwrap_or(2);
+    let wide = arguments.any(|value| value == "--wide");
     let session = match Session::open() {
         Ok(session) => session,
         Err(refusal) => {
@@ -20,15 +21,24 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let model = match Qwen::open(&session) {
+    let width = match wide {
+        true => Width::Wide,
+        false => Width::Narrowed,
+    };
+    let mut model = match Qwen::open_with(&session, width) {
         Ok(model) => model,
         Err(refusal) => {
             eprintln!("{refusal}");
             std::process::exit(1);
         }
     };
-    println!("generating {count} token(s) after {start}");
-    let generated = match model.generate(start, count) {
+    // The halves are read once and kept: what a token pays after that is the work, not the file.
+    if !wide && let Err(refusal) = model.hold_in_memory() {
+        eprintln!("{refusal}");
+        std::process::exit(1);
+    }
+    println!("generating {count} token(s) after {start} at {width:?}");
+    let generated = match model.generate_with(start, count, |token| println!("  {token}")) {
         Ok(generated) => generated,
         Err(refusal) => {
             eprintln!("{refusal}");
@@ -36,16 +46,7 @@ fn main() {
         }
     };
     println!("tokens: {:?}", generated.tokens);
-    let total: f64 = generated
-        .per_token
-        .iter()
-        .map(|elapsed| elapsed.as_secs_f64())
-        .sum();
     for (index, elapsed) in generated.per_token.iter().enumerate() {
-        println!("  token {} took {:.1} s", index + 1, elapsed.as_secs_f64());
+        println!("  token {} took {:.2} s", index + 1, elapsed.as_secs_f64());
     }
-    println!(
-        "{total:.1} s in all, {:.1} s per token",
-        total / generated.per_token.len() as f64
-    );
 }

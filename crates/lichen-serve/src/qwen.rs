@@ -394,6 +394,21 @@ impl<'session> Qwen<'session> {
 
     /// Generate `count` tokens greedily after `start`, keeping the cache the loop fills.
     pub fn generate(&self, start: usize, count: usize) -> Result<Generated, QwenRefusal> {
+        self.generate_with(start, count, |_| {})
+    }
+
+    /// Generate, handing each token to `on_token` as it is chosen.
+    ///
+    /// # Invariant
+    /// The token is handed over **after** the forward that chose it and before the next one starts, so a
+    /// caller printing it sees the output arrive at the rate the model produces it rather than at the rate
+    /// the whole run finishes.
+    pub fn generate_with<F: FnMut(usize)>(
+        &self,
+        start: usize,
+        count: usize,
+        mut on_token: F,
+    ) -> Result<Generated, QwenRefusal> {
         let mut caches: Vec<Cache> = (0..LAYERS).map(|_| Cache::default()).collect();
         let mut tokens = vec![start];
         let mut per_token = Vec::new();
@@ -429,6 +444,7 @@ impl<'session> Qwen<'session> {
             token = argmax(&logits);
             tokens.push(token);
             per_token.push(started.elapsed());
+            on_token(token);
         }
         Ok(Generated { tokens, per_token })
     }
