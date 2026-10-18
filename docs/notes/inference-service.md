@@ -153,6 +153,16 @@ that is 69 ms, or 14 tokens a second, **before any arithmetic**. Batching amorti
 sequences and cannot touch the 0.08 ms per dispatch; only fewer dispatches can, which is what fusion
 is for, and the fusion floor currently refuses both real shapes by name (`llm-operators.md`).
 
+**How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
+examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
+`silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
+32-layer model is **400 to 580 dispatches per token**. At the measured 0.08 ms that is **32 to 46 ms
+per token, before any arithmetic** — 22 to 31 tokens a second for one sequence, and that is the floor
+a service is measured against, not an estimate of its throughput. The two levers are therefore
+distinct and the note should not confuse them: **batching multiplies the sequences a step serves**
+(measured: 16 sequences at one step's cost) while **fusion lowers the per-dispatch floor** (not
+measured, and gated by the fusion floor refusing both real shapes).
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
