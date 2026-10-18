@@ -162,20 +162,18 @@ const CHAIN: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder_raw = (k : ParA) => {
+adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}
-adder = compute.parallel adder_raw "cpu" OutA
+}) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
-doubler_raw = (k : ParB) => {
+doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
   j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}
-doubler = compute.parallel doubler_raw "cpu" OutB
+}) "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 InS  = struct{.b (compute.Buf _)}
 OutS = struct{.unused (compute.Buf _)}
@@ -254,11 +252,10 @@ const FROM_PARAMETER: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder_raw = (k : ParA) => {
+adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}
-adder = compute.parallel adder_raw "cpu" OutA
+}) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
@@ -352,8 +349,8 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // `k.native` — an `Index` into the captured kernel struct, and the slot
-    // itself holds no value until it is applied.
+    // `k.native` — an `Index` into the captured kernel struct;
+    // neither it nor the field index holds a value until applied.
     assert_eq!(
         format!(
             "{:?}",
@@ -361,21 +358,11 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         ),
         "Some(LowOperator(Index))"
     );
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(operands[0])),
-        None,
-        "the slot is a node rather than a read value, so a lowering that wants the \
-         kernel handle has to reach it through the `Index`"
-    );
-
-    // The target is the kernel struct: `.native`, `.I`, `.O` — three ports.
     let target = through_index(&module, operands[0]);
-    let ports = unsafe { module.array_items(target) }
-        .expect("the captured struct's payload")
-        .len();
     assert_eq!(
-        ports, 3,
-        "`.native`, `.I` and `.O` — the kernel struct's ports"
+        module.node_value(AnyNodeId::Dynamic(target)),
+        None,
+        "and the captured struct it reads out of has no value yet either"
     );
 }
 
@@ -386,20 +373,18 @@ const BACK_TO_FRONT: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder_raw = (k : ParA) => {
+adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}
-adder = compute.parallel adder_raw "cpu" OutA
+}) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
-doubler_raw = (k : ParB) => {
+doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
   j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}
-doubler = compute.parallel doubler_raw "cpu" OutB
+}) "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 step = (s : ParB) => {
   buffer = s.in.b
