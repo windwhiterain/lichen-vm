@@ -505,7 +505,7 @@ impl<'session> Qwen<'session> {
                         .map_err(QwenRefusal::Step)?,
                     Tensors::Narrowed(tensors) => self
                         .session
-                        .upload_narrowed(&tensors[slot])
+                        .place(&tensors[slot], lichen_kernel_ir::ScalarClass::BFloat16)
                         .map_err(QwenRefusal::Step)?,
                 });
             }

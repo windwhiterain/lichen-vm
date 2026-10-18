@@ -62,6 +62,52 @@ impl Session {
 }
 
 impl Session {
+    /// Make a resident out of raw bytes of any class, which is what a weight load needs.
+    ///
+    /// # Invariant
+    /// The copy moves bytes and nothing else, so the step copies them four at a time and the resident is
+    /// then **restated** at the class and extent the caller names. Without the restatement a half-width
+    /// payload would be read four bytes an element, and with it the buffer holds exactly the bytes it was
+    /// given at the width its reader uses.
+    pub fn place(&self, bytes: &[u8], class: ScalarClass) -> Result<ResidentBuffer, ServeRefusal> {
+        let width = class.byte_width();
+        if bytes.is_empty() || bytes.len() % width != 0 {
+            return Err(ServeRefusal::Program(vec![format!(
+                "{} bytes are not whole elements of {class:?}, {} bytes each",
+                bytes.len(),
+                width
+            )]));
+        }
+        let mut words = bytes.to_vec();
+        words.resize(bytes.len().div_ceil(4) * 4, 0);
+        let prepared = self.prepare(UPLOAD)?;
+        let stepped = prepared.step(vec![
+            RunArgument::Count((words.len() / 4) as i64),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: words,
+            },
+        ])?;
+        let [RunResult::Resident(resident)] = &stepped.results[..] else {
+            return Err(ServeRefusal::Program(vec![
+                "the copying step answers with one resident, and this one answered otherwise"
+                    .into(),
+            ]));
+        };
+        let backend = lichen_kernel_ir::parallel_backend().ok_or_else(|| {
+            ServeRefusal::Program(vec!["no compute backend to restate a resident on".into()])
+        })?;
+        // The handle and the backend's record both answer the extent and the class.
+        backend
+            .relabel(resident.id, bytes.len() / width, class)
+            .map_err(|reason| ServeRefusal::Program(vec![reason]))?;
+        Ok(ResidentBuffer {
+            count: bytes.len() / width,
+            class,
+            ..*resident
+        })
+    }
+
     /// Make a resident out of the checkpoint's own halves, which is the width a model keeps them at.
     ///
     /// # Invariant
