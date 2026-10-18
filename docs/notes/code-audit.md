@@ -47,11 +47,11 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P4-12 | low | highlevel, language | A struct instantiation's field-type mismatch renders the two field lists as raw shapes | fixed — a per-field guard runs before the list unify with the field's type read forced first: `S("x", 1)` is `expected Int, found string`, `struct{.f Type, .g Type}(1, 2)` `expected Type, found Int`, one diagnostic at the first field at fault |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | subsumed:P1-49 — the ruling refuses the undetermined callee, so no instance is built there; measured: `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6 |
-| P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
+| P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | retired:P1-49 — the message fix landed and its machinery (the supply keys and the field-naming sentence) was deleted with the lazy reorder; the refusal removes the miss entirely |
 | P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | subsumed:P1-49 — the ruling refuses the undetermined callee; measured: `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, a later `.b` read panics with `index 1 out of bounds (array length 1)` |
-| P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | fixed — the miss now carries the argument names the checker recorded, so `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument is named a — the arguments are named z` |
+| P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | retired:P1-49 — the sentence landed and its plumbing (`Diag::supplied_names`, the supply-key map) was deleted with the lazy reorder; the refusal removes the miss entirely |
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
-| P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | todo — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7): *"normalize时函数类型检查就应当确定。旧的依赖lazy的检查方式要被淘汰了。"* `g = c => c(.a 1, .b 2)` must be **refused**, because `c`'s name table is undetermined at the normalize; the lazy reorder (`lazy_named_instantiate`) is retired, and `P1-44`/`P1-46` are subsumed |
+| P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -693,7 +693,11 @@ designs are in
 [deferred-instantiation-checks](deferred-instantiation-checks.md); a regression test
 belongs with the fix (`D3`).
 
-### P1-45 — An instantiation through a parameter reports a type mismatch as an opaque table miss `verified`
+### P1-45 — An instantiation through a parameter reports a type mismatch as an opaque table miss `retired:P1-49`
+
+> **Retired with `P1-49`**: the lazy reorder is gone, so this miss cannot arise from
+> source and the field-naming sentence was deleted with the supply-key machinery. The
+> record stays as the measurement that motivated the ruling.
 
 The same deferred reorder keys its supply lookup by `[name|rank, argument type]`
 (`lazy_named_instantiate`, `structs.rs`), so a field whose declared type no argument
@@ -780,7 +784,11 @@ is unchanged, and `D3`'s smallest test extends the existing mismatch test with t
 sentence. Suites: highlevel 140/0; language 272/1 (the `gc_block` red); compute
 229/2/2 (the two known reds).
 
-### P1-47 — An unknown argument name through a parameter is reported as a missing field `verified`
+### P1-47 — An unknown argument name through a parameter is reported as a missing field `retired:P1-49`
+
+> **Retired with `P1-49`**: the lazy reorder is gone, so the miss this sentence
+> repaired cannot arise from source; its plumbing (`Diag::supplied_names`, the
+> argument-name map) was deleted with it. The record stays as the measurement.
 
 Measuring the deferred reorder's three name shapes after P1-45: a **duplicate** name
 is its own guard (`duplicate field a in the struct type struct{?a}`), a **valid**
@@ -857,7 +865,7 @@ letter), and the instantiation cases are unchanged. `D3`'s smallest test is
 Suites: lowlevel 146/13 (the GC ruling's baseline), language 273/1 (the `gc_block`
 red), highlevel 140/0, compute 229/2/2 (the two known reds).
 
-### P1-49 — An instantiation through an undetermined callee is accepted with a lazy reorder `verified`
+### P1-49 — An instantiation through an undetermined callee is accepted with a lazy reorder `fixed`
 
 The maintainer's ruling, recorded in
 [function-normalization](function-normalization.md) §3.7: *"normalize时函数类型检查
@@ -885,16 +893,25 @@ removes `P1-44`'s and `P1-46`'s silent acceptances, and `P1-45`'s and `P1-47`'s
 sentences become unreachable from source (kept until the machinery is deleted, then
 removed with it).
 
-Fix direction: in `check_instantiate`'s `!concrete` branch, replace the kind pin and
-the lazy reorder with a diagnostic at the callee (the same place the placeholder
-refusal is recorded); delete `lazy_named_instantiate` and its keys, with the
-`Checker::supply_keys`/`supply_argument_names` and `Diag::supplied_names` plumbing
-(`P1-47`) that only the lazy miss used. The diagnostic's sentence is the one design
-question left — it should say the callee's struct type is not determined here and name
-the spelling that would be (`S = struct{…}` at the instantiation, or a name the checker
-can resolve). A regression test belongs with the fix (`D3`): `g = c => c(.a 1)` must be
-refused, and every test or example that relies on the lazy form must be rewritten to
-name its struct type.
+**Fixed.** `check_instantiate`'s `!concrete` branch records
+`DiagKind::InstantiateCalleeUndetermined` — *"the callee of an instantiation is not
+determined here — name the struct type where the instantiation is written"* — and
+returns, so nothing downstream builds a reorder for an undetermined callee.
+`lazy_named_instantiate` and the helpers only it used (`index_const`, `table_get`,
+`in_domain`, `select`, `add`, `sub`) are deleted, together with the
+`Checker::supply_keys`/`supply_argument_names` maps, `Build`'s copies,
+`Diag::supplied_names`, `Build::is_supply_key`/`supply_origin`, and the two miss
+sentences that read them (`P1-45`'s field-naming miss and `P1-47`'s argument-name
+sentence) — their rows are `retired:P1-49`.
+
+Measured: `g = c => c(.a 1, .b 2)` and the positional `g = c => c(1, 2)` are refused at
+the definition; `S(.a 1, .b 2)` and `(S(.a 1)).a` are unchanged; a placeholder callee
+still answers `the callee of an instantiation must be a struct type`. `D3`'s smallest
+test is `pipeline::an_instantiation_through_an_undetermined_callee_is_refused`. The
+owner permitted deleting the tests that encoded the retired behaviour (13 in
+`lichen-language`, 2 in `lichen-highlevel`). Suites: language 261/1 (the `gc_block`
+red), highlevel 138/0, lowlevel 146/13 (the GC ruling's baseline), LSP 54/0, compute
+236/2/2 (the two known reds).
 
 ## Decisions## Decisions## Decisions## Decisions## Decisions
 

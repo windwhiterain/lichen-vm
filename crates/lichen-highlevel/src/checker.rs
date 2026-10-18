@@ -188,10 +188,7 @@ where
     user_asserts: HashSet<NodeId>,
     /// How a failed assert of each registered condition should read.
     assert_spellings: HashMap<NodeId, AssertSpelling>,
-    /// A deferred reorder's supply keys: a miss on one names the field it wanted.
-    supply_keys: HashSet<NodeId>,
-    /// The argument names each supply key was built for, for the miss's sentence.
-    supply_argument_names: HashMap<NodeId, Vec<&'static str>>,
+
     /// The value node of every lambda in the program.
     ///
     /// # Invariant
@@ -358,10 +355,7 @@ where
     /// How a failed assert of each registered condition should read (see
     /// [`AssertSpelling`]).
     pub assert_spellings: HashMap<NodeId, AssertSpelling>,
-    /// A deferred reorder's supply keys: a miss on one names the field it wanted.
-    pub supply_keys: HashSet<NodeId>,
-    /// The argument names each supply key was built for.
-    pub supply_argument_names: HashMap<NodeId, Vec<&'static str>>,
+
     /// The top-level statements the definition pass found non-terminating.
     pub nonterminating: Vec<NonTerminating>,
     pub ok: bool,
@@ -516,8 +510,7 @@ where
             read_site: None,
             user_asserts: HashSet::new(),
             assert_spellings: HashMap::new(),
-            supply_keys: HashSet::new(),
-            supply_argument_names: HashMap::new(),
+
             lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
             force_failed: false,
@@ -689,8 +682,7 @@ where
             node_edges: checker.node_edges,
             user_asserts: checker.user_asserts,
             assert_spellings: checker.assert_spellings,
-            supply_keys: checker.supply_keys,
-            supply_argument_names: checker.supply_argument_names,
+
             nonterminating: checker.nonterminating,
             ok,
             lowerings: OnceLock::new(),

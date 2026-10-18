@@ -490,21 +490,20 @@ where
             return pair;
         }
         if !concrete {
-            // Defer the check: pin the callee to a struct kind with its payload
-            // written out — the deferred reorder reads it lazily.
-            let id = self.fresh_cell();
-            let names = self.fresh_cell();
-            // The definition-order names, read by a named instantiation's
-            // deferred reorder.
-            let names_in_order = self.fresh_cell();
-            let marker = self.struct_marker_node(id, names, names_in_order);
-            let kind = self.kind_expr(self.current_block, marker);
-            self.check_unify(
-                callee_ty,
-                kind,
+            // The check is determined here, not at the apply: refuse the undetermined.
+            self.record_guard(
+                type_pair,
+                type_pair,
                 self.loc(type_expr, 1),
-                DiagKind::InstantiateCallee,
+                DiagKind::InstantiateCalleeUndetermined,
+                None,
             );
+            let value_node = self.value_of(value);
+            let pair = self.pair_of(value_node, type_pair);
+            self.state[e].term = Some(pair);
+            self.state[e].val = Some(value_node);
+            self.state[e].ty = Some(type_pair);
+            return pair;
         }
         // The shape *is* the positional field-type list; mid-recursion it is
         // undecided, so the check goes through a probe cell.
@@ -540,7 +539,7 @@ where
                 }
             };
         let (value_node, value_shape, valid, argument_types) = if any_named {
-            let named = self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
+            let named = self.named_instantiate(e, type_pair, value, arg_names);
             self.unify_named_instantiate_elements(type_expr, value, &named.assign);
             let elem_ids = self.compound_children(value).unwrap_or_default();
             let tys: Vec<NodeId> = elem_ids
@@ -600,8 +599,7 @@ where
                     .compound_children(value)
                     .is_some_and(|children| children.len() == arg_names.len())
             {
-                let named =
-                    self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
+                let named = self.named_instantiate(e, type_pair, value, arg_names);
                 structural = named.valid;
             }
             let types: Vec<Option<NodeId>> = self
@@ -740,18 +738,14 @@ where
     ///
     /// # Invariant
     /// `valid` is `false` once a structural mismatch is recorded, and the caller
-    /// then skips the field-list unify. `callee_concrete` tells an anonymous
-    /// struct (refused) from an unresolved callee, whose reorder is deferred
-    /// ([`Self::lazy_named_instantiate`]); the caller owns it because **its own
-    /// pin makes every callee concrete** — read before the pin, never after.
+    /// then skips the field-list unify. A callee the caller could not determine
+    /// was refused before this point, so the name table here is the struct's own.
     fn named_instantiate(
         &mut self,
         e: ExprId,
         type_pair: NodeId,
-        callee_ty: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
-        callee_concrete: bool,
     ) -> NamedInstance {
         // The value's elements are the arguments in call order.
         let elem_ids = self.range_children(value);
@@ -760,8 +754,7 @@ where
             .iter()
             .map(|&a| self.state[a].ty.unwrap())
             .collect();
-        // No name table: a concrete struct without one records each
-        // `.name`; an unresolved callee defers the reorder.
+        // No name table: a struct without one records each `.name`.
         if shape::struct_names_any(
             &mut self.module,
             self.type_expr,
@@ -769,17 +762,6 @@ where
         )
         .is_none()
         {
-            if !callee_concrete {
-                let (value, value_shape, valid) = self.lazy_named_instantiate(
-                    type_pair, callee_ty, &elem_ids, arg_names, &vals, &tys,
-                );
-                return NamedInstance {
-                    value,
-                    value_shape,
-                    valid,
-                    assign: Vec::new(),
-                };
-            }
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
                     self.record_guard(
@@ -919,207 +901,12 @@ where
         }
     }
 
-    /// The deferred named instantiation: an unresolved struct type, so the
-    /// reorder is a lazy read (eval-before-unify.md).
-    ///
-    /// # Invariant
-    /// A **duplicate** name is refused here — one name cannot supply two
-    /// positions. A **missing** argument is not: the returned field-type list is
-    /// a probe with one cell per argument, so the caller's field-list unify is
-    /// an arity check that fires when the type resolves.
-    fn lazy_named_instantiate(
-        &mut self,
-        type_pair: NodeId,
-        callee_ty: NodeId,
-        elem_ids: &[ExprId],
-        arg_names: &[Option<&'static str>],
-        vals: &[NodeId],
-        tys: &[NodeId],
-    ) -> (NodeId, NodeId, bool) {
-        let mut valid = true;
-        let mut supplied: Vec<&'static str> = Vec::new();
-        for (i, name) in arg_names.iter().enumerate() {
-            let Some(name) = *name else { continue };
-            if supplied.contains(&name) {
-                self.record_guard(
-                    type_pair,
-                    type_pair,
-                    self.loc(elem_ids[i], 0),
-                    DiagKind::StructDuplicateField,
-                    Some(name),
-                );
-                valid = false;
-            } else {
-                supplied.push(name);
-            }
-        }
-        if !valid {
-            // The call-order value stands so the descent stays total.
-            let value_node = self.array_node(self.current_block, vals);
-            let value_shape = self.array_node(self.current_block, tys);
-            return (value_node, value_shape, false);
-        }
-        let has_positional = arg_names.iter().any(|name| name.is_none());
-        // Whether every argument's type is decided: then it joins the key, so
-        // the lookup's equality is the field-type check.
-        let typed = tys.iter().all(|&ty| self.type_is_concrete(ty));
-        // The callee's field-type list, read lazily: `[shape, kind]`'s shape.
-        let shape = self.index(type_pair, self.zero());
-        // One entry per argument, keyed by name or positional rank, and by
-        // type when every argument's type is decided.
-        let mut entries = Vec::new();
-        let mut positional_rank = 0usize;
-        for (i, name) in arg_names.iter().enumerate() {
-            let tag = match name {
-                Some(name) => self.name_node(name),
-                None => {
-                    let tag = self.usize_node(positional_rank);
-                    positional_rank += 1;
-                    tag
-                }
-            };
-            let key = if typed {
-                self.array_node(self.current_block, &[tag, tys[i]])
-            } else {
-                tag
-            };
-            let value = self.usize_node(i);
-            entries.push((AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value)));
-        }
-        let handle = self.module.build_table(&entries, self.current_block);
-        let supply = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Table(handle))),
-        );
-        // The supplied names as a set value: what tells a named position from
-        // one that takes the next positional argument.
-        let mut supplied_nodes = Vec::with_capacity(supplied.len());
-        for &name in &supplied {
-            let node = self.name_node(name);
-            supplied_nodes.push(node);
-        }
-        let supplied_names = self.array_node(self.current_block, &supplied_nodes);
-        // The definition-order names, read lazily through the callee's kind.
-        let names_in_order = self.lazy_index_path(callee_ty, &shape::STRUCT_KIND_NAMES_ORDER_PATH);
-
-        let call_values = self.array_node(self.current_block, vals);
-        // The field-type list is a **probe**: one fresh cell per argument, so
-        // the caller's unify is an arity check.
-        let mut order_ty = Vec::with_capacity(tys.len());
-        for _ in 0..tys.len() {
-            order_ty.push(self.fresh_cell());
-        }
-        let mut order = Vec::with_capacity(vals.len());
-        // Definition positions already claimed by a named argument.
-        let mut supplied_before = self.zero();
-        for i in 0..vals.len() {
-            let name_at = self.index_const(names_in_order, i);
-            // The position's tag: its field name, or its positional rank.
-            let tag = if has_positional {
-                let is_named = self.in_domain(name_at, supplied_names);
-                let rank = if i == 0 {
-                    self.zero()
-                } else {
-                    let position = self.usize_node(i);
-                    self.sub(position, supplied_before)
-                };
-                supplied_before = self.add(supplied_before, is_named);
-                self.select(rank, name_at, is_named)
-            } else {
-                name_at
-            };
-            // The supplying argument's call slot. A tag no argument supplies is
-            // a genuine miss, so the read is the refusal.
-            let key = if typed {
-                // The field's type is its slot's type position, the same shape
-                // the supply keys were built from.
-                let element = self.index_const(shape, i);
-                let field_type = self.index(element, self.one());
-                self.array_node(self.current_block, &[tag, field_type])
-            } else {
-                tag
-            };
-            self.node_edges.insert(key, self.loc(elem_ids[i], 0));
-            self.supply_keys.insert(key);
-            let names: Vec<&'static str> = arg_names.iter().filter_map(|name| *name).collect();
-            self.supply_argument_names.insert(key, names);
-            let slot = self.table_get(supply, key);
-            order.push(self.index(call_values, slot));
-        }
-        (
-            self.array_node(self.current_block, &order),
-            self.array_node(self.current_block, &order_ty),
-            true,
-        )
-    }
-
     /// The lazy structural read `Index(base, at)`.
     fn index(&mut self, base: NodeId, at: NodeId) -> NodeId {
         let ops = self.array_node(self.current_block, &[base, at]);
         self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
-            Some(ops),
-        )
-    }
-
-    /// [`Self::index`] with a constant subscript — the `Index(base, k)` of the
-    /// encoding's positional offsets.
-    fn index_const(&mut self, base: NodeId, k: usize) -> NodeId {
-        let at = self.usize_node(k);
-        self.index(base, at)
-    }
-
-    /// The lazy table read `TableGet(table, key)`.
-    fn table_get(&mut self, table: NodeId, key: NodeId) -> NodeId {
-        let ops = self.array_node(self.current_block, &[table, key]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::TableGet),
-            Some(ops),
-        )
-    }
-
-    /// Whether `value` is a member of the set `members` — the
-    /// `InDomain` test, reading "an argument supplied it".
-    fn in_domain(&mut self, value: NodeId, members: NodeId) -> NodeId {
-        let ops = self.array_node(self.current_block, &[value, members]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::InDomain),
-            Some(ops),
-        )
-    }
-
-    /// The encoding's conditional `Index([first, second], cond)`: `second` when
-    /// the condition is 1, `first` when it is 0.
-    fn select(&mut self, first: NodeId, second: NodeId, condition: NodeId) -> NodeId {
-        let arms = self.array_node(self.current_block, &[first, second]);
-        let ops = self.array_node(self.current_block, &[arms, condition]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ops),
-        )
-    }
-
-    /// The lazy `Add(left, right)` over machine scalars.
-    fn add(&mut self, left: NodeId, right: NodeId) -> NodeId {
-        let ops = self.array_node(self.current_block, &[left, right]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::Add),
-            Some(ops),
-        )
-    }
-
-    /// The lazy `Sub(left, right)` over machine scalars.
-    fn sub(&mut self, left: NodeId, right: NodeId) -> NodeId {
-        let ops = self.array_node(self.current_block, &[left, right]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::Sub),
             Some(ops),
         )
     }

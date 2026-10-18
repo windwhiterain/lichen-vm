@@ -11,7 +11,6 @@
 use std::ops::Range;
 
 use lichen_lowlevel::{AnyNodeId, BudgetExhausted, EvalError, LowValue, NodeId, Program};
-use lichen_utils::extend::AsEnum;
 
 use crate::{
     checker::Build,
@@ -58,6 +57,8 @@ pub enum DiagKind {
     StructFieldName,
     /// A struct instantiation whose callee's type is concretely not a struct type.
     InstantiateCallee,
+    /// A struct instantiation whose callee is not determined at its normalize.
+    InstantiateCalleeUndetermined,
     /// A homogeneous literal's elements must share one type: the shared type is
     /// expected.
     ArrayElement,
@@ -372,28 +373,6 @@ impl<P: HighProgram> Build<P>
 where
     P::Value: ValueType,
 {
-    /// Whether `node` is a deferred instantiation's supply key, following the
-    /// runtime clone back to the checker's node.
-    fn is_supply_key(&self, node: NodeId) -> bool {
-        self.supply_origin(node).is_some()
-    }
-
-    /// The checker key `node` is the runtime clone of, when it is a reorder key.
-    fn supply_origin(&self, node: NodeId) -> Option<NodeId> {
-        let mut current = node;
-        for _ in 0..8 {
-            if self.supply_keys.contains(&current) {
-                return Some(current);
-            }
-            current = self.module.node_origin(current)?;
-        }
-        None
-    }
-}
-impl<P: HighProgram> Build<P>
-where
-    P::Value: ValueType,
-{
     /// Render the lowlevel's failure facts as structured diagnostics.
     ///
     /// # Invariant
@@ -540,38 +519,10 @@ where
                     static_template: None,
                     clone: None,
                 }),
-                EvalError::TableMiss { key, .. } => {
-                    let mut diag = Diag {
-                        table_key: self.module.node_value(*key),
-                        ..Diag::factual(DiagKind::TableMiss, self.node_loc(*key))
-                    };
-                    // A reorder's supply key is `[field tag, field type]`, read through
-                    // the runtime clone's origin.
-                    if let AnyNodeId::Dynamic(node) = *key
-                        && self.is_supply_key(node)
-                        && let Some(items) = unsafe { self.module.array_items(node) }
-                        && let [tag, r#type, ..] = items
-                    {
-                        if let AnyNodeId::Dynamic(r#type) = r#type.node {
-                            diag.a = r#type;
-                        }
-                        diag.field = self
-                            .module
-                            .node_value(tag.node)
-                            .and_then(|value| value.as_enum())
-                            .and_then(|value| match value {
-                                LowValue::Str(name) => Some(name.to_string()),
-                                _ => None,
-                            });
-                        if let Some(origin) = self.supply_origin(node) {
-                            diag.supplied_names = self
-                                .supply_argument_names
-                                .get(&origin)
-                                .map(|names| names.iter().map(|name| name.to_string()).collect());
-                        }
-                    }
-                    out.push(diag)
-                }
+                EvalError::TableMiss { key, .. } => out.push(Diag {
+                    table_key: self.module.node_value(*key),
+                    ..Diag::factual(DiagKind::TableMiss, self.node_loc(*key))
+                }),
                 EvalError::TableKeyUndecided { key } => out.push(Diag::factual(
                     DiagKind::TableKeyUndecided,
                     self.node_loc(*key),

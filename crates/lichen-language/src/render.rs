@@ -306,6 +306,9 @@ where
             "the callee of an instantiation must be a struct type, found {}",
             printer.node(d.a)
         ),
+        DiagKind::InstantiateCalleeUndetermined => {
+            "the callee of an instantiation is not determined here — name the struct type where the instantiation is written".to_string()
+        }
         // The expected side is the class the operation computes over, read from
         // the report rather than spelled here.
         DiagKind::BinOp | DiagKind::Conv => format!(
@@ -343,31 +346,10 @@ where
             };
             format!("index {index} out of bounds (array length {length})")
         }
-        DiagKind::TableMiss => {
-            // A reorder's miss names the field it wanted, not a table's key.
-            if d.a != lichen_lowlevel::NodeId::default() {
-                let r#type = printer.node(d.a);
-                match d.field.as_deref() {
-                    Some(name) => match d.supplied_names.as_deref() {
-                        Some(names) if !names.iter().any(|supplied| supplied == name) => format!(
-                            "no argument is named {name} — the arguments are named {}",
-                            names.join(", ")
-                        ),
-                        _ => format!(
-                            "no argument supplies field {name} — the field's type is {type}"
-                        ),
-                    },
-                    None => format!(
-                        "no argument supplies the field this position needs — the field's type is {type}"
-                    ),
-                }
-            } else {
-                match table_key_text(d) {
-                    Some(key) => format!("table lookup missed — no entry for key {key}"),
-                    None => "table lookup missed — no entry for this key".to_string(),
-                }
-            }
-        }
+        DiagKind::TableMiss => match table_key_text(d) {
+            Some(key) => format!("table lookup missed — no entry for key {key}"),
+            None => "table lookup missed — no entry for this key".to_string(),
+        },
         // The report invariant's last resort: the build failed with nothing to
         // attribute it to.
         DiagKind::UnattributedFailure => {
