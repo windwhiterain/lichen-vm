@@ -174,6 +174,15 @@ the address arithmetic inside the kernel and nothing else** — the step would s
 and one metadata buffer — so the simpler layout carries the proof and paging swaps in behind this
 ABI rather than redesigning it.
 
+**Per-sequence positions ride in one `Int` buffer, and an `Int` element is eight bytes.** A batch
+whose sequences are at different points runs in one dispatch: a lane's position is the sequence's
+word in the positions buffer, so three sequences at positions `2`, `0` and `1` append at three
+different slots in one submission (`crates/lichen-serve/tests/positioned_step.rs`), and the next step
+advances each of them independently. The landmine is the width — `ScalarClass::Int` is **8** bytes
+while `Float` is 4 — so a positions buffer packed from `i32` words declares a third of the elements
+it holds and **every read past the first answers `0`**. That reads as a kernel defect because
+position `0` is a plausible answer: pack an `Int` buffer from `i64`.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
