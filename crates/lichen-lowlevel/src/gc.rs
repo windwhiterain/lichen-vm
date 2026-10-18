@@ -22,11 +22,11 @@ impl<P: Program> Module<P> {
     /// # Invariant
     ///
     /// Nothing reachable from `block_root` may name a node this releases, so a
-    /// surviving node's every edge into `source` has to be one the walk follows:
-    /// the equality classes it aliases into, its value's items, its traced nodes,
-    /// or the operand of an operation it still owes an answer for. A pending
-    /// assert's condition is a second root: the pass drains later. See
-    /// [`Self::drop_block`].
+    /// surviving node's every edge into `source` must be one the walk follows: its
+    /// class, its value's items, its traced nodes, or the operand of an owed
+    /// operation. Three roots ride along: a pending assert's condition, and the
+    /// template of a function whose home outlives the block.
+    /// See [`Self::drop_block`].
     #[stacksafe]
     pub fn garbage_collect(&mut self, block_root: NodeId) -> Option<P::Value> {
         let source = self.nodes[block_root].block;
@@ -47,8 +47,50 @@ impl<P: Program> Module<P> {
                 self.garbage_collect_node(condition, source, target);
             }
         }
+        // A surviving function's template is a root set too.
+        for node in self.owned_by_surviving_function(source) {
+            self.garbage_collect_node(node, source, target);
+        }
         self.drop_block(source);
         value
+    }
+
+    /// The nodes in `source`'s block subtree that a function outliving `source` names.
+    ///
+    /// # Invariant
+    ///
+    /// A function's home is not always the block its template nodes are homed in, so
+    /// the walk cannot find them from the root; the node's owner is the one record that
+    /// says which function a node belongs to, and a function whose home descends from
+    /// `source` dies with it — its nodes are then released with it and are not kept.
+    fn owned_by_surviving_function(&mut self, source: BlockId) -> Vec<NodeId> {
+        let mut owned = Vec::new();
+        let mut pending = vec![source];
+        while let Some(block) = pending.pop() {
+            let Some(entry) = self.blocks.get(block) else {
+                continue;
+            };
+            pending.extend(entry.children.iter().copied());
+            for &node in &entry.nodes {
+                let lives_here = self
+                    .nodes
+                    .get(node)
+                    .is_some_and(|node_entry| node_entry.block == block);
+                if lives_here && self.owns_surviving_function(node, source) {
+                    owned.push(node);
+                }
+            }
+        }
+        owned
+    }
+
+    /// Whether `node` belongs to a function whose home is outside `source`.
+    fn owns_surviving_function(&self, node: NodeId, source: BlockId) -> bool {
+        self.nodes[node].function.is_some_and(|owner| {
+            self.functions
+                .get(owner)
+                .is_some_and(|entry| !self.descends_from(entry.block, source))
+        })
     }
 
     /// The equality-class members of `node` that this walk has not entered yet.

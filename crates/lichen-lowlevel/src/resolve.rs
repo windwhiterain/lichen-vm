@@ -348,7 +348,10 @@ impl<P: Program> Module<P> {
             if current == function {
                 return Ok(true);
             }
-            owner = self.functions[current].parent;
+            owner = self
+                .functions
+                .get(current)
+                .and_then(|function| function.parent);
         }
         Ok(false)
     }
