@@ -117,7 +117,7 @@ that *disappeared* changes `resolved_structure`; a read that *appeared* adds an 
 read list; a resolution that moved under unchanged text changes the recorded `BinderId`.
 So the window seeding keeps its value as an accelerator (§5) and loses its status as a
 soundness obligation. The note's warning "dropping either propagation is unsound" becomes
-"a key that omits a read is unsound", which is a narrower and checkable obligation — §9.
+"a key that omits a read is unsound", which is a narrower and checkable obligation — §11.
 
 ## 5. What propagation still buys, and honestly how little
 
@@ -152,7 +152,7 @@ bindings with identical structure and identical dependency keys get the **same**
 share one cache entry. For a value cache that is deduplication, a bonus.
 
 The consequence that does need care is not correctness: a shared entry has **one owner**,
-so byte accounting and the "why did this recompute" report must attribute it once. §8.
+so byte accounting and the "why did this recompute" report must attribute it once. §10.
 
 ## 7. What keys do not solve: the three value tiers
 
@@ -183,7 +183,75 @@ Two consequences, and the second is the one that is easy to miss:
   and gives up backdating and persistence, which is a coherent choice for a value that is
   expensive to read back and cheap to recompute.
 
-## 8. Costs and failure modes
+## 8. The work budget is the first constraint on heavy data, and it is measured
+
+This was not in the plan until a probe found it, and it reorders the stages. `WorkBudget`'s
+default is `apply_depth_limit: 500` / `apply_total_limit: 2_000`
+(`crates/lichen-highlevel/src/checker.rs:396-401`), and **every language-level caller gets
+it**: `build_in_attr_native` is what `compile`, `BufferSession`, `compile_with_cells` and the
+language server all reach, and it passes `WorkBudget::default()` literally
+(`checker.rs:463`). The lowlevel's own `Module::MAX_APPLY_TOTAL` is **100 000**, so the
+checker overrides the VM's bound by a factor of fifty, and `reset_apply_budget` has no
+caller — the count is cumulative over the whole build.
+
+Two measured consequences:
+
+- **A heavy node overruns it almost immediately.** The naive `fib` this probe uses costs
+  ~2·fib(n+1)−1 applications because the array literal evaluates both arms, so `fib 16` is
+  ~3 193 applications against a 2 000 budget.
+- **An overrun costs the whole program its cache, not part of it.** `freeze_cells` returns on
+  `!build.ok` (`crates/lichen-language/src/lib.rs:165-167`), and a `NonTerminating` budget
+  refusal makes `build.ok` false. Measured: one `fib 16` cell gives `build ok false`,
+  1 diagnostic, **`frozen 0`, `retained 0`**.
+
+So heavy computation **cannot happen at check time** under today's budget, which means the
+heavy values these two domains need are the compute layer's — `$parallel`/`$jit` results,
+where one dispatch is one application however many elements it produces. That makes §7's
+tiers the main line rather than an addendum: **T2 and T3 are where a data-science or PCG
+program's heavy data actually lives**, and T1 is the cheap case.
+
+Whether the budget should be raisable per host is a decision, not a measurement:
+`Checker::build_with_budget` is public, but it does not take a cell store, so a host cannot
+raise the budget and keep the cell path through the same call. §13 records it as open.
+
+## 9. Recovered measurements
+
+Taken on `feature/heavy-value-cache` off `dev@9d85271b`, one process, **debug build**, so the
+ratios are the reading and the absolute milliseconds are inflated. Probe:
+`crates/lichen-language/examples/cache_timing.rs` (temporary; delete when this closes).
+
+**Shape**: 8 cheap `cache`d bindings in a chain plus 4 heavy ones calling a naive `fib 10`,
+with a tail that reads every one. Frontend versus check: **2.38 ms against 149.43 ms**, so
+the check is 98.4 % of a build and a key fold that costs "the same order as resolve" is
+competing with under two percent of it.
+
+| edit | fresh ms | session ms | ratio | build | reused | frozen | dropped |
+|---|---|---|---|---|---|---|---|
+| cheap seed `c0` | 151.42 | **1.95** | 78× | new | 4 | 8 | 8 |
+| heavy `h0` depth+1 | 199.92 | 86.22 | 2.3× | new | 11 | 1 | 1 |
+| append a cached statement | 188.65 | **6.37** | 30× | new | 12 | 1 | 0 |
+| whitespace only | 195.97 | **0.41** | 478× | reuse | 0 | 0 | 0 |
+| tail only | 194.29 | **1.47** | 132× | new | 13 | 0 | 0 |
+
+The table is one rerun; a first run read the same within noise (e.g. 156.93 / 1.95 on the
+first row), and the ratios are what it is for.
+
+Three readings, and the third is a caveat rather than a win:
+
+- **The reuse is real and it is exactly the intended cone.** Editing `c0` recomputes the
+  eight cheap cells and leaves all four heavy ones alone; editing `h0`'s depth touches that
+  one cell and its readers.
+- **Session cost is flat in the number of heavy nodes while a fresh compile is linear**:
+  **87 / 88 / 89 ms against 57 / 87 / 189 ms** for 1 / 2 / 4 heavy cells. The checker still
+  walks the whole IR and only the cell bodies are skipped, so the win comes from what a cell
+  *contains* — the mechanism's intended granularity, and also its limit.
+- **The session path has fixed overhead that a small program does not amortize.** Its first
+  compile of the same source took **245.60 ms against a fresh 151.80 ms** (1.6×), and at one
+  heavy cell an edit cost 87 ms against a fresh 57 ms. Unattributed in this reading — the
+  diff, the freeze, or materializing static reads — and it is the thing to profile next,
+  because a data-science edit loop pays it on every edit.
+
+## 10. Costs and failure modes
 
 - **`KEY_FORMAT_VERSION` stops being free to bump.** `incremental-update.md` §8 currently
   says a bump "invalidates every cached key; today that is in-memory only … so a bump is
@@ -212,7 +280,7 @@ Two consequences, and the second is the one that is easy to miss:
   the key path is the judge. Until then it is still load-bearing, which is why propagation
   is kept rather than deleted (§1).
 
-## 9. What would falsify it
+## 11. What would falsify it
 
 - **The key fold dominates a build.** Then §5's "resolve is already whole-program" stops
   being a reason and the answer is to make resolve incremental.
@@ -226,7 +294,7 @@ Two consequences, and the second is the one that is easy to miss:
   reporting cell rather than to the artifact, which is a report-shape change, not a cache
   change.
 
-## 10. Decisions taken
+## 12. Decisions taken
 
 - **Keys are allowed; the key is the judge and propagation is the accelerator.** Where they
   disagree the key wins, and that is a bug in propagation.
@@ -244,7 +312,7 @@ Two consequences, and the second is the one that is easy to miss:
   device→host readback (§7).
 - **Propagation is kept, not deleted**, until the key path is measured (§1, §5).
 
-## 11. Open
+## 13. Open
 
 - **The exact persistence container for a cell.** A cell artifact is a `StaticModule` closure
   with the closure's own ref set; the package store's six acceptance criteria
@@ -257,6 +325,21 @@ Two consequences, and the second is the one that is easy to miss:
 - **How a graph node's key folds its edges** — the descriptor that
   `incremental-update.md` §5 promises becomes an accelerator and a reason source under this
   ruling, not a soundness requirement, which is a smaller job than that note assumes.
-- **The measurement** (`incremental-evaluation.md` Q9 is still owed): no number exists for a
-  build's wall-clock split, so "the key fold is the same order as resolve" is an argument
-  from the code and not a reading.
+- **Whether the work budget is raisable per host** (§8). `Checker::build_with_budget` is
+  public, but the language-level path hard-wires `WorkBudget::default()` and no cell-store
+  call takes a budget, so "a host that needs heavy checker-time generation" has no route
+  today. Three shapes, none of them free: thread a budget through the cell path; let a
+  `cache` mark raise the bound for that binding only (a per-binding budget, which is a new
+  semantic); or keep the bound and require heavy work to be compute-layer. **The third is a
+  decision the plan can live with**; the first is the smallest mechanical change.
+- **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
+  and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
+  around it.
+- **The heavy case has not been measured on the composed vocabulary.** Every reading in §9
+  is the bare language, where a value is a host scalar or array. The heavy values these
+  domains need are `lichen-compute`'s, so the next probe belongs in
+  `crates/lichen-compute/examples/` over that crate's own `LangProgram`, and it is the
+  reading that decides T2 against T3.
+- **The measurement** (`incremental-evaluation.md` Q9 is still owed): §9 has the
+  frontend-versus-check split now, but not the deep pass separated from the check, and not
+  the session's overhead broken out.
