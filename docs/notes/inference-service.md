@@ -207,13 +207,14 @@ extent is **one of the step's arguments**, because an extent cannot be computed 
 `sequences × rows` lanes, the sampler `sequences`, the append `sequences × capacity × columns`, so
 the step takes three counts and the host passes all three.
 
-**A model's weights have to be a resident, and a step's own output is the only public way to make
-one.** `RunArgument::Resident` is what keeps a buffer on the device, and `graph::run` needs a
-`ResidentBuffer` for it, which only `RunResult::Resident` produces: `GpuContext` exposes `fetch` and
-`release` but **no upload**. So a service loads its weights with a **load step** — a graph whose only
-job is to copy a host buffer into a resident, run once when the model opens. One dispatch at load
-costs nothing, and it keeps the per-token path free of a weight upload, which the residency
-measurement above says would otherwise be 99% of the step.
+**A model's weights become a resident through a load step, and the crate now has one.**
+`graph::run` needs a `ResidentBuffer` for every buffer it reads from the device, and only
+`RunResult::Resident` produces one: `GpuContext` exposes `fetch` and `release` but **no upload**. So
+`Session::upload(&[f32])` prepares a built-in two-dispatch copying step and runs it once, and the
+resident it answers is the weights' — after which the per-token path never uploads them, which the
+residency measurement above says would otherwise be 99% of a step. The compile is paid per upload
+rather than per token, which is what makes the shape right for a weight load, and
+`crates/lichen-serve/tests/upload_step.rs` round-trips eight words through it.
 
 **And a decode-shaped step takes a different argument list from the append-shaped one.** The append
 step is `count, k, v, nk, nv, positions`, while the whole decode step is three counts and six

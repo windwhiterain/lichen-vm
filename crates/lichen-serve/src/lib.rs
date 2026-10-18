@@ -14,6 +14,7 @@ use lichen_kernel_ir::{
 use lichen_utils::extend::AsEnum;
 
 mod service;
+mod upload;
 
 pub use service::{Served, Service};
 
