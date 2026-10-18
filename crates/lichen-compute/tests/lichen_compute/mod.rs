@@ -10,6 +10,7 @@ mod composed_chain;
 mod compute;
 
 mod consumer_guard;
+mod decode_step_graph;
 mod elementwise_chain;
 mod examples;
 mod fan_in_merge;

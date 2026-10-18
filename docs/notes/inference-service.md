@@ -84,6 +84,26 @@ the end of §8.
 | U1b | a runtime scalar inside a recorded graph | **yes — the open item is stale** | `zz_graph_scalar_probe`: `off 0 → [1,2,3,4]`, `off 2 → [0,0,1,2]`; and `Scalar::Value(ValueId)`, pinned by `graph_runtime_scalar.rs` |
 | U3 | argmax as three single-class folds | **yes, all-`Float`** | `zz_argmax_probe`: max `9.0`, then `[…, 5.0, …]`, then token `5.0`; the mixed spelling is refused below |
 
+**And the whole step is one graph, measured** (`decode_step_graph.rs`, on the device):
+`examples/generate.lichen`'s three kernels — the score GEMV, the greedy sampler whose
+fold carries an `Int` slot beside two `Float` ones, and the cache append — record into
+**one** graph and answer that file's hand derivation of step zero,
+`[1.0, 2.0, 2.0, -1.0, -1.0]`; and a **second** `graphrun` reads the first's answer
+through `first[0]` and answers step one, `[1.0, 2.0, 2.0, 0.0, -1.0]`. So a step is
+**one submission**, and a loop over steps needs **no host round trip** — the shape this
+note is built on is expressible today, in the language, with no copies.
+[llm-operators](llm-operators.md) had measured the append-then-score **pair**; the
+third kernel, and two graph runs chained, are what this adds.
+
+**One defect rides with it, and it has a one-token workaround.** A graph run's answer
+loses its element class — `raw[raw 1.0, …]: ?a` against the direct chain's
+`array{Float, 5}` — which is
+[compute-runtime-scalars](compute-runtime-scalars.md)'s open item 4
+([class-channel](class-channel.md) §2/§3). An **annotation on the collect** restores
+it, `compute.collect (…) : array{Float, 5}`, which is the spelling
+`examples/generate.lichen` already uses to read its sampled token. So it costs a
+spelling and not a capability.
+
 Four more facts were read rather than measured, each with its own witness in the
 tree:
 
@@ -152,12 +172,15 @@ The question that prompted this round was whether a graph, which describes one
 input to one output, can hold the loop a service actually is. Three forms, and they
 are not variants of one another:
 
-**A — unroll N steps into one DAG, run under `Policy::Batch`.** Works today, with
-no IR change: one submission, one fence, and every per-step parameter a `Constant`
-known at record time, which is exactly what §4's rule allows. Two bounds are real:
-**64 dispatches per submission**, which caps N at `64 / dispatches-per-step`, and no
-early exit, since the host-known zero extent is refused. The cap is a pool size
-(`max_sets`), not an architecture, so it moves; the exit is §4's indirect row.
+**A — one step per graph run, the loop above it.** Works today, with no IR change, and
+with the step itself measured (`decode_step_graph.rs`): a decode step's three kernels
+are one submission and one fence, the loop over steps is the language's own recursion
+or the host's, and `first[0]` carries the answer forward with no host round trip. Every
+per-step parameter is a `Constant` or a graph argument, which is exactly what §4's rule
+allows. Two bounds remain and neither is fatal: **64 dispatches per submission**, which
+is a pool size (`max_sets`) rather than an architecture and caps how many steps may be
+unrolled into one run; and an early exit, which §4's indirect row supplies — a step
+gated by a device-written zero extent dispatches nothing at the schedule it already had.
 
 **B — a loop node holding a subgraph.** The shape is forced by an invariant worth
 protecting: `Graph`'s node list **is** the topological order, with no sort, no cycle
