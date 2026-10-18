@@ -195,8 +195,9 @@ of fifty, and `reset_apply_budget` had no caller — the count was cumulative ov
 Two measured consequences, and then the decision they forced:
 
 - **A heavy node overran it almost immediately.** The naive `fib` this probe uses costs
-  ~2·fib(n+1)−1 applications because the array literal evaluates both arms, so `fib 16` is
-  ~3 193 applications against a 2 000 budget.
+  ~2·fib(n+1)−1 applications — plain double recursion; `[a, b][cond]` is a *lazy* conditional,
+  so it is not charged for both arms — and `fib 16` is ~3 193 applications against a 2 000
+  budget.
 - **An overrun cost the whole program its cache, not part of it.** `freeze_cells` returns on
   `!build.ok`, and a `NonTerminating` budget refusal made `build.ok` false. Measured: one
   `fib 16` cell gave `build ok false`, 1 diagnostic, **`frozen 0`, `retained 0`**.
@@ -270,7 +271,58 @@ Three readings, and the third is a caveat rather than a win:
   diff, the freeze, or materializing static reads — and it is the thing to profile next,
   because a data-science edit loop pays it on every edit.
 
+### 9.2 The pipeline application, and the two things it found
+
+`crates/lichen-language/examples/pipeline_edits.rs` is the same question on the shape the two
+domains actually have: a generator pipeline of 6 stages, each `cache`d stage reading the one
+before it, each doing a branching recurrence, with a tail that reads all of them. An agent's
+five edits are applied in sequence to one session. **Every row also compares the session's
+root value with the same source's fresh compile** — `Module::node_value` reads the raw answer,
+so this is the differential oracle and not a proxy for it.
+
+| edit | fresh ms | session ms | speedup | reused | frozen | dropped | value |
+|---|---|---|---|---|---|---|---|
+| upstream `s0` | 404.86 | 1398.48 | **0.3×** | 0 | 6 | 6 | same |
+| middle `s3` | 556.44 | 322.16 | 1.7× | 3 | 3 | 3 | same |
+| leaf `s5` | 917.40 | 255.88 | 3.6× | 5 | 1 | 1 | same |
+| append a stage | 957.78 | **9.27** | 103× | 6 | 1 | 0 | same |
+| whitespace only | 1318.07 | **0.55** | 2384× | 0 | 0 | 0 | same |
+| **five edits** | **4154.55** | **1986.34** | **2.1×** | | | | **5/5** |
+
+**Value agreement is 5 of 5**, which is the mechanism's soundness reading on a real edit
+sequence: every session answer equalled a fresh compile's, including the edits that reused
+every cell.
+
+Two findings, and the first is a caveat the table forces:
+
+- **The win is proportional to the fraction of cells reused, and the all-dirty case is a
+  loss.** Editing the upstream stage dirties all six, nothing is reused, and the session took
+  **1398 ms against a fresh 405 ms — 3.3× slower**. Two costs produce that: the session's own
+  bookkeeping, and **the per-cell freeze**, which for a cell holding a heavy apply walks that
+  apply's *clone graph* — thousands of nodes for ~900 applications — rather than its value.
+  So a heavy cell is expensive to *freeze* as well as to compute, and the break-even is a
+  cell that is reused more often than it is recomputed. That is the retention policy's real
+  design constraint, and it is new to this note.
+- **The fresh arm is not stationary within a run.** The same unchanged source compiled five
+  times read 277.96 / 277.31 / 285.91 / 291.90 / 287.24 ms — flat — so the process does not
+  drift on its own; but the fresh arm varies with source size superlinearly (884 applications
+  1.46× the control's 706, and 1324 applications 3.3×), and **two runs of the whole probe
+  disagree**: the first read fresh 404.86 / 556.44 / 917.40 / 957.78 / 1318.07 with totals
+  2.1×, the second 381.61 / 535.05 / 937.86 / 915.42 / **2322.66** with totals 2.7× — the last
+  row's fresh time for one structure differed by 76 %. So read the **row ratios** as the
+  reading (stable to about ±10 %: 0.3×, 1.6–1.7×, 3.6–3.7×, 94–103×, 2339–2384×), the
+  aggregate as a range, and the whole-build-reuse row as the robust one because it skips the
+  compile entirely.
+
 ## 10. Costs and failure modes
+
+- **A heavy cell is expensive to freeze, and the cost is its clone graph, not its value.**
+  Measured in §9.2: freezing six cells whose values came from ~900-application applies cost
+  ~990 ms in a debug build — **≈165 ms per cell** — and the artifact a cell freezes is the
+  closure of the apply, whose clone graph holds thousands of nodes. So a cell's break-even is
+  *reused more often than recomputed*, and a policy that freezes a cell on every dirty edit
+  can cost more than it saves. This is the retention policy's real constraint and it was not
+  visible before a heavy cell existed to freeze.
 
 - **`KEY_FORMAT_VERSION` stops being free to bump.** `incremental-update.md` §8 currently
   says a bump "invalidates every cached key; today that is in-memory only … so a bump is
@@ -312,6 +364,11 @@ Three readings, and the third is a caveat rather than a win:
 - **Keys deduplicate in a way that confuses the report.** Then sharing must be keyed to the
   reporting cell rather than to the artifact, which is a report-shape change, not a cache
   change.
+- **A typical agent edit dirties most cells.** §9.2 measures the all-dirty case at **0.3×** —
+  the session three times slower than a fresh compile — so if an agent's real edits usually
+  reach the upstream-most stage, retention saves nothing and the freeze *costs*. The
+  measurement that would settle it is the distribution of dirty-fraction over a real edit
+  session, which nobody has taken.
 
 ## 12. Decisions taken
 
@@ -353,6 +410,12 @@ Three readings, and the third is a caveat rather than a win:
 - **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
   and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
   around it.
+- **Whether a cell can freeze its value without its clone graph.** §10's ≈165 ms per freeze
+  is the closure's clone graph. For a fully decided value the artifact needs the value and
+  the refs it reads in place — not the thousands of nodes the apply cloned to get there. The
+  closure's four edges plus `traced` are the contract that makes the freeze total, so
+  narrowing it is a change to that contract and needs the materialize pass's carry rule
+  re-read first, not a shortcut.
 - **The heavy case has not been measured on the composed vocabulary.** Every reading in §9
   is the bare language, where a value is a host scalar or array. The heavy values these
   domains need are `lichen-compute`'s, so the next probe belongs in
