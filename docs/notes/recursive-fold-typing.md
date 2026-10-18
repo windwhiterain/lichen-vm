@@ -206,7 +206,25 @@ So the remaining choice is structural, and it is the owner's:
   spec (the compute kernels already annotate; the workaround section below is that
   rule).
 
-## 7. The workaround
+## 7. The workaround, and its minimal form
 
 Annotate the recursive function's **parameter** or its **result type**, or annotate the read's
 result. The compute kernels' folds are annotated for this reason.
+
+**The minimal annotation is the arity alone, and it works (measured at `dev@575ad0be`).**
+The parameter's *shape* is what the un-annotated form lacks, and the field types then follow
+from the application:
+
+| program | answer |
+|---|---|
+| `@loop f = ((s : tuple{_, _}) => …)` — the repro with the desugared array | `3: Int` |
+| the same with `if` | `3: Int` |
+| `(s : tuple{Int, _})` / `(s : tuple{Int, S})` | `3: Int` |
+| `g = (s : tuple{_, _}) => s(1)` ; `g (0, 7)` | `7: Int` |
+| `g = s => s(1)` ; `g` | `?a -> ?b` — no arity, no field type |
+| `g = (s : tuple{_, _}) => s(1)` ; `g` | `tuple{raw[?a, ?b], raw[?c, ?d]} -> raw[?c, ?d]` — the arity is fixed, the field types are open until the call |
+
+So the arity **cannot** be inferred from uses (`?a -> ?b` above) while the **field types
+can**: with the arity annotated they are decided per call. The defect this note records is
+therefore only the *un-annotated shape*; an annotation of `tuple{_, _}` is enough, and the
+type system already does the inference the annotation leaves open.
