@@ -143,9 +143,9 @@ A name is a lowercase or mixed-case identifier (`x`, `id`, `n2`). The
 language's keywords are reserved and cannot be names: `Int`, `Float`,
 `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`,
 `if`, `then`, `else`, `return`, `pub`, `cache`, `int2float`, `float2int`,
-`max`, `min`, `exp`, `sqrt`, `floor`, and the `@`-led words `@loop`,
-`@assert`, `@shallow`, `@gc`, and `@in`. The underscore `_` is not a name
-either; it is the inference placeholder of Chapter 5.
+`max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`, `ln`, and the `@`-led
+words `@loop`, `@assert`, `@shallow`, `@gc`, and `@in`. The underscore `_`
+is not a name either; it is the inference placeholder of Chapter 5.
 
 ## The atomic types
 
@@ -223,21 +223,21 @@ The comparison yields an `Int` like every other comparison. A negative
 number is printed with a minus sign, but there is no unary minus to
 *write* one: `0.0 - 1.0` is the spelling.
 
-`exp`, `sqrt` and `floor` are prefix keywords over one operand, and
-`floor` yields a `Float`:
+`exp`, `sqrt`, `floor`, `sin`, `cos` and `ln` are prefix keywords over one
+operand, and `floor` yields a `Float`:
 
 ```lichen
-(exp 0.0, exp 1.0, sqrt 4.0, floor 1.75)
+(exp 0.0, exp 1.0, sqrt 4.0, floor 1.75, sin 0.0, cos 0.0, ln 1.0)
 ```
 
 ```text
-(1.0, 2.718293, 2.0, 1.0): tuple{Float, Float, Float, Float}
+(1.0, 2.718293, 2.0, 1.0, 0.0, 1.0, 0.0): tuple{Float, Float, Float, Float, Float, Float, Float}
 ```
 
 `exp 1.0` is `2.718293`, not `e`: the language defines its transcendentals
-as its own arithmetic sequences (a polynomial for `exp`, a range reduction
-and Newton iteration for `sqrt`), and every backend runs the same
-sequence, so the answer is reproducible rather than platform-defined.
+(`exp`, `sqrt`, `sin`, `cos`, `ln`) as its own arithmetic sequences, and
+every backend runs the same sequence, so the answer is reproducible
+rather than platform-defined.
 
 Floating point division by zero is not refused; it produces the IEEE
 values, which the printer spells `inf` and `NaN`:
@@ -339,7 +339,7 @@ The operators, from loosest to tightest, are:
 | bitwise and | `&` | left |
 | sum | `+` `-` | left |
 | product | `*` `/` `%` | left |
-| prefix keywords | `@assert`, `@gc`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor` | — |
+| prefix keywords | `@assert`, `@gc`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`, `ln` | — |
 | application | `f x` | left |
 | postfix reads | `a[i]`, `a.name`, `X{n}`, `X::a`, `a(k)` | left |
 | atoms | literals, names, `( … )`, `[ … ]`, `{ … }`, the type forms | — |
@@ -375,9 +375,10 @@ uniform at each binary level:
 That is `(1 - 2) - 3`, with both subtractions wrapping.
 
 Prefix keywords take a fixed shape. `@assert`, `@gc`, `int2float`,
-`float2int`, `exp`, `sqrt` and `floor` each take one **application**;
-`max` and `min` each take two **atoms**. So `max a b` is the maximum of
-the atoms `a` and `b`, and `max (a + 1) b` needs its parentheses.
+`float2int`, `exp`, `sqrt`, `floor`, `sin`, `cos` and `ln` each take one
+**application**; `max` and `min` each take two **atoms**. So `max a b` is
+the maximum of the atoms `a` and `b`, and `max (a + 1) b` needs its
+parentheses.
 
 ```lichen
 f = x => x + 1

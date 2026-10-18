@@ -55,11 +55,11 @@ bitand   := sum ('&' sum)*                          -- bitwise and
 sum      := product (('+' | '-') product)*          -- arithmetic, left-assoc
 product  := prefix (('*' | '/' | '%') prefix)*      -- product, left-assoc; tighter than '+'/'-'
 prefix   := '@assert' apply
-          | ('int2float' | 'float2int' | 'exp' | 'sqrt' | 'floor') apply
+          | ('int2float' | 'float2int' | 'exp' | 'sqrt' | 'floor' | 'sin' | 'cos' | 'ln') apply
                                                   -- one operand, by juxtaposition
           | ('max' | 'min') atom atom                       -- two operands, by juxtaposition
           | apply
-                                                  -- the prefix assert, the two class crossings and the four scalar keywords exp/sqrt/floor/max/min; tighter than every binary operator, looser than application
+                                                  -- the prefix assert, the two class crossings, and the scalar keywords exp/sqrt/floor/sin/cos/ln (one operand) and max/min (two); tighter than every binary operator, looser than application
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
@@ -98,11 +98,12 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `=>`, `->`, `:`.  The
+  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`,
+  `ln`, `=>`, `->`, `:`.  The
   `@`-led keywords — `@loop`, `@assert`, `@shallow`, `@gc`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
   The
-  seven prefix keywords open a prefix expression and so cannot be used as
+  ten prefix keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`, `<==`, `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
@@ -651,14 +652,16 @@ maps every span back to the original file.
    is **partial** — a `NaN`, an infinity, or a value the unsigned `Int` cannot
    hold records `operator.out_of_range` and answers the lazy marker.  See
    [operators](notes/operators.md) §7.
-   Five more prefix keywords are **scalar operators** rather than crossings:
+   Eight more prefix keywords are **scalar operators** rather than crossings:
    `max a b` and `min a b` yield the operands' own class (so `max 1 1.5` does not
-   check, by the same tie `1 + 1.5` fails), and `exp x`, `sqrt x` and `floor x` are
+   check, by the same tie `1 + 1.5` fails), and `exp x`, `sqrt x`, `floor x`,
+   `sin x`, `cos x` and `ln x` are
    `Float`'s alone.  A two-operand keyword takes **atoms**, so `max a b` is the
    maximum of `a` and `b` and `max (a + 1) b` needs its parentheses; the one-operand
-   ones take an application, like the crossings.  All three `Float`-only operators
+   ones take an application, like the crossings.  All the `Float`-only operators
    are **defined in the kernel IR** — a shared polynomial for `exp`, a range
-   reduction and Newton's iteration for `sqrt`, an exact conversion for `floor` —
+   reduction and Newton's iteration for `sqrt`, an exact conversion for `floor`,
+   and range-reduced sequences for `sin`, `cos` and `ln` —
    rather than by a target's instruction, so every backend and the interpreter read
    one sequence; `sqrt`'s worst relative error is `1.19e-7` and `floor` is exact.
    See [notes/floating-point](notes/floating-point.md) §6, §7.  See
@@ -962,7 +965,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
 | `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker deep-evaluates to `USize(1)` |
-| `int2float e` / `float2int e` / `max a b` / `min a b` / `exp x` / `sqrt x` / `floor x` | `Prefix { operator, operands }` — `int2float`/`float2int` are the only forms whose type is not their operand's: the operand checks against the direction's source class, the result's type is its target.  `max`/`min` tie their operands to one class and leave it; `exp`, `sqrt` and `floor` check their operand as `Float` and are `Float` |
+| `int2float e` / `float2int e` / `max a b` / `min a b` / `exp x` / `sqrt x` / `floor x` / `sin x` / `cos x` / `ln x` | `Prefix { operator, operands }` — `int2float`/`float2int` are the only forms whose type is not their operand's: the operand checks against the direction's source class, the result's type is its target.  `max`/`min` tie their operands to one class and leave it; `exp`, `sqrt`, `floor`, `sin`, `cos` and `ln` check their operand as `Float` and are `Float` |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a **tuple** element (a struct reads `a.name`) |
