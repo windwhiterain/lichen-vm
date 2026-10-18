@@ -193,11 +193,13 @@ So half of a layer's time is **making a copy of the file it already holds**: `Te
 dispatch is a second copy. 28 layers of that is 2.7 GB of `memcpy` a token, and it is the largest single
 line in the budget.
 
-The first of those two copies is gone: a layer now **borrows** the copy the model keeps, which took a warm
-token from 4.82 s to **2.64 s** — the 2.2 s the timers had attributed to the clone almost exactly. The
-second is still there, because `RunArgument::Buffer` takes its bytes by value, so the slice handed to a
-dispatch is a copy of the slice it borrowed; making that a borrow too is an interface change in
-`lichen-compute` and not a scheduling one, and it is the next 1.2 s.
+Both copies are gone. A layer now **borrows** the copy the model keeps, which took a warm token from 4.82 s
+to 2.64 s — the 2.2 s the timers had attributed to the clone almost exactly. And the second one was not an
+interface change at all: `graph::run` took its arguments **by value** and then cloned each payload out of
+them, so moving the bytes instead of copying them took the token to **1.61 s**. Two copies of a 96 MB file,
+one line each, were worth three seconds.
+
+What is left per layer is the upload of the weights it reads and the dispatches that read them.
 
 ## Running it
 

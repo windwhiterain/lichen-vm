@@ -621,18 +621,19 @@ pub fn run(
                 .into(),
         );
     }
+    let graph = &aligned(graph, &arguments)?;
+    // The arguments are this call's, so their bytes move: a clone here copies every payload.
     let inputs: Vec<Value<'_>> = arguments
-        .iter()
+        .into_iter()
         .map(|argument| match argument {
-            RunArgument::Buffer { class, data } => Value::host_data(*class, data.clone()),
+            RunArgument::Buffer { class, data } => Value::host_data(class, data),
             RunArgument::Resident(resident) => {
                 Value::device(resident.id, resident.count, resident.class)
             }
-            RunArgument::Count(count) => Value::int(*count),
-            RunArgument::Float(number) => Value::float(*number),
+            RunArgument::Count(count) => Value::int(count),
+            RunArgument::Float(number) => Value::float(number),
         })
         .collect();
-    let graph = &aligned(graph, &arguments)?;
     let table = Runner::new(&*backend, policy)
         .run(graph, inputs)
         .map_err(|refusal| format!("this graph could not be run: {refusal}"))?;
