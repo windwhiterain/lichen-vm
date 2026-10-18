@@ -236,9 +236,11 @@ in one counter was the original defect. §13 records it as open.
 
 ## 9. Recovered measurements
 
-Taken on `feature/heavy-value-cache` off `dev@9d85271b`, one process, **debug build**, so the
-ratios are the reading and the absolute milliseconds are inflated. Probe:
-`crates/lichen-language/examples/cache_timing.rs` (temporary; delete when this closes).
+One process, wall clock, on `feature/heavy-value-cache`. §9.1 is a **debug** build, so its
+absolute milliseconds are inflated and its ratios are the reading. §9.2 has **both** builds,
+because its headline is the one that had to survive a release compile.
+Probes: `crates/lichen-language/examples/{cache_timing,pipeline_edits}.rs` (temporary; delete
+when this closes).
 
 **Shape**: 8 cheap `cache`d bindings in a chain plus 4 heavy ones calling a naive `fib 10`,
 with a tail that reads every one. Frontend versus check: **2.38 ms against 149.43 ms**, so
@@ -280,46 +282,53 @@ five edits are applied in sequence to one session. **Every row also compares the
 root value with the same source's fresh compile** — `Module::node_value` reads the raw answer,
 so this is the differential oracle and not a proxy for it.
 
+**Release build** (`cargo run --release`), which is the headline because it had to survive one:
+
 | edit | fresh ms | session ms | speedup | reused | frozen | dropped | value |
 |---|---|---|---|---|---|---|---|
-| upstream `s0` | 404.86 | 1398.48 | **0.3×** | 0 | 6 | 6 | same |
-| middle `s3` | 556.44 | 322.16 | 1.7× | 3 | 3 | 3 | same |
-| leaf `s5` | 917.40 | 255.88 | 3.6× | 5 | 1 | 1 | same |
-| append a stage | 957.78 | **9.27** | 103× | 6 | 1 | 0 | same |
-| whitespace only | 1318.07 | **0.55** | 2384× | 0 | 0 | 0 | same |
-| **five edits** | **4154.55** | **1986.34** | **2.1×** | | | | **5/5** |
+| upstream `s0` | 65.42 | 197.17 | **0.3×** | 0 | 6 | 6 | same |
+| middle `s3` | 89.92 | 50.15 | 1.8× | 3 | 3 | 3 | same |
+| leaf `s5` | 226.20 | 46.54 | 4.9× | 5 | 1 | 1 | same |
+| append a stage | 208.42 | **2.61** | 80× | 6 | 1 | 0 | same |
+| whitespace only | 195.21 | **0.14** | 1374× | 0 | 0 | 0 | same |
+| **five edits** | **785.17** | **296.61** | **2.6×** | | | | **5/5** |
 
-**Value agreement is 5 of 5**, which is the mechanism's soundness reading on a real edit
-sequence: every session answer equalled a fresh compile's, including the edits that reused
-every cell.
+The debug build read fresh 404.86 / 556.44 / 917.40 / 957.78 / 1318.07 and session
+1398.48 / 322.16 / 255.88 / 9.27 / 0.55, totals 2.1×. **The ratios agree between the two
+builds** (0.3×, 1.7–1.8×, 3.6–4.9×, 80–103×, 1374–2384×), so the shape of the result is not a
+debug artefact — only the constants are.
+
+**Value agreement is 5 of 5** in both builds, which is the mechanism's soundness reading on a
+real edit sequence: every session answer equalled a fresh compile's, including the edits that
+reused every cell.
 
 Two findings, and the first is a caveat the table forces:
 
 - **The win is proportional to the fraction of cells reused, and the all-dirty case is a
-  loss.** Editing the upstream stage dirties all six, nothing is reused, and the session took
-  **1398 ms against a fresh 405 ms — 3.3× slower**. Two costs produce that: the session's own
-  bookkeeping, and **the per-cell freeze**, which for a cell holding a heavy apply walks that
-  apply's *clone graph* — thousands of nodes for ~900 applications — rather than its value.
-  So a heavy cell is expensive to *freeze* as well as to compute, and the break-even is a
-  cell that is reused more often than it is recomputed. That is the retention policy's real
-  design constraint, and it is new to this note.
-- **The fresh arm is not stationary within a run.** The same unchanged source compiled five
-  times read 277.96 / 277.31 / 285.91 / 291.90 / 287.24 ms — flat — so the process does not
-  drift on its own; but the fresh arm varies with source size superlinearly (884 applications
-  1.46× the control's 706, and 1324 applications 3.3×), and **two runs of the whole probe
-  disagree**: the first read fresh 404.86 / 556.44 / 917.40 / 957.78 / 1318.07 with totals
-  2.1×, the second 381.61 / 535.05 / 937.86 / 915.42 / **2322.66** with totals 2.7× — the last
-  row's fresh time for one structure differed by 76 %. So read the **row ratios** as the
-  reading (stable to about ±10 %: 0.3×, 1.6–1.7×, 3.6–3.7×, 94–103×, 2339–2384×), the
-  aggregate as a range, and the whole-build-reuse row as the robust one because it skips the
-  compile entirely.
+  loss.** Editing the upstream stage dirties all six, nothing is reused, and the session is
+  **3× slower than a fresh compile** in both builds (197.17 against 65.42 in release). Two
+  costs produce that: the session's own bookkeeping, and **the per-cell freeze**, which for a
+  cell holding a heavy apply walks that apply's *clone graph* — thousands of nodes for ~900
+  applications — rather than its value. So a heavy cell is expensive to *freeze* as well as to
+  compute: **~22 ms per cell in release**, against a 65 ms fresh compile of the whole
+  program. The break-even is a cell reused more often than it is recomputed. That is the
+  retention policy's real design constraint, and it is new to this note.
+- **The fresh arm is not stationary across runs.** One unchanged source compiled five times
+  reads flat (277.96 / 277.31 / 285.91 / 291.90 / 287.24 in debug), so the process does not
+  drift on its own; but the fresh arm varies with source size superlinearly, and two debug
+  runs of the whole probe disagreed by up to 76 % on one row's fresh time (1318.07 against
+  2322.66 for the same structure). So read the **row ratios** as the reading, the aggregate
+  as a range (2.1–2.7× debug, 2.6× release), and the whole-build-reuse row as the robust one
+  because it skips the compile entirely.
+
 
 ## 10. Costs and failure modes
 
 - **A heavy cell is expensive to freeze, and the cost is its clone graph, not its value.**
   Measured in §9.2: freezing six cells whose values came from ~900-application applies cost
-  ~990 ms in a debug build — **≈165 ms per cell** — and the artifact a cell freezes is the
-  closure of the apply, whose clone graph holds thousands of nodes. So a cell's break-even is
+  **≈22 ms per cell in release** (≈165 ms in debug), against a 65 ms fresh compile of the
+  whole program. The artifact a cell freezes is the closure of the apply, whose clone graph
+  holds thousands of nodes. So a cell's break-even is
   *reused more often than recomputed*, and a policy that freezes a cell on every dirty edit
   can cost more than it saves. This is the retention policy's real constraint and it was not
   visible before a heavy cell existed to freeze.
