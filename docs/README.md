@@ -107,6 +107,7 @@ authority, and this table only names the state.
 | [Packages & import](notes/packages.md) | `lichen-preprocess`, `lichen-language`, `lichen-compiler` | current |
 | [Package manager](notes/package-manager.md) | `lichen-package`, `lichen-preprocess` | current |
 | [Isolating the preprocessor](notes/preprocessor-isolation.md) | `lichen-preprocess`, `lichen-span`, `lichen-language`, `lichen-package` | current |
+| [The assembled-kernel disk cache](notes/kernel-disk-cache.md) | `lichen-runtime` (`module_cache`), `lichen-compute` (`language`) | current — the directory, the content key, self-healing, and the measured wrong-module an id-keyed cache served |
 | [Cross-process artifact store](notes/artifact-cache.md) | `lichen-registry`, `lichen-language` (`persist`), `lichen-lowlevel` | current |
 | [Testing the package manager offline](notes/venv-test.md) | `lichen-package`, `scripts/venv-test.sh` | current |
 | [README example sync](notes/readme-sync.md) | `lichen-tools`, `lichen-compute` (`tests/lichen_compute/readme.rs`) | current |
