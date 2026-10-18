@@ -10,3 +10,4 @@ lichen-compute-gpu.workspace = true
 lichen-graph-ir.workspace = true
 lichen-kernel-ir.workspace = true
 lichen-language.workspace = true
+lichen-utils.workspace = true

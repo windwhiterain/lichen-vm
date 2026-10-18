@@ -1098,6 +1098,7 @@ dependencies = [
  "lichen-graph-ir",
  "lichen-kernel-ir",
  "lichen-language",
+ "lichen-utils",
 ]
 
 [[package]]

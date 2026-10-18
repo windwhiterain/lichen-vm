@@ -3,10 +3,15 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use lichen_compute::compute::graph::{self, RunArgument, RunResult};
+use lichen_compute::compute::{Backend, ComputeValue, ResidentBuffer};
 use lichen_compute::set_graph_policy;
 use lichen_compute_gpu::GpuContext;
-use lichen_graph_ir::Policy;
-use lichen_kernel_ir::{ParallelBackend, clear_parallel_backend, install_parallel_backend};
+use lichen_graph_ir::{Graph, Policy};
+use lichen_kernel_ir::{
+    ParallelBackend, ScalarData, clear_parallel_backend, install_parallel_backend,
+};
+use lichen_utils::extend::AsEnum;
 
 /// What one run asked the device for.
 ///
@@ -122,5 +127,104 @@ impl Drop for Session {
     fn drop(&mut self) {
         clear_parallel_backend();
         set_graph_policy(Policy::Async);
+    }
+}
+
+/// A recorded step, held so that a step does not compile its program again.
+///
+/// # Invariant
+/// The graph is looked up **once** and run many times, and [`Prepared::step`] passes the session's
+/// policy as an argument rather than reading a thread-local. What a session does **not** do is
+/// consult a graph pass: `graph::run` documents that the graph handed to it is *"the one a pass
+/// handed back"*, so a caller that wants a pass runs it before preparing.
+pub struct Prepared<'session> {
+    session: &'session Session,
+    graph: Graph,
+    backend: Backend,
+}
+
+/// What one step answered, and what it cost.
+pub struct Stepped {
+    /// The graph's returns in the source function's order, device values left resident.
+    pub results: Vec<RunResult>,
+    /// The device work behind them.
+    pub cost: StepCost,
+}
+
+impl Prepared<'_> {
+    /// Run the held graph once, and leave what it wrote where it wrote it.
+    ///
+    /// # Invariant
+    /// The counts are this call's alone, and a `RunResult::Resident` names memory the caller still
+    /// has to fetch: a step is one submission and a readback is a separate act with a cost of its
+    /// own, which is what [`Session::fetch`] exists for.
+    pub fn step(&self, arguments: Vec<RunArgument>) -> Result<Stepped, ServeRefusal> {
+        let before = (
+            self.session.context.submissions(),
+            self.session.context.fence_waits(),
+        );
+        let started = Instant::now();
+        let outcome = graph::run(&self.graph, self.backend, arguments, Policy::Batch);
+        let elapsed = started.elapsed();
+        let cost = StepCost {
+            submissions: self.session.context.submissions().saturating_sub(before.0),
+            fence_waits: self.session.context.fence_waits().saturating_sub(before.1),
+            elapsed,
+        };
+        match outcome {
+            Ok(results) => Ok(Stepped { results, cost }),
+            Err(reason) => Err(ServeRefusal::Program(vec![reason])),
+        }
+    }
+
+    /// How many nodes the held graph dispatches.
+    pub fn nodes(&self) -> usize {
+        self.graph.nodes().len()
+    }
+}
+
+impl Session {
+    /// Compile `source` once and hold the step its tail recorded.
+    ///
+    /// # Invariant
+    /// The program's tail must be the graph value — `compute.graph step` and nothing after it —
+    /// because preparing records a step and dispatches nothing. It compiles twice: the refusal is
+    /// asked for first, since `run_at` panics on a refused program, and `line_starts` is not
+    /// public, so the one-pass form is unreachable
+    /// (`docs/notes/inference-service.md` §8).
+    pub fn prepare(&self, source: &str) -> Result<Prepared<'_>, ServeRefusal> {
+        let mut store = lichen_compute::language::new_store(None)
+            .map_err(|error| ServeRefusal::Device(error.to_string()))?;
+        if let Err(diagnostics) = lichen_language::run::evaluate_raw(source, None, &mut store) {
+            return Err(ServeRefusal::Program(
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .collect(),
+            ));
+        }
+        let mut store = lichen_compute::language::new_store(None)
+            .map_err(|error| ServeRefusal::Device(error.to_string()))?;
+        let (_module, value, _root) = lichen_language::testing::run_at(source, None, &mut store);
+        let Some(ComputeValue::Graph(id, backend)) = AsEnum::<ComputeValue>::as_enum(&value) else {
+            return Err(ServeRefusal::Program(vec![
+                "this program's tail is not a recorded graph: preparing wants `compute.graph step` \
+                 as the last binding, so that a step is recorded and nothing is dispatched"
+                    .into(),
+            ]));
+        };
+        let graph = graph::lookup(id).map_err(|reason| ServeRefusal::Program(vec![reason]))?;
+        Ok(Prepared {
+            session: self,
+            graph,
+            backend,
+        })
+    }
+
+    /// Read a resident the device wrote, so a caller fetches only what it asks for.
+    pub fn fetch(&self, resident: ResidentBuffer) -> Result<ScalarData, ServeRefusal> {
+        self.context
+            .fetch(resident.id, resident.count)
+            .map_err(|error| ServeRefusal::Device(error.to_string()))
     }
 }

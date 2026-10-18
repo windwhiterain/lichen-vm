@@ -54,13 +54,16 @@ installed context and every program answers a hand-derived number:
 | three dispatches, then the same `collect` | 4 | 4 |
 | one **recorded step** (three dispatches), then the same `collect` | 2 | 2 |
 | three **recorded steps**, then the same `collect` | 4 | 4 |
+| one **prepared step**, with the readback left to the caller | **1** | **1** |
 
 So a dispatch is one submission and one fence; a **recorded step is one of each however many
 dispatches it holds**; and **a readback is a submission and a fence of its own** — it does not
 ride along in the graph's submission, `Batch` or not. A step that hands a token back therefore
 costs **two**, and a generation of `N` tokens costs **`N + 1`** where the same work as a direct
-chain costs **`N × dispatches-per-step + 1`**. Everything below is about whether a step can be
-built to hit that.
+chain costs **`N × dispatches-per-step + 1`**. A step that **holds its answer on the device**
+costs **one**, and the readback becomes the caller's separate act — which is what the last row
+is, and what `Session::prepare`/`Prepared::step`/`Session::fetch` exist for. Everything below is
+about whether a step can be built to hit that.
 
 ## 2. The layers are already split — below the runtime is not where the gap is
 
@@ -419,8 +422,13 @@ Three verdicts were given and are recorded here rather than left in a transcript
    Its own doc states the caller's obligation too: the graph handed in is *"the one a pass
    handed back"*, so a session that never consults a pass runs without one. That is the
    default and worth saying rather than assuming.
-   So the crate's surface should be **`prepare` a model (compile, look up the graph, hold it)
-   and `step` it**, with `run(source)` kept only as the harness its tests need.
+   **The crate now does that**: `Session::prepare(source)` holds the graph,
+   `Prepared::step(arguments)` runs it, and `Session::fetch(resident)` is the readback —
+   measured at **one submission and one fence per step**, the compile paid once at load. Two
+   gaps are named rather than hidden: preparing a **source** compiles it twice, because the
+   refusal is asked for first (`run_at` panics on a refused program) and `line_starts` is not
+   public, so the one-pass form is unreachable; and `run(source)` stays as the harness the
+   cost table above is measured with.
 
 The seven probes, in one command:
 

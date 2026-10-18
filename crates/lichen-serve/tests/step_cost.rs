@@ -1,5 +1,7 @@
 //! A session installs the backend, counts what its runs ask for, and reports refusals by name.
 
+use lichen_compute::compute::graph::{RunArgument, RunResult};
+use lichen_kernel_ir::{ScalarClass, ScalarData};
 use lichen_serve::{ServeRefusal, Session};
 
 /// One kernel, so that only the schedule can differ between two runs of the same work.
@@ -219,5 +221,90 @@ fn each_further_recorded_step_is_one_more_submission() {
     println!(
         "one step {}/{}, three steps {}/{}",
         one.cost.submissions, one.cost.fence_waits, three.cost.submissions, three.cost.fence_waits
+    );
+}
+
+/// A step recorded as a graph value, which is what preparing wants as a program's tail.
+const STEP_GRAPH: &str = r#"
+GArg = struct{.n Int, .in Inc}
+step = (s : GArg) => {
+  a = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)
+  compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d a.e)))
+}
+built = compute.graph step
+built
+"#;
+
+/// Three `Float` elements as the packed bytes a `RunArgument::Buffer` carries.
+fn packed(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// One `prepare`, two `step`s, and the answer fetched afterwards as the caller's own act.
+///
+/// # Invariant
+/// The second step costs one submission and no compilation, which is what says the program was
+/// compiled once. The readback is not in the step's count because `graph::run` leaves what the
+/// device wrote where it is: `Session::fetch` is what reads it back, and it pays its own submission.
+#[test]
+fn a_prepared_step_runs_without_compiling_again() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_prepared_step_runs_without_compiling_again: no device");
+        return;
+    };
+    let prepared = session
+        .prepare(&format!("{KERNEL}{STEP_GRAPH}"))
+        .unwrap_or_else(|refusal| panic!("the step prepares: {refusal}"));
+    let arguments = || {
+        vec![
+            RunArgument::Count(3),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&[1.0, 2.0, 3.0]),
+            },
+        ]
+    };
+    let first = prepared
+        .step(arguments())
+        .unwrap_or_else(|refusal| panic!("the first step runs: {refusal}"));
+    let second = prepared
+        .step(arguments())
+        .unwrap_or_else(|refusal| panic!("the second step runs: {refusal}"));
+
+    assert_eq!(
+        prepared.nodes(),
+        2,
+        "the held step is two dispatches, and a submission carries both"
+    );
+    for (which, stepped) in [("first", &first), ("second", &second)] {
+        assert_eq!(
+            (stepped.cost.submissions, stepped.cost.fence_waits),
+            (1, 1),
+            "the {which} step is one submission and one fence, with no compilation in it"
+        );
+    }
+    assert_eq!(
+        first.results.len(),
+        1,
+        "the step returns the tail node's buffer, and nothing else"
+    );
+    let RunResult::Resident(resident) = &first.results[0] else {
+        panic!("a device wrote this value, so it stays a resident id");
+    };
+    assert_eq!(
+        session
+            .fetch(*resident)
+            .unwrap_or_else(|refusal| panic!("the resident is readable: {refusal}")),
+        ScalarData::Float(vec![4.0, 8.0, 12.0]),
+        "two doublings of 1, 2 and 3, fetched only because the caller asked"
+    );
+    println!(
+        "prepared step {}/{} twice, {} node(s)",
+        first.cost.submissions,
+        first.cost.fence_waits,
+        prepared.nodes()
     );
 }
