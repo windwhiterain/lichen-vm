@@ -134,8 +134,8 @@ x = 1
 a rebuild. The compiler accepts the mark everywhere and it changes
 nothing about evaluation; it exists for the incremental toolchain, which
 identifies a retained cell by the binding's path from the program root and
-can reuse it when an edit does not touch it. Chapter 18 covers the
-incremental session.
+can reuse it when an edit does not touch it
+([incremental update](../../notes/incremental-update.md)).
 
 ### Names
 

@@ -222,8 +222,7 @@ A scope is safe to release because of a contract the language guarantees:
 a value may only name nodes that outlive it — its own block, an enclosing
 one, a parentless one, or a child scope's **declared root**. The compiler
 builds cross-block references to satisfy that contract, so no released
-scope leaves a dangling reference. Chapter 19 has the whole story of how
-the boundary is kept; the mechanism's note is
+scope leaves a dangling reference. The mechanism's note is
 [gc-block](../../notes/gc-block.md).
 
 ## Summary

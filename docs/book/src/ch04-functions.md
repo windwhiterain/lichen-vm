@@ -253,8 +253,8 @@ fact 5
 ```
 
 The mark changes no answer. It is a hint to the loop-conversion pass
-(Chapter 19), which turns an eligible recursion into a loop nest when the
-shape allows it.
+([the note](../../notes/loop-conversion.md)), which turns an eligible
+recursion into a loop nest when the shape allows it.
 
 ## Higher-order functions
 
