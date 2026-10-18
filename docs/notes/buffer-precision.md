@@ -23,6 +23,20 @@ Two things follow, and both are the caller's: the fragment's class comes from a 
 that reach the buffer are the caller's to match — the runtime cannot tell a `bf16` payload from an
 `f32` one, only a real one from an integer one.
 
+## A class is the buffer's, and an edge is where two nodes must agree
+
+Measured while narrowing a real projection: the pack's class reaches the node it names — the landed
+fragment reads and writes `BFloat16`, its body's accesses are `BFloat16`, and the emitted module declares
+`ArrayStride 2` — and a `BFloat16` payload round-trips through a dispatch unchanged. What is **not** in
+place is the edge: a graph whose second node still reads the first node's output as `Float` reads four
+bytes of a two-byte-per-element buffer and answers a different number without refusing.
+
+So the sentence "the pack decides the precision of a node's buffers" has a consequence the tree does not
+carry yet: when two nodes share a buffer, the class is not either node's to state alone. Either a graph
+converts at a boundary where the two disagree, or the pack must reach every node that touches the buffer.
+The model would want the second, because a narrowed weight matrix is read by the projection and by
+nothing else, while a hidden state is read by many.
+
 ## Why the language cannot spell it today
 
 Measured, in the current tree:
