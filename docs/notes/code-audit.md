@@ -687,11 +687,10 @@ lazy runtime read when the callee is a parameter), so a per-field unify inserted
 the resolution would merge into the undecided read instead of refusing — the trap
 P4-12 measured. Note the *type* half is already covered: a field-type mismatch is a
 typed-key miss (P1-45's sentence), so only the perspective and the spelled pin are
-silent. Two routes remain, both runtime: (a) give `Perspective` (and the pin walk) a
-`constraint`-style assert that compares the two slots once the reorder resolves — the
-`AttrExt::constraint` hook already exists and the perspective ext does not implement
-it; (b) an engine-side slot compare where a struct instance crosses an apply, shared
-with P1-46's arity check. A regression test belongs with the fix (`D3`).
+silent. The shared route, the engine's constraint (it may not call `AttrExt`), and the two
+designs are in
+[deferred-instantiation-checks](deferred-instantiation-checks.md); a regression test
+belongs with the fix (`D3`).
 
 ### P1-45 — An instantiation through a parameter reports a type mismatch as an opaque table miss `verified`
 
@@ -746,8 +745,9 @@ instance's type is the callee's own struct type, so the apply's unify sees no
 disagreement. Fix direction: an engine-level arity check when a struct-typed instance
 crosses an apply — compare the positional value's length with the struct kind's field
 count where both are decided — or a reorder whose length is the field count (which
-needs a runtime-length node operation the encoding does not have today). A regression
-test belongs with the fix (`D3`).
+needs a runtime-length node operation the encoding does not have today). The shared
+route is in [deferred-instantiation-checks](deferred-instantiation-checks.md); a
+regression test belongs with the fix (`D3`).
 
 ### P4-12 — A struct instantiation's field-type mismatch renders the two field lists `verified`
 
