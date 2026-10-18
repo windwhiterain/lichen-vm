@@ -1,9 +1,4 @@
-//! The contested scatter on both backends: `write_atomic` and `write`, over `Int` and
-//! over `Float`, on `"cpu"` and on `"gpu"`.
-//!
-//! The `write` arms are the control: every lane writes `1` (or `0.5`) into one of eight
-//! buckets, so the answer is whichever lane wrote last, while the atomic arms add every
-//! lane's value and must total the launch. See docs/notes/gpu-algorithms-ladder.md §5.
+//! The contested scatter on both backends. docs/notes/gpu-algorithms-ladder.md §5.
 
 use lichen_compute::language::{LangProgram, new_store};
 use lichen_kernel_ir::ScalarClass;
@@ -37,17 +32,13 @@ fn value_of(module: &Module<LangProgram>, root: NodeId, root_ty: NodeId) -> Stri
     let Some(value) = module.node_value(AnyNodeId::Dynamic(root)) else {
         return "<raw none>".to_string();
     };
-    // **A shape, not the whole array**: the counts are printed beside it, and rendering 65536
-    // elements into a line would bury the reading.
+    // **A shape, not the array**: rendering 65536 elements would bury the counts.
     let rendered = lichen_language::render::print_value_lang(module, value, root_ty);
     let head: String = rendered.chars().take(24).collect();
     format!("{head}… ({} chars)", rendered.len())
 }
 
-/// The collected buckets, read through the host's own array value.
-///
-/// An `Int` element is a `usize` and a `Float` one an `f32`, because the class is what the
-/// buffer was declared with; one reader answers both.
+/// The collected buckets: an `Int` element is a `usize`, a `Float` one an `f32`.
 fn elements(module: &Module<LangProgram>, root: NodeId, class: ScalarClass) -> Vec<f64> {
     let Some(value) = module.node_value(AnyNodeId::Dynamic(root)) else {
         return Vec::new();
@@ -61,8 +52,7 @@ fn elements(module: &Module<LangProgram>, root: NodeId, class: ScalarClass) -> V
         .collect()
 }
 
-/// Compile and run `text`, reporting rather than panicking: a device that lacks the atomic
-/// answers a named refusal, and the reading has to survive it.
+/// Compile and run `text`, reporting rather than panicking: a refusal must survive.
 fn compile(
     store: &mut PackageStore<LangProgram>,
     text: &str,
@@ -105,8 +95,7 @@ fn compile(
     let mut module = build.module;
     let root = build.root_val;
     let root_ty = build.root_ty;
-    // **The root is evaluated here, not at compile time**: a dispatch is recorded while the
-    // value is produced, so an unevaluated root has run nothing.
+    // **The root is evaluated here**: a dispatch is recorded while the value is produced.
     module.evaluate_node_deep(root, None);
     (
         value_of(&module, root, root_ty),
@@ -135,8 +124,7 @@ fn arm(backend: &str, verb: &str, structure: &str, element: &str, value: &str) {
 }
 
 fn main() {
-    // `lichen-compute` never names the GPU crate, so the device is opened and installed here:
-    // this is what a host program does before a kernel asks for the `"gpu"` backend.
+    // `lichen-compute` never names the GPU crate, so the device is installed here.
     match lichen_compute_gpu::install_default() {
         Ok(()) => println!(
             "installed backend {:?}",

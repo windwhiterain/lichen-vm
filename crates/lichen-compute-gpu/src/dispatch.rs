@@ -410,11 +410,11 @@ fn subgroup_width(
 /// The two hardware atomic adds this target emits, as the device's own answers.
 ///
 /// # Invariant
-/// **Each fact is the device's feature bit and not its extension's presence alone**: the
-/// `VK_EXT_shader_atomic_float` extension can be listed by a device that answers
-/// `shaderBufferFloat32Atomics` false, and the SPIR-V opcode is then declared by a module the
-/// device would refuse at pipeline creation. An integer atomic is asked for at 64 bits, so it is
-/// only meaningful beside `shaderInt64` — the capability `Int64Atomics` builds on.
+/// **Each fact is the device's feature bit and not its extension's presence alone**: a device
+/// may list `VK_EXT_shader_atomic_float` and answer `shaderBufferFloat32Atomics` false, and the
+/// opcode is then declared by a module the device refuses at pipeline creation. An integer
+/// atomic is asked at 64 bits, so it is only meaningful beside `shaderInt64`, which
+/// `Int64Atomics` builds on.
 fn atomic_facts(
     entry: &ash::Entry,
     instance: &ash::Instance,
@@ -432,8 +432,7 @@ fn atomic_facts(
     // SAFETY: both structs are chained into `features` and outlive the call.
     unsafe { instance.get_physical_device_features2(physical, &mut features) };
     let int64 = shader_int64 && int64.shader_buffer_int64_atomics != 0;
-    // **Both halves of the float fact**: the feature bit says the device performs the add, and
-    // the extension list says it accepts the struct that enables it.
+    // **Both halves of the float fact**: the bit says the device adds, the list the struct.
     let float = float.shader_buffer_float32_atomics != 0
         && has_extension(instance, physical, ATOMIC_FLOAT_EXTENSION);
     (int64, float)
@@ -796,17 +795,13 @@ impl GpuContext {
             p_queue_priorities: priorities.as_ptr(),
             ..Default::default()
         };
-        // **The atomics are enabled, not merely recorded**: a module declaring `Int64Atomics` or
-        // `AtomicFloat32AddEXT` is only legal on a device whose corresponding feature was enabled
-        // at creation, and a module that does neither pays nothing for asking.
+        // only where the matching feature was enabled here.
         let mut atomic_int64_features = vk::PhysicalDeviceShaderAtomicInt64Features::default()
             .shader_buffer_int64_atomics(atomic_int64);
         let mut atomic_float_features = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
             .shader_buffer_float32_atomics(atomic_float_add)
             .shader_buffer_float32_atomic_add(atomic_float_add);
-        // `shaderBufferInt64Atomics` builds on `shaderInt64`, and enabling one without the other
-        // is what the spec forbids — so the type feature is enabled beside it, which is also what
-        // an integer module's `Int64` capability has always needed here.
+        // `shaderBufferInt64Atomics` builds on `shaderInt64`: one alone is forbidden.
         let enabled = vk::PhysicalDeviceFeatures::default().shader_int64(shader_int64);
         // The queue infos outlive the create-info too, for the same reason the priorities do.
         let queue_create_infos = [priority];
@@ -2138,15 +2133,10 @@ impl GpuContext {
                 device: self.name.clone(),
             });
         }
-        // **The same gate, one query per primitive**: an atomic add is emitted as a hardware
-        // read-modify-write, so a device without the feature runs nothing rather than something
-        // that emulates one. Each fact is asked for by its own class, and only by the class the
-        // set actually uses.
+        // **The same gate per primitive**: no feature means nothing runs, not an emulation.
         for class in spirv::atomic_classes(launch) {
             match class {
-                // A `BFloat16` atomic falls through to the emitter, which refuses it by name: it
-                // has no primitive to ask a device about at all, so there is no feature here to
-                // report it as missing.
+                // A `BFloat16` atomic falls through: the emitter refuses it by name.
                 ScalarClass::Int if !self.atomic_int64 => {
                     return Err(RunError::MissingAtomicInt64 {
                         device: self.name.clone(),

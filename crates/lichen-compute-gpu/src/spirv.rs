@@ -393,11 +393,9 @@ pub enum SpirvRefusal {
     /// A `write_atomic` whose class no hardware atomic add exists for.
     ///
     /// # Invariant
-    /// **Refused rather than emulated, and rather than narrowed**: the language's lowering already
-    /// refuses a `BFloat16` atomic before a fragment is built (`compute.lichen` lowering), so this
-    /// is the emitter's own name for a fragment that carries one anyway. A read-modify-write loop
-    /// over a 16-bit integer would answer a different program — one that may lose an update —
-    /// and there is no `OpAtomicFAdd` at that width on any extension this target names.
+    /// **Refused rather than emulated, and rather than narrowed**: no extension this target
+    /// names has an atomic add at this class's width, and a read-modify-write loop over the
+    /// storage integer would answer a different program — one that may lose an update.
     AtomicAddNotAHardwarePrimitive { class: ScalarClass, at: usize },
     /// A body the target has no way to structure.
     ///
@@ -1203,11 +1201,10 @@ pub fn atomic_classes(launch: &LaunchSet<'_>) -> Vec<ScalarClass> {
 /// The capabilities and extended instruction sets a module's bodies reached for, one flag each.
 ///
 /// # Invariant
-/// **Recorded by the emission that names it, and read once by [`assemble`]**: an `OpExtInst` names
-/// its set by the result id of an `OpExtInstImport`, an `OpAtomicFAddEXT` needs its capability and
-/// its extension declared, and `spirv-val` answers each of those absences by name. A flag the walk
-/// does not set is a module that does not declare the thing, which is the point: a module using
-/// only an integer atomic asks no device for `shaderBufferFloat32Atomics`.
+/// **Recorded by the emission that names it, and read once by [`assemble`]**: each of the three
+/// is a declaration the module owes for an opcode it wrote, and `spirv-val` answers every
+/// absence by name. A flag the walk does not set is a module that declares nothing extra, which
+/// is the point: an integer atomic alone asks no device for `shaderBufferFloat32Atomics`.
 #[derive(Default)]
 struct Extensions {
     /// Whether any body emitted an `OpExtInst`, and so whether the module declares `GLSL.std.450`.
@@ -1215,13 +1212,11 @@ struct Extensions {
     /// Whether any body added atomically to a 64-bit integer, and so whether the module declares
     /// `Int64Atomics`.
     int64_atomics: bool,
-    /// Whether any body added atomically to a float, and so whether the module declares
-    /// `AtomicFloat32AddEXT` and `SPV_EXT_shader_atomic_float_add`.
+    /// Whether a body added atomically to a float, and so whether the module declares
+    /// its capability and extension.
     ///
     /// # Invariant
-    /// **The two travel together because the SPIR-V needs both**: the extension is the opcode's
-    /// registration and the capability is the gate a validator checks it against, so a module
-    /// carrying one without the other is refused rather than half-enabled.
+    /// **Both travel together**: the extension registers the opcode, the capability gates it.
     float_add_atomics: bool,
 }
 
@@ -2084,9 +2079,8 @@ fn emit_function(
                             slots.insert(definition, scalar(id, read_as));
                         }
                         KernelInstr::BufferAtomicAddCall(class) => {
-                            // **The same refusal a plain write carries**: a zero trip count never
-                            // runs the body, so a lane that never reaches the atomic would leave
-                            // its output element as whatever a fresh allocation held.
+                            // **The plain write's refusal, for its reason**: a zero trip count
+                            // leaves the output element uninitialised.
                             if plan.inside[node] {
                                 return Err(SpirvRefusal::WriteInsideLoop { at });
                             }
@@ -2106,10 +2100,8 @@ fn emit_function(
                                 binding.outputs,
                                 "output",
                             )?;
-                            // **Everything about the address is the plain write's, word for
-                            // word**: the same storage slot, the same access chain, the same
-                            // narrowing and class conversions. The only difference is the
-                            // instruction the chain feeds.
+                            // **The plain write's address, word for word**: only the fed
+                            // instruction differs.
                             let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let value = as_class(
@@ -2143,11 +2135,8 @@ fn emit_function(
                                     ids.zero,
                                 ],
                             ));
-                            // The result id is required and unused: SPIR-V gives every
-                            // atomic a result, and `write_atomic` produces nothing, so the id is
-                            // allocated to keep the function-local bound right and no slot is
-                            // pushed for it. `Relaxed` semantics is `ids.zero`, which the module
-                            // already declares as a 32-bit `0`.
+                            // Required and unused: the result is required by SPIR-V, so it is
+                            // allocated to keep the bound right, no slot pushed.
                             let result = next;
                             next += 1;
                             let opcode = match class {
@@ -2165,9 +2154,7 @@ fn emit_function(
                                     value.id,
                                 ],
                             ));
-                            // **Recorded by the emission, like every other capability**: a
-                            // module that emitted the opcode and did not declare its gate is a
-                            // `spirv-val` rejection rather than a slower program.
+                            // **Recorded by the emission, like every other capability**.
                             extensions.note(KernelInstr::BufferAtomicAddCall(class));
                         }
                         KernelInstr::BufferWriteCall(_) => {
@@ -3712,8 +3699,8 @@ fn assemble(
         }
     };
 
-    // 1. Capabilities: `Int64`, `Int64Atomics`, `AtomicFloat32AddEXT` (a `write_atomic`),
-    // `Int16` (a brain float), `GroupNonUniformShuffle` (`Warp`).
+    // 1. Capabilities: `Int64`, `Int64Atomics`, `AtomicFloat32AddEXT`, `Int16`, and the
+    // `Warp` exchange's.
     let bf16_buffered = classes.contains(&ScalarClass::BFloat16);
     let mut capabilities = vec![Inst::new(op::CAPABILITY, vec![capability::SHADER])];
     if ids.class == ScalarClass::Int {
@@ -3739,13 +3726,9 @@ fn assemble(
     }
     emit_all(&mut out, &capabilities);
 
-    // 2. The extension the atomic float add is registered under — **ahead of the memory model**
-    // and of the extended-set import below it.
-    //
-    // **No result id, unlike the import below**: `OpExtension` names a string and nothing else,
-    // and an extra leading operand makes `spirv-val` answer `expected no more operands after 2
-    // words` rather than reading the name.
+    // 2. The extension the atomic float add is registered under.
     if extensions.float_add_atomics {
+        // **No result id, unlike the import below**: `OpExtension` names a string alone.
         emit_all(
             &mut out,
             &[Inst::new(
@@ -3999,8 +3982,7 @@ fn assemble(
         opcode: literal.opcode,
         operands: literal.operands.clone(),
     }));
-    // The scope an atomic add's memory operand names, declared only where one was emitted: an
-    // `OpConstant` nothing names is legal, and a module without an atomic pays nothing for it.
+    // The scope an atomic add's memory operand names, declared only where one was emitted.
     if extensions.int64_atomics || extensions.float_add_atomics {
         constants.push(Inst::new(
             op::CONSTANT,
