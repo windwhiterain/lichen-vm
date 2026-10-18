@@ -19,3 +19,7 @@
 - [Structs and Records](ch08-structs-and-records.md)
 - [Tables and Sets](ch09-tables-and-sets.md)
 - [Types as Values](ch10-types-as-values.md)
+
+# Types at Work
+
+- [Polymorphism and Classes](ch11-polymorphism.md)
