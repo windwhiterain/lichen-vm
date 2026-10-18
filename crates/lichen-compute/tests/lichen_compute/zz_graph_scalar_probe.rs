@@ -46,6 +46,28 @@ built = compute.graph step
 compute.collect (compute.graphrun built (4, 4, x)) : array{Int, 8}
 "#;
 
+/// The control for `RECORDED`: offset 0 through the same graph. Hand answer `[1, 2, 3, 4]`, so
+/// an offset that did not cross and one that answers nothing are told apart.
+const RECORDED_OFFSET_ZERO: &str = r#"
+GArg = struct{.n Int, .off Int, .in PIn}
+step = (s : GArg) => {
+  compute.plrun append ((PArg)(.n s.n, .off s.off, .I PIn(.x s.in.x))) : POut
+}
+built = compute.graph step
+compute.collect (compute.graphrun built (4, 0, x)) : array{Int, 4}
+"#;
+
+/// The control that names the offset: 2 lands half inside the extent, so the scalar reached
+/// the kernel only if the answer is `[0, 0, 1, 2]`.
+const RECORDED_OFFSET_TWO: &str = r#"
+GArg = struct{.n Int, .off Int, .in PIn}
+step = (s : GArg) => {
+  compute.plrun append ((PArg)(.n s.n, .off s.off, .I PIn(.x s.in.x))) : POut
+}
+built = compute.graph step
+compute.collect (compute.graphrun built (4, 2, x)) : array{Int, 4}
+"#;
+
 /// What the raw runner renders for `body`, or how it refused.
 fn rendered(body: &str) -> String {
     let source = format!("{KERNEL}{body}");
@@ -67,4 +89,6 @@ fn probe_the_graph_scalar() {
     let _guard = common::device("zz_graph_scalar_probe");
     println!("[recorded] {}", rendered(RECORDED));
     println!("[recorded_wide] {}", rendered(RECORDED_WIDE));
+    println!("[recorded_off0] {}", rendered(RECORDED_OFFSET_ZERO));
+    println!("[recorded_off2] {}", rendered(RECORDED_OFFSET_TWO));
 }
