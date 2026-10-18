@@ -171,8 +171,12 @@ is the other: the checkpoint's own halves are read and handed to the device **un
 costs its 96 MB read and no conversion at all, and the projection that consumes them is the one a pack
 narrowed.
 
-What is left per layer is three uploads of the weights at about 2 GB/s, twelve dispatches at eight
-milliseconds each, and one 96 MB read. So the next lever is the dispatch count, not the bytes.
+What is left per layer is three uploads of the weights at about 2 GB/s, twelve dispatches, and one 96 MB
+read — and the dispatches are **not** the lever the count suggests: fusing the half after the attention
+into one graph of nine dispatches was measured correct (the same tokens) and **slower**, 5.97 s against
+4.52 s. So a submission and a fence cost less than a composed graph's own scheduling, and what a token
+still pays is the bytes: the weights it hands over, and the file it no longer reads because the halves are
+held in memory.
 
 ## Running it
 
