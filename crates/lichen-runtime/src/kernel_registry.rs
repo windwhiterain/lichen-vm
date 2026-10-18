@@ -6,11 +6,12 @@
 //! body reaches it without a `Module`. What **fills** it is the compiler's: a caller registers
 //! the fragment a body compiled to, and never this crate's business again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId, fragment_digest};
+use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId, KernelInstr, fragment_digest};
+use lichen_utils::hash::{Hash, sha256};
 
 /// The process kernel registry: compiled fragments and the claims they were compiled
 /// for, keyed by [`KernelId`].
@@ -116,6 +117,36 @@ pub fn kernel_fragment(id: KernelId) -> Option<KernelFragment> {
         .unwrap()
         .get(&id)
         .map(|entry| entry.fragment.clone())
+}
+
+/// The content identity of the launch set rooted at `root`, or `None` when a
+/// fragment in it is not registered.
+///
+/// # Invariant
+/// A module is a function of the ordered fragments of that set alone — the emitter
+/// reads no claim, no binding fact and no device — so this digest changes exactly
+/// when the module does. A [`KernelId`] is not that identity: [`alloc_kernel_id`]
+/// hands out a fresh slot per kernel and the digest is only the intern key, so the
+/// same kernel carries a different id in a process that compiled another one first.
+pub fn launch_set_digest(root: KernelId) -> Option<Hash> {
+    let fragments = kernels().lock().unwrap();
+    let mut folded: Vec<u8> = Vec::new();
+    let mut seen: HashSet<KernelId> = HashSet::new();
+    let mut queue: VecDeque<KernelId> = VecDeque::new();
+    seen.insert(root);
+    queue.push_back(root);
+    while let Some(id) = queue.pop_front() {
+        let entry = fragments.get(&id)?;
+        folded.extend_from_slice(&fragment_digest(&entry.fragment).to_le_bytes());
+        for instr in entry.fragment.body.instrs() {
+            if let KernelInstr::CallKernel(callee) = *instr
+                && seen.insert(callee)
+            {
+                queue.push_back(callee);
+            }
+        }
+    }
+    Some(sha256(&folded))
 }
 
 /// The interface instance a registered kernel claims, or `None` when it claims none.

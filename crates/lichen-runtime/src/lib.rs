@@ -27,7 +27,9 @@ pub use fused::{
     write_fused_kernel,
 };
 pub use graph_pass::{GraphPass, LaunchExtent, pass_chain};
-pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fragment};
+pub use kernel_registry::{
+    KernelEntry, claimed_kernels, kernel_claim, kernel_fragment, launch_set_digest,
+};
 pub use load::{LoadRefusal, LoadedKernel, load_fused_kernel};
 #[cfg(feature = "wasm")]
 pub use module_cache::cached_module;
