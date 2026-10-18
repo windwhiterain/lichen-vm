@@ -48,6 +48,20 @@ caller's. Measured on 2048 rows over 2048 inputs with a pattern that is exact in
 is the only difference available: rows `0`, `1` and `2047` answer `-0.5`, `-1.84375` and `-1.84375`,
 which are the host's own dot products.
 
+## Getting the weights, measured
+
+Four things cost a round and are worth not re-deriving:
+
+| | |
+|---|---|
+| **Never park the files in a worktree.** | `git worktree remove --force` deletes what is inside it, and 3.78 GiB of downloads went with the worktree that held them. They live in `<checkout>/.model/`, which `.gitignore` names, and the tests read `LICHEN_MODEL_DIR` first. |
+| **`Start-Job` is not a background job.** | It is a child of the `pwsh` the harness starts, so it dies when that call returns — the file froze at the byte the call ended on. Only the harness's own background call persists. |
+| **Parallel ranged fetches stall; one connection works.** | Eight concurrent ranged `curl`s to ModelScope all sat at zero bytes for seventy seconds while a single 1 MiB range answered `206` in 1.4 s. The host throttles per address, so the parallel trick that helps on GitHub hurts here. |
+| **Do not kill `curl` while diagnosing.** | Every cleanup that stopped the processes also stopped the transfer: the same shard reached 117 MB, then 175 MB, then 106 MB on three attempts, and each of those was a transfer this session ended. |
+
+The CDN itself is fine: `curl -I -L` reaches a `302` to `cdn-lfs-cn-1.modelscope.cn` and answers
+`Content-Length: 3441185608`, and a single ranged read of the same URL returns `206`.
+
 ## What is ahead
 
 The rest of a layer — RoPE, the GQA attention over a growing cache, the SwiGLU — then 28 layers, then
