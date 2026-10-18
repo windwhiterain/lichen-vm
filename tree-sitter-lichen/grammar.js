@@ -85,7 +85,7 @@ module.exports = grammar({
 
     binding: $ => seq(
       optional(token(prec(1, '@loop'))),
-      optional('cache'),
+      optional(token(prec(1, '@cache'))),
       optional('let'),
       field('name', $.identifier),
       '=',

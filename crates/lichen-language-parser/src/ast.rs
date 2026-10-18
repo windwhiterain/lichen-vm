@@ -299,7 +299,7 @@ pub struct Binding {
     /// `let` — the name is visible only to later statements (so `let a = a`
     /// resolves the outer `a`).
     pub restrictive: bool,
-    /// `cache` — a retained cell, whose identity is the binding's occurrence
+    /// `@cache` — a retained cell, whose identity is the binding's occurrence
     /// path (`docs/notes/incremental-update.md` §3).
     pub cached: bool,
     /// `@loop` — the recursion **may become a loop**; its absence is the unroll
@@ -333,7 +333,7 @@ pub struct RecordField {
     pub public: bool,
     /// `false` for a `let` binding (a block-local, never a struct field).
     pub field: bool,
-    /// `cache` — a retained cell, exactly as [`Binding::cached`].
+    /// `@cache` — a retained cell, exactly as [`Binding::cached`].
     pub cached: bool,
     /// `@loop` — exactly as [`Binding::looping`].
     pub looping: bool,

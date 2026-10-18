@@ -35,7 +35,7 @@
 "else" @keyword
 "let" @keyword
 "pub" @keyword
-"cache" @keyword
+"@cache" @keyword
 "import" @keyword
 "return" @keyword
 "@loop" @keyword

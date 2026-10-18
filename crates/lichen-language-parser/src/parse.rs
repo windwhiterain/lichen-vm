@@ -450,7 +450,7 @@ fn statement<'a, Er: GrammarError<'a>>(
     ))
 }
 
-/// `['@loop'] ['cache'] ['let'] name = expr` — a binding, with three
+/// `['@loop'] ['@cache'] ['let'] name = expr` — a binding, with three
 /// independent marks.
 fn binding<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
