@@ -163,6 +163,35 @@ fn a_class_members_payload_moves_out_of_the_released_arena() {
     );
 }
 
+/// A payload a collect moved once moves again: the next collect frees that arena.
+#[test]
+fn a_class_members_payload_moves_again_with_the_next_collect() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let middle = m.add_block(Some(root));
+    let inner = m.add_block(Some(middle));
+    let seven = u128_node(&mut m, inner, 7);
+    let array = array_node(&mut m, inner, &[seven], None);
+    let outside = undecided_node(&mut m, middle);
+    m.unify(outside, array);
+    assert!(m.unify_errors.is_empty());
+    let inner_root = op_node(&mut m, inner, TestOperator::Id, Some(array));
+    m.garbage_collect(inner_root);
+    let first = array_pointer(&m, outside);
+    let middle_root = op_node(&mut m, middle, TestOperator::Id, Some(inner_root));
+
+    m.garbage_collect(middle_root);
+
+    assert!(!m.blocks.contains_key(middle));
+    assert_eq!(m.node_block(outside), root);
+    let second = array_pointer(&m, outside);
+    assert_ne!(first, second, "the second collect released the first arena");
+    assert_eq!(
+        array_ids(m.node_value(AnyNodeId::Dynamic(outside))),
+        vec![seven]
+    );
+}
+
 /// A value cycle inside the scope terminates the walk and moves both nodes.
 #[test]
 fn a_value_cycle_inside_the_scope_survives_the_collect() {

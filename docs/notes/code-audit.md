@@ -55,7 +55,8 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
-| P1-51 | high | lowlevel | A surviving function's template list names released nodes after a collect | todo — measured on the example corpus: `FunctionId(3v1)`, homed in block `4v1`, listed 23 nodes of the released block `5v1`; a function's home and its nodes diverge (a per-call closure is homed at the call site, its nodes in the call's fresh scope block), so the walk skips an outside function's template and the list dangles. Fix needs the function-home invariant; readings in [gc-trigger-design](gc-trigger-design.md) §8 |
+| P1-51 | high | lowlevel | A surviving function's template list names released nodes after a collect | fixed — measured on the example corpus before the fix: `FunctionId(3v1)`, homed in `4v1`, listed 23 nodes of the released `5v1`. A node's owner records its function, so `garbage_collect` now keeps every node of a function whose home outlives the block (`owned_by_surviving_function`) and moves it into the target; after the fix the corpus leaves no dangling function node, and the contracts are pinned in `basic::gc_safety` |
+| P1-52 | high | lowlevel | A collect releases a node a live parent-block payload names | blocked:D21 — the walk cannot see an incoming edge from the parent block; measured repro (`#[ignore]`d in `basic::gc_safety::a_parent_block_array_naming_a_scope_node_keeps_it`) has the parent's array name `[scope_root, sibling]` and the collect releases `sibling`. The retired deep trigger panicked on this shape; see [gc-trigger-design](gc-trigger-design.md) §8 |
 
 ## P1 — correctness
 
@@ -1545,3 +1546,15 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   scopes after compile and 2 / 0 after the run. *Rejected — skip a block whose parent is a
   function's template body:* it keeps a whole scope alive for the module's lifetime to serve
   calls that may never come.
+
+- **D21 — How does a collect keep a node only a parent-block payload names? — OPEN.** The
+  block boundary permits only a scope's root to be named from outside, and nothing enforces
+  it: the checker's `check_gc` pair can hold a sibling of the scope, so a live parent array
+  names a node the walk cannot see and the release leaves a dead id — the shape the retired
+  deep trigger panicked on (`P1-52`). Candidates, with their costs: **(a) enforce the
+  boundary at the checker**, the shape's source — cheapest at runtime, but it is a
+  cross-layer discipline with no engine check; **(b) a per-block incoming-reference count**,
+  maintained on every edge write and re-keyed on every block move — exact, but it touches
+  every array, table and class write; **(c) a parent-block scan at the collect** — O(parent)
+  per collect, which makes a per-call scope in a loop quadratic. The maintainer's call; the
+  repro is ignored in `basic::gc_safety`.

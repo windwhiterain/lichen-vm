@@ -339,10 +339,12 @@ graph fact — a 2-element array one of whose elements points back at its own cl
   **outside** the vacated subtree is walked too — a live node may name one inside it,
   and a class write hands an outside member the same payload, which then moves into
   that member's own block — and a pending assert's condition is a second root,
-  because the assert pass drains after the collect. A function value reached from
-  inside is walked with its template; one reached only from outside is not, because a
-  function's home and its nodes must be one unit (an open item, see
-  [gc-block](gc-block.md)).
+  because the assert pass drains after the collect. A function's home and its
+  template's nodes can be homed in different blocks, so a **surviving function's
+  template is a root set of its own**: a node's owner says which function it belongs
+  to, and the collect keeps what a function whose home outlives the block names even
+  when the walk cannot reach it. The contracts are pinned in
+  `crates/lichen-lowlevel/tests/basic/gc_safety.rs`; see [gc-block](gc-block.md).
 - **Tables** (`table(…)` / `t <== k`) are immutable and built once (`build_table`).
   Each entry stores its key's precomputed deep-content hash, the items are sorted
   by that hash, and a read binary-searches and verifies the equal-hash run with

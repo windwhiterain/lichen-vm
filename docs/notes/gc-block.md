@@ -15,7 +15,8 @@
 > `crates/lichen-language-parser` (`gc_marked`, `Expr::Gc`),
 > `crates/lichen-highlevel/src/checker/gc.rs` (`check_gc`),
 > `crates/lichen-lowlevel/src/gc.rs` (`garbage_collect`, `class_walk`,
-> `relocate_class_value`, `prune_released_failures`),
+> `relocate_class_value`, `owned_by_surviving_function`, `prune_released_failures`),
+> `crates/lichen-lowlevel/tests/basic/gc_safety.rs` (the safety contracts),
 > `crates/lichen-lowlevel/src/evaluation.rs` (`evaluate_block`, `is_scope_root_read`),
 > `crates/lichen-lowlevel/src/function.rs` (`clone_target`).
 
@@ -115,14 +116,21 @@ still has to follow is the operand of a node whose run stamp is zero, because a
 value written by a unification is not that operator's answer and the operator
 still reads the operand for its own.
 
-**A function value reached from inside is walked with its template; one reached
-only from outside is not.** A function's home block and its template's nodes must
-be one unit, and today they can diverge (a per-call closure is homed at the call
-site while its nodes land in the call's fresh scope block), so a surviving
-function can keep a template list naming released nodes. Measured on the example
-corpus: one surviving function named 23 released nodes after a collect. That is an
-open collector item, not a trigger decision; see
-[gc-trigger-design](gc-trigger-design.md) §6.
+**A surviving function's template is a root set of its own.** A function's home block
+and its template's nodes can diverge — a per-call closure is homed at the call site while
+its nodes land in the call's fresh scope block — so the walk cannot always reach them from
+the root. The node's owner is the one record that says which function it belongs to, and
+the collect keeps what a function whose home outlives the block names, whether the walk
+reaches it or not (`owned_by_surviving_function`). Measured on the example corpus: one
+surviving function named 23 nodes of the released block; after the fix the two collects
+leave **no** dangling function node.
+
+**The safety contracts are pinned in `gc_safety.rs`**: a surviving function's template and
+its assert conditions move with the collect, a function homed in the released block dies
+with its template, a class member's payload is re-allocated in its own arena, a value cycle
+terminates, and a table entry's nodes move. One shape is still open and its repro is
+`#[ignore]`d there: a **parent-block payload naming a non-root scope node** (a node id the
+walk cannot see from its root). See `P1-52` in [code-audit](code-audit.md).
 
 ## What it actually frees, measured
 
@@ -182,7 +190,7 @@ and the tables are pruned in the build that follows it. A host that reads a
   release is not promised for a body whose scope a definition-pass read already
   finished.
 - **An undecided scope is not collected at all**, by the rule above.
-- **A surviving function's template list is not kept when the function is reached
-  only from outside the block.** The walk does not enter an outside function's
-  template nodes (their home and the function's home must be one unit, an open
-  collector item), so such a list can name released nodes.
+- **A parent-block payload naming a non-root scope node is not kept.** The block boundary
+  says only the scope's root may be named from outside, and nothing enforces it: a parent
+  block's array may name a sibling inside the scope, and the walk cannot see that reference
+  from its root. The repro is `#[ignore]`d in `gc_safety.rs`; open as `P1-52`.

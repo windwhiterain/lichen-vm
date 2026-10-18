@@ -159,14 +159,14 @@ template's scope may be collected (`2.b`) — and the trigger is **on**:
 | the verdict cache does not answer for a scope-root read | `evaluate_node_deep_inner` |
 | a pending assert's condition is a collect root | `gc.rs` (`garbage_collect`) |
 | the walk goes into a node outside the vacated subtree, and a class member's payload moves into its own block | `gc.rs` (`garbage_collect_node`, `relocate_class_value`) |
-| the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided` |
+| the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided`, `basic::gc_safety` (the safety battery), `gc_block::a_closure_*_is_still_callable` |
 
-Measured on the merged change: `lichen-language` **262 / 0**, `lichen-lowlevel` **156 / 0**,
-`lichen-highlevel` **136 / 0**, `lichen-compute`'s
+Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **162 / 0**
+plus one ignored repro (`P1-52`), `lichen-highlevel` **136 / 0**, `lichen-compute`'s
 `examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
 under the old trigger). The corpus' two collects released 23 and 8 nodes, and no live node
-named a released one through its operand, array or table edge — the function-list scan is
-the open item of §8.
+named a released one through its operand, array or table edge; after the function-template
+fix (§8) neither leaves a dangling function node.
 
 The template decision (`2.b`) is measured too: `f = n => @gc { a = 1; a }` leaves 7 blocks /
 5 declared scopes after compile and 2 / 0 after the run — a definition-pass read decides the
@@ -174,19 +174,26 @@ template's scope, so it is released there and the calls have none of their own. 
 block whose parent is a function's template body was the alternative; it would keep a scope
 alive for the module's lifetime to serve calls that may never come.
 
-## 8. The collector item that is still open
+## 8. The collector items around the release
 
-A **surviving function's template list can name released nodes**. Measured on the example
-corpus: `FunctionId(3v1)`, homed in block `4v1`, listed **23 nodes of the released block
-`5v1`** after the collect. The cause is that a function's home and its nodes diverge today: a
-per-call closure is homed at the call site while its nodes land in the call's fresh scope
-block, so the collect can release the nodes while the function stays. The walk does not enter
-an outside function's template (that is why the corpus still passes), and a later clone of
-such a function would name released nodes.
+**Fixed — a surviving function's template list named released nodes** (`P1-51`). Measured
+before the fix on the example corpus: `FunctionId(3v1)`, homed in block `4v1`, listed **23
+nodes of the released block `5v1`**. The cause is that a function's home and its nodes
+diverge (a per-call closure is homed at the call site while its nodes land in the call's
+fresh scope block). A node's owner records which function it belongs to, so the collect now
+keeps every node of a function whose home outlives the block — `owned_by_surviving_function`
+walks the block subtree and re-walks those nodes, which moves them into the target. After the
+fix the corpus' two collects leave **no** dangling function node, and the closure-escape
+programs are unit tests (`gc_block::a_closure_released_from_a_scope_is_still_callable`).
 
-That needs the **function-home invariant** — a function and its template nodes are one unit,
-either both kept or both released — and it is a collector design change, not a trigger
-decision. Recorded as `P1-51` in [code-audit](code-audit.md).
+**Open — a parent-block payload naming a non-root scope node** (`P1-52`). The block boundary
+says only a scope's root may be named from outside, and nothing enforces it: a parent-block
+array can name a sibling inside the scope, and the walk cannot see that reference from its
+root, so the release leaves a live payload naming a dead id (the retired deep trigger panicked
+on exactly this). It is a decision, not a patch: the candidate repairs are the block-boundary
+discipline at the checker (the shape is generated there, in `check_gc`'s pair), a per-block
+incoming-reference count, or a parent-block scan at the collect — the last two cost what this
+collector is built to avoid. The repro is `#[ignore]`d in `gc_safety.rs`.
 
 ## 9. What the sources do not answer
 
