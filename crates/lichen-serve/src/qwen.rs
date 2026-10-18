@@ -487,7 +487,7 @@ impl<'session> Qwen<'session> {
     /// # Invariant
     /// A layer held here is read once for the life of the model: every token after the first hands the
     /// residents straight to the dispatches. What it costs is device memory, so how many layers a card can
-    /// hold is the caller's to decide — a 4 GB card fit none of the model, an 8 GB one fits all of it.
+    /// hold is the caller's to decide: what a card can hold is measured (`resident_token`), not assumed.
     pub fn reside(&mut self, layers: usize) -> Result<(), QwenRefusal> {
         for layer in 0..layers.min(LAYERS) {
             let read: Vec<std::sync::Arc<[u8]>>;

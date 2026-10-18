@@ -142,8 +142,8 @@ That correction changes what to fix. The host has 15.6 GB with about 5 GB free, 
 (6.6 GB) do not fit in memory, but **at bf16 they are 3.3 GB and do**. They are bf16 on disk already, so
 the shape of the fix is to read them once, hold the halves, and upload those.
 
-That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32 and the
-card reports 4 GB, so they cannot be held; at bf16 they are 2.7 GB and they can, which is what the
+That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32, and at
+bf16 they are 2.7 GB, which is what the
 precision path exists for. Reaching it needs two things the interface does not have yet, both measured:
 
 | | |
@@ -207,6 +207,11 @@ through `Value`, and the forty-one places that build one kept their own construc
 What is left per layer is the upload of the weights it reads and the dispatches that read them.
 
 ## A weight can stay on the device
+
+The card is **6 GB**, measured with `nvidia-smi`; the 4 GB this work believed for several rounds came from
+WMI's `AdapterRAM`, a 32-bit field that saturates at 4 GiB on every larger card. What a card can actually
+hold is not its size either: on this one, twenty layers (1.9 GB) and the head (0.6 GB) are placed and
+twenty-four are refused by the driver, so the usable budget is around 2.5 GB and not 6.
 
 The upload stopped being a token's cost the day a host could **place** bytes rather than copy them through a
 program: `Session::place(bytes, class)` copies four bytes at a time — a copy does not care what the bytes
