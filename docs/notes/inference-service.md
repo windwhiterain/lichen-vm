@@ -122,6 +122,26 @@ tree:
 - **A launch that stages a slice must cover whole workgroups**
   (`RunError::StagedLaunchNotAWholeWorkgroup`), so a tiled kernel's extent is a
   multiple of 64 or it stages nothing.
+- **The graph leg needs an installed backend, and an example cannot install one.**
+  Measured through the CLI, which is the path the example suite takes:
+  `compute.graph` refuses with *"this graph dispatches to a device, but no compute
+  backend is installed: a host program has to install one before a run can be
+  dispatched"*, and `readme::program_output` installs nothing. So
+  `examples/generate.lichen` **stays host-only**, and the program that installs the
+  backend is not an example — it is the service. That is a better reason for
+  `lichen-serve` than convenience: without it the graph leg is unreachable from
+  anything the tree runs.
+- **A language-level run cannot report its own schedule counts.** `GpuContext` counts
+  `submissions` and `fence_waits`, but `install_default()` deliberately does not hand
+  the context back — *"a second handle would only be a second way to be stale"* — so the
+  handle a language-level test can hold is a **second** context whose counters read
+  zero. Per-step counts are therefore **derived from the policy's contract**, not
+  counted: one submission and one fence per node under `Serial`, one of each per graph
+  under `Batch`, both measured for two nodes in `graph_on_device.rs`. The cost
+  consequence of the graph leg is two submissions and two fences per step, which at the
+  measured 0.036 ms dispatch floor is **~0.07 ms per token** — small beside a real
+  layer's compute, and binding only where a step's dispatch count approaches the
+  64-per-submission cap.
 
 ## 4. The rule those readings impose
 
@@ -297,6 +317,9 @@ Three verdicts were given and are recorded here rather than left in a transcript
    alternative was `lichen-runtime`, whose own invariant (*nothing here takes a
    `Module`*) the session would satisfy; the choice against it is that a session
    owns residency and lifetimes, which is a different subject from a pass over IR.
+   **And §3's measured row is the stronger reason**: the graph leg refuses without an
+   installed backend and an example cannot install one, so the session is the only
+   place in this tree where a graph-leg step can run or be measured at all.
 2. **The host side becomes a `ParallelBackend`.** The cpu path today is the wasm
    engine inside `lichen-compute`, which is *driven by a compiled module rather than
    by a submitted run*, so a `"cpu"` graph is refused by name. The way in is an
