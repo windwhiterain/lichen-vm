@@ -867,14 +867,16 @@ where
                 }
                 modules
             };
-            // A codec refusal leaves the package uncached rather than failing the build.
-            if let Ok(bytes) = persist::serialize_artifact_with::<P, P::Codec>(
-                modules[&freeze.key].as_ref(),
-                &modules,
-                hash,
-                export.index,
-                P::Codec::default(),
-            ) {
+            // A codec refusal or a runtime-only module leaves the package uncached.
+            if !<P::Codec as persist::ArtifactCodec<P>>::runtime_only(modules[&freeze.key].as_ref())
+                && let Ok(bytes) = persist::serialize_artifact_with::<P, P::Codec>(
+                    modules[&freeze.key].as_ref(),
+                    &modules,
+                    hash,
+                    export.index,
+                    P::Codec::default(),
+                )
+            {
                 device.store_artifact(&file_id, &bytes);
                 device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
             }

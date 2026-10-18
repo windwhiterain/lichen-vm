@@ -341,14 +341,16 @@ version check and recompile; there is no compatibility path.
 
 - **A serialization refusal means "no artifact form", not "wrong package".** The
   ordinary case is a package whose top level `$jit`s, which holds a live `Kernel`
-  — a process-local registry handle with no on-disk form. The program runs either
-  way, so the package is left **uncached** rather than failing a compile that
-  would have succeeded. The compute values' codec arms refuse such a value **by
-  name** rather than panicking, because the caller's answer is to not cache the
-  module. The refusal is also **permanent** for that file: the device entry
-  `PackageStore::alloc_key` wrote stays unpublished, and an unpublished entry can
-  never verify, so the key is completed rather than reallocated and no slot is
-  leaked.
+  — a content-addressed id, so the value codec writes it, and the package is left
+  **uncached** because the *module* holds a handle rather than plain data: a store hit
+  would replace the source that registers it (`ArtifactCodec::runtime_only`). The program
+  runs either way, so the package is left uncached rather than failing a compile that
+  would have succeeded. A value with no wire form at all (`Graph`, a device buffer) is
+  still refused **by name** by the compute codec rather than panicking, because the
+  caller's answer is to not cache the module. The refusal is also **permanent** for that
+  file: the device entry `PackageStore::alloc_key` wrote stays unpublished, and an
+  unpublished entry can never verify, so the key is completed rather than reallocated and
+  no slot is leaked.
 - **Only packages are frozen, so only a package catches it.** A top-level `jit` in
   a *single* file never reaches the codec, because the main program is not
   serialized and only an importer freezes the package holding a kernel; an

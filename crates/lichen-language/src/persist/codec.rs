@@ -51,6 +51,18 @@ pub trait ArtifactCodec<P: Program> {
 
     /// Read one operation's operator tag.
     fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
+
+    /// Whether `module` holds a handle only the writing process can resolve.
+    ///
+    /// # Invariant
+    /// **A package artifact replaces its source, so it must be plain data**: a kernel id it
+    /// carries would name a registry entry the reader's process never creates. The package
+    /// writer asks this and leaves the module uncached when it answers `true`; a cell artifact
+    /// is loaded beside its source, so a nested content-addressed id is still resolvable and its
+    /// writer does not ask.
+    fn runtime_only(_module: &StaticModule<P>) -> bool {
+        false
+    }
 }
 
 /// A compiled program that carries its own artifact codec.

@@ -911,10 +911,20 @@ pub enum ComputeOperator {
     GraphRun,
 }
 
-// A collected buffer is host bytes and persists; every other arm names a process handle.
+// A buffer, a kernel and a parallel kernel persist; every other arm names a process handle.
 
 /// The artifact tag of [`ComputeValue::Buffer`], private to this leaf's value encoding.
 const BUFFER_TAG: u8 = 9;
+
+/// The artifact tag of [`ComputeValue::Kernel`].
+///
+/// # Invariant
+/// **A kernel id is a content digest**: `KernelId` is `fragment_digest` of the whole fragment, so
+/// the id names the same fragment in every process — the id is the whole handle that travels.
+const KERNEL_TAG: u8 = 10;
+
+/// The artifact tag of [`ComputeValue::ParKernel`]: the same id, beside where it runs.
+const PAR_KERNEL_TAG: u8 = 11;
 
 /// A collected buffer's element class on the wire: the payload cannot say it, so it travels.
 fn write_class(w: &mut Writer, class: ScalarClass) -> Result<(), String> {
@@ -933,6 +943,37 @@ fn read_class(r: &mut Reader<'_>) -> Result<ScalarClass, String> {
         1 => Ok(ScalarClass::Float),
         2 => Ok(ScalarClass::BFloat16),
         other => Err(format!("unknown buffer element class {other}")),
+    }
+}
+
+/// A kernel's content digest on the wire.
+///
+/// # Invariant
+/// `KernelId` is `fragment_digest` — a `u64` carried in a `usize` — so the wire form is the
+/// `u64`. An id that does not fit the host's `usize` is refused by name rather than truncated
+/// into another kernel's identity.
+fn write_kernel_id(w: &mut Writer, id: KernelId) {
+    w.u64(id as u64);
+}
+
+fn read_kernel_id(r: &mut Reader<'_>) -> Result<KernelId, String> {
+    let bits = r.u64()?;
+    usize::try_from(bits).map_err(|_| format!("kernel id {bits} does not fit this host's usize"))
+}
+
+/// Where a kernel runs, on the wire: the two backends the language names.
+fn write_backend(w: &mut Writer, backend: Backend) {
+    w.u8(match backend {
+        Backend::Cpu => 0,
+        Backend::Gpu => 1,
+    });
+}
+
+fn read_backend(r: &mut Reader<'_>) -> Result<Backend, String> {
+    match r.u8()? {
+        0 => Ok(Backend::Cpu),
+        1 => Ok(Backend::Gpu),
+        other => Err(format!("unknown compute backend {other}")),
     }
 }
 
@@ -958,21 +999,17 @@ impl ValueCodec for ComputeValue {
             ComputeValue::Buffer(AnyHandle::Dynamic(_), _) => {
                 Err("cannot serialize a module carrying a dynamic buffer payload".into())
             }
-            // The value's own name, so a reader can tell which of the three it
-            // met without a debugger.
-            ComputeValue::Kernel(_) => {
-                return Err(
-                    "this package is not cached: it holds a jit'd kernel at its top level, \
-                     and a kernel is a runtime value with no on-disk form"
-                        .into(),
-                );
+            // The handle is the digest, so the id is all of what travels.
+            ComputeValue::Kernel(id) => {
+                w.u8(KERNEL_TAG);
+                write_kernel_id(w, id);
+                Ok(())
             }
-            ComputeValue::ParKernel(..) => {
-                return Err(
-                    "this package is not cached: it holds a jit'd parallel kernel at its top \
-                     level, and a kernel is a runtime value with no on-disk form"
-                        .into(),
-                );
+            ComputeValue::ParKernel(id, backend) => {
+                w.u8(PAR_KERNEL_TAG);
+                write_kernel_id(w, id);
+                write_backend(w, backend);
+                Ok(())
             }
             ComputeValue::DeviceBuffer(_) => {
                 return Err(
@@ -1018,40 +1055,83 @@ impl ValueCodec for ComputeValue {
                 )?;
                 Ok(ComputeValue::Buffer(AnyHandle::Static(handle), class))
             }
+            KERNEL_TAG => Ok(ComputeValue::Kernel(read_kernel_id(r)?)),
+            PAR_KERNEL_TAG => {
+                let id = read_kernel_id(r)?;
+                Ok(ComputeValue::ParKernel(id, read_backend(r)?))
+            }
             other => Err(format!("unknown compute-value tag {other}")),
         }
+    }
+
+    /// A kernel, a graph and a device buffer name a registry entry the writer's process holds.
+    ///
+    /// # Invariant
+    /// A cell's artifact is loaded beside its source, so a nested content-addressed kernel id is
+    /// still resolvable; a *package* artifact replaces its source, so any of these makes the
+    /// module runtime-only (`runtime_only_package` is that rule's test).
+    fn names_process_handle(value: &Self) -> bool {
+        matches!(
+            value,
+            ComputeValue::Kernel(_)
+                | ComputeValue::ParKernel(..)
+                | ComputeValue::Graph(..)
+                | ComputeValue::DeviceBuffer(_)
+                | ComputeValue::GraphInput(_)
+                | ComputeValue::GraphValue(_)
+        )
     }
 }
 
 impl OperatorCodec for ComputeOperator {
-    fn write_operator(_w: &mut Writer, op: Self) -> Result<(), String> {
-        match op {
-            // An operator is an operation the VM performs, not a value an artifact
-            // describes; refused like a kernel value.
-            ComputeOperator::Jit
-            | ComputeOperator::Launch
-            | ComputeOperator::Call
-            | ComputeOperator::Parallel
-            | ComputeOperator::ParLaunch
-            | ComputeOperator::Range
-            | ComputeOperator::Row
-            | ComputeOperator::Col
-            | ComputeOperator::Read
-            | ComputeOperator::Write
-            | ComputeOperator::WriteAtomic
-            | ComputeOperator::Graph
-            | ComputeOperator::GraphRun
-            | ComputeOperator::Buffer
-            | ComputeOperator::BufferCollect => Err(
-                "this package is not cached: it holds a compute operation, and a compute \
-                 operation is a runtime form with no on-disk representation"
-                    .into(),
-            ),
-        }
+    /// The operator's wire tag.
+    ///
+    /// # Invariant
+    /// A tag is never reused, and a new operator appends: the operation is what the artifact's
+    /// value graph is made of, so a tag that moved between operators would make an old artifact
+    /// a different program. Every variant is tagged, because a portable cell keeps its
+    /// operations and the value codec now carries the kernel handles those operations name.
+    fn write_operator(w: &mut Writer, op: Self) -> Result<(), String> {
+        let tag: u8 = match op {
+            ComputeOperator::Jit => 0,
+            ComputeOperator::Launch => 1,
+            ComputeOperator::Call => 2,
+            ComputeOperator::Parallel => 3,
+            ComputeOperator::ParLaunch => 4,
+            ComputeOperator::Range => 5,
+            ComputeOperator::Row => 6,
+            ComputeOperator::Col => 7,
+            ComputeOperator::Read => 8,
+            ComputeOperator::Write => 9,
+            ComputeOperator::WriteAtomic => 10,
+            ComputeOperator::Graph => 11,
+            ComputeOperator::GraphRun => 12,
+            ComputeOperator::Buffer => 13,
+            ComputeOperator::BufferCollect => 14,
+        };
+        w.u8(tag);
+        Ok(())
     }
 
     fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
-        Err(format!("unknown compute-operator tag {}", r.u8()?))
+        match r.u8()? {
+            0 => Ok(ComputeOperator::Jit),
+            1 => Ok(ComputeOperator::Launch),
+            2 => Ok(ComputeOperator::Call),
+            3 => Ok(ComputeOperator::Parallel),
+            4 => Ok(ComputeOperator::ParLaunch),
+            5 => Ok(ComputeOperator::Range),
+            6 => Ok(ComputeOperator::Row),
+            7 => Ok(ComputeOperator::Col),
+            8 => Ok(ComputeOperator::Read),
+            9 => Ok(ComputeOperator::Write),
+            10 => Ok(ComputeOperator::WriteAtomic),
+            11 => Ok(ComputeOperator::Graph),
+            12 => Ok(ComputeOperator::GraphRun),
+            13 => Ok(ComputeOperator::Buffer),
+            14 => Ok(ComputeOperator::BufferCollect),
+            other => Err(format!("unknown compute-operator tag {other}")),
+        }
     }
 }
 

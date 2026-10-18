@@ -154,7 +154,7 @@ fn main() {
         }),
         ("append a smoothing pass", |source| {
             let inserted = "@cache weathered = (compute.plrun smooth ((ASmooth)(.n count, \
-                            .cols size, .I InField(.f relief))) : OutField).f\ncache biomes";
+                            .cols size, .I InField(.f relief))) : OutField).f\n@cache biomes";
             source
                 .replace("@cache biomes", inserted)
                 .replace(".height relief", ".height weathered")
@@ -260,13 +260,15 @@ fn restart(source: &str) -> (Option<String>, f64, Report) {
     let mut session =
         BufferSession::<LangProgram>::with_registry("", "worldgen.lichen", store.registry())
             .with_cell_cache(CELLS);
-    // Buffer stages are no table key, so the small freeze is this application's mode.
-    let names: Vec<String> = source
-        .lines()
-        .filter_map(|line| line.strip_prefix("cache "))
-        .map(|rest| rest.split(' ').next().unwrap_or_default().to_string())
-        .collect();
-    session.set_read_only(names);
+    // The app elects its stages into `ReadOnly`; without the variable the default is measured.
+    if std::env::var("READ_ONLY").is_ok() {
+        let names: Vec<String> = source
+            .lines()
+            .filter_map(|line| line.strip_prefix("@cache "))
+            .map(|rest| rest.split(' ').next().unwrap_or_default().to_string())
+            .collect();
+        session.set_read_only(names);
+    }
     let (code, offset, imports) = prepare(&mut store, source);
     let starts = lichen_language::lex::line_starts(source);
     session.set_view(code, offset, &starts, &imports);

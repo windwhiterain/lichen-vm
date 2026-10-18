@@ -837,7 +837,8 @@ With all three, the restart reuses the map and the numbers are the point of the 
 **warm 85.30 ms against a fresh 195.34 ms (2.3×), twelve cells reused, one recomputed, values
 identical.** Twelve of the application's thirteen cells write a file; `octave_a` refuses because
 its closure still holds the kernel-creation operation — an undecided compute node — so it is the
-one cell a warm start recomputes.
+one cell a warm start recomputes. (§9.19 removed the codec refusal itself, so a `Portable` cell
+persists and all thirteen survive; the numbers here are `ReadOnly`'s, as they were.)
 
 **One reading not chased.** A reused cell's *type* prints `raw` where the fresh build prints the
 type (`(raw Buffer, raw Int)` against `(raw Buffer, Int)`), because the type slot materializes as
@@ -871,10 +872,41 @@ table keys, so the small freeze is the honest mode):
 
 So a restart over its own cache is **2.5–3.3× cheaper at `128 × 128`** — the warm arm held at
 78–82 ms while the fresh one ranged 195–267 ms across runs, §9.2's variance again — **and 4.7× at
-`512 × 512`**, the values equal a fresh compile's at both sizes, and twelve of the thirteen cells
-survive. The one that does not is `octave_a`: its closure still holds the kernel-creation
-operation, an undecided compute node the `ReadOnly` freeze keeps, so it is exactly the cell a warm
-start recomputes.
+`512 × 512`**, the values equal a fresh compile's at both sizes, and all thirteen cells survive
+(§9.19 removed the one that did not).
+
+### 9.19 A `Portable` cell persists, because a kernel id is its content
+
+The codec refused compute operations and kernel values, and that refusal was the only reason a
+default-mode cell could not be stored. Both now have an on-disk form, and the form is the identity
+that already existed:
+
+- **A kernel value is its digest.** `KernelId` is `fragment_digest` — a hash over every field of
+  the fragment — so the id names the same kernel in every process. `Kernel(id)` is the value tag
+  `10` and `ParKernel(id, backend)` `11`, the parallel one adding the backend tag.
+- **An operator is a tag.** All fifteen `ComputeOperator` variants are tagged `0..=14`, never
+  reused, so a `Portable` cell's operations — the `Parallel` that made its kernel and the
+  `ParLaunch` that filled its buffer — are written like any other node.
+- What still refuses is what names a registry entry rather than content: `Graph` (a recording's
+  slot), `DeviceBuffer` (device residency) and a recording's placeholders. A cell whose closure
+  holds one of those stays uncached, by feature rather than by bug.
+- **The package boundary is where this must not apply.** A package artifact *replaces* its
+  source, so a handle in it would name a registry entry the reader's process never creates; the
+  package writer therefore asks `ArtifactCodec::runtime_only` (does the module hold any handle?)
+  and leaves the package uncached, which is the rule `runtime_only_package`'s test states. A cell
+  artifact is loaded *beside* its source, where the same id resolves.
+
+Measured, `128 × 128`, the two modes side by side (§9.18's own numbers were `ReadOnly`):
+
+| arm | files | warm ms | fresh ms | restart |
+|---|---|---|---|---|
+| `ReadOnly` | 13 | 70.42 | 321.65 | 4.6× |
+| **`Portable`** | **13** | **139.12** | **403.85** | **2.9×** |
+
+So the default mode has the cross-process half too, and its warm path is *slower* than
+`ReadOnly`'s: the artifact carries the operations, so the load is heavier. `ReadOnly` stays the
+right choice for an application that can make it; `Portable` is no longer the mode that cannot
+persist at all.
 
 ## 10. Costs and failure modes
 
@@ -1001,11 +1033,10 @@ start recomputes.
   an edit costing 87 ms against a fresh 57 ms at one heavy cell.
 - **The deep pass is still not separated from the check** (`incremental-evaluation.md` Q9):
   §9.1 splits the frontend from the check, not the check from its evaluation.
-- **A `Portable` compute cell cannot persist, and one `ReadOnly` cell still refuses.** A launch's
-  node holds a compute operation, which has no on-disk form; `ReadOnly` drops a *decided* node's,
-  which is why the restart works now (§9.18). `octave_a` keeps the kernel-creation operation, an
-  undecided node, so it is the one cell a warm start recomputes. Whether that node can be decided
-  before the freeze — or dropped from a `ReadOnly` closure even undecided — is unmeasured.
+- **A cell whose closure holds a graph or a device buffer still cannot persist.** Both name a
+  registry entry rather than content — a recording's slot, device residency — so the codec
+  refuses them by name (§9.19). Encoding a graph's structure and re-registering it on load is the
+  step that would close it; §9.19's kernel form does not reach it.
 - **A reused cell's type is not restored.** Its value is; its type prints `raw` (§9.17). Nothing
   measured is wrong yet, and nothing says a typed position would be right.
 - **No operator was missing for a real application, and the one §7 predicts is still absent.** The

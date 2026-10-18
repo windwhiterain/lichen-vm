@@ -24,9 +24,8 @@ pub use lichen_registry::codec::{Reader, Writer};
 /// The two sides must be exact inverses — every tag the writer emits, the
 /// reader decodes to the equal value, and nothing else. A mismatch
 /// silently breaks every cache load. Writing is **fallible**: a value
-/// can be one this format cannot carry (a compute kernel's registry
-/// handle has no on-disk form), and the caller's answer is to *not cache*
-/// the module, never to fail the compile.
+/// can be one this format cannot carry (a graph's registry slot, device
+/// residency), and the answer is to *not cache* the module.
 pub trait ValueCodec: Sized {
     fn write_value<P: Program>(
         w: &mut Writer,
@@ -40,6 +39,17 @@ pub trait ValueCodec: Sized {
         self_base: *const u8,
         modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<Self, String>;
+
+    /// Whether `value` names a registry entry only the writing process holds.
+    ///
+    /// # Invariant
+    /// **The one fact that makes an artifact runtime-only**: a package artifact replaces its
+    /// source, so a handle in it (a kernel id, a graph slot, a device buffer) names a registry
+    /// entry the reader's process never creates; a cell artifact is loaded beside its source,
+    /// where a content-addressed kernel id is still resolvable. `false` means plain data.
+    fn names_process_handle(_value: &Self) -> bool {
+        false
+    }
 }
 
 /// Encode/decode one **operator leaf** enum.

@@ -493,6 +493,38 @@ macro_rules! lang_compose_vocabulary {
                     String::from_utf8_lossy(name)
                 ))
             }
+
+            fn runtime_only(module: &::lichen_lowlevel::StaticModule<LangProgram>) -> bool {
+                for node in &module.nodes {
+                    let Some(value) = node.value else { continue };
+                    if let Some(v) =
+                        <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(&value)
+                    {
+                        if <$low as ::lichen_lowlevel::codec::ValueCodec>::names_process_handle(&v) {
+                            return true;
+                        }
+                    }
+                    if let Some(v) =
+                        <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(&value)
+                    {
+                        if <$tyv as ::lichen_lowlevel::codec::ValueCodec>::names_process_handle(&v)
+                        {
+                            return true;
+                        }
+                    }
+                    $(
+                        if let Some(v) =
+                            <LangValue as ::lichen_utils::extend::AsEnum<$extra_v>>::as_enum(&value)
+                        {
+                            if <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::names_process_handle(&v)
+                            {
+                                return true;
+                            }
+                        }
+                    )*
+                }
+                false
+            }
         }
     };
 

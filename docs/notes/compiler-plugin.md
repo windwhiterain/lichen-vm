@@ -431,8 +431,10 @@ bodies over `From<TypeValue>`.
 - The native-op binding is **syntactic** (`$name`); it's private per module, so names are
   a plugin-local contract, not a global namespace.
 - A host-owned scalar value (a `KernelId`) is a deliberate choice to stay out of the arena,
-  so GC / static-freeze / `ValueExt` are untouched — at the cost that such values are
-  runtime-only and not serializable into a shipped package.
+  so GC / static-freeze / `ValueExt` are untouched — at the cost that a module holding one
+  is **runtime-only**: its id has a wire form (the fragment digest), but a package artifact
+  would replace the source that registers the kernel, so the package writer leaves it
+  uncached rather than shipping it (`ArtifactCodec::runtime_only`).
 
 ## Recovered measurements
 
