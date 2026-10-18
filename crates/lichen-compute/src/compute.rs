@@ -2516,9 +2516,9 @@ where
 ///
 /// # Invariant
 /// The every-ordinal-written rule holds by construction: the lowered body is
-/// straight-line, its only conditional is the emitter's 2-element
-/// scalar `select`, and a `select` can skip only a *value* — a write reached inside
-/// one is refused by name. The walk reads the body as values, so it must have run:
+/// straight-line, its only conditional is the emitter's 2-element scalar
+/// `select`, and a `select` can skip only a *value* — a write reached inside one
+/// is refused by name. The walk reads the body as values, so it must have run:
 /// `undecided-reads` §7.
 ///
 /// Public for the same reason [`compile_fragment`] is.
