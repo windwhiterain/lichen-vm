@@ -123,7 +123,12 @@ answer does not depend on the position at all — `0.545759` and `12.312018` are
 and 5 — because the rotate-half form turns every head's key and query by the same angle, and a dot
 product is invariant under that.
 
-What remains is scale and speed: the loop is two positions because the attention step is written for
-two, so a cache of any length needs the fold over positions; and a token costs **167 s**, which the
-precision path and resident weights are what to attack (built and merged, not yet used — everything here
-runs at f32).
+`ATTEND_CACHE_STEP` makes the cache's length the caller's: one dispatch scores every `(head, position)`
+pair by folding the head's width, one sums each head's exponentials by folding the positions, one divides
+them into weights, and one mixes the cached values by folding the positions again. Measured over three
+positions, where the third carries a weight of `2.8e-6` — small enough that dropping it would hide in a
+loose check, which is why the last head's values near `-0.76` are asserted too — the answer is the host's
+within `1e-5`.
+
+What remains is speed: a token costs **167 s**, and the precision path with resident weights is what to
+attack (built and merged, not yet used — everything here runs at f32).
