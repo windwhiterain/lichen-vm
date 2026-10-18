@@ -60,15 +60,62 @@ back, is a `ControlFlow` refusal naming which. What a loop changes for a
 **dispatch** is the write rule (see the tail-lane obligation below), and that is
 the only place this target is still narrower than the IR.
 
-### `write_atomic` is refused here, for now
+### `write_atomic` is the hardware primitive, and nothing else
 
-The wasm backend lowers `KernelInstr::BufferAtomicAddCall` to an atomic add; this target does
-not. `OpAtomicIAdd` on the storage element needs `OpCapability AtomicInt64` (an integer module's
-storage integers are 64-bit) and the device feature behind it, neither of which this emitter
-declares or the runtime requests, so a `write_atomic` kernel is refused by name here rather than
-emitted as an `OpStore` that would lose an update. Emitting it is the next step; a `Float`
-accumulate needs `OpAtomicFAddEXT` (extension, capability and a per-lane ordering) or a
-compare-exchange loop over the bits, which is the same shape the wasm backend runs.
+`KernelInstr::BufferAtomicAddCall` is emitted as one read-modify-write instruction, and as
+nothing else. The address is computed exactly as a plain `BufferWriteCall` computes it — the
+same storage slot, the same `OpAccessChain`, the same `as_class` conversions, and the same
+`WriteInsideLoop` refusal, because a zero trip count never runs the body either way. The two
+arms differ in one place: the instruction the chain feeds.
+
+| element class | instruction | capability | extension |
+|---|---|---|---|
+| `Int` (the module's 64-bit `ulong`) | `OpAtomicIAdd` | `Int64Atomics` (12) | — |
+| `Float` (the 32-bit `float`) | `OpAtomicFAddEXT` (6035) | `AtomicFloat32AddEXT` (6033) | `SPV_EXT_shader_atomic_float_add` |
+| `BFloat16` | — | — | refused, `AtomicAddNotAHardwarePrimitive` |
+
+`Int64` alone is not enough for the integer arm: `OpAtomicIAdd` over a 64-bit integer is the
+one 64-bit operation the type capability does not cover, and `spirv-val` names `Int64Atomics`.
+A **float module's `Int` is 32-bit**, so an integer atomic over one needs nothing beyond `Shader`.
+Each capability and the extension are recorded by the emission that needs them, so a module that
+adds atomically only over `Int` does not declare `AtomicFloat32AddEXT`, does not declare the float
+extension, and asks no device for `shaderBufferFloat32Atomics`; and vice versa.
+
+The memory operands are `Device` scope (`SpvScopeDevice`, 1) and `Relaxed` semantics (the
+module's existing 32-bit `0`): the contention a `write_atomic` answers is between every invocation
+of the whole dispatch, so workgroup scope would order the add against one workgroup's lanes while
+leaving another workgroup's racing write unconstrained. The atomic's result id is allocated and
+discarded — SPIR-V gives every atomic a result, and the language's `write_atomic` produces
+nothing.
+
+**The device facts.** `dispatch` probes two feature structs through
+`vkGetPhysicalDeviceFeatures2` at device selection and enables what the device offers:
+
+- an integer atomic needs **`shaderBufferInt64Atomics`** (`VkPhysicalDeviceShaderAtomicInt64Features`),
+  and only when `shaderInt64` is also supported, because `Int64Atomics` builds on `Int64`;
+- a float atomic needs **`shaderBufferFloat32Atomics`**
+  (`VkPhysicalDeviceShaderAtomicFloatFeaturesEXT`) **and** the device extension
+  `VK_EXT_shader_atomic_float` in `vkEnumerateDeviceExtensionProperties`. Both halves: the bit says
+  the device performs the add and the extension says it accepts the struct that enables it.
+
+`shaderInt64` itself is enabled at device creation beside them, which is what the spec requires of
+`shaderBufferInt64Atomics` and what an integer module's `Int64` capability already needed here.
+
+**A device without the primitive fails, and there is no emulation.** Before the module is emitted,
+`spirv::atomic_classes(launch)` is asked which element classes the set adds to atomically and each
+is checked against the device: an `Int` one on a device without `shaderBufferInt64Atomics` returns
+`RunError::MissingAtomicInt64`, a `Float` one without the float add returns
+`RunError::MissingAtomicFloatAdd`. Neither falls back to an `OpStore` and neither expands to a
+compare-exchange loop. That is the user's ruling and it is what makes the answer a *different
+program*: a load, an add and a store around a contended slot is an update that may be lost, and
+`write_atomic` exists precisely to say that must not happen. The wasm backend runs a
+`fetch_add` for `Int` and a compare-exchange loop for `Float`; **this backend does not**, and a
+kernel that wants the emulation runs on `"cpu"`.
+
+A `BFloat16` atomic is refused by name at emission (`AtomicAddNotAHardwarePrimitive`) — no
+extension this target names has a primitive at that width. The language already refuses one at
+lowering time (`compute/body.rs`, "no atomic add"), so this is the emitter's own name for a
+fragment that carries one anyway.
 
 ### The two type facts the IR does not carry
 

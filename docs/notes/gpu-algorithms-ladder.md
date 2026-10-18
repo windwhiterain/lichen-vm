@@ -165,19 +165,30 @@ accumulate. Where a program goes past what the atomics order (a read of a slot a
 an ordering the program itself relies on), that is the program's own problem, not the mechanism's.
 `shared-memory-and-barriers.md` §4's "refuse a contended write" is superseded by this.
 
-**Measured**, 65 536 lanes into 8 buckets, 20 worker threads (`histogram_atomic`):
+**Measured**, 65 536 lanes into 8 buckets, 20 worker threads
+(`histogram_atomic` on `"cpu"`, `histogram_atomic_gpu` on both backends, an RTX 3060):
 
-| write | counts | sum |
-|---|---|---|
-| `write_atomic`, `Int` | 8192 × 8 | 65 536 |
-| `write`, `Int` | 1 × 8 | 8 |
-| `write_atomic`, `Float` | 4096.0 × 8 | 32 768.0 |
-| `write`, `Float` | 0.5 × 8 | 4 |
+| write | `"cpu"` counts | `"gpu"` counts | sum |
+|---|---|---|---|
+| `write_atomic`, `Int` | 8192 × 8 | 8192 × 8 | 65 536 |
+| `write`, `Int` | 1 × 8 | 1 × 8 | 8 |
+| `write_atomic`, `Float` | 4096.0 × 8 | 4096.0 × 8 | 32 768.0 |
+| `write`, `Float` | 0.5 × 8 | 0.5 × 8 | 4 |
 
 So the scatter is expressible and correct when it says which write it is, and the plain
 `write` in that shape is the contract violation the ruling defines rather than a bug in the
-runtime. The wasm backend runs both classes; the SPIR-V backend refuses `write_atomic` by name
-until `OpAtomicIAdd` (which needs `AtomicInt64` and the device feature behind it) is emitted.
+runtime.
+
+**Both backends now answer it the same way.** The SPIR-V backend emits the primitive and
+nothing else: `OpAtomicIAdd` over the 64-bit integer, `OpAtomicFAddEXT` over the 32-bit float,
+each at `Device` scope with `Relaxed` semantics, and the plain `write` is still the
+last-writer-wins store the table records. A device without the primitive does not fall back —
+`shaderBufferInt64Atomics` for the integer arm, `shaderBufferFloat32Atomics` plus
+`VK_EXT_shader_atomic_float` for the float one, and a run that asks for what the device does not
+have is refused by name rather than emulated with a compare-exchange loop. Both emitted modules
+pass `spirv-val --target-env vulkan1.1`. See
+[lichen-compute-gpu](lichen-compute-gpu.md) § "`write_atomic` is the hardware primitive, and
+nothing else".
 
 ### 6. An out-of-range read is undefined, and differs per backend
 
@@ -417,15 +428,16 @@ note is where the design is; nothing here needs to change for it.
 
 ## What the ladder did not try
 
-Sorting, atomics, and anything with a data-dependent trip count — all three are
-outside the primitive rather than at its edge, so probing them would have
-measured refusals rather than behaviour. Sub-group width and shared memory were
-not probed because no source construct reaches them.
+Sorting and anything with a data-dependent trip count are outside the primitive
+rather than at its edge, so probing them would have measured refusals rather
+than behaviour. Sub-group width and shared memory were not probed because no
+source construct reaches them.
 
 The histogram (a contended write) is the exception and it is not one of them: a
 contended write is *expressible*, which is what makes it worth having written
-down — it runs, on both backends, and is silently wrong. Sorting and a
-data-dependent trip count have no such shape, so there was nothing to measure.
+down — §5 measures it, and it runs correctly on both backends once the program
+says which write it is (`compute.write_atomic`). Sorting and a data-dependent
+trip count have no such shape, so there was nothing to measure.
 
 **The reason this note is evidence rather than a specification is that its
 blind spots are structural.** No probe can distinguish "the primitive cannot say
