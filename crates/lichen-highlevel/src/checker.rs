@@ -20,6 +20,21 @@ use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{AssertSpelling, DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, PrefixOp};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
+
+/// What a build does after checking: run the program, or decide only types.
+///
+/// # Invariant
+/// **`Check` evaluates the type slot of every expression and never the value slot.** Types are
+/// values in this language and can participate in computation, so `Check` still evaluates — it
+/// is the *value* slot that is never entered, which is what keeps a divergent `@loop` out of
+/// the checking path. `Evaluate` is the full build the compiler and the tests run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Check, then run every body and every top-level statement (the definition pass).
+    Evaluate,
+    /// Check, then decide every expression's type slot; no body runs.
+    Check,
+}
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
 
@@ -404,15 +419,48 @@ where
         Self::build_with_budget(ir, WorkBudget::default())
     }
 
+    /// [`Self::build_in_attr_native`] with an explicit [`Mode`].
+    pub fn build_in_attr_native_with_mode(
+        ir: IR<P::Attr, P::Literal>,
+        registry: Arc<RwLock<Registry<P>>>,
+        attr_ext: AttrExtRegistry<P, P::Attr>,
+        native_ops: NativeOps<P>,
+        mode: Mode,
+    ) -> Build<P> {
+        let module = Registry::new_module(&registry);
+        Self::build_with(
+            ir,
+            module,
+            Some(attr_ext),
+            native_ops,
+            WorkBudget::default(),
+            mode,
+        )
+    }
+
     /// [`Self::build`] under a caller-supplied [`WorkBudget`].
     pub fn build_with_budget(ir: IR<P::Attr, P::Literal>, work_budget: WorkBudget) -> Build<P> {
-        Self::build_with(ir, Module::new(), None, no_native_ops(), work_budget)
+        Self::build_with(
+            ir,
+            Module::new(),
+            None,
+            no_native_ops(),
+            work_budget,
+            Mode::Evaluate,
+        )
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared registry.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, None, no_native_ops(), WorkBudget::default())
+        Self::build_with(
+            ir,
+            module,
+            None,
+            no_native_ops(),
+            WorkBudget::default(),
+            Mode::Evaluate,
+        )
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry.
@@ -432,6 +480,7 @@ where
             Some(attr_ext),
             no_native_ops(),
             WorkBudget::default(),
+            Mode::Evaluate,
         )
     }
 
@@ -453,6 +502,7 @@ where
             Some(attr_ext),
             native_ops,
             WorkBudget::default(),
+            Mode::Evaluate,
         )
     }
 
@@ -464,13 +514,16 @@ where
         attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
         native_ops: NativeOps<P>,
         work_budget: WorkBudget,
+        mode: Mode,
     ) -> Build<P> {
-        // Invariant: an attribute's canonical index is its position in the set's
         // order; checked once per program.
         debug_assert!(
             crate::attr::order_is_canonical::<P::Attr>(),
             "an attribute's canonical index must be its position in the set's order"
         );
+        // A `Check` build reports the type side's parameter check; `Evaluate` lets the value side.
+        module.set_type_side_reporting(mode == Mode::Check);
+
         // The definition pass runs the whole program, so the limits must be set
         // before it starts.
         module.apply_depth_limit = work_budget.apply_depth_limit;
@@ -562,7 +615,7 @@ where
             checker.close_shallow_tail(tail);
         }
         // The definition pass: run the program so the apply-time checks fire.
-        if !checker.check_failed() {
+        if mode == Mode::Evaluate && !checker.check_failed() {
             // Its order is user-visible, so functions are sorted by the IR
             // expression they were compiled from.
             let expression_of: HashMap<FunctionId, ExprId> = checker
@@ -597,7 +650,7 @@ where
 
         // Evaluate every user-written top-level statement, so a
         // non-terminating one is a diagnostic, not an aborted build.
-        if !checker.check_failed() {
+        if mode == Mode::Evaluate && !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
                 let Some(term) = checker.state[s].term else {
@@ -632,6 +685,16 @@ where
                 }
             }
         }
+        // `Check`: every expression's type slot is decided; no value slot is entered.
+        if mode == Mode::Check && !checker.check_failed() {
+            for index in 0..checker.ir.expr.len() {
+                let expression = ExprId(index as u32);
+                if let Some(ty) = checker.state[expression].ty {
+                    checker.module.evaluate_node_deep(ty, None);
+                }
+            }
+        }
+
         // The assert pass: drain the constraint worklist, requiring `USize(1)` of
         // each deep-evaluated condition.
         if !checker.check_failed() && checker.nonterminating.is_empty() {
