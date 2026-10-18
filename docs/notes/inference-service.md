@@ -361,16 +361,35 @@ Three verdicts were given and are recorded here rather than left in a transcript
    operation"*. An `Int` min-fold works on its own. So a device-side embedding
    lookup needs either a fourth dispatch to convert, or `float2int` at the point of
    use; a host-side readback does not care.
-6. **The recipe a graph step's parameter must follow, and it is narrower than "a step
-   records".** Three shapes were tried for a minimal three-node step and each was refused
-   by the recorder in its own words: with `.in` holding **two** buffers, and with **one**,
-   *"node 0 was given value 0 as a buffer, and that value is a number"* — the extent
-   arriving where a buffer belongs; with **no** buffers at all, *"this function's return is
-   not a value a graph can hand back"*. `decode_step_graph.rs`'s shape — four buffers under
-   `.in`, and dispatches whose own argument structs differ from it — records and runs, and
-   whether a kernel carries a claim made no difference either way. So the difference is in
-   the recording's slot numbering and not in the backend, and it is worth isolating before a
-   service depends on it.
+6. **The graph step's recipe — isolated this round, and it is two rules over one defect.**
+   `compute.rs` numbers a recorded dispatch's input slots as the **rank of each role path in
+   `scalars ++ inputs ++ outputs`, sorted by path**, over **the kernel's own parameter**, and
+   `place` hands that number to the graph unchanged as a value id. So a step works only when
+   its own parameter presents the same cells as the dispatch's, in the same order, and each
+   is read. Two measured rules follow, and both were confirmed by making the sentence
+   disappear:
+   - **Read the extent argument (`s.n`).** A body that passes a literal `.n` never reads that
+     cell, the step's cell list loses it, every buffer input shifts down one slot, and node 0
+     is handed the extent — *"node 0 was given value 0 as a buffer, and that value is a
+     number"*.
+   - **The dispatch's argument struct must be the graph's `.in` struct.** With a different
+     struct the ranks still disagree and the same sentence stays, even with `s.n` read.
+   A **one-node** step fails separately, with *"two answers met on one node"*, so a step needs
+   at least two nodes. With both rules obeyed `zz_graph_step_shape_probe.rs` prints
+   `[4.0, 8.0, 12.0]` for a two-node step. **The defect to file is the conflation itself**: a
+   kernel's parameter cell is not a graph input slot, and the recording treats one as the
+   other; the fix belongs there and not in the backend.
+7. **`compute.graphrun` reaches `Async` and never `Batch`, and `Async` saves nothing.**
+   `compute.rs`'s `GRAPH_POLICY` defaults to `Policy::Async`, and its own comment says *"`Batch`
+   needs a host that asks for it"* — `set_graph_policy` is that ask. Measured on the same three
+   dispatches: through the language default the run costs **4 submissions and 5 fences**, and
+   through a session that sets `Batch`, **2 and 2**. So the language surface cannot reach a
+   one-submission step at all; the host that can is `lichen-serve`, and that is now the crate's
+   measured reason to exist rather than an anticipated one. **What stays open is whether the
+   language surface should be able to ask for `Batch` at all** — today only a Rust host can,
+   which means an example that used it would be unrunnable by the example suite. Keeping the
+   probe is deliberate: the failing shapes are the evidence for the defect, and the defect is
+   not fixed.
 
 The seven probes, in one command:
 

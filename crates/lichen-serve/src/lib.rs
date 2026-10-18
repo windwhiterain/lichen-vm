@@ -3,7 +3,9 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use lichen_compute::set_graph_policy;
 use lichen_compute_gpu::GpuContext;
+use lichen_graph_ir::Policy;
 use lichen_kernel_ir::{ParallelBackend, clear_parallel_backend, install_parallel_backend};
 
 /// What one run asked the device for.
@@ -69,7 +71,9 @@ impl Session {
     ///
     /// # Invariant
     /// The slot is taken **before** the device is opened, so a second caller blocks rather than
-    /// opening a device whose context the first would replace.
+    /// opening a device whose context the first would replace. The graph schedule is set to
+    /// [`Policy::Batch`]: the language's own default is `Async`, whose submission count is
+    /// `Serial`'s, so `Batch` is reachable only from a host that asks — a served step is one.
     pub fn open() -> Result<Self, ServeRefusal> {
         let slot = SESSION
             .lock()
@@ -78,6 +82,7 @@ impl Session {
             Arc::new(GpuContext::new().map_err(|error| ServeRefusal::Device(error.to_string()))?);
         let backend: Arc<dyn ParallelBackend> = context.clone();
         install_parallel_backend(backend);
+        set_graph_policy(Policy::Batch);
         Ok(Self {
             context,
             _slot: slot,
@@ -116,5 +121,6 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         clear_parallel_backend();
+        set_graph_policy(Policy::Async);
     }
 }

@@ -2,37 +2,50 @@
 
 use lichen_serve::{ServeRefusal, Session};
 
-/// One kernel, whose body reads nothing, so only the schedule can differ between runs.
+/// One kernel, so that only the schedule can differ between two runs of the same work.
 const KERNEL: &str = r#"
 --- compute = import "compute.lichen" ---
+Inc = struct{.d (compute.Buf Float)}
 Out = struct{.e (compute.Buf Float)}
-Par = struct{.n Int, .out Out}
-Arg = struct{.n Int}
-seven_raw = (k : Par) => {
+Par = struct{.n Int, .in Inc, .out Out}
+double_raw = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value 7.0))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)))
 }
-seven = compute.parallel seven_raw "gpu"
-"#;
-
-/// Three dispatches, which is one submission and one fence per node.
-const CHAINED: &str = r#"
-a = (compute.plrun seven ((Arg)(.n 3)) : Out)
-b = (compute.plrun seven ((Arg)(.n 3)) : Out)
-c = (compute.plrun seven ((Arg)(.n 3)) : Out)
-compute.collect c.e : array{Float, 3}
+double = compute.parallel double_raw "gpu"
+data = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 "#;
 
 /// One dispatch, to which the readback adds its own share.
 const ONE: &str = r#"
-a = (compute.plrun seven ((Arg)(.n 3)) : Out)
+a = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d data))) : Out)
 compute.collect a.e : array{Float, 3}
+"#;
+
+/// Three dispatches, which is one submission and one fence per node.
+const CHAINED: &str = r#"
+a = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d data))) : Out)
+b = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d a.e))) : Out)
+c = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d b.e))) : Out)
+compute.collect c.e : array{Float, 3}
+"#;
+
+/// The same three kernels as one recorded graph, so the whole step is one submission.
+const GRAPHED: &str = r#"
+GArg = struct{.n Int, .in Inc}
+step = (s : GArg) => {
+  a = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)
+  b = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d a.e))) : Out)
+  compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d b.e)))
+}
+built = compute.graph step
+compute.collect (compute.graphrun built (3, data)) : array{Float, 3}
 "#;
 
 /// A dispatch whose count is neither a literal nor an argument, which the recorder refuses.
 const REFUSED: &str = r#"
-a = (compute.plrun seven ((Arg)(.n 3)) : Out)
-b = (compute.plrun seven ((Arg)(.n (compute.read ((compute.Read _)(.from a.e, .at 0))))) : Out)
+a = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d data))) : Out)
+b = (compute.plrun double ((compute.A Inc)(.n (compute.read ((compute.Read _)(.from a.e, .at 0))), .I Inc(.d a.e))) : Out)
 compute.collect b.e : array{Float, 3}
 "#;
 
@@ -56,8 +69,12 @@ fn a_readback_is_a_submission_and_dispatches_are_one_each() {
         .run(&format!("{KERNEL}{CHAINED}"))
         .unwrap_or_else(|refusal| panic!("the chain runs: {refusal}"));
     assert_eq!(
-        three.answer, "[7.0, 7.0, 7.0]: array{Float, 3}",
-        "the body writes the same number on every lane"
+        one.answer, "[2.0, 4.0, 6.0]: array{Float, 3}",
+        "one doubling of 1, 2 and 3"
+    );
+    assert_eq!(
+        three.answer, "[8.0, 16.0, 24.0]: array{Float, 3}",
+        "three doublings of 1, 2 and 3"
     );
     assert_eq!(
         (one.cost.submissions, one.cost.fence_waits),
@@ -73,6 +90,48 @@ fn a_readback_is_a_submission_and_dispatches_are_one_each() {
     println!(
         "one dispatch + readback {}/{}, three + readback {}/{}",
         one.cost.submissions, one.cost.fence_waits, three.cost.submissions, three.cost.fence_waits
+    );
+}
+
+/// The same three dispatches recorded as one graph cost one submission, not three.
+///
+/// # Invariant
+/// The step's body reads its own extent argument and its parameter's `.in` is the dispatch's own
+/// struct: a graph step that breaks either rule is handed the extent in its first buffer slot.
+#[test]
+fn a_recorded_step_is_one_submission_where_the_chain_is_three() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_recorded_step_is_one_submission_where_the_chain_is_three: no device");
+        return;
+    };
+    let chained = session
+        .run(&format!("{KERNEL}{CHAINED}"))
+        .unwrap_or_else(|refusal| panic!("the chain runs: {refusal}"));
+    let graphed = session
+        .run(&format!("{KERNEL}{GRAPHED}"))
+        .unwrap_or_else(|refusal| panic!("the recorded step runs: {refusal}"));
+    assert_eq!(
+        graphed.answer, chained.answer,
+        "the recorded step answers what the chain answers: the schedule changed and the numbers \
+         did not"
+    );
+    assert_eq!(
+        (chained.cost.submissions, chained.cost.fence_waits),
+        (4, 4),
+        "three dispatches and a readback"
+    );
+    assert_eq!(
+        (graphed.cost.submissions, graphed.cost.fence_waits),
+        (2, 2),
+        "and one recorded step plus the same readback is two, so a step is one submission and the \
+         readback is the other"
+    );
+    println!(
+        "chained {}/{}, recorded step {}/{}",
+        chained.cost.submissions,
+        chained.cost.fence_waits,
+        graphed.cost.submissions,
+        graphed.cost.fence_waits
     );
 }
 
