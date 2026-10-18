@@ -24,12 +24,12 @@ and the answer has three parts:
 
 The retired design answered (1) with `evaluated_deep(root).undecided == false`, i.e. with a
 **deep pass**, and that pass is what forces: `evaluate_node_deep` evaluates every position
-of the root's value graph. In the checker's definition pass the same positions are forced
-anyway (it deep-evaluates every statement and every body), so the measurable defect is not
-the extra work but §6: **the deep pass decides the scope's assert conditions, and the collect
-that follows then unregisters them**. (2) and (3) were never answered — the read-path
-disable ([gc-trigger-disabled](gc-trigger-disabled.md)) is (3) reaching a running frame, and
-§5 names (2) in the wild.
+of the root's value graph. In the checker's definition pass most of those positions are
+forced anyway (it deep-evaluates every statement and every body), so the measured defect is
+not the extra work but §6: **the old trigger releases a pending assert's condition and
+silently unregisters the assert**. (2) and (3) were never answered — the read-path disable
+([gc-trigger-disabled](gc-trigger-disabled.md)) is (3) reaching a running frame, and §5
+names (2) in the wild.
 
 ## 2. The shape of a scope, measured
 
@@ -78,11 +78,11 @@ the descent died on is a **decided** array node (§5), not an undecided one.
 `root.value` holds a decided value that is not the wildcard. No deep pass, so nothing is
 forced and no side effect runs. Measured, with the trigger reading that:
 
-| suite | disabled (dev) | deep (old) | shallow (proposed) |
+| suite | shipped (the disable) | deep (old) | shallow (proposed) |
 |---|---|---|---|
-| `lichen-lowlevel` `basic` | 146 / 13 | 155 / 1 | 154 / 2 (153 / 3 with §6's assert fix) |
-| `lichen-language` `language` | 271 / 1 | — | 262 / 1 (a research probe) |
-| `lichen-highlevel` `highlevel` | 138 / 0 | — | 136 / 0 (the probe adds none here) |
+| `lichen-language` `language` | 263 / 1 | — | **264 / 0** with §6's fix |
+| `lichen-lowlevel` `basic` | 143 / 13 | 155 / 1 | 154 / 2 (153 / 3 with §6's fix) |
+| `lichen-highlevel` `highlevel` | 136 / 0 | — | 136 / 0 |
 | `lichen-compute` `examples::every_example…` | passes | **panics** | passes |
 | `gc_block::*` | 6 / 1 | 7 / 0 | 7 / 0 |
 
@@ -109,13 +109,13 @@ DEEP DEAD NODE NodeId(464v1) visiting-frame depth=6
 
 The released node is **decided and not in flight**; it is named as an array item by a live
 node of the **parent** block (11v1). `462v1`'s array holds both the scope root (`463v1`)
-and its sibling (`464v1`) — it is the scope expression's `[term, value]` pair, whose value
-was propagated into a parent-block cell by a class write (`fill_class_holes` /
-`propagate_class_value`), and the payload lives in the child block's arena. The collector
-walks the class edge to `462v1`, sees a node outside the vacated subtree, and **returns
-without relocating its value**: the array still names `464v1`, which the walk then releases
-(the root's class reached only `463v1`). The next deep frame iterating that array dies on
-the released id.
+and its sibling (`464v1`), so the parent names a node the walk does not keep. The walk does
+reach `462v1` (its class edge from the root), sees a node outside the vacated subtree, and
+**returns without walking or relocating its value**: the array keeps naming `464v1`, and the
+next deep frame iterating it dies on the released id. How the parent cell came to hold a
+child-block array is not established by this trace — a class write (`fill_class_holes`
+copies a class's value into every member) is the likely path — and it does not matter: the
+hole is that a node outside the block can name a node inside it and the walk never looks.
 
 That is the same hole in the other direction: the walk relocates the values of nodes it
 **moves**, but a value that reached a node **outside** the block by a class write is a
@@ -132,17 +132,15 @@ the read path was unsafe. Two shapes of repair:
 ## 6. The second defect: a released scope loses its asserts
 
 The collector's contract today is that a pending assert's condition **dies with its block**
-(`assert::gc_prunes_asserts_of_dropped_blocks`). Measured consequence: under the old deep
-trigger, `x = @gc { @assert (1 > 2); 3 }; x` reports **no** error — the failing assert is
-silently unregistered, while the same program with the collect disabled reports
-`ok=false / assert_errors=1`. The mechanism is the deep pass: it decides the condition, the
-collect's walk no longer reaches it (a decided node's operand edge is dead), and
-`drop_block` prunes the entry before `check_asserts` runs. `@gc` is documented as an
+(`assert::gc_prunes_asserts_of_dropped_blocks`). Measured consequence: with the collect
+disabled, `x = @gc { @assert (1 > 2); 3 }; x` reports `ok=false / assert_errors=1`; **under
+the old deep trigger the same program reports no error at all** — the condition is released
+before the assert pass drains, and `drop_block` prunes its entry. `@gc` is documented as an
 allocation marker that "computes nothing", so a release that changes a program's verdict is
 a semantic hole.
 
-The shallow trigger keeps the assert **only because** the condition is still undecided and
-therefore kept as an owed operand — luck, not a rule: as soon as anything reads the
+The shallow trigger keeps the assert **only because** the condition is still undecided there
+and therefore kept by an owed edge — luck, not a rule: as soon as anything reads the
 condition before the collect, the same loss happens. Treating pending assert conditions as
 collect roots fixes it (measured: the deep trigger's false assert is reported again), at the
 cost of the lowlevel test that states the opposite contract.
