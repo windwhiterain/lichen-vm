@@ -165,15 +165,16 @@ bound or used as a parameter (Chapter 3).
 
 ### A `raw` mark is a defect
 
-The printer marks a value it cannot explain with `raw`. The mark is never
-an answer: it says the value/type pair is not decided enough to print, and
-a correct program does not produce one. The strict read rule (Chapter 4)
-refuses the read that would have produced it; a program that still prints
-`raw` has left a type open somewhere — a hole, an unannotated recursion, a
-call result whose type nothing states — and the fix is to state the type
-(an annotation on the container or on the call's result), not to read the
-mark as a result. Chapter 14 lists the mark among the printer's words for
-a defect.
+An **undecided** value prints the same cell name as its type: `_` in a tuple
+prints `(?a, ?b): tuple{?a, ?b}`, and two uses of one hole print
+`(?a, ?a): tuple{?a, ?a}`, so the answer's two halves share one table and
+show the unification topology. `raw` is the printer's other fallback: a
+value whose type the check **decided** but cannot read as a form (a kernel
+handle the struct type never named, a bare `[in, out]` shape). The mark is
+never an answer: it says the value/type pair cannot be printed, and a
+correct program does not produce one. The strict read rule (Chapter 4)
+refuses the reads that would have left a value undecided. Chapter 14 lists
+the mark among the printer's words for a defect.
 
 ## Annotations state, they do not check
 
@@ -290,8 +291,10 @@ types; Chapter 13 records what a perspective adds to the pair.
   have kind types such as `TypeTuple` and `TypeStruct`.
 - An expression's type is found by unification, not declared and checked.
 - An undecided type is an open cell named `?a`; the same name means one
-  cell. `_` is a placeholder. An answer whose type stays open is a defect,
-  and the printer's `raw` mark is its symptom (Chapter 14).
+  cell. `_` is a placeholder. An answer whose type stays open prints that
+  cell's name in both halves — the topology, not a value; a `raw` mark is
+  the separate symptom of a decided type the value cannot be read through
+  (Chapter 14).
 - An annotation is a unification, and it can state what the program did not
   decide.
 - `type_of` is an ordinary function: placeholder plus annotation.

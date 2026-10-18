@@ -56,6 +56,21 @@ where
     printer.print(value, ty)
 }
 
+/// The answer's two halves under one class-name table: one hole, one `?a`.
+pub fn print_answer_lang<P>(module: &Module<P>, value: P::Value, ty: NodeId) -> (String, String)
+where
+    P: LangProgramShape,
+    P::Value: ValueType,
+    P::Operator: From<crate::program::GcdOp> + From<lichen_lowlevel::LowOperator>,
+{
+    let attrs = lang_attr_ext::<P>();
+    let mut printer = ValuePrinter::new_with_ext(module, Some(lang_render_ext::<P>()));
+    printer.show_attributes(&*attrs);
+    let value = printer.print(value, ty);
+    let ty = printer.type_node(ty);
+    (value, ty)
+}
+
 // --- the caret shell ---------------------------------------------------------
 
 /// Render a diagnostic with its source line and a caret.

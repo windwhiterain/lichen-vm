@@ -10,6 +10,14 @@
 > bless it. The printer design below stands; an answer that prints a raw value
 > as normal does not.
 >
+> **The author's later encoding ruling** (see
+> [undecided-reads](undecided-reads.md) §6): an **undecided** value and its
+> type print the same `?a`, `?b`, … name, from one class-name table, so the
+> answer's two halves show the unification topology instead of a dump —
+> `(?a, ?a): tuple{?a, ?a}` for one shared hole. The raw fallback below is
+> reached only when the type is **decided** and the value still does not read
+> as a form.
+>
 > Companions: [type-rendering-inconsistent](type-rendering-inconsistent.md) (the
 > tag-against-structured split, which this mark does **not** fix),
 > [eval-before-unify](eval-before-unify.md) (whose diagnostics are
@@ -24,9 +32,9 @@ fallback is now spelled with the mark, and the mark is **unconditional**: the
 fallback has no type chain behind it, so nothing it reads is a form.
 
 ```
-expected Int, found raw 6          -- an undetermined type: a dump
+expected Int, found raw 6          -- a decided type the value cannot be read through
 6: Int                             -- an `Int` type: read through the chain
-raw[raw 6, raw 14]: ?a              -- an untyped call's two leaves
+?b: ?b                             -- an undecided value and type: one cell
 raw Kernel                         -- a kernel slot the struct type never named
 ```
 
@@ -57,7 +65,8 @@ unrolling forever — the previous `[head, K]` collapse cut that cycle by
 |---|---|
 | `TypePrinter::elements`' last branch | a type node no form recognises: the `[value, type]` cells, directly |
 | `TypePrinter::static_elements`' last branch | the same for a frozen module's static refs |
-| `ValuePrinter::raw_any` | a runtime value the type chain named **no class** for: a list `raw[…]`, an atomic `raw x` |
+| `ValuePrinter::value`'s undecided branch | **not** a dump any more: an undecided type cell prints its class name in both halves |
+| `ValuePrinter::raw_any` | a runtime value whose **decided** type the chain cannot read as a form: a list `raw[…]`, an atomic `raw x` |
 
 ```lichen
 P = ins => struct{.I ins.x, .O ins.y}
@@ -71,7 +80,9 @@ error: expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct
 The same branch is reached from a struct field — a kernel binding renders
 `struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]}` — and from the
 value side: `compute.call` on a tuple-codomain kernel types its result as a
-fresh cell, so the result prints `raw[raw 6, raw 14]: ?a`. A bare `[in, out]`
+fresh cell, so the result prints `?a: ?a` — the value and the type are one
+cell, and the encoding ruling shows the topology; before it, the value was
+dumped as `raw[raw 6, raw 14]`. A bare `[in, out]`
 shape on the CLI output path is a third entry, since that path carries no
 checker arrow registry to recognise it as an arrow.
 

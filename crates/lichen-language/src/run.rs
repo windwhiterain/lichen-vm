@@ -16,7 +16,7 @@ use crate::preprocess::preprocess;
 use crate::program::{GcdOp, LangProgram};
 pub use crate::render::print_type;
 pub use crate::render::print_value;
-use crate::render::{print_type_lang, print_value_lang, render_attributes, value_label};
+use crate::render::{print_answer_lang, print_type_lang, render_attributes, value_label};
 
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::{TypeOperator, ValueType};
@@ -131,18 +131,17 @@ where
     } else {
         // An undecided root renders as the printer's no-value reading.
         let value = value.unwrap_or_else(|| P::Value::from(lichen_lowlevel::LowValue::None));
+        let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
+        let (value_text, type_text) = print_answer_lang::<P>(&module, value, build.root_ty);
         format!(
             "{}{}: {}",
-            print_value_lang::<P>(&module, value, build.root_ty),
-            {
-                let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
-                if attrs.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {attrs}")
-                }
+            value_text,
+            if attrs.is_empty() {
+                String::new()
+            } else {
+                format!(" {attrs}")
             },
-            print_type_lang::<P>(&module, build.root_ty)
+            type_text
         )
     };
     Ok(RunOutput {

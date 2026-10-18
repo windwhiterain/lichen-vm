@@ -175,8 +175,9 @@ read:
 - `…` — a cycle cut (Chapter 12), never a truncation.
 - `struct{.x Int}#11` — a struct type's nominal identity (Chapter 8). Two
   `#id`s are two types, however identical their fields look.
-- `raw` — the printer's mark for a value whose type is not decided; it is
-  a defect, never an answer (Chapter 5).
+- `raw` — the printer's mark for a value whose **decided** type cannot be
+  read as a form (an undecided value prints its cell's `?a`, the same name
+  its type shows); it is a defect, never an answer (Chapter 5).
 - `note: the failing use is here` — a second location: the declaration is
   the first, your use is the second.
 - `did you mean 'x'?` — a suggestion attached to a named-field miss

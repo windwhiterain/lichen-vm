@@ -1089,7 +1089,10 @@ diagnostics.
 Checker messages are rendered by the same printer as the CLI output, so
 types appear in the language's own syntax: `Int`, `Type`, `T1 -> T2`,
 `tuple{T1, T2}`, `array{T, len}`, `struct{...}`, and undecided cells as stable `?a`,
-`?b`, … names (cells in one unification class share a name).  The boxed
+`?b`, … names (cells in one unification class share a name).  The **output
+answer** (`value: type`) prints both halves under one class-name table, so an
+undecided value shows the same `?a` its type does: `(?a, ?a)` for one shared
+hole, `?a: ?a` when the whole answer is one cell.  The boxed
 highlevel `Diag` in `check` stays raw — it carries the structured facts
 (`kind`, the classes `a`/`b` and their values, the `error_index` into
 `unify_errors`) and its own raw message (`TypeInt`, `TypeType`, …).

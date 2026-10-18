@@ -181,3 +181,12 @@ open cells instead of the shared cut; the spec's §5 states that.
 - the table read and set membership strictification (§4) needed one TestKit
   test to build a typed table parameter; every suite is otherwise unchanged,
   and the book's ch09 table/set blocks were re-run with the strict compiler.
+- the wildcard-root frontier: an **undecided value** and its type now print
+  the same class name from one table (the author's encoding ruling), so the
+  answer shows the unification topology instead of a dump. Measured:
+  `f = n => if n == 0 then (_, _) else f (n - 1); f 3` prints
+  `(?a, ?b): tuple{?a, ?b}`; `x = _; (x, x)` prints `(?a, ?a): tuple{?a, ?a}`
+  (one hole, one name); `(1, _)` prints `(1, ?a): tuple{Int, ?a}`. The `raw`
+  mark is left for a **decided** type the value cannot be read through, and
+  the render/answer path builds the two halves under one class-name table
+  (`print_answer_lang`).

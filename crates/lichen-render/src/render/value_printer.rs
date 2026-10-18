@@ -36,6 +36,11 @@ where
         self.value(value, ty)
     }
 
+    /// The type under the class names [`Self::print`] already assigned.
+    pub fn type_node(&mut self, node: NodeId) -> String {
+        self.printer.node(node)
+    }
+
     /// Render `value`, whose type is `ty`: the type chain decides how it reads.
     ///
     /// # Invariant
@@ -48,11 +53,12 @@ where
         if self.printer.is_universe_any(AnyNodeId::Dynamic(ty)) {
             return self.atomic(value);
         }
-        let Some(LowValue::Array(ty_array)) = self
-            .module
-            .node_value(AnyNodeId::Dynamic(ty))
-            .and_then(|v| v.as_enum())
-        else {
+        let Some(type_value) = self.module.node_value(AnyNodeId::Dynamic(ty)) else {
+            // One hole, not a disagreement: the cell's class name is the value's
+            // own spelling and the type print reuses it.
+            return self.printer.class_name(ty);
+        };
+        let Some(LowValue::Array(ty_array)) = type_value.as_enum() else {
             return self.raw(value);
         };
         // SAFETY: `ty_array` is the payload of the value read from the live
