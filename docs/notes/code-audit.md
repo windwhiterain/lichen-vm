@@ -46,6 +46,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | fixed — the structural pass now runs for a positional call once the struct type is decided (gated on the argument list matching the name list); `S(1, "a", 3)` reports `too many fields for the struct type …` and `S(1,)` reports `missing field y …` |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | todo — measured `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6, and a `# n` argument requirement is accepted likewise |
+| P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | todo — measured `S = struct{.a Int}` ; `g = c => c(.a "x")` ; `g S` answers `table lookup missed — no entry for this key`, naming neither the field nor the argument |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -673,8 +674,35 @@ A *type* mismatch through the same callee does reach the reorder's lookup
 placeholder callee is refused earlier (`the callee of an instantiation must be a
 struct type`). Fix direction: compare the field's slot (its requirement and its pin)
 against the supplying argument where the reorder resolves, where both the field and
-the argument are decided — the same walk the written form already runs, ordered after
-the type key. A regression test belongs with the fix (`D3`).
+the argument are decided. The written form's walk cannot be reused as it stands: it
+pairs **expressions** (`schema_tail`, `unify_type_attributes`), and the deferred path
+has only nodes (the field's slot out of the callee's lazy shape, the argument's
+[value, type, attr] pair), so the comparison must be a runtime unify or a registered
+assert at the reorder's resolution. A regression test belongs with the fix (`D3`).
+
+### P1-45 — An instantiation through a parameter reports a type mismatch as an opaque table miss `verified`
+
+The same deferred reorder keys its supply lookup by `[name|rank, argument type]`
+(`lazy_named_instantiate`, `structs.rs`), so a field whose declared type no argument
+matches is a **lookup miss** — by design in the named-instantiation paragraph — but
+the miss's wording is the generic table sentence:
+
+```lichen
+S = struct{.a Int}
+g = c => c(.a "x")
+g S                     -- `table lookup missed — no entry for this key` at the .a argument
+
+S = struct{.a Int, .b string}
+g = c => c(.b Int, .a 1)
+g S                     -- the same sentence at `.b Int`
+```
+
+Measured at `8b94e13c`. The checker knows the field's name per definition position and
+the argument's type at the call site (`elem_ids[i]`, `node_edges` already carries the
+argument's loc), so the sentence could name both — "field `a` expects `Int`, the
+argument is `string`" — either as a spelling on the miss or as a dedicated diagnostic
+for the reorder's resolution. The written form's mismatch names both through the
+field-list unify; this path is the one place a mismatch has no words.
 
 ## Decisions
 

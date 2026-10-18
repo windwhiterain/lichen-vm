@@ -874,7 +874,8 @@ maps every span back to the original file.
   field's own name — or, for a positional argument, by its rank among the
   positional ones — and, when every argument's type is decided, by that type
   too, so a field whose declared type no supplying argument matches is a
-  lookup miss (`TableMiss`) at the moment the type resolves, and the arity is
+  lookup miss (`TableMiss`) at the moment the type resolves — its sentence names
+  neither the field nor the argument (`P1-45`) — and the arity is
   the field-list unify's, as for a positional instantiation.  A **duplicate**
   name is refused at check time: one name supplying two positions is a
   structural mismatch whatever the field list is.
