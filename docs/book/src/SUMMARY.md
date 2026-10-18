@@ -25,3 +25,4 @@
 - [Polymorphism and Classes](ch11-polymorphism.md)
 - [Recursive and Dependent Types](ch12-recursive-and-dependent.md)
 - [Attributes and Perspectives](ch13-attributes.md)
+- [Diagnostics and Assertions](ch14-diagnostics.md)
