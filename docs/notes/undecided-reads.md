@@ -190,3 +190,51 @@ open cells instead of the shared cut; the spec's §5 states that.
   mark is left for a **decided** type the value cannot be read through, and
   the render/answer path builds the two halves under one class-name table
   (`print_answer_lang`).
+
+## 7. An inline kernel body under `compute.parallel`
+
+The last frontier item: `compute.parallel` over an **inline** lambda was refused
+at check time, while the same body **hoisted to a named binding** compiled.
+
+```text
+compute.parallel: no output of this parallel index function carries a decided
+scalar class: its codomain names 1 output(s) and none of them is a
+`compute.write` of a decided scalar …
+```
+
+The cause is neither class inference nor the return's materialization.
+`write_node` reaches a `compute.write` through the body's **last expression's
+value**, and the output walk runs from the `$parallel` hook — which the checker's
+**definition pass** reaches in *expression* order: every function's `r#return` is
+`evaluate_node_deep`'d once, sorted by the `ExprId` its body was compiled from
+(`crates/lichen-highlevel/src/checker.rs`).
+
+Measured on `graph_structure`'s `CHAIN`, printing the definition pass's order and
+each hook firing inside it:
+
+| form | kernel lambdas | `step` | order | outcome |
+| --- | --- | --- | --- | --- |
+| inline | `ExprId(39)`, `ExprId(80)` | `ExprId(24)` | `step` first, and its body reads the kernel binding | the hook fires with the kernel **unrun** |
+| hoisted | `ExprId(1)`, `ExprId(2)` | `ExprId(3)` | the two kernels first | their bodies are run; the walk finds the write |
+
+So the hoisted form compiled by accident of numbering, and the walk's outcome
+followed IR order rather than the kernel. The peel says the same, one hop from
+the end:
+
+```text
+inline   return 966 → 965 Index → 952 Index → target 947 = Apply, value=None     → STOP
+hoisted  return 957 → 956 Index → 943 Index → target 938 = Apply, value=Array(2)
+                                                  → element 0 = the Write
+```
+
+The last hop is `Index(apply, 0)` — the **apply's result**, which exists only once
+the body has run. That is why forcing the *container* of the return `Index`
+changed nothing: the container already held a value; the apply inside it did not.
+
+The fix forces the index function's body at the top of `compile_parallel_fragment`.
+That is the definition pass's own run, not a second one — a run body is memoized —
+so the hoisted form is unchanged. `graph_structure`'s third test loses its
+pre-hoist claim that the captured kernel struct holds no value: `compute.parallel`
+runs during the check, so the struct it returns is a value. It reads the three
+declared ports instead.
+

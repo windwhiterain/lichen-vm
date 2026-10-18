@@ -365,14 +365,16 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
          kernel handle has to reach it through the `Index`"
     );
 
-    // What it reads out of is the kernel struct `compute.parallel` built, and it
-    // is materialized: the call ran during the check, so the struct it returned
-    // is a value here. Its ports are the three it declares.
+    // The struct `compute.parallel` built: it ran during the check, so it holds
+    // the three ports it declares.
     let target = through_index(&module, operands[0]);
     let ports = unsafe { module.array_items(target) }
         .expect("the captured struct's payload")
         .len();
-    assert_eq!(ports, 3, "`.native`, `.I` and `.O` — the kernel struct's ports");
+    assert_eq!(
+        ports, 3,
+        "`.native`, `.I` and `.O` — the kernel struct's ports"
+    );
 }
 
 /// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".
