@@ -349,8 +349,8 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // `k.native` — an `Index` into the captured kernel struct;
-    // neither it nor the field index holds a value until applied.
+    // `k.native` — an `Index` into the captured kernel struct, and the slot
+    // itself holds no value until it is applied.
     assert_eq!(
         format!(
             "{:?}",
@@ -358,12 +358,21 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         ),
         "Some(LowOperator(Index))"
     );
-    let target = through_index(&module, operands[0]);
     assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(target)),
+        module.node_value(AnyNodeId::Dynamic(operands[0])),
         None,
-        "and the captured struct it reads out of has no value yet either"
+        "the slot is a node rather than a read value, so a lowering that wants the \
+         kernel handle has to reach it through the `Index`"
     );
+
+    // What it reads out of is the kernel struct `compute.parallel` built, and it
+    // is materialized: the call ran during the check, so the struct it returned
+    // is a value here. Its ports are the three it declares.
+    let target = through_index(&module, operands[0]);
+    let ports = unsafe { module.array_items(target) }
+        .expect("the captured struct's payload")
+        .len();
+    assert_eq!(ports, 3, "`.native`, `.I` and `.O` — the kernel struct's ports");
 }
 
 /// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".

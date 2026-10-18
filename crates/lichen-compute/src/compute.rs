@@ -2515,10 +2515,14 @@ where
 /// Lower a single-arg index function into a parallel kernel ([`KernelFragment`]).
 ///
 /// # Invariant
-/// The every-ordinal-written rule holds by construction: the lowered body is
-/// straight-line, the only conditional in the subset is the emitter's 2-element
-/// scalar `select`, and a `select` can skip only a *value* — a write reached inside
-/// one is refused by name. Public for the same reason [`compile_fragment`] is.
+/// The body has run before the walk reads it: the walk reaches a `compute.write`
+/// through the body's last expression's *value*, and the class it reads off that
+/// write is the kernel's. The checker's definition pass runs every body exactly
+/// once, but in expression order, and an index function written as an inline
+/// lambda argumented to `compute.parallel` sorts after the first consumer of its
+/// kernel — so that consumer's evaluation reaches this hook with the body still
+/// unrun and the walk sees no write at all. Running it here is the same run the
+/// definition pass makes, not a second one: an already-run body is memoized.
 pub fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
@@ -2534,6 +2538,7 @@ where
     let cfg_pair = module.functions[fid].parameter;
     let body = module.functions[fid].r#return;
     // The kernel's result is the body value — a `Write`, or a tuple of them.
+    module.evaluate_node_deep(body, None);
 
     // SAFETY: `body` is a live node of `module`.
     let ret_value = match unsafe { module.array_items(body) } {
