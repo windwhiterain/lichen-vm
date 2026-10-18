@@ -36,6 +36,16 @@ answers `raw none: ?a`; so does the identity fold `… else f (s(0) - 1, s(1))`.
 is a **tuple of Ints** with the same shape (`f (0, 7)` → `raw 7: ?a`): the loss needs the
 base branch to be a **parameter-derived read** whose type is a struct.
 
+**The desugar is not the cause (measured at `dev@575ad0be`).** Writing the branch as the
+desugared form by hand — `s => [f (s(0) - 1, S(.y (s(1).y + 1))), s(1)][s(0) == 0]` — answers
+the very same `raw none: ?a`, with and without `@loop` (block-wide recursion), so the fold
+and the `if` spelling are one program. A **tuple** container is not an alternative:
+`(1, 2)[1]` is refused `expected TypeArray, found TypeTuple`, so an index read only ever
+reads an array, and the branch container the desugar produces is the only legal one. What
+the base arm *is* decides the outcome: a **struct literal** base
+(`[f (…), S(.y 9)][s(0) == 0]`) answers `9: Int`, while a **parameter-derived read** base
+(`s(1)`) answers `raw none` — the loss needs that read, not the sugar.
+
 ## 3. The mechanism
 
 1. `if c then t else e` desugars to `Index([else, then], c)` — there is no conditional IR
