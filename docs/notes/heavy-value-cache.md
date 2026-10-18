@@ -384,6 +384,38 @@ The same five-edit sequence, release, both modes, both on this branch:
 full one does. The all-dirty edit stops being a loss (0.3× → 1.1×), which is the whole point:
 the freeze no longer costs more than the recomputation it preserves.
 
+### 9.5 A compute value retains as its bytes, and nothing else
+
+The pipeline's heavy cells are scalars from host-side recursion, so §9.3's 14 030-node closure
+is the *scalar* case. The two domains' heavy data is the compute layer's, where a value is a
+packed payload — `ComputeValue::Buffer(AnyHandle<[u8]>, ScalarClass)`. Probed without opening a
+device (`crates/lichen-compute/examples/cache_buffer.rs`, temporary), by freezing a node that
+holds one and reading it back through the static ref:
+
+| payload | freeze ms (Portable) | artifact nodes | arena bytes | read back |
+|---|---|---|---|---|
+| 32 KB (4 096 Int) | 0.09 | **1** | 32 776 | 4 096 elements, equal |
+| 512 KB (65 536) | 0.24 | **1** | 524 296 | 65 536, equal |
+| 2 MB (262 144) | 0.42 | **1** | 2 097 160 | 262 144, equal |
+| 8 MB (1 048 576) | 1.61 | **1** | 8 388 616 | 1 048 576, equal |
+
+Three readings:
+
+- **A compute value freezes as one node plus its bytes** — `arena = payload + 8` at every size.
+  There is no clone graph to hold, because a buffer node has no operation and pulls no class.
+  So §9.3's 14 030-node closure is a property of the *operand chain*, not of heavy data as
+  such: a heavy value that is a leaf costs its bytes and nothing more.
+- **The freeze is one `memcpy` of the value**, ~5 GB/s here, so 8 MB costs 1.6 ms. For the
+  domains this is the honest price of in-process retention: one copy of the value, paid once
+  per recomputation, against a dispatch.
+- **Both modes give the same artifact** for this value (one node), so a buffer cell needs no
+  mode choice; the knob matters only where an operand chain exists.
+
+**The caveat, stated because the probe is a lower bound**: the module built here has no type
+side. A real `cache out = …` binding carries a `[value, type]` pair, and the type graph is
+where the classes are; so a language-level buffer cell's closure is larger than one node. The
+claim measured here is about the value, not about the whole cell.
+
 ## 10. Costs and failure modes
 
 - **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
