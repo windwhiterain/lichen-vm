@@ -348,9 +348,15 @@ where
             if d.a != lichen_lowlevel::NodeId::default() {
                 let r#type = printer.node(d.a);
                 match d.field.as_deref() {
-                    Some(name) => format!(
-                        "no argument supplies field {name} — the field's type is {type}"
-                    ),
+                    Some(name) => match d.supplied_names.as_deref() {
+                        Some(names) if !names.iter().any(|supplied| supplied == name) => format!(
+                            "no argument is named {name} — the arguments are named {}",
+                            names.join(", ")
+                        ),
+                        _ => format!(
+                            "no argument supplies field {name} — the field's type is {type}"
+                        ),
+                    },
                     None => format!(
                         "no argument supplies the field this position needs — the field's type is {type}"
                     ),

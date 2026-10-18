@@ -300,6 +300,8 @@ pub struct Diag<P: Program> {
     /// The offending or missing field name of a named-field read or
     /// instantiation.
     pub field: Option<String>,
+    /// The argument names a deferred instantiation supplied, for its miss.
+    pub supplied_names: Option<Vec<String>>,
     /// The key a missed table read looked up (when `kind == DiagKind::TableMiss`);
     /// `None` when the key held no value.
     pub table_key: Option<P::Value>,
@@ -350,6 +352,7 @@ impl<P: Program> Diag<P> {
             index: None,
             length: None,
             field: None,
+            supplied_names: None,
             table_key: None,
             budget: None,
             error_index: None,
@@ -372,17 +375,19 @@ where
     /// Whether `node` is a deferred instantiation's supply key, following the
     /// runtime clone back to the checker's node.
     fn is_supply_key(&self, node: NodeId) -> bool {
+        self.supply_origin(node).is_some()
+    }
+
+    /// The checker key `node` is the runtime clone of, when it is a reorder key.
+    fn supply_origin(&self, node: NodeId) -> Option<NodeId> {
         let mut current = node;
         for _ in 0..8 {
             if self.supply_keys.contains(&current) {
-                return true;
+                return Some(current);
             }
-            match self.module.node_origin(current) {
-                Some(origin) => current = origin,
-                None => return false,
-            }
+            current = self.module.node_origin(current)?;
         }
-        false
+        None
     }
 }
 impl<P: HighProgram> Build<P>
@@ -420,6 +425,7 @@ where
                         a: entry.a,
                         b: entry.b,
                         field: entry.field.clone(),
+                        supplied_names: None,
                         ..Diag::factual(entry.kind, Some(entry.loc.clone()))
                     },
                 ));
@@ -446,6 +452,7 @@ where
                 a: entry.node.unwrap_or_default(),
                 b: entry.node.unwrap_or_default(),
                 field: Some(format!("{}: {}", entry.category, entry.message)),
+                supplied_names: None,
                 ..Diag::factual(DiagKind::ExtensionRule, loc)
             });
         }
@@ -527,6 +534,7 @@ where
                     index: Some(*index_value),
                     length: Some(*length),
                     field: None,
+                    supplied_names: None,
                     table_key: None,
                     error_index: None,
                     static_template: None,
@@ -555,6 +563,12 @@ where
                                 LowValue::Str(name) => Some(name.to_string()),
                                 _ => None,
                             });
+                        if let Some(origin) = self.supply_origin(node) {
+                            diag.supplied_names = self
+                                .supply_argument_names
+                                .get(&origin)
+                                .map(|names| names.iter().map(|name| name.to_string()).collect());
+                        }
                     }
                     out.push(diag)
                 }
@@ -761,6 +775,7 @@ where
                 index: None,
                 length: None,
                 field: None,
+                supplied_names: None,
                 table_key: None,
                 error_index: Some(i),
                 static_template: None,
@@ -807,6 +822,7 @@ where
             index: None,
             length: None,
             field,
+            supplied_names: None,
             table_key: None,
             error_index: Some(i),
             static_template: None,

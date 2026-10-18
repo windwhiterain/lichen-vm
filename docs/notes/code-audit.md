@@ -49,7 +49,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | todo — measured `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6, and a `# n` argument requirement is accepted likewise |
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
 | P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | todo — measured `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, and a later `.b` read panics the run with `index 1 out of bounds (array length 1)` |
-| P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | todo — measured `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument supplies field a — the field's type is Int`, though the fact is that `z` is not a field of the struct |
+| P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | fixed — the miss now carries the argument names the checker recorded, so `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument is named a — the arguments are named z` |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -787,11 +787,17 @@ is the fact the user needs. P1-45's sentence is mechanically right — field `a`
 unsupplied — but the cause is the argument's name, and the checker never compares the
 supplied names against the callee's name list: `lazy_named_instantiate` uses each
 argument's name as a lookup **key** and the callee's names only for the definition
-positions, so a name outside the list simply never matches. Fix direction: at the
-resolution, assert each supplied name is in the callee's name list (the reorder already
-reads that list at run — `names_in_order` — and `in_domain` builds the membership
-test), with a sentence naming the argument and the struct type; a miss there is the
-unknown-field diagnostic the written form has. Same runtime-assert route as P1-44/P1-46.
+positions, so a name outside the list simply never matches. **Fixed** on the sentence side rather than by a new assert: the checker records the
+argument names each reorder key was built for (`Checker::supply_argument_names`, next to
+`supply_keys`), the miss's diag carries them (`Diag::supplied_names`), and the renderer
+answers "no argument is named a — the arguments are named z" when the field's name is
+none of them. The first route tried was an `AssertSpelling::UnknownField` membership
+assert (`InDomain` over `names_in_order`), and it was measured **not to fire**: the
+reorder's lookup miss aborts the value's evaluation before the assert worklist drains,
+and an undecided condition never activates. The sentence route is static — the
+argument's name and the key's field name are both known at diag time — so it needs no
+runtime check at all. A valid named set and a duplicate are unchanged; `D3`'s smallest
+test extends the deferred-instantiation test with the unknown name.
 
 ## Decisions## Decisions## Decisions
 

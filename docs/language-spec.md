@@ -854,9 +854,9 @@ maps every span back to the original file.
   once the struct type is known — measured: `S(1, "a", 3)` over a two-field `S`
   reports `too many fields for the struct type …`, and `S(1,)` reports
   `missing field y …`), each pointing at the offending argument: an unknown field
-  (`StructUnknownField`; through a *parameter* the supplied names are never compared
-  with the name list, so the unknown name surfaces as its field's miss — measured,
-  `P1-47`), a duplicate
+  (`StructUnknownField`; through a *parameter* the supplied names are named by the
+  miss's sentence — `no argument is named a — the arguments are named z` — rather than
+  by the written form's diagnostic), a duplicate
   (`StructDuplicateField`), a field left unsupplied (`StructMissingField` —
   not reported when another argument's name is unknown, because that name
   explains the gap; one typo yields one diagnostic),

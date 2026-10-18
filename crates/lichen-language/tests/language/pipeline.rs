@@ -1483,6 +1483,14 @@ fn a_deferred_instantiation_names_the_field_its_arguments_missed() {
         d[0].message
     );
     assert!(d[0].message.contains("Int"), "{}", d[0].message);
+    // A name no field has is the miss's cause, not just a gap (P1-47).
+    let d = diags("s = struct{.a Int}; g = c => c(.z 1); g s");
+    assert_eq!(d.len(), 1);
+    assert!(
+        d[0].message.contains("the arguments are named z"),
+        "{}",
+        d[0].message
+    );
 }
 
 #[test]

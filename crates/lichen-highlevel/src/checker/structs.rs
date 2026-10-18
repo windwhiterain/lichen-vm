@@ -1002,6 +1002,7 @@ where
         let supplied_names = self.array_node(self.current_block, &supplied_nodes);
         // The definition-order names, read lazily through the callee's kind.
         let names_in_order = self.lazy_index_path(callee_ty, &shape::STRUCT_KIND_NAMES_ORDER_PATH);
+
         let call_values = self.array_node(self.current_block, vals);
         // The field-type list is a **probe**: one fresh cell per argument, so
         // the caller's unify is an arity check.
@@ -1041,6 +1042,8 @@ where
             };
             self.node_edges.insert(key, self.loc(elem_ids[i], 0));
             self.supply_keys.insert(key);
+            let names: Vec<&'static str> = arg_names.iter().filter_map(|name| *name).collect();
+            self.supply_argument_names.insert(key, names);
             let slot = self.table_get(supply, key);
             order.push(self.index(call_values, slot));
         }
