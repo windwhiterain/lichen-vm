@@ -261,7 +261,21 @@ impl Session {
                     .into(),
             ]));
         };
-        let graph = graph::lookup(id).map_err(|reason| ServeRefusal::Program(vec![reason]))?;
+        let mut graph = graph::lookup(id).map_err(|reason| ServeRefusal::Program(vec![reason]))?;
+        // A `compute.graph` tail is recorded rather than run, so the pass is asked here.
+        let extent = |node: usize| -> Option<usize> {
+            match graph.nodes().get(node)? {
+                lichen_graph_ir::Node::Kernel(kernel) => match kernel.count {
+                    lichen_graph_ir::Count::Constant(count) => Some(count),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        if let Some(rewritten) = lichen_compute::compute::consult_graph_pass(&graph, &extent) {
+            graph::store(&rewritten);
+            graph = rewritten;
+        }
         Ok(Prepared {
             session: self,
             graph,

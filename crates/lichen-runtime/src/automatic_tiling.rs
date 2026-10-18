@@ -172,19 +172,20 @@ impl GraphPass for AutomaticTiling {
                 &self.packs,
             ));
         }
-        // A pack that states a class lands a node it does not tile: a tiled node has a new digest.
+        // A pack stating a class lands its node whatever its staging did: the two sentences are apart.
         let mut classed: Vec<(usize, Instance, ScalarClass)> = Vec::new();
         for (position, node) in rewritten.nodes().iter().enumerate() {
             let Node::Kernel(kernel) = node;
             let Some(Ok(instance)) = instances.get(&fragment_digest(&kernel.fragment)) else {
                 continue;
             };
-            let Decision::Fires(pack, _) =
-                decision(&self.packs, &instance.schema.hash(), &kernel.fragment)
-            else {
-                continue;
-            };
-            if let Some(class) = pack.class() {
+            let hash = instance.schema.hash();
+            let class = self
+                .packs
+                .iter()
+                .find(|pack| pack.schema() == Some(&hash))
+                .and_then(|pack| pack.class());
+            if let Some(class) = class {
                 classed.push((position, instance.clone(), class));
             }
         }
