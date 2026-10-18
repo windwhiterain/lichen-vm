@@ -80,27 +80,28 @@ the descent died on is a **decided** array node (§5), not an undecided one.
 `root.value` holds a decided value that is not the wildcard. No deep pass, so nothing is
 forced and no side effect runs. Measured, with the trigger reading that:
 
-| suite | disabled (before this change) | deep (old trigger) | shallow (the trigger that landed) |
+| suite | before (no automatic collect) | deep trigger (retired) | landed (shallow read) |
 |---|---|---|---|
-| `lichen-language` `language` | 263 / 1 | — | **264 / 0** with §6's fix |
-| `lichen-lowlevel` `basic` | 143 / 13 | 155 / 1 | 154 / 2 (153 / 3 with §6's fix) |
+| `lichen-language` `language` | 261 / 1 | — | **262 / 0** |
+| `lichen-lowlevel` `basic` | 143 / 13 | 155 / 1 | **156 / 0** |
 | `lichen-highlevel` `highlevel` | 136 / 0 | — | 136 / 0 |
 | `lichen-compute` `examples::every_example…` | passes | **panics** | passes |
 | `gc_block::*` | 6 / 1 | 7 / 0 | 7 / 0 |
 
-The shallow reds and the deep reds are the same tests seen from two designs:
-`compaction::call_clones_are_compacted_with_the_calling_block` fails under **both** (its
-call is already deep-cached, so the read path never delegates — a fact of the deep pass's
-verdict cache, not of the trigger), `evaluation::a_block_root_the_budget_refuses_yields_an_empty_value`
-encodes the deep design's own depth accounting (its premise disappears without the forcing),
-and `assert::gc_prunes_asserts_of_dropped_blocks` fails under either design **once §6's fix
-is in**, because that test *is* the "asserts die with their scope" contract. All three are
-contracts to re-state with the maintainer, not regressions of the proposed trigger.
+The deep column was measured before §6's assert root was in place; with it, the retired
+trigger reports the false assert too (154 / 2), because that test states the old contract.
+The landed column's three suites are green because the three tests whose contracts this
+change re-states were updated with it: `call_clones_are_compacted_with_the_calling_block`
+(the deep verdict cache used to answer for a scope-root read, so the read never delegated —
+`evaluate_node_deep_inner` now asks `is_scope_root_read` first),
+`a_block_root_the_budget_refuses_stays_undecided` (the shallow read means the refused
+operand leaves the root undecided, not `Error`), and
+`gc_moves_a_pending_assert_condition_out_of_a_dropped_block` (D19).
 
 ## 5. What the old trigger's panic actually is — the collector's defect, named
 
-The compute examples run under the deep trigger reproduced the disable note's panic. With
-`LICHEN_GC_DEBUG` naming the collect:
+The compute examples run under the deep trigger reproduced the disable note's panic. With a
+research-only trace naming each collect (removed with the scaffolding, `LICHEN_GC_DEBUG`):
 
 ```
 GC DEBUG mode=deep collect block=BlockId(12v1) root=NodeId(463v1) blocks=15 nodes=698
@@ -160,7 +161,7 @@ template's scope may be collected (`2.b`) — and the trigger is **on**:
 | the walk goes into a node outside the vacated subtree, and a class member's payload moves into its own block | `gc.rs` (`garbage_collect_node`, `relocate_class_value`) |
 | the new contract tests | `assert::gc_moves_a_pending_assert_condition_out_of_a_dropped_block`, `evaluation::a_block_root_the_budget_refuses_stays_undecided` |
 
-Measured on the merged change: `lichen-language` **264 / 0**, `lichen-lowlevel` **156 / 0**,
+Measured on the merged change: `lichen-language` **262 / 0**, `lichen-lowlevel` **156 / 0**,
 `lichen-highlevel` **136 / 0**, `lichen-compute`'s
 `examples::every_example_runs_and_prints_what_it_declares` passes (the run that panicked
 under the old trigger), and the example corpus' two collects release 23 and 8 nodes with
