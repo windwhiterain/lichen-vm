@@ -164,6 +164,16 @@ is 7 to 10 submissions and **1.6 to 2.3 ms out of a 34 to 46 ms token**. So the 
 steps a service issues per token**, not how fast a token is: the dispatches are the cost, and fusion
 is still the only lever on them.
 
+**The crate is an application now, not only a library.** `cargo run -p lichen-serve` loads the toy
+model's weights into a resident, admits two sequences, and generates four tokens each at **one
+submission a step**, then retires a slot and admits a new sequence at position zero so the batch
+adapting is visible. The model's source and its tables are the crate's own — `DECODE_STEP`,
+`WEIGHTS`, `EMBEDDING` — so the demo and the tests serve **one** model rather than one copy each.
+Measured run: the first step `2.77 ms` with the cold start, then `0.45` to `0.77 ms` a step, and the
+step after the swap advanced **one** sequence because the other's cache was full. The toy model
+scores only the key it is handed, so its tokens repeat; the demo is the serving mechanics and says
+that in its own module doc.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

@@ -13,7 +13,11 @@ use lichen_kernel_ir::{
 };
 use lichen_utils::extend::AsEnum;
 
+mod model;
 mod service;
+
+pub use model::{CAPACITY, COLUMNS, DECODE_STEP, EMBEDDING, ROWS, WEIGHTS, embedding_of};
+
 mod upload;
 
 pub use service::{Served, Service};
