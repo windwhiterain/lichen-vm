@@ -1,7 +1,7 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
-use crate::Release;
+use crate::{FreezeMode, Release};
 impl<P: Program> StaticModule<P> {
     /// The node's solved value, or [`None`] when the node is a residual
     /// computation with no cached answer.
@@ -34,7 +34,7 @@ impl<P: Program> StaticModule<P> {
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
         let nodes: Vec<NodeId> = module.nodes.iter().map(|(id, _)| id).collect();
         let functions: Vec<FunctionId> = module.functions.iter().map(|(id, _)| id).collect();
-        Self::freeze_set(module, key, &nodes, &functions)
+        Self::freeze_set(module, key, &nodes, &functions, FreezeMode::Portable)
     }
 
     /// [`Self::from_module`] for the **closure** of `roots`: only the reachable nodes file.
@@ -50,13 +50,19 @@ impl<P: Program> StaticModule<P> {
         key: ModuleKey,
         roots: &[NodeId],
         check: impl FnOnce(HashSet<ModuleKey>),
+        mode: FreezeMode,
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
-        let (nodes, functions) = closure(module, roots);
+        let (nodes, functions) = closure(module, roots, mode);
         check(referenced_keys_of(module, &nodes));
-        Self::freeze_set(module, key, &nodes, &functions)
+        Self::freeze_set(module, key, &nodes, &functions, mode)
     }
 
     /// Freeze exactly `node_ids`/`function_ids`, in slotmap order.
+    ///
+    /// # Invariant
+    /// `ReadOnly` stores no operation for a decided node, so the artifact holds no operand it
+    /// would have to contain; `Portable` stores every operation, which is what keeps its
+    /// content identity equal to the source's ([`FreezeMode`]).
     ///
     /// # Invariant
     ///
@@ -70,6 +76,7 @@ impl<P: Program> StaticModule<P> {
         key: ModuleKey,
         node_ids: &[NodeId],
         function_ids: &[FunctionId],
+        mode: FreezeMode,
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
         // Phase 1: indices and facts. A class's member list points forward, so
         // every id is mapped before a meta is remapped.
@@ -121,10 +128,14 @@ impl<P: Program> StaticModule<P> {
 
                 // The class's low type, not this member's own — a member's slot may be empty.
                 low_shape: module.class_low_type(id).cloned(),
-                operation: node.operation.map(|operation| StaticOperation {
-                    operator: operation.operator,
-                    operand: operation.operand.map(|operand| node_map[&operand]),
-                }),
+                operation: if mode == FreezeMode::ReadOnly && node.value.is_some() {
+                    None
+                } else {
+                    node.operation.map(|operation| StaticOperation {
+                        operator: operation.operator,
+                        operand: operation.operand.map(|operand| node_map[&operand]),
+                    })
+                },
                 equality: disjoint::Meta::new(
                     equality.parent().map(|p| node_map[&p]),
                     equality.next().map(|n| node_map[&n]),
@@ -245,6 +256,7 @@ impl<P: Program> StaticModule<P> {
             nodes,
             functions,
             arena,
+            read_only: mode == FreezeMode::ReadOnly,
             releases,
         };
         artifact.fill_open_captures();
@@ -395,11 +407,10 @@ fn rewrite_value<P: Program>(
 ///
 /// # Invariant
 ///
-/// Closed under four edge kinds: a value's items/entries; a residual node's
-/// `operation.operand` (the GC's walk skips a cached operand, this one cannot); the
-/// equality class of a node whose own value is undecided (it holds that node's answer,
-/// taken whole once however many members the walk reaches); and the whole function
-/// template. A class not held whole is spliced by [`freeze_set`].
+/// Closed under four edge kinds: a value's items/entries; a node's `operation.operand`
+/// (`freeze_set` stores the ref, so the walk cannot skip it); the class of a node whose value
+/// is undecided, taken whole; and the whole function template. `ReadOnly` follows an operand
+/// only from a residual node, which is why such a value is not a key ([`FreezeMode`]).
 ///
 /// # Safety
 ///
@@ -407,7 +418,11 @@ fn rewrite_value<P: Program>(
 /// [`ValueExt::traced`]: phase 3 rewrites a handle and never the bytes behind it, so a
 /// payload that holds nodes silently would freeze into an artifact that lacks them. A
 /// value that fails to answer is not caught, here exactly as in the GC.
-fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Vec<FunctionId>) {
+fn closure<P: Program>(
+    module: &Module<P>,
+    roots: &[NodeId],
+    mode: FreezeMode,
+) -> (Vec<NodeId>, Vec<FunctionId>) {
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
@@ -430,7 +445,9 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
                 }
             }
         }
-        if let Some(operand) = entry.operation.and_then(|operation| operation.operand) {
+        if (mode == FreezeMode::Portable || entry.value.is_none())
+            && let Some(operand) = entry.operation.and_then(|operation| operation.operand)
+        {
             work.push(operand);
         }
         let Some(value) = entry.value else { continue };

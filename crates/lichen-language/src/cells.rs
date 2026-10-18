@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_language_parser::path::Path;
-use lichen_lowlevel::{ModuleKey, StaticNodeId};
+use lichen_lowlevel::{FreezeMode, ModuleKey, StaticNodeId};
 
 /// The name of the source a cell came from — a caller-named file identity.
 ///
@@ -29,11 +29,33 @@ struct Cell {
 #[derive(Default)]
 pub struct CellStore {
     cells: HashMap<Path, Cell>,
+    /// Binding names whose cells freeze `ReadOnly`: far smaller, and not usable as keys.
+    read_only: HashSet<String>,
 }
 
 impl CellStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Opt the cells bound to `names` into [`FreezeMode::ReadOnly`].
+    ///
+    /// # Invariant
+    ///
+    /// The opt-in is a contract: a `ReadOnly` cell's value must never become a table key,
+    /// because the artifact keeps no operation to hash. The key hash refuses one it meets
+    /// (`docs/notes/heavy-value-cache.md` §13).
+    pub fn set_read_only(&mut self, names: impl IntoIterator<Item = String>) {
+        self.read_only.extend(names);
+    }
+
+    /// The freeze mode a cell bound as `name` asks for; `Portable` unless opted in.
+    pub fn freeze_mode(&self, name: &str) -> FreezeMode {
+        if self.read_only.contains(name) {
+            FreezeMode::ReadOnly
+        } else {
+            FreezeMode::Portable
+        }
     }
 
     /// The frozen value of a cell, or `None` when the binding must be compiled.

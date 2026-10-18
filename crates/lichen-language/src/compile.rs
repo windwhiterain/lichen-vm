@@ -61,7 +61,7 @@ pub fn compile_with_imports_with_cells(
     IR<LangAttr>,
     SpanIndex,
     Vec<Diag<LangProgram>>,
-    Vec<(Path, ExprId)>,
+    Vec<CompiledCell>,
 ) {
     let resolved = crate::resolve::resolve(program, imports);
     let (ir, spans, compiled_cells) =
@@ -80,13 +80,13 @@ pub(crate) fn compile_resolved_with_cells(
     import_binders: &[crate::resolve::ImportBinder],
     prelude: &[(String, BinderId)],
     cells: Option<&CellStore>,
-) -> (IR<LangAttr>, SpanIndex, Vec<(Path, ExprId)>) {
+) -> (IR<LangAttr>, SpanIndex, Vec<CompiledCell>) {
     let mut compiler = Compiler::new();
     compiler.seed_imports(import_binders);
     compiler.seed_prelude(prelude);
-    compiler.cached_paths = cached_bindings(program);
+    compiler.cached = cached_bindings(program);
     if let Some(cells) = cells {
-        for (binder, path) in &compiler.cached_paths {
+        for (binder, (path, _)) in &compiler.cached {
             if let Some(reference) = cells.reference(path) {
                 compiler.reusable.insert(*binder, reference);
             }
@@ -157,19 +157,21 @@ pub(crate) fn compile_resolved_with_cells(
 /// materializes the artifact's two-wide pair, while an annotation's schema tail
 /// widens the source's pair, so the cell would be read back at the wrong arity.
 /// See `docs/notes/incremental-update.md` §3.3.
-pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
+pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, (Path, String)> {
     let mut out = HashMap::new();
     crate::path::for_each(program, &mut |path, node| {
-        let (cached, binder, annotated) = match node {
+        let (cached, binder, annotated, name) = match node {
             crate::path::Node::Binding(binding) => (
                 binding.cached,
                 binding.binder,
                 matches!(&binding.value, Expr::Annotation { .. }),
+                binding.name.clone(),
             ),
             crate::path::Node::Field(field) => (
                 field.cached,
                 field.binder,
                 matches!(&field.value, Expr::Annotation { .. }),
+                field.name.clone().unwrap_or_default(),
             ),
             crate::path::Node::Expr(_) => return,
         };
@@ -177,20 +179,27 @@ pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
             && !annotated
             && let Some(binder) = binder
         {
-            out.insert(binder, path.clone());
+            out.insert(binder, (path.clone(), name));
         }
     });
     out
 }
 
+/// A marked binding a build compiled, and the name its host can opt into a freeze mode by.
+pub struct CompiledCell {
+    pub path: Path,
+    pub name: String,
+    pub expr: ExprId,
+}
+
 struct Compiler {
     ir: IR<LangAttr>,
-    /// The marked bindings' occurrence paths, by binder (see [`cached_bindings`]).
-    cached_paths: HashMap<BinderId, Path>,
+    /// The marked bindings' occurrence paths and names, by binder (see [`cached_bindings`]).
+    cached: HashMap<BinderId, (Path, String)>,
     /// Clean cells: the frozen reference a marked binding's node lowers to.
     reusable: HashMap<BinderId, StaticNodeId>,
     /// The marked bindings this build compiled, with their paths, to be frozen.
-    compiled_cells: Vec<(Path, ExprId)>,
+    compiled_cells: Vec<CompiledCell>,
     /// `BinderId` → the IR node of that binding; every binder gets exactly one.
     binder_to_expr: Vec<Option<ExprId>>,
     /// The enclosing `Function` nodes, each a reserved id pushed for its body.
@@ -222,7 +231,7 @@ impl Compiler {
     fn new() -> Self {
         Compiler {
             ir: IR::new(),
-            cached_paths: HashMap::new(),
+            cached: HashMap::new(),
             reusable: HashMap::new(),
             compiled_cells: Vec::new(),
             binder_to_expr: Vec::new(),
@@ -371,9 +380,13 @@ impl Compiler {
                 && binding.cached
                 && let Some(binder) = binding.binder
                 && !self.reusable.contains_key(&binder)
-                && let Some(path) = self.cached_paths.get(&binder)
+                && let Some((path, name)) = self.cached.get(&binder)
             {
-                self.compiled_cells.push((path.clone(), id));
+                self.compiled_cells.push(CompiledCell {
+                    path: path.clone(),
+                    name: name.clone(),
+                    expr: id,
+                });
             }
             out.push(id);
         }

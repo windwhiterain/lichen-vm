@@ -215,6 +215,10 @@ impl<P: Program> Module<P> {
             };
             return KeyState::Hashed(mix(OPERATION_TOKEN ^ nested));
         }
+        // A ReadOnly artifact kept no operation: refuse the key rather than hash a value.
+        if mode == UnfoldMode::Template && self.read_only_static(id) {
+            return KeyState::Undecided;
+        }
         let Some(value) = self.node_value(id) else {
             // An empty slot is undecided wherever it sits; it must not collapse onto
             // one constant.

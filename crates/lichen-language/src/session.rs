@@ -256,6 +256,16 @@ where
         &self.source_id
     }
 
+    /// Opt the cells bound to `names` into a `ReadOnly` freeze: far smaller, not key-shaped.
+    ///
+    /// # Invariant
+    ///
+    /// The host promises these values never become table keys; the key hash refuses one it
+    /// meets rather than answering a different number (`docs/notes/heavy-value-cache.md` §13).
+    pub fn set_read_only(&mut self, names: impl IntoIterator<Item = String>) {
+        self.cells.set_read_only(names);
+    }
+
     /// How many cells the session currently retains.
     pub fn retained_cells(&self) -> usize {
         self.cells.len()
@@ -546,6 +556,7 @@ where
         // Rebuild: reconcile the cells with the program about to be lowered.
         let marked: HashSet<Path> = crate::compile::cached_bindings(&program)
             .into_values()
+            .map(|(path, _)| path)
             .collect();
         let dirty = match &self.last {
             Some(last) => {

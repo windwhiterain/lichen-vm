@@ -33,7 +33,7 @@ pub(crate) fn dirty_marked_paths(
         let deps = dependencies(program);
         for statement in dirty_statements(&deps, window) {
             for binder in &deps[statement].declares {
-                if let Some(path) = marked.get(binder) {
+                if let Some((path, _)) = marked.get(binder) {
                     dirty.insert(path.clone());
                 }
             }

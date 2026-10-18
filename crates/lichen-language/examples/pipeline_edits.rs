@@ -99,10 +99,16 @@ fn main() {
     };
     let mut session =
         BufferSession::<LangProgram>::with_source_id(pipeline.source(), "pipeline.lichen");
+    // `READ_ONLY=1` opts every stage's cell into the small freeze; no other row changes.
+    let read_only = std::env::var("READ_ONLY").is_ok();
+    if read_only {
+        session.set_read_only((0..stages).map(|i| format!("s{i}")).collect::<Vec<_>>());
+    }
     let start = Instant::now();
     let first = session.compile();
     println!(
-        "== pipeline: {stages} stages, base depth {base}, first compile {:.2} ms, {} frozen, ok {}",
+        "== pipeline: {stages} stages, base depth {base}, freeze {}, first compile {:.2} ms, {} frozen, ok {}",
+        if read_only { "ReadOnly" } else { "Portable" },
         ms(start.elapsed()),
         first.cells.frozen,
         first.build.as_ref().is_some_and(|b| b.ok),

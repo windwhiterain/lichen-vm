@@ -439,6 +439,8 @@ where
         nodes,
         functions,
         arena,
+        // No mode on the wire yet: a loaded artifact is content-portable.
+        read_only: false,
         // A loaded artifact owns no out-of-arena resource: a resource handle
         // is process-local and cannot be in the bytes.
         releases: Vec::new(),

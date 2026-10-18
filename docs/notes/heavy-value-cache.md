@@ -356,8 +356,33 @@ storage requirement demands, and hashing a decided node by its value instead wou
 exactly the definition-pass dependence that sentence exists to exclude.
 
 **What is left is a contract question, not a performance one**: the cheap freeze is available
-only to a cell that gives up being usable as a table key. That is the granularity knob §13
-records.
+only to a cell that gives up being usable as a table key. That is the granularity knob, and
+the superior ruled it in as two modes with `Portable` the default.
+
+### 9.4 The knob, built and measured
+
+`FreezeMode { Portable, ReadOnly }` on the freeze, opted into per cell by **binding name**
+through `CellStore::set_read_only` / `BufferSession::set_read_only`; `Portable` is the default
+so nothing changed for an existing caller. `ReadOnly` follows an operand only from a residual
+node, stores no operation for a decided one, and marks its artifact, and the key hash
+**refuses** a `ReadOnly` static node it meets in template mode (`KeyState::Undecided`, so a
+table reports its existing undecided-key error) rather than hashing a number that is not the
+node's content.
+
+The same five-edit sequence, release, both modes, both on this branch:
+
+| edit | Portable | ReadOnly | reused | frozen |
+|---|---|---|---|---|
+| upstream `s0` (all dirty) | **0.3×** | **1.1×** | 0 | 6 |
+| middle `s3` | 2.5× | 5.3× | 3 | 3 |
+| leaf `s5` | 4.5× | 8.9× | 5 | 1 |
+| append a stage | 142× | 111× | 6 | 1 |
+| whitespace only | 1110× | 1671× | 0 | 0 |
+| **five edits** | **2.9×** | **7.1×** | | |
+
+**Value agreement is 5 of 5 in both modes**, so the small artifact answers exactly what the
+full one does. The all-dirty edit stops being a loss (0.3× → 1.1×), which is the whole point:
+the freeze no longer costs more than the recomputation it preserves.
 
 ## 10. Costs and failure modes
 
@@ -456,17 +481,14 @@ records.
 - **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
   and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
   around it.
-- **The freeze's granularity, which is now a contract question with a measured price.**
-  §9.3 tried the obvious narrowing and it is unsound, because a decided node's operation is
-  part of its content identity (the table key hash unfolds the operation deliberately). So the
-  cheap freeze — **14 030 nodes down to 6, and 2.6× to 6.6× on the pipeline** — is available
-  only to a cell that gives up being usable as a table key. The shape is a per-cell mode
-  (`Portable` today, a `ReadOnly` that stores values only), owned by the `CellStore` so no
-  syntax changes, defaulting to `Portable`. What it needs before it is built: an answer to
-  whether anything can *enforce* that a `ReadOnly` value never becomes a key — a static ref
-  materializes into an ordinary node, so nothing today distinguishes one — and whether the
-  right default is per-cell or per-source. **Not started; it needs the superior's ruling on
-  the contract, which is why it is here rather than in the code.**
+- **The freeze's granularity is built (§9.4), and what remains is its enforcement.** The mode
+  is per cell, by binding name, defaulting to `Portable`; the key hash refuses a `ReadOnly`
+  node it meets in template mode instead of mis-hashing it. What is *not* settled: the refusal
+  covers the template unfolding (where the operation was the content), not every way a value
+  can be compared — `key_eq` compares values, which the two modes agree on, but a future key
+  path that read a stored operation would have to repeat the check. And a **persisted**
+  `ReadOnly` artifact would need the mode in the wire format; today the loader sets
+  `read_only: false`, which is right only because `ReadOnly` cells are not persisted yet.
 - **The heavy case has not been measured on the composed vocabulary.** Every reading in §9
   is the bare language, where a value is a host scalar or array. The heavy values these
   domains need are `lichen-compute`'s, so the next probe belongs in

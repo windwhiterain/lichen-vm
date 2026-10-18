@@ -103,6 +103,7 @@ impl<P: Program> Registry<P> {
         key: ModuleKey,
         roots: &[NodeId],
         hash: [u8; 32],
+        mode: FreezeMode,
     ) -> Freeze {
         assert!(
             !self.entries.contains_key(&key),
@@ -120,6 +121,7 @@ impl<P: Program> Registry<P> {
                     );
                 }
             },
+            mode,
         );
         // The **closure's** refs: a superset would refuse to evict an unreferenced one.
         let refs = static_module.referenced_keys();

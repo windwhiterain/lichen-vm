@@ -33,7 +33,7 @@ pub mod testing;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
-use lichen_highlevel::ir::{ExprId, IR};
+use lichen_highlevel::ir::IR;
 use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
 };
@@ -41,7 +41,6 @@ use lichen_highlevel::{NativeOps, no_native_ops};
 use lichen_lowlevel::{AnyNodeId, Registry, StaticNodeId};
 
 use crate::cells::CellStore;
-use crate::path::Path;
 use crate::persist::ProgramCodecOf;
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
@@ -155,7 +154,7 @@ fn freeze_cells<P>(
     build: &Build<P>,
     cells: &mut CellStore,
     registry: &Arc<RwLock<Registry<P>>>,
-    compiled_cells: Vec<(Path, ExprId)>,
+    compiled_cells: Vec<compile::CompiledCell>,
     source_id: &str,
 ) where
     P: LangProgramShape,
@@ -166,8 +165,8 @@ fn freeze_cells<P>(
         return;
     }
     let mut registry = registry.write().unwrap_or_else(PoisonError::into_inner);
-    for (path, expr) in compiled_cells {
-        let Some(pair) = build.state[expr.0 as usize].term else {
+    for cell in compiled_cells {
+        let Some(pair) = build.state[cell.expr.0 as usize].term else {
             continue;
         };
         if build.module.node_value(AnyNodeId::Dynamic(pair)).is_none() {
@@ -175,9 +174,10 @@ fn freeze_cells<P>(
         }
         let key = registry.allocate_cell_key();
         // The hash is unset on this path: no cell key is computed yet (heavy-value-cache §3).
-        let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);
+        let mode = cells.freeze_mode(&cell.name);
+        let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32], mode);
         let index = freeze.node_map[&pair];
-        cells.record(path, source_id, StaticNodeId { module: key, index });
+        cells.record(cell.path, source_id, StaticNodeId { module: key, index });
     }
 }
 
@@ -255,7 +255,7 @@ pub fn compile_with_imports_at_with_cells<P>(
     line_starts: &[usize],
     native_ops: NativeOps<P>,
     cells: Option<&mut CellStore>,
-    compiled_cells: Vec<(Path, ExprId)>,
+    compiled_cells: Vec<compile::CompiledCell>,
     source_id: &str,
 ) -> Report<P>
 where
@@ -303,7 +303,7 @@ pub fn build_report<P>(
     registry: Option<Arc<RwLock<Registry<P>>>>,
     native_ops: NativeOps<P>,
     cells: Option<&mut CellStore>,
-    compiled_cells: Vec<(Path, ExprId)>,
+    compiled_cells: Vec<compile::CompiledCell>,
     source_id: &str,
 ) -> Report<P>
 where
@@ -522,8 +522,8 @@ pub fn frontend_at_with_cells(
     line_starts: &[usize],
     imports: &[ResolvedImport],
     cells: Option<&CellStore>,
-    mut compiled_cells: Vec<(Path, ExprId)>,
-) -> (Frontend, Vec<(Path, ExprId)>) {
+    mut compiled_cells: Vec<compile::CompiledCell>,
+) -> (Frontend, Vec<compile::CompiledCell>) {
     let lex::Lexed {
         tokens,
         errors: lex_errors,

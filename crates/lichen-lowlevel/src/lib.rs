@@ -988,6 +988,20 @@ pub struct Package<P: Program> {
     pub refs: HashSet<ModuleKey>,
 }
 
+/// What a frozen artifact must remain good for.
+///
+/// # Invariant
+/// `Portable` (default) keeps every operation, so its values are content-identical to the
+/// module's and can be table keys. `ReadOnly` drops a decided node's operation and the
+/// operand chain, which is far smaller and **not key-portable**: the key hash refuses.
+/// See `docs/notes/heavy-value-cache.md` §9.4.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FreezeMode {
+    #[default]
+    Portable,
+    ReadOnly,
+}
+
 /// A fully-solved module frozen into an immutable, shareable form.
 pub struct StaticModule<P: Program> {
     /// The module's global name, allocated at freeze and carried by every ref into it.
@@ -996,6 +1010,8 @@ pub struct StaticModule<P: Program> {
     pub functions: Vec<StaticFunction>,
     /// The flattened payload arena: array item slices and ext-value bytes, deduped by `(ptr, len)`.
     pub arena: Vec<u8>,
+    /// Whether the artifact was frozen `ReadOnly`; its values are not content-portable.
+    pub read_only: bool,
     /// The out-of-arena resources the artifact owns, released on drop.
     ///
     /// # Invariant

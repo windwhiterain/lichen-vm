@@ -175,6 +175,17 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether `id` is a static node whose artifact was frozen `ReadOnly`.
+    ///
+    /// # Invariant
+    /// Answers only for a key already registered, as [`Self::static_module`] does.
+    pub(crate) fn read_only_static(&self, id: AnyNodeId) -> bool {
+        match id {
+            Dyn(_) => false,
+            AnyNodeId::Static(sref) => self.static_module(sref.module).read_only,
+        }
+    }
+
     /// Whether `node`'s operator **owes an answer** — the evaluator's run gate
     /// [`Self::evaluate_node`] cannot drift from.
     ///
