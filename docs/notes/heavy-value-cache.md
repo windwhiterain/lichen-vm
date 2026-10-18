@@ -441,6 +441,36 @@ costs its own size plus a header, and reloads byte-identical. That makes T2 clos
 halves — in-process retention and persistence — and it is the first value tier where a heavy
 compute result survives a process.
 
+### 9.7 A compute program's buffer cells, under an edit
+
+The readings above are about a value in a module. The target shape is a *language program* whose
+cached bindings hold buffers, so `crates/lichen-compute/examples/cache_pipeline.rs` (temporary)
+drives one through `BufferSession` over the composed vocabulary: two kernels, `adder` and
+`doubler`, with `cache data = raw.z` and `cache result = raw2.w.native` — the annotation that
+`plrun` needs sits on the unmarked binding `raw`, because a marked binding whose value spells
+an annotation is not eligible (§3.3).
+
+| edit | fresh ms | session ms | speedup | build | reused | frozen | value |
+|---|---|---|---|---|---|---|---|
+| the kernel's constant (`i + 3` → `i + 4`) | 5.07 | 5.05 | 1.0× | new | 0 | 2 | [8, 10, 12, 14], same |
+| whitespace only | 4.74 | 5.07 | 0.9× | new | 0 | 2 | same |
+| the same source again | 4.63 | **0.38** | **12.1×** | reuse | 0 | 0 | same |
+
+Three readings:
+
+- **Buffer cells freeze and are reused on a real program, and the answers agree.** Both rows'
+  session values equal the fresh arm's element for element, which is the differential oracle at
+  language level rather than at module level.
+- **The all-dirty edit costs parity, not the scalar pipeline's 0.3×.** Every cell is dropped
+  and re-frozen, and the session is still 1.0× — because a buffer cell freezes as one node
+  (§9.5), where §9.3's scalar cell froze a 14 030-node operand chain. So the freeze cost that
+  made `ReadOnly` necessary for host scalars is simply not there for compute values.
+- **An unexplained row, recorded as a lead rather than a claim**: a whitespace-only edit inside
+  the *preprocessed view* recompiled (`new`) while a same-source recompile reused (`12.1×`), so
+  the content key is stable and the reuse path works — yet the one-byte edit moved the key.
+  The bare-language pipeline does not show this, and it is the path the language server takes
+  (`set_view`), so it is worth a separate investigation before anything is concluded about it.
+
 ## 10. Costs and failure modes
 
 - **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
