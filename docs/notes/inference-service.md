@@ -212,6 +212,15 @@ implementations that share no code. Twelve dispatches is near the low end of the
 takes and nowhere near the 64 cap, so **a block is one submission and a stack of blocks is what needs
 the scoped-step plan**: at five blocks the count reaches sixty, and the sixth crosses.
 
+**A stack of blocks is a scoped-step loop, and the fit predicts it.** Six blocks — seventy-two
+dispatches, which is more than one submission holds — ran as **six submissions**, each block reading
+the previous one's answer as its residual, and the stack matched the host block iterated six times
+(`crates/lichen-serve/tests/block_step.rs`). Measured: **7.88 ms a token, 1.31 ms a block**. The fit
+`0.23 × submissions + 0.08 × dispatches` predicts 7.1 ms for that token, so **it is within ten per
+cent**, and at a real depth of thirty-two blocks it predicts **38 ms a token** (about 26 tokens a
+second) — which is where the 32 to 46 ms estimate above comes from, now with a measurement at each end
+of it.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

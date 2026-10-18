@@ -280,3 +280,112 @@ fn a_block_of_twelve_kernels_runs_in_one_submission() {
     session.release(held);
     session.release(cached);
 }
+
+/// Six blocks are six scoped steps, and the sixth crosses the dispatch cap of one submission.
+///
+/// # Invariant
+/// The block is stepped six times with its own answer as the next residual, so six blocks cost six
+/// submissions and seventy-two dispatches — more than one submission holds, which is why a stack is a
+/// loop and not one graph. The answer is the host block iterated the same six times.
+#[test]
+fn a_stack_of_six_blocks_costs_six_submissions() {
+    const DEPTH: usize = 6;
+    const REPEATS: usize = 20;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_stack_of_six_blocks_costs_six_submissions: no device");
+        return;
+    };
+    let keys = [
+        [[1.0f32, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        [[2.0, 0.0], [0.0, 2.0], [1.0, -1.0]],
+    ];
+    let values = [
+        [[1.0f32, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        [[1.0, 0.0], [0.0, 1.0], [2.0, 2.0]],
+    ];
+    let state = [[1.0f32, 0.0], [0.0, 1.0]];
+    let query = [[1.0f32, 1.0], [1.0, 0.0]];
+    let feed = [[1.0f32, 2.0], [3.0, 1.0]];
+    let flat = |rows: &[[f32; 2]; 2]| -> Vec<f32> { rows.iter().flatten().copied().collect() };
+    let flattened = |rows: &[[[f32; 2]; 3]; 2]| -> Vec<f32> {
+        rows.iter().flatten().flatten().copied().collect()
+    };
+    let as_rows = |words: &[f32]| -> [[f32; 2]; 2] { [[words[0], words[1]], [words[2], words[3]]] };
+    let held = session
+        .upload(&flattened(&keys))
+        .unwrap_or_else(|refusal| panic!("the key cache loads: {refusal}"));
+    let cached = session
+        .upload(&flattened(&values))
+        .unwrap_or_else(|refusal| panic!("the value cache loads: {refusal}"));
+    let prepared = session
+        .prepare(BLOCK)
+        .unwrap_or_else(|refusal| panic!("the block prepares: {refusal}"));
+
+    let arguments = |words: &[f32]| -> Vec<RunArgument> {
+        vec![
+            RunArgument::Count(12),
+            RunArgument::Count(6),
+            RunArgument::Count(2),
+            RunArgument::Count(4),
+            RunArgument::Count(8),
+            floats(words),
+            RunArgument::Resident(held),
+            RunArgument::Resident(cached),
+            floats(&flat(&query)),
+            floats(&flat(&feed)),
+        ]
+    };
+
+    let mut words = flat(&state);
+    let mut submissions: u64 = 0;
+    for block in 0..DEPTH {
+        let stepped = prepared
+            .step(arguments(&words))
+            .unwrap_or_else(|refusal| panic!("block {block} runs: {refusal}"));
+        assert_eq!(
+            (stepped.cost.submissions, stepped.cost.fence_waits),
+            (1, 1),
+            "block {block} is one submission"
+        );
+        submissions += stepped.cost.submissions;
+        let answered = only(&stepped);
+        words = read(&session, answered);
+        session.release(answered);
+    }
+    assert_eq!(
+        submissions, DEPTH as u64,
+        "six blocks over six submissions: seventy-two dispatches, past the sixty-four a step holds"
+    );
+
+    let mut oracle = flat(&state);
+    for _ in 0..DEPTH {
+        oracle = expected(&as_rows(&oracle), &keys, &values, &query, &feed).to_vec();
+    }
+    for (index, (got, want)) in words.iter().zip(oracle.iter()).enumerate() {
+        assert!(
+            (got - want).abs() <= 1.0e-4 * want.abs().max(1.0),
+            "element {index}: six blocks answered {got} and the host's six {want}"
+        );
+    }
+
+    let started = std::time::Instant::now();
+    for _ in 0..REPEATS {
+        let mut state = flat(&state);
+        for _ in 0..DEPTH {
+            let stepped = prepared
+                .step(arguments(&state))
+                .unwrap_or_else(|refusal| panic!("a stacked block runs: {refusal}"));
+            let answered = only(&stepped);
+            state = read(&session, answered);
+            session.release(answered);
+        }
+        std::hint::black_box(&state);
+    }
+    let per_token = started.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64;
+    println!(
+        "six blocks: 72 dispatches over 6 submissions, {per_token:.2} ms a token, {:.2} ms a block",
+        per_token / DEPTH as f64
+    );
+    session.release(held);
+    session.release(cached);
+}
