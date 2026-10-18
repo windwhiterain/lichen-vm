@@ -559,6 +559,7 @@ where
             .into_values()
             .map(|(path, _)| path)
             .collect();
+        // The key decides; propagation is the fallback where the key cannot be written.
         let dirty = match &self.last {
             Some(last) => {
                 let (previous_window, current_window) = windows.unwrap_or_else(|| {
@@ -567,12 +568,22 @@ where
                         0..logical_statements(&program),
                     )
                 });
-                crate::dirty::dirty_marked_paths(
+                let propagated = crate::dirty::dirty_marked_paths(
                     &last.program,
                     &program,
                     previous_window,
                     current_window,
-                )
+                );
+                let before = crate::key::binding_keys(&last.program);
+                let after = crate::key::binding_keys(&program);
+                after
+                    .iter()
+                    .filter(|(path, key)| match (before.get(*path), key) {
+                        (Some(Some(previous)), Some(current)) => previous != current,
+                        _ => propagated.contains(*path),
+                    })
+                    .map(|(path, _)| path.clone())
+                    .collect()
             }
             None => HashSet::new(),
         };

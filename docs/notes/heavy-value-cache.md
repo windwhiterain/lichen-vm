@@ -505,8 +505,9 @@ has (`gc_block::a_gc_block_releases_its_scope`, and
 ### 9.9 The key beside the judge: an oracle, not a replacement
 
 `lichen_language::key::binding_keys` builds the `K_in` of §2 for every marked binding, and
-`dirty_marked_paths` is now public as the oracle it must be compared against. Neither decides
-reuse: the key is computed and compared, so a disagreement is a reading rather than a change.
+`dirty_marked_paths` is now public as the oracle it must be compared against. At the time of
+this section the key only observed; **as of §9.10 it decides**, with propagation as the
+fallback.
 
 `crates/lichen-language/examples/key_oracle.rs` (temporary) applies seven edits in sequence and
 compares the **path sets**, never counts:
@@ -532,9 +533,35 @@ Both disagreements are the two documented ways and neither is unsound:
   path churn drops cells propagation would have kept.
 
 **No edit put the key clean where a value changed**, which is the direction that would make it
-unfit as a judge. Seven edits is a thin sample and the note says so; what it establishes is
-that the key is buildable, path-stable under an unrelated insertion, and never less sound than
-propagation on this sequence.
+unfit as a judge. The sample has since been widened (§9.10), and the key now decides.
+
+### 9.10 The key as the judge, with propagation as the fallback
+
+Widened to twelve edits over three shapes (a chain, a diamond, and a cell whose value reads a
+nested block binding), the oracle reads **8 of 12 agree**. Every disagreement is one of the two
+classes §9.9 names, and the new shape adds two readings:
+
+- **The key is more precise in two independent shapes.** On a whitespace edit of `b` in the
+  diamond, propagation dirties `b` *and* `d`, because `d` reads `b`; the key sees that neither
+  content changed. So the key does not merely skip the byte-only statement — it stops the
+  over-dirtying from travelling down the graph, which propagation cannot do by construction.
+- **The key is less precise exactly where it refuses.** A cell reading a nested binder gets
+  `None`, which is read as changed; and a duplicate name moves every path in the chain. Both are
+  the documented conservative directions.
+
+**Wired, per the ruling.** `BufferSession::compile` now takes the key's verdict as the judge and
+consults propagation **only where the key is `None`** — a nested binder or a cycle. The
+demonstration is a single `set_source` carrying a whitespace edit inside a cell *and* a real
+change to an unmarked binding: propagation reports 2 dirty, the key reports 0, and the session
+drops **0** and reuses **2**. That is a case the byte-window seed cannot see through, and it is
+the first measured edit where the key's verdict reaches the cells.
+
+The pipeline and the suite are unchanged by the wiring: `pipeline_edits` still reads 2.8× total
+with 5 of 5 values, and `lichen-language` is 262 passed / 0 failed. The oracle's `dirty` column
+uses the window its own edit implies, while the session computes its window from the splice —
+which is why one boundary-append row drops a cell the oracle's narrow window calls clean
+(§4.2's widened-window rule, not the key).
+
 
 ## 10. Costs and failure modes
 
@@ -623,6 +650,9 @@ propagation on this sequence.
 - **The reuse gate is the coordinate space, not the line table.** Decided by the superior after
   §9.7 named the defect; built and measured in §9.8, which takes a whitespace edit on the view
   path from unreachable to 26×.
+- **The key decides, and propagation is the fallback where the key cannot be written.** Landed
+  in §9.10 after §9.9's oracle and §9.10's widened sample showed the two classes of disagreement
+  are both conservative. A `None` key is read as changed.
 
 
 ## 13. Open
