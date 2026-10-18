@@ -89,6 +89,14 @@ The same attention inside a whole layer, over two tokens of the real model, answ
 state within `1.1e-6`: the second token''s query reads both cached positions, so this is the first test
 that fails when the query, the key, the rotation or the grouping is wrong.
 
-That closes the last shape a layer needs. What remains is the loop around it: 28 layers in sequence, the
-151936-wide vocabulary projection and sampling, and the precision path (built and merged, not yet used —
+That closes the last shape a layer needs.
+
+## The head, and a token
+
+The vocabulary projection is the tied embedding matrix, so a lane is one of the model's 151936 entries
+folding the hidden width. Measured against the host's own dot products over the same two inputs, the
+logits agree within `1.1e-6` and the largest is the **same entry** on both sides (9708, `3.0415757`
+against the host's `3.0415742`) — which is the whole of a greedy sampler: the head names the next token.
+
+What remains is the loop: 28 layers in sequence, and the precision path (built and merged, not yet used —
 everything here runs at f32, which is why the weights are streamed).
