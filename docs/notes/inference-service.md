@@ -254,6 +254,23 @@ slots would average them in — the values past the length are far from the firs
 **thirteen** kernels now, and the edge case is that a sequence must have a length of at least one: the
 peak of an all-masked row is `-inf`, and its exponent is not a number.
 
+**Sampling happens on the device, from a seed, and in one submission.** `SAMPLE_STEP` is seven kernels —
+score, peak, the exponent at the host's temperature, total, shares, pick, append — and the pick walks the
+rows from the highest down, keeping the lowest index whose cumulative probability still exceeds a
+threshold made from `sin` of the seed and the sequence. Measured
+(`crates/lichen-serve/tests/sample_step.rs`): at temperature `0.01` it answers **the same token greedy
+does** (`3.0, 3.0`), which is the collapse check, and eight seeds at temperature `4` draw
+`0, 3, 0, 2, 1, 1, 1, 3`. `Service::open_sample` serves it and `set_sampler` moves the temperature and
+the seed for the next step, so no random number reaches the host and the demo now samples rather than
+repeating one token.
+
+**A `@loop` fold cannot capture a `Float`.** The sampler's first version captured the threshold in the
+fold's body and was refused with *"a `@loop`-marked recursion this kernel body applies is not
+convertible … the shape is a non-scalar carried state"*; a second version that kept the capture but
+replaced an `if` with arithmetic was refused the same way, and only carrying the threshold as an initial
+value — `fold (rows, drawn, total, index)` — compiled. So the accumulation may carry a fixed value, and
+reading one from the enclosing body is what is not allowed.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

@@ -283,3 +283,113 @@ pub const PROJECTIONS: [[f32; 25]; BLOCKS] = [
         0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0,
     ],
 ];
+
+/// A whole decode step that samples instead of taking the largest, all on the device.
+///
+/// # Invariant
+/// Seven kernels: score, peak, the exponent at the host's temperature, total, shares, pick, append. The
+/// pick walks the rows from the highest down, keeping the lowest index whose cumulative probability
+/// still exceeds a threshold made from `sin` of the seed and the sequence, so a token follows from its
+/// seed and no random number reaches the host.
+pub const SAMPLE_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+ScoreIn  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
+ScoreOut = struct{.y (compute.Buf Float)}
+ScorePar = struct{.n Int, .rows Int, .dim Int, .in ScoreIn, .out ScoreOut}
+ScoreArg = struct{.n Int, .rows Int, .dim Int, .I ScoreIn}
+score_raw = (k : ScorePar) => {
+  lane = compute.range k.n
+  sequence = lane / k.rows
+  row = lane - sequence * k.rows
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (sequence * k.dim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+PeakIn  = struct{.s (compute.Buf Float)}
+PeakPar = struct{.n Int, .rows Int, .in PeakIn, .out ScoreOut}
+PeakArg = struct{.n Int, .rows Int, .I PeakIn}
+peak_raw = (k : PeakPar) => {
+  lane = compute.range k.n
+  base = lane * k.rows
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1)))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.rows, ((0.0 - 1.0) / 0.0) ~ "identity"))))
+}
+peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu"
+ExpoIn  = struct{.s (compute.Buf Float), .m (compute.Buf Float)}
+ExpoPar = struct{.n Int, .rows Int, .temp Float, .in ExpoIn, .out ScoreOut}
+ExpoArg = struct{.n Int, .rows Int, .temp Float, .I ExpoIn}
+expo_raw = (k : ExpoPar) => {
+  i = compute.range k.n
+  sequence = i / k.rows
+  value = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  top = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  shifted = (value - top) / k.temp
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (exp shifted)))
+}
+expo = compute.parallel expo_raw "gpu"
+TotalPar = struct{.n Int, .rows Int, .in PeakIn, .out ScoreOut}
+TotalArg = struct{.n Int, .rows Int, .I PeakIn}
+total_raw = (k : TotalPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.rows + (s(0) - 1))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.rows, 0.0 ~ "identity"))))
+}
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+SharePar = struct{.n Int, .rows Int, .in ExpoIn, .out ScoreOut}
+ShareArg = struct{.n Int, .rows Int, .I ExpoIn}
+share_raw = (k : SharePar) => {
+  i = compute.range k.n
+  sequence = i / k.rows
+  weight = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  divisor = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (weight / divisor)))
+}
+share = compute.parallel share_raw "gpu"
+Pick     = struct{.p (compute.Buf Float)}
+PickPar  = struct{.n Int, .rows Int, .seed Float, .in PeakIn, .out Pick}
+PickArg  = struct{.n Int, .rows Int, .seed Float, .I PeakIn}
+pick_raw = (k : PickPar) => {
+  lane = compute.range k.n
+  base = lane * k.rows
+  drawn_lane = int2float lane
+  noise = sin ((k.seed * 12.9898) + (drawn_lane * 78.233))
+  drawn = (noise * 43758.545) - floor (noise * 43758.545)
+  @loop fold = s => if s(0) == 0 then s(3) else fold (s(0) - 1, s(1), (s(2) + (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1))))) ~ "combine", (s(3) + ((1 * (s(2) <= (1.0 - s(1)))) * ((s(0) - 1) - s(3)))) ~ "combine")
+  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.rows, drawn, 0.0 ~ "identity", 0)))))
+}
+pick = compute.parallel (pick_raw ~ "claim:Reduction(combine,identity)") "gpu"
+AppIn   = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
+KVOut   = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
+AppPar  = struct{.n Int, .cap Int, .dim Int, .in AppIn, .out KVOut}
+AppArg  = struct{.n Int, .cap Int, .dim Int, .I AppIn}
+bappend_raw = (k : AppPar) => {
+  lane = compute.range k.n
+  per_sequence = k.cap * k.dim
+  sequence = lane / per_sequence
+  rest = lane - sequence * per_sequence
+  position = rest / k.dim
+  column = rest - position * k.dim
+  mine = compute.read ((compute.Read _)(.from k.in.pos, .at sequence))
+  fresh = position == mine
+  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
+  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
+  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column)))) else old_k
+  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column)))) else old_v
+  (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
+}
+bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu"
+StepIn = struct{.w (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
+GArg = struct{.n Int, .lanes Int, .cells Int, .temp Float, .seed Float, .in StepIn}
+step = (s : GArg) => {
+  scored = (compute.plrun score ((ScoreArg)(.n s.lanes, .rows 4, .dim 5, .I ScoreIn(.w s.in.w, .x s.in.nk))) : ScoreOut)
+  topped = (compute.plrun peak ((PeakArg)(.n s.n, .rows 4, .I PeakIn(.s scored.y))) : ScoreOut)
+  shifted = (compute.plrun expo ((ExpoArg)(.n s.lanes, .rows 4, .temp s.temp, .I ExpoIn(.s scored.y, .m topped.y))) : ScoreOut)
+  divided = (compute.plrun total ((TotalArg)(.n s.n, .rows 4, .I PeakIn(.s shifted.y))) : ScoreOut)
+  shared = (compute.plrun share ((ShareArg)(.n s.lanes, .rows 4, .I ExpoIn(.s shifted.y, .m divided.y))) : ScoreOut)
+  tok = (compute.plrun pick ((PickArg)(.n s.n, .rows 4, .seed s.seed, .I PeakIn(.s shared.y))) : Pick)
+  cached = (compute.plrun bappend ((AppArg)(.n s.cells, .cap 4, .dim 5, .I AppIn(.k s.in.k, .v s.in.v, .nk s.in.nk, .nv s.in.nv, .pos s.in.pos))) : KVOut)
+  (tok.p, cached.k, cached.v)
+}
+built = compute.graph step
+built
+"#;

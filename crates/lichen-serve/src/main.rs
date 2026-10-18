@@ -12,7 +12,7 @@ use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::ScalarData;
 use lichen_serve::{
-    BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, PROJECTIONS, QUERIES, ROWS, Service, Session,
+    BLOCK, BLOCKS, CAPACITY, COLUMNS, PROJECTIONS, QUERIES, ROWS, SAMPLE_STEP, Service, Session,
     WEIGHTS, embedding_of,
 };
 
@@ -110,9 +110,9 @@ fn serve() -> Result<(), String> {
         );
     }
 
-    let mut service = Service::open_decode(
+    let mut service = Service::open_sample(
         &session,
-        DECODE_STEP,
+        SAMPLE_STEP,
         SEQUENCES,
         CAPACITY,
         COLUMNS,
@@ -141,6 +141,7 @@ fn serve() -> Result<(), String> {
             (Some(keys), Some(values)) => (keys, values),
             _ => (empty_keys, empty_values),
         };
+        service.set_sampler(4.0, step as f32);
         let visible = (step + 1).min(CAPACITY) as i64;
         let lengths = vec![visible; SEQUENCES];
         let mut hidden: Option<ResidentBuffer> = None;

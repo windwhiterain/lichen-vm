@@ -29,6 +29,11 @@ enum Shape {
         weights: ResidentBuffer,
         rows: usize,
     },
+    /// Decode, but sampling from the distribution a temperature and a seed make.
+    Sample {
+        weights: ResidentBuffer,
+        rows: usize,
+    },
 }
 
 /// A batch of sequences sharing one cache, admitted and retired by slot.
@@ -44,6 +49,8 @@ pub struct Service<'session> {
     sequences: usize,
     capacity: usize,
     dim: usize,
+    temperature: f32,
+    seed: f32,
     tokens: Option<ResidentBuffer>,
     keys: Option<ResidentBuffer>,
     values: Option<ResidentBuffer>,
@@ -97,6 +104,37 @@ impl<'session> Service<'session> {
         )
     }
 
+    /// Prepare a step that samples from the distribution instead of taking the largest row.
+    ///
+    /// # Invariant
+    /// The temperature and the seed are the caller's per step, so one batch can be served hotter and
+    /// then colder without a new step: `set_sampler` is what changes them, and the device derives the
+    /// threshold from the seed, so no random number reaches the host.
+    pub fn open_sample(
+        session: &'session Session,
+        source: &str,
+        sequences: usize,
+        capacity: usize,
+        dim: usize,
+        rows: usize,
+        weights: ResidentBuffer,
+    ) -> Result<Self, ServeRefusal> {
+        Self::opened(
+            session,
+            source,
+            Shape::Sample { weights, rows },
+            sequences,
+            capacity,
+            dim,
+        )
+    }
+
+    /// Set the temperature and the seed the next sampled step uses.
+    pub fn set_sampler(&mut self, temperature: f32, seed: f32) {
+        self.temperature = temperature;
+        self.seed = seed;
+    }
+
     /// The one place a batch is built, so both shapes start retired and empty.
     fn opened(
         session: &'session Session,
@@ -113,6 +151,8 @@ impl<'session> Service<'session> {
             sequences,
             capacity,
             dim,
+            temperature: 1.0,
+            seed: 0.0,
             tokens: None,
             keys: None,
             values: None,
@@ -226,6 +266,28 @@ impl<'session> Service<'session> {
                 }
                 arguments
             }
+            Shape::Sample { weights, rows } => vec![
+                RunArgument::Count(self.sequences as i64),
+                RunArgument::Count((self.sequences * rows) as i64),
+                RunArgument::Count(lanes as i64),
+                RunArgument::Float(self.temperature),
+                RunArgument::Float(self.seed),
+                RunArgument::Resident(*weights),
+                match previous.1 {
+                    Some(resident) => RunArgument::Resident(resident),
+                    None => RunArgument::Buffer {
+                        class: ScalarClass::Float,
+                        data: vec![0; lanes * ScalarClass::Float.byte_width()],
+                    },
+                },
+                match previous.2 {
+                    Some(resident) => RunArgument::Resident(resident),
+                    None => RunArgument::Buffer {
+                        class: ScalarClass::Float,
+                        data: vec![0; lanes * ScalarClass::Float.byte_width()],
+                    },
+                },
+            ],
             Shape::Decode { weights, rows } => vec![
                 RunArgument::Count(self.sequences as i64),
                 RunArgument::Count((self.sequences * rows) as i64),
