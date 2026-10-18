@@ -143,7 +143,7 @@ precision path exists for. Reaching it needs two things the interface does not h
 
 | | |
 |---|---|
-| **A pack's class must reach a node from the serve path.** | `pack_placement`'s six tests read the pass report through `module.extension_diagnostics`, and they pass; the same channel came back empty through `Session::prepare_with_packs`, so the accessor that would carry it was reverted rather than shipped returning nothing. |
+| **A pack's class must reach a node from the serve path.** | `pack_placement`'s six tests read the pass report through `module.extension_diagnostics`, and they pass; the same channel came back empty through `Session::prepare_with_packs`. The reason is where the lines are recorded: `compute.rs:5680` fills them from `take_graph_pass_lines` on the **graph-run** path, and every serve program ends in `compute.graph step`, which records a graph and runs nothing. `pack_placement`'s program ends in `compute.graphrun` with `compute.collect`, which is what forces the run. So a `compute.graph` tail can never report, and the accessor that would have carried it was reverted rather than shipped returning nothing. |
 | **A bf16 result must be readable.** | `ScalarData` has no `BFloat16` variant, so a node compiled for bf16 storage writes bytes nothing can fetch back as numbers. |
 
 So the token rate is gated on the engine, not on the model: the layers, the cache and the loop are all
