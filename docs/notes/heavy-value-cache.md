@@ -48,7 +48,7 @@ the dependency having to be marked too.
 K_in(b) = H( KEY_FORMAT_VERSION
            , vocabulary_key                 // the plugin set: value/operator leaves
            , source_identity                // the file id, for imports and cross-file reads
-           , resolved_structure(b)           // b's own AST, names by BinderId, spans dropped
+           , resolved_structure(b)           // b's own AST, reads named by occurrence path
            , [ K_out(d) for d in reads(b) ]  // direct reads, in the resolver's order
            )
 K_out(b) = H( the value b evaluated to )
@@ -65,11 +65,16 @@ Five properties are contractual, and each one is a decision rather than an accid
   build content key, where `cache` **is** included (`KEY_FORMAT_VERSION` 2) because the
   lowering consumes it. Two keys, two questions; conflating them would make toggling a mark
   invalidate values it did not change.
-- **`K_in` is over the resolved structure, not the text.** Names are `BinderId`s, never
-  spellings, and spans are dropped — the same rules `resolve/content_key.rs` already applies
-  to the build content key. Two consequences, both wanted: editing whitespace or moving a
-  binding without changing resolution does not move any key, and a resolution that changes
-  under unchanged text (a shadowing insertion) *does* move it.
+- **`K_in` is over the resolved structure, and a read is named by its occurrence path — not by
+  its `BinderId`.** This is a correction: the build content key writes binders by id, which is
+  right for a whole file (any change should move it) and wrong for a binding (binder ids are
+  numbered in traversal order, so inserting a statement before a binding renumbers it and a key
+  written by id would change for a binding nothing touched). The occurrence path is the identity
+  that outlives the insertion (§2.2 of [incremental-update](incremental-update.md)), so it is
+  the one a key folds. Spans are dropped, as in the build key. Two consequences, both wanted:
+  editing whitespace or moving a binding without changing resolution does not move any key, and
+  a resolution that changes under unchanged text *does* move it — the read now names a different
+  path. Built as `lichen_language::key` (§9.9).
 - **`vocabulary_key` participates** because a `jit`/`parallel` leaf's meaning is the
   plugin's, and the artifact store already scopes per plugin set for exactly that reason
   ([artifact-cache](artifact-cache.md), "the artifact store is scoped per plugin set").
@@ -496,6 +501,40 @@ and the value still agrees element for element in every row. The tests are uncha
 has (`gc_block::a_gc_block_releases_its_scope`, and
 `analysis::tests::a_prelude_name_use_jumps_into_the_builtins_own_file`).
 
+
+### 9.9 The key beside the judge: an oracle, not a replacement
+
+`lichen_language::key::binding_keys` builds the `K_in` of §2 for every marked binding, and
+`dirty_marked_paths` is now public as the oracle it must be compared against. Neither decides
+reuse: the key is computed and compared, so a disagreement is a reading rather than a change.
+
+`crates/lichen-language/examples/key_oracle.rs` (temporary) applies seven edits in sequence and
+compares the **path sets**, never counts:
+
+| edit | propagation | key | agree |
+|---|---|---|---|
+| change `c`'s constant | 3 dirty | 3 changed | yes |
+| the tail only | 0 | 0 | yes |
+| append a marked binding | 1 | 1 | yes |
+| insert an unmarked binding at the top | 0 | 0 | yes |
+| whitespace only | **5** | **0** | **no — the key is more precise** |
+| change `a`'s constant | 5 | 5 | yes |
+| insert a duplicate `a` | **0** | **6** | **no — the key is less precise** |
+
+Both disagreements are the two documented ways and neither is unsound:
+
+- **Whitespace**: propagation seeds from the re-parsed statement, so a byte-only edit dirties
+  that statement and its readers; the key sees no content change. This is §4.4's over-dirtying,
+  not a defect — and it is the one place the key is *better* than the shipped judge.
+- **A duplicate name**: `cache a`'s path stops being `Name("a")` and becomes an `Index`, which
+  is the documented "both steps become indices" row of [incremental-update](incremental-update.md)
+  §2.2. Every later key folds a read by path, so the whole chain moves. Safe over-dirtying:
+  path churn drops cells propagation would have kept.
+
+**No edit put the key clean where a value changed**, which is the direction that would make it
+unfit as a judge. Seven edits is a thin sample and the note says so; what it establishes is
+that the key is buildable, path-stable under an unrelated insertion, and never less sound than
+propagation on this sequence.
 
 ## 10. Costs and failure modes
 

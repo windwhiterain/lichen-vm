@@ -13,6 +13,33 @@ use super::*;
 /// See docs/notes/incremental-update.md §6.1.
 const KEY_FORMAT_VERSION: u64 = 8;
 
+/// The tag that opens a path-written binder, so an id-written key can never alias one.
+const PATH_BINDER: u64 = 0x7061_7468_0000_0001;
+
+/// The **per-binding key** of `value`: its structure, reads named by path, read digests.
+///
+/// # Invariant
+/// The `cache` mark and `let` are **not** written: neither changes the computation, and a key
+/// that moved when a mark did would invalidate a value nothing touched
+/// (`docs/notes/heavy-value-cache.md` §2).
+pub(crate) fn binding_key(
+    value: &Expr,
+    paths: &HashMap<BinderId, crate::path::Path>,
+    read_digests: &[u64],
+) -> Vec<u64> {
+    let mut k = KeyWriter {
+        key: Vec::new(),
+        binders: Binders::Path(paths),
+    };
+    k.u(KEY_FORMAT_VERSION);
+    k.expr(value);
+    k.u(read_digests.len() as u64);
+    for digest in read_digests {
+        k.u(*digest);
+    }
+    k.key
+}
+
 /// The **resolved content key** of a resolved program.
 ///
 /// # Invariant
@@ -24,17 +51,32 @@ const KEY_FORMAT_VERSION: u64 = 8;
 /// content, which is when the session reuses the build.
 /// See docs/notes/incremental-update.md §6.1.
 pub fn content_key(program: &Program) -> Vec<u64> {
-    let mut k = KeyWriter { key: Vec::new() };
+    let mut k = KeyWriter {
+        key: Vec::new(),
+        binders: Binders::Id,
+    };
     k.u(KEY_FORMAT_VERSION);
     k.program(program);
     k.key
 }
 
-struct KeyWriter {
-    key: Vec<u64>,
+/// How a binder is written: its resolution id, or the occurrence path that outlives it.
+///
+/// # Invariant
+/// A per-binding key must use [`Binders::Path`]. Binder ids are numbered in traversal order,
+/// so inserting a statement renumbers every later one and a key written by id would change
+/// for a binding nothing touched (`docs/notes/heavy-value-cache.md` §2).
+enum Binders<'a> {
+    Id,
+    Path(&'a HashMap<BinderId, crate::path::Path>),
 }
 
-impl KeyWriter {
+struct KeyWriter<'a> {
+    key: Vec<u64>,
+    binders: Binders<'a>,
+}
+
+impl KeyWriter<'_> {
     fn u(&mut self, v: u64) {
         self.key.push(v);
     }
@@ -46,7 +88,37 @@ impl KeyWriter {
         self.key.extend(s.bytes().map(u64::from));
     }
     fn opt_binder(&mut self, binder: &Option<BinderId>) {
-        self.u(binder.map(|b| b as u64).unwrap_or(UNRESOLVED));
+        if !matches!(self.binders, Binders::Path(_)) {
+            self.u(binder.map(|b| b as u64).unwrap_or(UNRESOLVED));
+            return;
+        }
+        let path = match &self.binders {
+            Binders::Path(paths) => binder.and_then(|binder| paths.get(&binder).cloned()),
+            Binders::Id => None,
+        };
+        self.u(PATH_BINDER);
+        match path {
+            Some(path) => self.path(&path),
+            None => self.u(UNRESOLVED),
+        }
+    }
+
+    /// One occurrence path: its steps, each tagged by kind.
+    fn path(&mut self, path: &crate::path::Path) {
+        self.u(path.0.len() as u64);
+        for step in &path.0 {
+            match step {
+                crate::path::Step::Name(name) => {
+                    self.u(0);
+                    self.str(name);
+                }
+                crate::path::Step::Index(index) => {
+                    self.u(1);
+                    self.u(*index as u64);
+                }
+                crate::path::Step::Tail => self.u(2),
+            }
+        }
     }
 
     /// The program shape and its top level: fields for a record program, plain

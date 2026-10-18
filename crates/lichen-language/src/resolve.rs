@@ -17,7 +17,7 @@ use crate::preprocess::ResolvedImport;
 use crate::program::LangProgram;
 use crate::suggest;
 
-mod content_key;
+pub(crate) mod content_key;
 
 pub use content_key::content_key;
 

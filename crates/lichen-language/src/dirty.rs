@@ -19,9 +19,9 @@ use crate::compile::cached_bindings;
 ///
 /// # Invariant
 ///
-/// A window is a top-level statement index range in its own program; a window
-/// past the end of a program contributes nothing.
-pub(crate) fn dirty_marked_paths(
+/// This is the shipped judge over one edit: the key in [`crate::key`] must agree with it
+/// before it may decide reuse itself (`docs/notes/heavy-value-cache.md` §2, §5).
+pub fn dirty_marked_paths(
     previous: &Program,
     current: &Program,
     previous_window: Range<usize>,
@@ -66,6 +66,20 @@ fn dependencies(program: &Program) -> Vec<Deps> {
         out.push(deps);
     }
     out
+}
+
+/// The statement graph: each top-level statement's declared and read binders.
+///
+/// # Invariant
+///
+/// One entry per statement plus the tail, in source order. A `declares` set holds binders
+/// declared *at any depth* in the statement, so a nested binder is named by the statement
+/// that contains it and not by a statement of its own.
+pub(crate) fn statement_dependencies(program: &Program) -> Vec<(Vec<BinderId>, Vec<BinderId>)> {
+    dependencies(program)
+        .into_iter()
+        .map(|deps| (deps.declares, deps.reads))
+        .collect()
 }
 
 /// The statements the edit reaches: re-parsed, plus transitive readers.
