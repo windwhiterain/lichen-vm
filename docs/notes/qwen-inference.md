@@ -130,5 +130,21 @@ positions, where the third carries a weight of `2.8e-6` — small enough that dr
 loose check, which is why the last head's values near `-0.76` are asserted too — the answer is the host's
 within `1e-5`.
 
-What remains is speed: a token costs **167 s**, and the precision path with resident weights is what to
-attack (built and merged, not yet used — everything here runs at f32).
+## What a token costs, and where
+
+A token costs **167 s**, and the cost is the **upload**, not the arithmetic. Two independent measurements
+say so: the vocabulary head moves its 1.24 GB in 38 s, and a forward moves 5.4 GB in 171 s — both about
+**33 MB/s** — so the time a token takes is the weight bytes divided by that rate, and the dispatches fill
+almost none of it.
+
+That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32 and the
+card reports 4 GB, so they cannot be held; at bf16 they are 2.7 GB and they can, which is what the
+precision path exists for. Reaching it needs two things the interface does not have yet, both measured:
+
+| | |
+|---|---|
+| **A pack's class must reach a node from the serve path.** | `pack_placement`'s six tests read the pass report through `module.extension_diagnostics`, and they pass; the same channel came back empty through `Session::prepare_with_packs`, so the accessor that would carry it was reverted rather than shipped returning nothing. |
+| **A bf16 result must be readable.** | `ScalarData` has no `BFloat16` variant, so a node compiled for bf16 storage writes bytes nothing can fetch back as numbers. |
+
+So the token rate is gated on the engine, not on the model: the layers, the cache and the loop are all
+verified against the host.
