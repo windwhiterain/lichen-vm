@@ -154,6 +154,26 @@ precision path exists for. Reaching it needs two things the interface does not h
 So the token rate is gated on the engine, not on the model: the layers, the cache and the loop are all
 verified against the host.
 
+## What a token costs now
+
+Two factors, measured one at a time on the same token (`9707 -> 25` both ways, so the narrowed model keeps
+the choice):
+
+| build | width | one token |
+|---|---|---|
+| debug | f32 | 243 s |
+| release | f32 | **13.4 s** |
+| release | bf16 halves | **6.3 s** |
+
+The build was the larger half: the f32 path's cost was a per-layer loop turning 200 MB of little-endian
+words into `f32` in an unoptimised build, which the release profile does eighteen times faster. The width
+is the other: the checkpoint's own halves are read and handed to the device **unconverted**, so a layer
+costs its 96 MB read and no conversion at all, and the projection that consumes them is the one a pack
+narrowed.
+
+What is left per layer is three uploads of the weights at about 2 GB/s, twelve dispatches at eight
+milliseconds each, and one 96 MB read. So the next lever is the dispatch count, not the bytes.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
