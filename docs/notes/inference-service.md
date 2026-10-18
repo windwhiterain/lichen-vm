@@ -133,6 +133,26 @@ hand derivation: step zero samples `2` and leaves the key cache `[1, 2, 2, -1, -
 samples `0` and leaves it `[1, 2, 2, 0, -1]`. So the cost model above is not a model of a trivial
 kernel: it is the decode step's, and the cache never comes back to the host between tokens.
 
+**And a step holds at most 64 dispatches, after which it refuses rather than splitting.** Measured on
+a chain of one kernel (`crates/lichen-serve/tests/step_cost.rs`):
+
+| dispatches in the step | submissions | per step |
+|---|---|---|
+| 2 | 1 | 0.39 ms |
+| 16 | 1 | 1.43 ms |
+| 64 | 1 | 5.33 ms |
+| 65 | — | refused |
+
+> *"a run of 65 dispatch(es) cannot be recorded in one submission: the range is 1 to 64, which is
+> what the descriptor pool has sets for."*
+
+The fit is **0.23 ms of fixed cost and 0.08 ms per dispatch**, so a step's clock is its dispatch count
+and the submission is the small part of it. That is the throughput budget: a model whose token costs
+`D` dispatches has a floor of `D × 0.08 ms` per token, and at `D = 864` — 32 layers of 27 dispatches —
+that is 69 ms, or 14 tokens a second, **before any arithmetic**. Batching amortizes the 0.23 ms across
+sequences and cannot touch the 0.08 ms per dispatch; only fewer dispatches can, which is what fusion
+is for, and the fusion floor currently refuses both real shapes by name (`llm-operators.md`).
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough

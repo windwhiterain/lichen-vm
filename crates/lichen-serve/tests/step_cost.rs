@@ -817,3 +817,84 @@ fn a_four_buffer_step_takes_five_arguments_in_order() {
     session.release(next);
     println!("a four-buffer step ran twice, one submission each, with a resident in its arguments");
 }
+
+/// How many dispatches one step can hold, and what refusal the next one meets.
+///
+/// # Invariant
+/// A step is recorded at any size — the graph does not refuse a big one — and the limit is the
+/// backend's, so the refusal comes at the run and names the number. The clock is measured on the
+/// sizes that run, so the step's scaling is the dispatches' and not a fit through a refusal.
+#[test]
+fn a_step_holds_at_most_this_many_dispatches() {
+    const REPEATS: usize = 50;
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_step_holds_at_most_this_many_dispatches: no device");
+        return;
+    };
+    let arguments = || {
+        vec![
+            RunArgument::Count(3),
+            RunArgument::Buffer {
+                class: ScalarClass::Float,
+                data: packed(&[1.0, 2.0, 3.0]),
+            },
+        ]
+    };
+    for nodes in [2usize, 16, 64] {
+        let prepared = session
+            .prepare(&layer(nodes))
+            .unwrap_or_else(|refusal| panic!("a {nodes}-node step prepares: {refusal}"));
+        assert_eq!(
+            prepared.nodes(),
+            nodes,
+            "the held step has the nodes asked for"
+        );
+        prepared
+            .step(arguments())
+            .unwrap_or_else(|refusal| panic!("a {nodes}-node step runs: {refusal}"));
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            let stepped = prepared
+                .step(arguments())
+                .unwrap_or_else(|refusal| panic!("a {nodes}-node step runs: {refusal}"));
+            assert_eq!(
+                (stepped.cost.submissions, stepped.cost.fence_waits),
+                (1, 1),
+                "a {nodes}-node step is one submission"
+            );
+            std::hint::black_box(&stepped);
+        }
+        println!(
+            "{nodes:>2} dispatches: {} submission(s), {:.4} ms per step",
+            node_submissions(&prepared, arguments()),
+            started.elapsed().as_secs_f64() * 1.0e3 / REPEATS as f64
+        );
+    }
+    let over = session
+        .prepare(&layer(65))
+        .unwrap_or_else(|refusal| panic!("a 65-node step prepares: {refusal}"));
+    assert_eq!(
+        over.nodes(),
+        65,
+        "recording a 65-node step is not what refuses"
+    );
+    match over.step(arguments()) {
+        Ok(stepped) => panic!(
+            "65 dispatches ran in {} submission(s), and the cap was said to be 64",
+            stepped.cost.submissions
+        ),
+        Err(ServeRefusal::Program(lines)) => {
+            println!("65 dispatches: refused with {}", lines.join(" | "));
+        }
+        Err(other) => panic!("a refused run is a program refusal: {other}"),
+    }
+}
+
+/// The submissions one step of a prepared graph takes, for printing beside its clock.
+fn node_submissions(prepared: &lichen_serve::Prepared<'_>, arguments: Vec<RunArgument>) -> u64 {
+    prepared
+        .step(arguments)
+        .expect("the step run just before this one ran")
+        .cost
+        .submissions
+}
