@@ -664,6 +664,17 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                 KernelInstr::CallKernel(_) => {
                     panic!("the reference emits no cross-kernel calls")
                 }
+                // **Not a write**: this loop walks one lane at a time into a slot of its own, so
+                // reading the atomic as a store would answer a scatter with the last lane's value
+                // rather than the sum — a comparison that cannot fail rather than one that has
+                // not been written. Naming it is the honest answer until the reference models the
+                // accumulation.
+                KernelInstr::BufferAtomicAddCall(class) => {
+                    panic!(
+                        "the reference has no entry for a {class:?} atomic add: it walks one lane \
+                         at a time, so it cannot say what a contended slot accumulates to"
+                    )
+                }
                 KernelInstr::SliceReadCall(_) | KernelInstr::SliceWriteCall(_) => {
                     panic!("{}", staging_refusal(definition))
                 }

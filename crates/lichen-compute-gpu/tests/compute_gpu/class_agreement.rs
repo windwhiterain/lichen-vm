@@ -239,6 +239,12 @@ fn unasked() -> Vec<(&'static str, &'static str)> {
              value for the emitter to have a class for",
         ),
         (
+            "BufferAtomicAddCall",
+            "the atomic's, for the same reason and by the same shape: `produces()` is 0 and the \
+             emission allocates the result id SPIR-V requires without pushing a slot for it, so \
+             there is no value for the emitter to have a class for",
+        ),
+        (
             "SliceWriteCall",
             "the version a slice write leaves is not materialised, so no instruction can read \
              the value back and no `Select` can hold it as an arm",
@@ -286,6 +292,7 @@ fn every_variant() -> Vec<(&'static str, KernelInstr)> {
         KernelInstr::Cos,
         KernelInstr::BufferReadCall(ScalarClass::Int),
         KernelInstr::BufferWriteCall(ScalarClass::Int),
+        KernelInstr::BufferAtomicAddCall(ScalarClass::Int),
         KernelInstr::SliceReadCall(ScalarClass::Int),
         KernelInstr::SliceWriteCall(ScalarClass::Int),
         KernelInstr::I32WrapI64,
@@ -313,6 +320,7 @@ fn named(instr: KernelInstr) -> (&'static str, KernelInstr) {
         KernelInstr::Cos => "Cos",
         KernelInstr::BufferReadCall(_) => "BufferReadCall",
         KernelInstr::BufferWriteCall(_) => "BufferWriteCall",
+        KernelInstr::BufferAtomicAddCall(_) => "BufferAtomicAddCall",
         KernelInstr::SliceReadCall(_) => "SliceReadCall",
         KernelInstr::SliceWriteCall(_) => "SliceWriteCall",
         KernelInstr::I32WrapI64 => "I32WrapI64",
