@@ -429,11 +429,11 @@ fn number(value: f32) -> FlatOp {
     ))
 }
 
-/// The one class that is not `class`.
+/// A class that is not `class`.
 fn other(class: ScalarClass) -> ScalarClass {
     match class {
         ScalarClass::Int => ScalarClass::Float,
-        ScalarClass::Float => ScalarClass::Int,
+        ScalarClass::Float | ScalarClass::BFloat16 => ScalarClass::Int,
     }
 }
 

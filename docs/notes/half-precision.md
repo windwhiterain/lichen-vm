@@ -51,6 +51,33 @@ fold identity is exact at bf16 because a reduction states `0`, `1` or `-inf` and
 exact halves; the lowering refuses a bf16 instruction **by name**
 (`BridgeRefusal::UnsupportedClass`) until the emitter can carry one.
 
+## What the compiler named, once the mirrors were in
+
+`cargo check --workspace --all-targets` after the mirrors: **37 arms across five library files and
+four test/example files**, every one an exhaustive match over the class. Splitting them is the
+useful part, because the two kinds need different work:
+
+| kind | sites | what an arm does today |
+|---|---|---|
+| **storage and width** — element read/write, packing, a binding's size, a wire tag, a stride | most | the 2-byte element and the shift pair, mirroring `Float` |
+| **arithmetic or a backend** — the wasm assembler and lowerer, the SPIR-V operator table, the interpreter's operator tables | 6 | refused by name (`SpirvRefusal::UnsupportedClass`, or the `Result<_, String>` the function already returns) |
+| **placeholder** — an id or a type the emitter hands out where it has no 16-bit spelling | 6 | the existing `float`/`uint` id, each with an `# Invariant` saying it is a placeholder |
+
+The tree is **green at the class**, not green at the feature: a bf16 *buffer* is still emitted with a
+2-byte stride and a 32-bit element type, which `spirv-val` would reject. Three gaps the pass surfaced
+and did not close, recorded so they are not mistaken for done:
+
+1. **`element_stride` and `type_of` disagree for a bf16 buffer.** The stride answers 2 from
+   `byte_width`, and the emitter's type is still the 32-bit float, so a module with a bf16 buffer is
+   mis-typed rather than refused. The gate belongs in `buffer_classes`/`module_class`, not at a site
+   the compiler names.
+2. **`ScalarData` has no bf16 variant**, so reading such a buffer to the host reports `Float`, and
+   `fetch_resident` would refuse it as a class disagreement — a loud failure on a path that is
+   unreachable until (1) is fixed.
+3. **The wire tag is a third value** (`write_class`/`read_class` gained `2`), so a persisted buffer's
+   class codec changed. Appending the tag keeps old payloads readable; a reader older than the tag
+   would not read a bf16 one.
+
 ## What remains
 
 1. `schema::ScalarClass`, and the conversions that mirror it.

@@ -350,6 +350,7 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             let (operator, ty) = match class {
                 ScalarClass::Int => (Operator::I64Const { value: bits as u64 }, Type::I64),
                 ScalarClass::Float => (Operator::F32Const { value: bits as u32 }, Type::F32),
+                ScalarClass::BFloat16 => return Err(half_constant_refusal()),
             };
             let value = walk.add(operator, &[], &[ty]);
             walk.values.insert(instr, (value, ty));
@@ -544,6 +545,18 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
     Ok(())
 }
 
+/// The reason this backend refuses a `BFloat16` constant.
+///
+/// # Invariant
+/// wasm's MVP has no 16-bit float type, so a half has no constant operator to be emitted as;
+/// refused by name rather than emitted as the `f32` its pattern spells, which is a number the
+/// body does not state.
+fn half_constant_refusal() -> String {
+    "compute.wasm: a `BFloat16` constant has no wasm type — wasm's MVP has no 16-bit float, so \
+     there is no constant operator to emit the half as"
+        .to_string()
+}
+
 /// The reason this backend refuses a body that stages a value between lanes.
 ///
 /// # Invariant
@@ -641,7 +654,7 @@ fn callee_arity(context: &ModuleCtx<'_>, callee: KernelId) -> Result<usize, Stri
 /// so they are lowered before this table is read.
 fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, String> {
     use KernelBin as Bin;
-    use ScalarClass::{Float, Int};
+    use ScalarClass::{BFloat16, Float, Int};
     Ok(match (class, operator) {
         (Int, Bin::Add) => Operator::I64Add,
         (Int, Bin::Sub) => Operator::I64Sub,
@@ -675,6 +688,13 @@ fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, 
                  select, which the instruction walk emits before this table is read"
                     .into(),
             );
+        }
+        (BFloat16, operator) => {
+            return Err(format!(
+                "compute.wasm: {operator:?} has no {class:?} form — wasm's MVP has no 16-bit \
+                 float, so this backend refuses the class by name rather than emit it as the \
+                 `f32` the half's pattern spells"
+            ));
         }
         (Float, operator) => {
             return Err(format!(

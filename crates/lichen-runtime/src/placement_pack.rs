@@ -321,6 +321,7 @@ impl From<artifact::ScalarClass> for ScalarClass {
         match class {
             artifact::ScalarClass::Int => ScalarClass::Int,
             artifact::ScalarClass::Float => ScalarClass::Float,
+            artifact::ScalarClass::BFloat16 => ScalarClass::BFloat16,
         }
     }
 }
@@ -353,6 +354,8 @@ mod artifact {
         Int,
         /// The IR's `Float`.
         Float,
+        /// The IR's `BFloat16`.
+        BFloat16,
     }
 
     /// The fragment facts a pack states.

@@ -88,6 +88,7 @@ impl From<schema::ScalarClass> for ir::ScalarClass {
         match class {
             schema::ScalarClass::Int => ir::ScalarClass::Int,
             schema::ScalarClass::Float => ir::ScalarClass::Float,
+            schema::ScalarClass::BFloat16 => ir::ScalarClass::BFloat16,
         }
     }
 }
@@ -97,6 +98,7 @@ impl From<ir::ScalarClass> for schema::ScalarClass {
         match class {
             ir::ScalarClass::Int => schema::ScalarClass::Int,
             ir::ScalarClass::Float => schema::ScalarClass::Float,
+            ir::ScalarClass::BFloat16 => schema::ScalarClass::BFloat16,
         }
     }
 }

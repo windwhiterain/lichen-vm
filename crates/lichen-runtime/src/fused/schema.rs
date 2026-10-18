@@ -18,6 +18,8 @@ pub enum ScalarClass {
     Int,
     /// The IR's `Float`.
     Float,
+    /// The IR's `BFloat16`.
+    BFloat16,
 }
 
 /// The integer width a fragment was lowered for.

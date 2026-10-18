@@ -278,6 +278,14 @@ pub enum SpirvRefusal {
     /// bitwise trio have no opcode: a kernel that runs but computes something nobody wrote is worse
     /// than one that does not run.
     UnsupportedFloatOperator { operator: &'static str, at: usize },
+    /// A value in a class this emitter has no SPIR-V type for.
+    ///
+    /// # Invariant
+    /// Refused by name rather than emitted as the `Float` a brain float is not: SPIR-V's
+    /// 16-bit float is an IEEE half, so a `BFloat16` has no type to declare and no
+    /// arithmetic that rounds in its own width — a module that carried one would compute
+    /// a program nobody wrote.
+    UnsupportedClass { class: ScalarClass },
     /// A value and a buffer index of different classes met in one operation.
     MixedClasses { at: usize },
     /// A block parameter's own reads ask it to be two classes at once.
@@ -416,6 +424,12 @@ impl fmt::Display for SpirvRefusal {
                  `+ - * /` and the four comparisons and nothing else. There is no float operator \
                  to emit for this, and emitting a different one would compute something the \
                  program does not say."
+            ),
+            SpirvRefusal::UnsupportedClass { class } => write!(
+                f,
+                "the body computes in {class:?}, which this emitter has no SPIR-V type for: \
+                 SPIR-V's 16-bit float is an IEEE half, not a brain float, so there is nothing to \
+                 declare a {class:?} value as and no arithmetic that rounds in its own width."
             ),
             SpirvRefusal::MixedClasses { at } => write!(
                 f,
@@ -606,6 +620,10 @@ impl Literals {
             ScalarClass::Int => ids.integer_constant(id, value),
             // A float's literal is its 32 bits in one word.
             ScalarClass::Float => Inst::new(op::CONSTANT, vec![ids.float, id, value as u32]),
+            // A half is declared as the 32-bit float whose high bits are its own (`Ids::type_of`).
+            ScalarClass::BFloat16 => {
+                Inst::new(op::CONSTANT, vec![ids.float, id, (value as u32) & !0xFFFF])
+            }
         });
         self.emitted.insert((class, value), id);
         id
@@ -771,10 +789,16 @@ impl Ids {
     }
 
     /// The module's scalar: the type of every value the body computes.
+    ///
+    /// # Invariant
+    /// A `BFloat16` module has no type of its own and is refused by name in the
+    /// body's prologue ([`SpirvRefusal::UnsupportedClass`]) before this answers for
+    /// one; the `Float` arm is the placeholder it takes, because SPIR-V's 16-bit float
+    /// is an IEEE half rather than a brain float.
     fn scalar(&self) -> u32 {
         match self.class {
             ScalarClass::Int => self.ulong,
-            ScalarClass::Float => self.float,
+            ScalarClass::Float | ScalarClass::BFloat16 => self.float,
         }
     }
 
@@ -782,7 +806,7 @@ impl Ids {
     fn integer(&self) -> u32 {
         match self.class {
             ScalarClass::Int => self.ulong,
-            ScalarClass::Float => self.uint,
+            ScalarClass::Float | ScalarClass::BFloat16 => self.uint,
         }
     }
 
@@ -804,10 +828,16 @@ impl Ids {
     }
 
     /// The type a value of `class` has.
+    ///
+    /// # Invariant
+    /// A buffer's element type and its `ArrayStride` are the same class's facts
+    /// ([`element_stride`]), so a class the module cannot compute in is still typed
+    /// here — as the `Float` a brain float has no SPIR-V type of its own for, which a
+    /// body reading it is refused for before the module is built.
     fn type_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.integer(),
-            ScalarClass::Float => self.float,
+            ScalarClass::Float | ScalarClass::BFloat16 => self.float,
         }
     }
 
@@ -815,14 +845,14 @@ impl Ids {
     fn one_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.one_integer,
-            ScalarClass::Float => self.one_float,
+            ScalarClass::Float | ScalarClass::BFloat16 => self.one_float,
         }
     }
 
     fn zero_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.zero_integer,
-            ScalarClass::Float => self.zero_float,
+            ScalarClass::Float | ScalarClass::BFloat16 => self.zero_float,
         }
     }
 
@@ -1345,6 +1375,10 @@ fn emit_function(
                     widened
                 }
                 ScalarClass::Float => component,
+                // SPIR-V's 16-bit float is an IEEE half, so there is no type to bind this to.
+                ScalarClass::BFloat16 => {
+                    return Err(SpirvRefusal::UnsupportedClass { class: ids.class });
+                }
             };
             (id, ScalarClass::Int)
         } else {
@@ -1606,6 +1640,13 @@ fn emit_function(
                                         return Err(SpirvRefusal::UnsupportedFloatOperator {
                                             operator: "^ (bitwise exclusive or)",
                                             at,
+                                        });
+                                    }
+                                    // A bf16 has no opcode in any width SPIR-V rounds a
+                                    // brain float in, so the class is refused by name.
+                                    (ScalarClass::BFloat16, _) => {
+                                        return Err(SpirvRefusal::UnsupportedClass {
+                                            class: operand_class,
                                         });
                                     }
                                     (_, KernelBin::Max) | (_, KernelBin::Min) => {
@@ -3819,7 +3860,7 @@ fn as_condition(
             ));
             condition(result)
         }
-        Kind::Scalar(ScalarClass::Float) => {
+        Kind::Scalar(ScalarClass::Float) | Kind::Scalar(ScalarClass::BFloat16) => {
             let bits = *next;
             *next += 1;
             let result = *next;

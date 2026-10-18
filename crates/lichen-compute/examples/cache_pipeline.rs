@@ -59,6 +59,11 @@ fn items(value: &LangValue) -> Option<Vec<i64>> {
                 lichen_kernel_ir::ScalarClass::Float => {
                     i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
                 }
+                // The half is the float's high bits, so the word is its pattern
+                // lifted back into place.
+                lichen_kernel_ir::ScalarClass::BFloat16 => {
+                    i64::from(u16::from_le_bytes(element.try_into().unwrap_or_default())) << 16
+                }
             })
             .collect(),
     )

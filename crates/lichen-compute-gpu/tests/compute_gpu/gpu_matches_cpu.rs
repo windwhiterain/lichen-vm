@@ -398,6 +398,9 @@ impl Scalar {
     fn is_true(self, class: ScalarClass) -> bool {
         match (self, class) {
             (Scalar::Literal(value), ScalarClass::Float) => (value as u32) != 0,
+            // A half's own sixteen bits are the pattern, so the low word cannot
+            // decide it.
+            (Scalar::Literal(value), ScalarClass::BFloat16) => (value as u32) >> 16 != 0,
             (Scalar::Literal(value), ScalarClass::Int) => value != 0,
             (Scalar::Int(value), _) => value != 0,
             (Scalar::Float(value), _) => value.to_bits() != 0,
@@ -409,7 +412,9 @@ impl Scalar {
 fn boolean(class: ScalarClass, holds: bool) -> Scalar {
     match class {
         ScalarClass::Int => Scalar::Int(i64::from(holds)),
-        ScalarClass::Float => Scalar::Float(if holds { 1.0 } else { 0.0 }),
+        // A half's `1.0`/`0.0` are the 32-bit ones: both patterns end in sixteen
+        // zero bits.
+        ScalarClass::Float | ScalarClass::BFloat16 => Scalar::Float(if holds { 1.0 } else { 0.0 }),
     }
 }
 
@@ -469,6 +474,11 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                 // payload holds in a value position (`Scalar::Float`).
                 KernelInstr::Const(ScalarClass::Float, value) => {
                     produced = Scalar::Float(f32::from_bits(value as u32));
+                }
+                // A half's word is the float's high bits twice, so the low sixteen
+                // read as the zero the class holds.
+                KernelInstr::Const(ScalarClass::BFloat16, value) => {
+                    produced = Scalar::Float(f32::from_bits(value as u32 & !0xFFFF));
                 }
                 // A comparison yields 1 or 0 here, or 1.0 and 0.0 over floats; a
                 // `select` only tests it.
@@ -636,6 +646,10 @@ pub(super) fn reference(fragment: &KernelFragment, input: &[i64], count: usize) 
                         // This reading's own word layout, not the ABI's: a float
                         // element in an `i64` word is its low 32 bits.
                         ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
+                        // And a half's is the 16 bits above the word's middle.
+                        ScalarClass::BFloat16 => {
+                            Scalar::Float(f32::from_bits(value as u32 & !0xFFFF))
+                        }
                     };
                 }
                 KernelInstr::BufferWriteCall(_) => {

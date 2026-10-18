@@ -19,10 +19,17 @@ use super::mixed::refuse_mixed_classes;
 use crate::compute::{buffer_import_name, param_classes};
 
 /// The wasm value type a class is lowered to.
+///
+/// # Invariant
+/// wasm has no 16-bit float, so `BFloat16` has no type of its own and takes `F32` as a
+/// placeholder: a body that computes in the class is refused by name in
+/// [`super::lower::binary_operator`], and `run_parallel_range` links only the `i64`/`f32`
+/// import pair, so no module this builds is ever run with that type in it.
 pub(super) fn value_type(class: ScalarClass) -> Type {
     match class {
         ScalarClass::Int => Type::I64,
         ScalarClass::Float => Type::F32,
+        ScalarClass::BFloat16 => Type::F32,
     }
 }
 
@@ -192,9 +199,6 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
         }
     }
     // A fixed order, so the indices follow the set rather than the walk.
-    classes.sort_by_key(|class| match class {
-        ScalarClass::Int => 0,
-        ScalarClass::Float => 1,
-    });
+    classes.sort_by_key(|class| class.index());
     classes
 }

@@ -2622,6 +2622,18 @@ impl Segment<'_> {
                     })
                     .collect(),
             ),
+            // The half is the float's high bits, so each two-byte element is read
+            // as the `f32` it is the top of.
+            ScalarClass::BFloat16 => ScalarData::Float(
+                data.chunks_exact(2)
+                    .map(|bytes| {
+                        f32::from_bits(
+                            u32::from(u16::from_le_bytes(bytes.try_into().unwrap_or_default()))
+                                << 16,
+                        )
+                    })
+                    .collect(),
+            ),
         })
     }
 }

@@ -365,6 +365,11 @@ fn element_value(class: ScalarClass, bytes: &[u8]) -> Option<LowValue> {
             let bits = u32::from_le_bytes(bytes.try_into().ok()?);
             Some(LowValue::Float(f32::from_bits(bits)))
         }
+        // The half is the float's high bits, so the pattern is lifted back into place.
+        ScalarClass::BFloat16 => {
+            let half = u16::from_le_bytes(bytes.try_into().ok()?);
+            Some(LowValue::Float(f32::from_bits(u32::from(half) << 16)))
+        }
     }
 }
 
@@ -379,6 +384,10 @@ fn pack_elements(class: ScalarClass, words: &[i64]) -> Vec<u8> {
         match class {
             ScalarClass::Int => payload.extend_from_slice(&word.to_le_bytes()),
             ScalarClass::Float => payload.extend_from_slice(&(*word as u32).to_le_bytes()),
+            // A bf16 is the top half of the float it rounds to, so the word keeps its high twice.
+            ScalarClass::BFloat16 => {
+                payload.extend_from_slice(&((*word as u32) >> 16).to_le_bytes()[..2])
+            }
         }
     }
     payload
@@ -403,6 +412,13 @@ fn unpack_elements(class: ScalarClass, payload: &[u8]) -> Vec<i64> {
                     .try_into()
                     .unwrap_or_default(),
             )),
+            ScalarClass::BFloat16 => {
+                i64::from(u16::from_le_bytes(
+                    payload[index * 2..index * 2 + 2]
+                        .try_into()
+                        .unwrap_or_default(),
+                )) << 16
+            }
         })
         .collect()
 }
@@ -892,6 +908,7 @@ fn write_class(w: &mut Writer, class: ScalarClass) -> Result<(), String> {
     let tag = match class {
         ScalarClass::Int => 0,
         ScalarClass::Float => 1,
+        ScalarClass::BFloat16 => 2,
     };
     w.u8(tag);
     Ok(())
@@ -901,6 +918,7 @@ fn read_class(r: &mut Reader<'_>) -> Result<ScalarClass, String> {
     match r.u8()? {
         0 => Ok(ScalarClass::Int),
         1 => Ok(ScalarClass::Float),
+        2 => Ok(ScalarClass::BFloat16),
         other => Err(format!("unknown buffer element class {other}")),
     }
 }
@@ -1614,7 +1632,9 @@ where
                             // an integer value, or an `f32`'s bits.
                             match class {
                                 ScalarClass::Int => ScalarData::Int(unpack_elements(class, items)),
-                                ScalarClass::Float => ScalarData::Float(
+                                // A bf16 rides the `f32` the half is the top of, which
+                                // is the reading [`unpack_elements`] already lifts it to.
+                                ScalarClass::Float | ScalarClass::BFloat16 => ScalarData::Float(
                                     unpack_elements(class, items)
                                         .into_iter()
                                         .map(|word| f32::from_bits(word as u32))
@@ -2753,11 +2773,14 @@ pub(crate) fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
 ///
 /// # Invariant
 /// A wasm import has one signature, so one `read` could not serve both classes:
-/// the pair is declared per class, and this is where the name is spelled.
+/// the pair is declared per class, and this is where the name is spelled. A
+/// `BFloat16` is spelled its own name and not `f32`'s, so a module in the class
+/// fails to link rather than bind the float host import to a half's payload.
 pub(crate) fn buffer_import_name(class: ScalarClass, kind: &str) -> String {
     let class = match class {
         ScalarClass::Int => "i64",
         ScalarClass::Float => "f32",
+        ScalarClass::BFloat16 => "bf16",
     };
     format!("{kind}_{class}")
 }
@@ -2893,10 +2916,15 @@ fn scalar_class_of(shape: &LowShape) -> ScalarClass {
 }
 
 /// The low shape a scalar leaf seeds its parameter slot with.
+///
+/// # Invariant
+/// The interpreter has no `bf16` shape: a `BFloat16` leaf seeds the `Float` slot
+/// [`ScalarValue::low`] reads, and the half's own sixteen bits are carried by the
+/// pattern in that `f32`, not by the shape.
 fn low_shape_of(class: ScalarClass) -> LowShape {
     match class {
         ScalarClass::Int => LowShape::USize,
-        ScalarClass::Float => LowShape::Float,
+        ScalarClass::Float | ScalarClass::BFloat16 => LowShape::Float,
     }
 }
 
@@ -3147,6 +3175,8 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
         // Exact for the integers a fragment carries: ordinals, and an index bounded
         // by `MAX_PARALLEL_ELEMENTS`.
         ScalarClass::Float => float_bits(value as f32),
+        // A half is its float's high sixteen bits, so the word is read back to that width.
+        ScalarClass::BFloat16 => i64::from(((value as u32) >> 16) << 16),
     }
 }
 
@@ -3263,10 +3293,15 @@ where
 }
 
 /// The type a buffer's elements are, for the wrapper's `.element` slot.
+///
+/// # Invariant
+/// The interpreter reads a bf16 element as the `f32` the half is the top of
+/// ([`element_value`]), so the slot states `Float`: a class the language has no
+/// type for cannot be spelled here, and the sixteen bits travel in the payload.
 fn element_type(class: ScalarClass) -> TypeValue {
     match class {
         ScalarClass::Int => TypeValue::TypeInt,
-        ScalarClass::Float => TypeValue::TypeFloat,
+        ScalarClass::Float | ScalarClass::BFloat16 => TypeValue::TypeFloat,
     }
 }
 
@@ -4309,18 +4344,31 @@ impl ScalarValue {
 
     /// The value as the language's own scalar: an integer is the `USize` it
     /// always was, an `f32` its `Float`.
+    ///
+    /// # Invariant
+    /// A bf16 reads as the `Float` the half is the top of, at its own sixteen bits:
+    /// the low half is zero, so the number is the one the class holds.
     fn low(self) -> LowValue {
         match self.class {
             ScalarClass::Int => LowValue::USize(self.bits as usize),
             ScalarClass::Float => LowValue::Float(f32::from_bits(self.bits as u32)),
+            ScalarClass::BFloat16 => LowValue::Float(f32::from_bits(self.bits as u32 & !0xFFFF)),
         }
     }
 
     /// The value as the class's wasm value.
+    ///
+    /// # Invariant
+    /// wasm has no 16-bit float, so a bf16 takes the `F32` lane
+    /// [`crate::compute::wasm::assemble::value_type`] declares for it: the pattern is
+    /// the half's own, and a module carrying one cannot link the host's import pair.
     fn wasmi(self) -> wasmi::Val {
         match self.class {
             ScalarClass::Int => wasmi::Val::I64(self.bits),
             ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32)),
+            ScalarClass::BFloat16 => {
+                wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32 & !0xFFFF))
+            }
         }
     }
 
@@ -4335,6 +4383,9 @@ impl ScalarValue {
         let bits = match class {
             ScalarClass::Int => v.i64()?,
             ScalarClass::Float => i64::from(v.f32()?.to_bits()),
+            // The lane carries the half in the high bits, so the word is that
+            // pattern at the width the class holds.
+            ScalarClass::BFloat16 => i64::from(v.f32()?.to_bits() & !0xFFFF),
         };
         Some(ScalarValue { class, bits })
     }
@@ -4607,6 +4658,7 @@ fn class_name(class: ScalarClass) -> &'static str {
     match class {
         ScalarClass::Int => "Int",
         ScalarClass::Float => "Float",
+        ScalarClass::BFloat16 => "BFloat16",
     }
 }
 
@@ -6433,18 +6485,30 @@ fn position_of(value: Option<&wasmi::Val>) -> usize {
 
 /// The word a `read`/`write` import's value argument carries, in the fragment's
 /// class.
+///
+/// # Invariant
+/// A bf16 crosses the `f32` lane wasm gives it at its own sixteen bits: the low
+/// half is zero, so the word is the element's own pattern and not a `Float`'s.
 fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
     match class {
         ScalarClass::Int => value.i64().unwrap_or(0),
         ScalarClass::Float => float_bits(value.f32().map_or(0.0, |bits| bits.to_float())),
+        ScalarClass::BFloat16 => {
+            i64::from(value.f32().map_or(0.0, |bits| bits.to_float()).to_bits() & !0xFFFF)
+        }
     }
 }
 
 /// One buffer word as the wasm value a class takes.
+///
+/// # Invariant
+/// The read-back half of [`value_word`]: a bf16's word keeps its high sixteen bits
+/// twice, so the lane holds the half and nothing of the bits below it.
 fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
     match class {
         ScalarClass::Int => wasmi::Val::I64(word),
         ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(word as u32)),
+        ScalarClass::BFloat16 => wasmi::Val::F32(wasmi::F32::from_bits(word as u32 & !0xFFFF)),
     }
 }
 
