@@ -163,6 +163,17 @@ distinct and the note should not confuse them: **batching multiplies the sequenc
 (measured: 16 sequences at one step's cost) while **fusion lowers the per-dispatch floor** (not
 measured, and gated by the fusion floor refusing both real shapes).
 
+**The cache layout is fixed slots, and the step's ABI does not change when it becomes a page table.**
+A sequence owns `capacity × dim` slots of one flat resident, so a lane is one slot: its sequence is
+`lane / (capacity × dim)`, its position the next division, and its column the remainder. One dispatch
+then writes every sequence's cache without the host naming any of them, and the whole cache stays
+resident (`crates/lichen-serve/tests/batch_step.rs`): three sequences of four positions of two
+columns appended one token each at **one submission per step**, with each sequence's slots untouched
+by the others and the positions no sequence reached still what they were. **A page table would change
+the address arithmetic inside the kernel and nothing else** — the step would still take one extent
+and one metadata buffer — so the simpler layout carries the proof and paging swaps in behind this
+ABI rather than redesigning it.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
