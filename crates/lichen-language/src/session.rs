@@ -6,7 +6,8 @@
 //! edit that leaves the resolved structure alone; the cells are the finer cut
 //! under that gate. See `docs/notes/incremental-update.md` §6.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use lichen_language_lex::{line_col, offset_of_span};
@@ -106,6 +107,8 @@ where
     cache: Option<Cache<P>>,
     /// The state the last compile ran under: the baseline the next edit is diffed against.
     last: Option<LastState>,
+    /// Where retained cells persist across processes, when the caller asked for it.
+    cell_cache: Option<PathBuf>,
 }
 
 /// The snapshot of the buffer a compile ran under.
@@ -243,7 +246,18 @@ where
             unreachable: Vec::new(),
             cache: None,
             last: None,
+            cell_cache: None,
         }
+    }
+
+    /// Cache this session's retained cells under `dir`, and load what is already there.
+    ///
+    /// # Invariant
+    /// A cell is loaded only when its artifact's module key is free in this registry: a key is
+    /// process-local, so a collision is a missed cell, never a shadowed one.
+    pub fn with_cell_cache(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cell_cache = Some(dir.into());
+        self
     }
 
     /// The registry this session's cells are filed in.
@@ -402,7 +416,92 @@ where
     ///
     /// Lexing resumes from the last snapshot over the edit span, so a keystroke is
     /// `O(edit)` in the regex work; the result is identical to a full re-lex.
+    /// Load what the cache holds for this source: a miss on any record, never a failure.
+    fn load_cells(&mut self) {
+        if !<P::Codec as crate::persist::ArtifactCodec<P>>::PERSISTENT {
+            return;
+        }
+        let Some(dir) = self.cell_cache.clone() else {
+            return;
+        };
+        for record in crate::cellcache::read(&dir, &self.source_id) {
+            let key = ModuleKey::from_raw(record.module);
+            let mut registry = self
+                .registry
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            if registry.get(key).is_some() {
+                continue;
+            }
+            let modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> = HashMap::new();
+            let Ok((module, export)) = crate::persist::deserialize_artifact_with(
+                &record.artifact,
+                key,
+                [0; 32],
+                &modules,
+                P::Codec::default(),
+            ) else {
+                continue;
+            };
+            registry.insert_module(key, [0; 32], module);
+            registry.reserve_cell_key(key);
+            drop(registry);
+            let path = record.path;
+            self.cells.record(
+                path.clone(),
+                &self.source_id,
+                lichen_lowlevel::StaticNodeId {
+                    module: key,
+                    index: export,
+                },
+            );
+            self.cells.set_key(&path, Some(record.key));
+        }
+    }
+
+    /// Store the retained cells for this source; a failed write is a missed cache.
+    fn save_cells(&self, dir: &PathBuf) {
+        if !<P::Codec as crate::persist::ArtifactCodec<P>>::PERSISTENT {
+            return;
+        }
+        let mut records = Vec::new();
+        for path in self.cells.paths() {
+            let Some(reference) = self.cells.reference(path) else {
+                continue;
+            };
+            let Some(key) = self.cells.key(path).map(<[u64]>::to_vec) else {
+                continue;
+            };
+            let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+            let Some(package) = registry.get(reference.module) else {
+                continue;
+            };
+            let mut modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> =
+                HashMap::new();
+            modules.insert(reference.module, package.module.clone());
+            let Ok(artifact) = crate::persist::serialize_artifact_with(
+                &package.module,
+                &modules,
+                [0; 32],
+                reference.index,
+                P::Codec::default(),
+            ) else {
+                continue;
+            };
+            records.push(crate::cellcache::Record {
+                path: path.clone(),
+                module: reference.module.as_raw(),
+                key,
+                artifact,
+            });
+        }
+        let _ = crate::cellcache::write(dir, &self.source_id, &records);
+    }
+
     pub fn compile(&mut self) -> SessionReport<P> {
+        if self.last.is_none() {
+            self.load_cells();
+        }
         // The line starts every span is measured against: the original file's.
         let line_starts = view_line_starts(&self.source, self.base, &self.line_starts);
 
@@ -560,6 +659,7 @@ where
             .map(|(path, _)| path)
             .collect();
         // The key decides; propagation is the fallback where the key cannot be written.
+        let after = crate::key::binding_keys(&program);
         let dirty = match &self.last {
             Some(last) => {
                 let (previous_window, current_window) = windows.unwrap_or_else(|| {
@@ -575,7 +675,6 @@ where
                     current_window,
                 );
                 let before = crate::key::binding_keys(&last.program);
-                let after = crate::key::binding_keys(&program);
                 after
                     .iter()
                     .filter(|(path, key)| match (before.get(*path), key) {
@@ -585,7 +684,16 @@ where
                     .map(|(path, _)| path.clone())
                     .collect()
             }
-            None => HashSet::new(),
+            // First compile: no previous program, so a loaded cell is judged by its stored key.
+            None => after
+                .iter()
+                .filter(|(path, key)| match (self.cells.key(path), key) {
+                    (Some(stored), Some(current)) => stored != current.as_slice(),
+                    (Some(_), None) => true,
+                    _ => false,
+                })
+                .map(|(path, _)| path.clone())
+                .collect(),
         };
         let mut unreachable = self.cells.invalidate_paths(&dirty);
         unreachable.extend(self.cells.retain_marked(&marked));
@@ -614,6 +722,12 @@ where
             compiled_cells,
             &self.source_id,
         );
+        if let Some(dir) = self.cell_cache.clone() {
+            for (path, key) in &after {
+                self.cells.set_key(path, key.clone());
+            }
+            self.save_cells(&dir);
+        }
         let check_diagnostics: Vec<Diag<P>> = report
             .diagnostics
             .iter()

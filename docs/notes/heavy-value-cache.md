@@ -627,7 +627,54 @@ What persistence still needs: a save sink inside `freeze_cells` (the pair node i
 there), the on-disk layout, and the judge arm that compares a **stored** key against the
 computed one on the first compile of a process — §13.
 
-## 10. Costs and failure modes
+### 9.13 Cells across processes: the first reuse that survives a restart
+
+The vertical is built. A session with a cache directory stores its retained cells and loads
+what an earlier session left; a cell is reused when the `K_in` it was stored with equals the one
+this compile computes. `crates/lichen-language/examples/cell_reload.rs` (temporary) drives four
+sessions, each with a **fresh, empty registry**:
+
+| session | source | frozen | reused | dropped | root |
+|---|---|---|---|---|---|
+| first (cold) | original | 2 | 0 | 0 | 9 |
+| **second (fresh registry)** | original | **0** | **2** | 0 | **9** |
+| third (fresh registry) | edited constant | 2 | 0 | **2** | 13 |
+| fourth (fresh registry) | edited constant | **0** | **2** | 0 | **13** |
+
+So the second session recompiled nothing and answered the same; an edit moved both keys, so the
+third recomputed and re-stored; and the fourth reused what the third stored. **This is the first
+time a retained value has survived a process boundary.**
+
+The design decisions, each of which removes work the design was expected to need:
+
+- **The bytes are stored as they are, and a load that collides is skipped.** The bytes embed the
+  artifact's `ModuleKey`, which is process-local, so two processes can hand out the same key.
+  Rather than derive a deterministic key — which then collides on *recompile* and needs the old
+  artifact evicted before the new one is filed — a load asks whether the key is free and skips
+  the cell if it is not: a collision is a missed cell, never a shadowed one. `reserve_cell_key`
+  keeps a filed key from being handed out again.
+- **The `K_in` is stored beside the artifact, not derived from it.** The artifact's own hash slot
+  is a placeholder (§3), so the container carries the key words the cell was frozen under; the
+  judge compares them on a process's first compile, where there is no previous program to compare
+  against.
+- **The container is the artifact plus framing.** `cellcache` writes `path | module key | K_in |
+  artifact bytes` and nothing else; the artifact codec remains the format, so corruption is
+  caught by its body digest and a malformed file decodes to an empty cache.
+
+The limits, stated rather than discovered:
+
+- **Nothing evicts.** A source's file is rewritten whole on every compile, so stale cells leave
+  the file, but a source that is never opened again keeps its file forever. The package store's
+  reclamation is the template; none of it is here.
+- **Every compile rewrites the file**, including the cells it reused, so the save cost is one
+  serialize per retained cell per compile. That is why it is opt-in (`with_cell_cache`) rather
+  than always on.
+- **A saved cell is only as good as its key.** The `K_in` covers the binding's own structure and
+  its reads; a change outside that cone (an import's content, a plugin set) is not in it. For a
+  cell that read an import, the session's own import invalidation is the guard, and the plugin
+  set is not guarded at all — the cache directory would have to be scoped per plugin set, as the
+  artifact store already is.
+
 
 - **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
   its value and not its template.** Measured in §9.2 and §9.3: freezing six cells whose

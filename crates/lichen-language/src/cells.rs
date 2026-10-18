@@ -23,6 +23,12 @@ struct Cell {
     reference: StaticNodeId,
     /// The source that produced it — what [`CellStore::invalidate_source`] drops.
     source: SourceId,
+    /// The `K_in` the cell was frozen under, or `None` before one was computed.
+    ///
+    /// # Invariant
+    /// A stored key is what a later process compares a computed key against; it is never
+    /// what decides reuse on its own (`docs/notes/heavy-value-cache.md` §9.13).
+    key: Option<Vec<u64>>,
 }
 
 /// The retained cells of one compilation context, keyed by occurrence path.
@@ -76,8 +82,34 @@ impl CellStore {
             Cell {
                 reference,
                 source: source.to_string(),
+                key: None,
             },
         );
+    }
+
+    /// Attach the `K_in` a cell was compiled under, and answer whether one was already there.
+    ///
+    /// # Invariant
+    /// The key travels with the cell so a later process can compare it; `false` means the cell
+    /// already carried one, which a caller restoring from disk uses to refuse a second record.
+    pub fn set_key(&mut self, path: &Path, key: Option<Vec<u64>>) -> bool {
+        match self.cells.get_mut(path) {
+            Some(cell) => {
+                cell.key = key;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The `K_in` a cell was frozen under, if one was computed.
+    pub fn key(&self, path: &Path) -> Option<&[u64]> {
+        self.cells.get(path).and_then(|cell| cell.key.as_deref())
+    }
+
+    /// Every retained path, for a caller that has to walk the store.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.cells.keys()
     }
 
     /// Drop every cell that came from `source`, returning the artifacts they named.
