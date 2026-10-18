@@ -515,3 +515,52 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// Qwen3's rotation: `head_dim` 128, half of it turned, `theta` one million, the rotate-half form.
+///
+/// # Invariant
+/// A lane is one element of one head and reads its partner at `i ± 64`, which stays inside the head
+/// because the head's own offset cancels: the first half pairs forward and subtracts, the second pairs
+/// back and adds. The angle is the position times `theta` raised to `-j/64`, which the language's own
+/// `exp` and `ln` build, so no table reaches the device.
+pub const ROPE_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In     = struct{.x (compute.Buf Float)}
+Out    = struct{.y (compute.Buf Float)}
+CopIn  = struct{.d (compute.Buf Float)}
+RopePar = struct{.n Int, .position Int, .in In, .out Out}
+RopeArg = struct{.n Int, .position Int, .I In}
+rope_raw = (k : RopePar) => {
+  i = compute.range k.n
+  head = i / 128
+  j = i - head * 128
+  low = j < 64
+  other_index = if low then (i + 64) else (i - 64)
+  own = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  other = compute.read ((compute.Read _)(.from k.in.x, .at other_index))
+  turned = if low then j else (j - 64)
+  exponent = (0.0 - (int2float turned)) / 64.0
+  scale = exp (exponent * (ln (1000000.0)))
+  angle = (int2float k.position) * scale
+  cosine = cos angle
+  sine = sin angle
+  signed = if low then (0.0 - 1.0) else 1.0
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((own * cosine) + ((signed * other) * sine))))
+}
+rope = compute.parallel rope_raw "gpu"
+CopPar = struct{.n Int, .in CopIn, .out CopIn}
+CopArg = struct{.n Int, .I CopIn}
+copy_raw = (k : CopPar) => {
+  i = compute.range k.n
+  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
+}
+copy = compute.parallel copy_raw "gpu"
+GArg = struct{.n Int, .position Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun rope ((RopeArg)(.n s.n, .position s.position, .I In(.x s.in.x))) : Out)
+  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+}
+built = compute.graph step
+built
+"#;
