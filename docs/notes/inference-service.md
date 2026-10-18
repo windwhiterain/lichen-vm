@@ -400,19 +400,27 @@ Three verdicts were given and are recorded here rather than left in a transcript
    which means an example that used it would be unrunnable by the example suite. Keeping the
    probe is deliberate: the failing shapes are the evidence for the defect, and the defect is
    not fixed.
-8. **Compile once, step many — and the language's own API has no such entry.** Every
+8. **Compile once, step many — and the step is already a public call.** Every
    `lichen_language` entry that reaches a program compiles and runs in one call
    (`evaluate_raw`, `run_at`, `evaluate`), and `compile_with_imports_at` hands back a `Report`
    whose module runs its root once and answers the cached value afterwards. So
    `Session::run(source)` recompiles per request: it is a measurement harness, not a service
-   loop. **Every piece of the real shape is already public** — a program whose tail is
-   `compute.graph step` records a `Graph` and registers it, `lichen_compute::graph::lookup(id)`
-   hands it back (`GraphId` is exported from the crate root), and
-   `lichen_graph_ir::Runner::run(&graph, values)` drives it with fresh
-   `Value::host(…)`/`Value::host_data(class, bytes)` inputs under the policy the session set.
-   So the step a service repeats should be a **`Graph` the session holds**, not a source string
-   it re-runs — and the session owes a `compile` that returns that graph, which shifts the
-   crate's surface from "run this program" to "prepare this model, then step it".
+   loop. **The step a service repeats is `lichen_compute::compute::graph::run`**, and it is
+   public:
+   > `pub fn run(graph: &Graph, backend_name: Backend, arguments: Vec<RunArgument>, policy: Policy)`
+   - the **graph is the caller's** — looked up once, held, run many times;
+   - the **policy is an argument**, so `Batch` needs no thread-local;
+   - the arguments are `RunArgument`s, and **`RunArgument::Resident { … }` means weights and
+     the cache stay resident across steps** with no re-upload — the channel the language
+     surface does not have, since a program's buffers are built inside its own source;
+   - the result **stays resident**: *"a value the device wrote stays a resident id and the
+     caller downloads it when it asks"* — which is exactly the one-readback-per-step the cost
+     table above measures.
+   Its own doc states the caller's obligation too: the graph handed in is *"the one a pass
+   handed back"*, so a session that never consults a pass runs without one. That is the
+   default and worth saying rather than assuming.
+   So the crate's surface should be **`prepare` a model (compile, look up the graph, hold it)
+   and `step` it**, with `run(source)` kept only as the harness its tests need.
 
 The seven probes, in one command:
 
