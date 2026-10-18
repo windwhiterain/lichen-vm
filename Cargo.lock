@@ -1090,6 +1090,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lichen-serve"
+version = "0.1.0"
+dependencies = [
+ "lichen-compute",
+ "lichen-compute-gpu",
+ "lichen-kernel-ir",
+ "lichen-language",
+]
+
+[[package]]
 name = "lichen-span"
 version = "0.1.0"
 

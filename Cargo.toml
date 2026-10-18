@@ -17,6 +17,7 @@ members = [
     "crates/lichen-testkit",
     "crates/lichen-runtime",
     "crates/lichen-compute",
+    "crates/lichen-serve",
     "crates/lichen-render",
     "crates/lichen-doc",
     "crates/lichen-perspective",
@@ -74,6 +75,7 @@ lichen-testkit = { path = "crates/lichen-testkit" }
 # so `lichen-compute` is what plugs it into the language rather than what contains it.
 lichen-runtime = { path = "crates/lichen-runtime" }
 lichen-compute = { path = "crates/lichen-compute" }
+lichen-serve = { path = "crates/lichen-serve" }
 lichen-render = { path = "crates/lichen-render" }
 lichen-doc = { path = "crates/lichen-doc" }
 lichen-perspective = { path = "crates/lichen-perspective" }

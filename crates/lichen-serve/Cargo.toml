@@ -1,0 +1,11 @@
+[package]
+name = "lichen-serve"
+version.workspace = true
+edition.workspace = true
+description = "A session that owns a compute backend and reports what one run asked the device for."
+
+[dependencies]
+lichen-compute.workspace = true
+lichen-compute-gpu.workspace = true
+lichen-kernel-ir.workspace = true
+lichen-language.workspace = true
