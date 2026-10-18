@@ -14,6 +14,7 @@ use lichen_kernel_ir::{
 use lichen_utils::extend::AsEnum;
 
 mod model;
+mod narrowed;
 mod qwen;
 mod service;
 
@@ -25,6 +26,7 @@ pub use model::{
 
 mod upload;
 
+pub use narrowed::narrowed_projection;
 pub use qwen::{Generated, Qwen, QwenRefusal};
 pub use service::{Served, Service};
 
