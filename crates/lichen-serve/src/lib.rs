@@ -219,6 +219,21 @@ impl Session {
     /// public, so the one-pass form is unreachable
     /// (`docs/notes/inference-service.md` §8).
     pub fn prepare(&self, source: &str) -> Result<Prepared<'_>, ServeRefusal> {
+        self.prepare_with_packs(source, &[])
+    }
+
+    /// Compile `source` once, with `packs` installed as graph passes **before** it is evaluated.
+    ///
+    /// # Invariant
+    /// A graph is recorded while the program's root is evaluated, so a pass installed after
+    /// [`Session::prepare`] would be applied to a graph that is already recorded. This composes the
+    /// language's compile and evaluate around the install, which is the only order that reaches the
+    /// recording — and with no packs nothing is installed, so [`Session::prepare`] is this call.
+    pub fn prepare_with_packs(
+        &self,
+        source: &str,
+        packs: &[lichen_compute::placement_pack::PlacementPack],
+    ) -> Result<Prepared<'_>, ServeRefusal> {
         let mut store = lichen_compute::language::new_store(None)
             .map_err(|error| ServeRefusal::Device(error.to_string()))?;
         if let Err(diagnostics) = lichen_language::run::evaluate_raw(source, None, &mut store) {
@@ -231,7 +246,11 @@ impl Session {
         }
         let mut store = lichen_compute::language::new_store(None)
             .map_err(|error| ServeRefusal::Device(error.to_string()))?;
-        let (_module, value, _root) = lichen_language::testing::run_at(source, None, &mut store);
+        let build = lichen_language::testing::compile_at(source, None, &mut store);
+        if !packs.is_empty() {
+            lichen_compute::automatic_tiling::install_tiling_with_packs(&build.module, packs);
+        }
+        let (_module, value, _root) = lichen_language::testing::finish(build);
         let Some(ComputeValue::Graph(id, backend)) = AsEnum::<ComputeValue>::as_enum(&value) else {
             return Err(ServeRefusal::Program(vec![
                 "this program's tail is not a recorded graph: preparing wants `compute.graph step` \

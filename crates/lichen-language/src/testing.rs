@@ -75,7 +75,43 @@ where
     finish(report.build.unwrap())
 }
 
-fn finish<P>(build: lichen_highlevel::checker::Build<P>) -> (Module<P>, P::Value, NodeId)
+/// Compile `source` and hand back the build with its root **unevaluated**.
+///
+/// # Invariant
+/// A graph is recorded while the root is evaluated, so a caller that must install a graph pass has
+/// to hold the build between the two steps: [`finish`] is the evaluation, and it is deliberately
+/// not folded into this one.
+pub fn compile_at<P>(
+    source: &str,
+    base: Option<&Path>,
+    store: &mut PackageStore<P>,
+) -> lichen_highlevel::checker::Build<P>
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+{
+    let (preprocessed, diags) = preprocess(source, base, store);
+    assert!(diags.is_empty(), "expected imports to resolve: {diags:?}");
+    let line_starts = lex::line_starts(source);
+    let report = compile_with_imports_at::<P>(
+        preprocessed.code,
+        &preprocessed.imports,
+        Some(store.registry()),
+        preprocessed.code_base,
+        &line_starts,
+        lichen_highlevel::no_native_ops(),
+    );
+    assert!(
+        report.ok(),
+        "expected {source:?} to check, got: {:?}",
+        report.diagnostics
+    );
+    report.build.unwrap()
+}
+
+/// Evaluate a compiled build, which is when the program's graph is recorded.
+pub fn finish<P>(build: lichen_highlevel::checker::Build<P>) -> (Module<P>, P::Value, NodeId)
 where
     P: LangProgramShape,
     P::Value: ValueType + 'static,
