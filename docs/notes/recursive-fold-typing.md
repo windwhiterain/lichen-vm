@@ -74,12 +74,33 @@ Each was implemented, measured on the repro, and reverted:
 | make `check_index`'s element type follow the runtime subscript | breaks even the working tuple-of-Ints fold with two *"not a container"* errors |
 | clone the return pair's type half explicitly, and deep-evaluate the exit's type cell | no change (the class still answers the template's read) |
 
-## 6. The open fix (the owner's call)
+## 6. The fix, decided
 
-The clone walk needs to carry a cloned cell's **class members** (the operations that decide
-it) per call, or the apply needs to decide the fold's return cell from the argument. Either is
-an engine change; a fix must keep the working cases unchanged and must not create a fourth
-unify site ([function-normalization](function-normalization.md) ruling 6).
+**The owner's verdict: route A — the clone walk carries a cloned cell's class members.**
+(The alternative, the apply deciding the fold's return cell from the argument, was
+rejected as the narrower special case.) The clone walk must, per call, clone the
+members that decide a cloned cell's class, so the fold's return cell is decided by the
+clone's own derived read instead of the template's. A fix must keep the working cases
+unchanged and must not create a fourth unify site
+([function-normalization](function-normalization.md) ruling 6).
+
+**The first attempt, and what it measured.** Implemented as stated: a helper over the
+class's member list, a per-pass `classes` set on the apply context (a class is carried
+once), and — on the clone path — the other members cloned after the clone is
+registered, so the pass's `regroup_clones` puts their clones in the clone's class.
+Measured on the repro: **no change** (`raw none: ?a`), and the working controls are
+unchanged (annotated fold `3: Int`, struct-literal base `7: Int`, un-annotated gcd
+`raw 6: ?a`, annotated gcd `6: Int`, the tuple control `7: Int`).
+
+A probe of the walk explains why: **every bare cell the walk clones arrives with a
+singleton class** (`size = 1`), and no `LowValue::Any` clone has a class larger than
+one. So the membership this note describes — the shared element cell's class holding
+the base arm's derived read — is **not present in the module the apply runs on**, even
+though it is what the checker's own unification built. The next step is therefore not
+in the walk's carry logic but in where the topology lives: find whether the checker's
+classes survive into the run module for this cell, or whether the deciding edge reaches
+the return type through a *reference* rather than a class (a shared cell referenced in
+place, which the walk correctly leaves alone).
 
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
