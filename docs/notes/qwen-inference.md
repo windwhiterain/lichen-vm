@@ -56,7 +56,7 @@ Four things cost a round and are worth not re-deriving:
 |---|---|
 | **Never park the files in a worktree.** | `git worktree remove --force` deletes what is inside it, and 3.78 GiB of downloads went with the worktree that held them. They live in `<checkout>/.model/`, which `.gitignore` names, and the tests read `LICHEN_MODEL_DIR` first. |
 | **`Start-Job` is not a background job.** | It is a child of the `pwsh` the harness starts, so it dies when that call returns — the file froze at the byte the call ended on. Only the harness's own background call persists. |
-| **Parallel ranged fetches stall; one connection works.** | Eight concurrent ranged `curl`s to ModelScope all sat at zero bytes for seventy seconds while a single 1 MiB range answered `206` in 1.4 s. The host throttles per address, so the parallel trick that helps on GitHub hurts here. |
+| **Sequential 16 MiB ranges are the way; the chunk size matters more than the connection count.** | Eight concurrent ranged `curl`s sat at zero bytes for seventy seconds, and 64 MiB ranges stalled at the same offset twice. Sixteen-MiB ranges fetched the same host at **7.1 MB/s** and finished both shards (3,441,185,608 and 622,329,984 bytes, each matching its manifest). Everything else was noise. |
 | **Do not kill `curl` while diagnosing.** | Every cleanup that stopped the processes also stopped the transfer: the same shard reached 117 MB, then 175 MB, then 106 MB on three attempts, and each of those was a transfer this session ended. |
 
 The CDN itself is fine: `curl -I -L` reaches a `302` to `cdn-lfs-cn-1.modelscope.cn` and answers
