@@ -318,7 +318,38 @@ pub struct Qwen<'session> {
     width: Width,
     /// The embedding's own bytes, which the head reads whole and unconverted when narrowed.
     embedding_bytes: Option<Vec<u8>>,
+    /// The layers' bytes read once, in the order they are used, when the model holds them.
+    ///
+    /// # Invariant
+    /// The page cache made a warm token 2.26 s cheaper than a cold one, which is the operating system
+    /// doing this job for 3.2 GB of halves: holding them here is the same saving made deliberate rather
+    /// than hoped for, and it is the one that needs no device memory.
+    held: Vec<Vec<u8>>,
+    /// The tensors held on the device, one entry per layer that does not stream.
+    ///
+    /// # Invariant
+    /// A resident is uploaded once and handed to every later token: what a layer costs then is its
+    /// dispatches and not its 96 MB, which is the difference between four and a half seconds and three.
+    resident: Vec<Option<Vec<crate::ResidentBuffer>>>,
 }
+
+/// How many tensors a layer holds, in the flat file's order.
+const TENSORS: usize = 11;
+
+/// The eleven tensors' element offsets and lengths, in the flat file's order.
+const SHAPES: [(usize, usize); TENSORS] = [
+    (GAIN, HIDDEN_SIZE),
+    (Q, 2048 * 2048),
+    (K, 1024 * 2048),
+    (V, 1024 * 2048),
+    (Q_NORM, 128),
+    (K_NORM, 128),
+    (O, 2048 * 2048),
+    (POST, HIDDEN_SIZE),
+    (GATE, 6144 * 2048),
+    (UP, 6144 * 2048),
+    (DOWN, 2048 * 6144),
+];
 
 impl<'session> Qwen<'session> {
     /// Read the tensors a forward needs in every token, and prepare the steps.
@@ -351,6 +382,8 @@ impl<'session> Qwen<'session> {
             embedding,
             width,
             embedding_bytes,
+            held: Vec::new(),
+            resident: (0..LAYERS).map(|_| None).collect(),
         })
     }
 
@@ -395,6 +428,69 @@ impl<'session> Qwen<'session> {
         Ok(Generated { tokens, per_token })
     }
 
+    /// Read every layer's bytes once and keep them, which is what a warm token already costs.
+    ///
+    /// # Invariant
+    /// The bytes are the width's own, so nothing is converted on the way in or out: a held layer is the
+    /// file's contents and a streamed one is the file, and they answer the same numbers.
+    pub fn hold_in_memory(&mut self) -> Result<(), QwenRefusal> {
+        for layer in 0..LAYERS {
+            self.held
+                .push(flat_bytes(&format!("layer{layer:02}"), self.width)?);
+        }
+        Ok(())
+    }
+
+    /// Hold the first `layers` layers' tensors on the device instead of streaming them.
+    ///
+    /// # Invariant
+    /// A layer held here is read once for the life of the model: every token after the first hands the
+    /// residents straight to the dispatches. What it costs is device memory, so how many layers a card can
+    /// hold is the caller's to decide — a 4 GB card fit none of the model, an 8 GB one fits all of it.
+    pub fn reside(&mut self, layers: usize) -> Result<(), QwenRefusal> {
+        for layer in 0..layers.min(LAYERS) {
+            let tensors = match self.width {
+                Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
+                Width::Narrowed => {
+                    Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?)
+                }
+            };
+            let mut held: Vec<crate::ResidentBuffer> = Vec::with_capacity(TENSORS);
+            for (offset, length) in SHAPES.iter() {
+                held.push(match &tensors {
+                    Tensors::Wide(values) => self
+                        .session
+                        .upload(&values[*offset..*offset + *length])
+                        .map_err(QwenRefusal::Step)?,
+                    Tensors::Narrowed(bytes) => {
+                        let start = offset * self.width.bytes();
+                        let end = (offset + length) * self.width.bytes();
+                        self.session
+                            .upload_narrowed(&bytes[start..end])
+                            .map_err(QwenRefusal::Step)?
+                    }
+                });
+            }
+            self.resident[layer] = Some(held);
+        }
+        Ok(())
+    }
+
+    /// One tensor of a layer, from the device when it is held there and from the host when it is not.
+    fn weight(
+        &self,
+        layer: usize,
+        tensors: &Tensors,
+        slot: usize,
+        offset: usize,
+        length: usize,
+    ) -> RunArgument {
+        match &self.resident[layer] {
+            Some(held) => RunArgument::Resident(held[slot]),
+            None => self.tensor(tensors, offset, length),
+        }
+    }
+
     /// The vocabulary head's weight, which is the embedding's own tensor.
     fn head_weight(&self) -> RunArgument {
         match &self.embedding_bytes {
@@ -434,10 +530,19 @@ impl<'session> Qwen<'session> {
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
         let tensors = match self.width {
-            Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
-            Width::Narrowed => {
-                Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?)
-            }
+            Width::Wide => match self.held.get(layer) {
+                Some(bytes) => Tensors::Wide(
+                    bytes
+                        .chunks_exact(4)
+                        .map(|word| f32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+                        .collect(),
+                ),
+                None => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
+            },
+            Width::Narrowed => match self.held.get(layer) {
+                Some(bytes) => Tensors::Narrowed(bytes.clone()),
+                None => Tensors::Narrowed(flat_bytes(&format!("layer{layer:02}"), self.width)?),
+            },
         };
         let session = self.session;
         let steps = &self.steps;
