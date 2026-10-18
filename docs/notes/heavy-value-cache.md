@@ -869,10 +869,12 @@ table keys, so the small freeze is the honest mode):
 | cold: empty cache, compile and write | 260.89 | 4075.05 | frozen 13, files 12 |
 | **warm: load and reuse** | **81.71** | **831.92** | **reused 12, frozen 1** |
 
-So a restart over its own cache is **3.3× cheaper at `128 × 128` and 4.7× at `512 × 512`**, the
-values equal a fresh compile's at both sizes, and twelve of the thirteen cells survive. The one
-that does not is `octave_a`: its closure still holds the kernel-creation operation, an undecided
-compute node the `ReadOnly` freeze keeps, so it is exactly the cell a warm start recomputes.
+So a restart over its own cache is **2.5–3.3× cheaper at `128 × 128`** — the warm arm held at
+78–82 ms while the fresh one ranged 195–267 ms across runs, §9.2's variance again — **and 4.7× at
+`512 × 512`**, the values equal a fresh compile's at both sizes, and twelve of the thirteen cells
+survive. The one that does not is `octave_a`: its closure still holds the kernel-creation
+operation, an undecided compute node the `ReadOnly` freeze keeps, so it is exactly the cell a warm
+start recomputes.
 
 ## 10. Costs and failure modes
 
