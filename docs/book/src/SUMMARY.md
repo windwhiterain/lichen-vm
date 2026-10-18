@@ -15,3 +15,4 @@
 
 - [The Value and Its Type](ch05-values-and-types.md)
 - [Laziness, Sharing, and Scope](ch06-laziness.md)
+- [Compound Values: Tuples and Arrays](ch07-tuples-and-arrays.md)
