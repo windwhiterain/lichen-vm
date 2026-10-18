@@ -25,9 +25,16 @@ pub struct Record {
     pub artifact: Vec<u8>,
 }
 
-/// One source's cache directory.
-fn dir_of(dir: &HostPath, source_id: &str) -> PathBuf {
-    dir.join(format!("cells-{:016x}", tag(source_id)))
+/// One source's cache directory, scoped by the vocabulary that wrote it.
+///
+/// # Invariant
+/// The vocabulary is part of the path, so two program types never read each other's records:
+/// a record's value encoding is the plugin set's, and a shared leaf name is not a shared meaning.
+fn dir_of(dir: &HostPath, source_id: &str, vocabulary: &str) -> PathBuf {
+    dir.join(format!(
+        "cells-{:016x}",
+        tag(&format!("{source_id}|{vocabulary}"))
+    ))
 }
 
 /// One cell's file, named by its path so a rewritten cell replaces its own file.
@@ -46,8 +53,13 @@ fn tag(source_id: &str) -> u64 {
 }
 
 /// Write `records` for `source_id`, one file per cell, leaving the other cells alone.
-pub fn write(dir: &HostPath, source_id: &str, records: &[Record]) -> io::Result<()> {
-    let source_dir = dir_of(dir, source_id);
+pub fn write(
+    dir: &HostPath,
+    source_id: &str,
+    vocabulary: &str,
+    records: &[Record],
+) -> io::Result<()> {
+    let source_dir = dir_of(dir, source_id, vocabulary);
     fs::create_dir_all(&source_dir)?;
     for record in records {
         let mut bytes = vec![FORMAT];
@@ -68,8 +80,8 @@ pub fn write(dir: &HostPath, source_id: &str, records: &[Record]) -> io::Result<
 }
 
 /// Read `source_id`'s records; a missing directory or a malformed file is a miss.
-pub fn read(dir: &HostPath, source_id: &str) -> Vec<Record> {
-    let Ok(entries) = fs::read_dir(dir_of(dir, source_id)) else {
+pub fn read(dir: &HostPath, source_id: &str, vocabulary: &str) -> Vec<Record> {
+    let Ok(entries) = fs::read_dir(dir_of(dir, source_id, vocabulary)) else {
         return Vec::new();
     };
     let mut records = Vec::new();
@@ -114,8 +126,13 @@ fn decode(bytes: &[u8]) -> Option<Record> {
 /// # Invariant
 /// Only files inside the source's own directory are removed, and only ones this container
 /// wrote: a renamed or unmarked binding's file would otherwise stay forever.
-pub fn prune(dir: &HostPath, source_id: &str, keep: &[Path]) -> io::Result<usize> {
-    let source_dir = dir_of(dir, source_id);
+pub fn prune(
+    dir: &HostPath,
+    source_id: &str,
+    vocabulary: &str,
+    keep: &[Path],
+) -> io::Result<usize> {
+    let source_dir = dir_of(dir, source_id, vocabulary);
     let keep: std::collections::HashSet<PathBuf> =
         keep.iter().map(|path| file_of(&source_dir, path)).collect();
     let Ok(entries) = fs::read_dir(&source_dir) else {

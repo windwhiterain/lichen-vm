@@ -767,6 +767,25 @@ probe needs a package store, so what is verified is the predicate's two halves �
 self-contained cell's `refs` is exactly its own key (`files = 2` after the fix), and any other
 key is what the guard tests.
 
+### 9.16 The cache directory is scoped by the vocabulary
+
+A record's value encoding is the **plugin set's**, and the artifact codec distinguishes leaves by
+type name — so two plugin sets that share a leaf name write bytes neither can safely read. §9.13
+recorded this as an open hazard with the fix "the directory must be scoped per plugin set, as the
+artifact store is"; this is that fix.
+
+The scoping is the program type: `cellcache`'s directory name folds
+`std::any::type_name::<P>()` with the source id, so two program types never see each other's
+records. Measured by pointing **both** the bare-language pipeline and the compute pipeline at one
+cache root — the root then holds two directories, `cells-5498c61155aeeede` and
+`cells-81140dc1e61a4251` — while each probe's own rows are exactly what they were. Both probes
+now use their own root so a run starts cold.
+
+The honest limit: `type_name` is not a stable ABI. Across builds it moves with the code's
+structure, which costs a **miss** — safe — and never a read of another vocabulary's bytes. A
+persisted cache that should survive a rebuild would need a deliberate scope key (the artifact
+store's `compiler_slot_key` is that shape) instead of a type name; that is not built.
+
 ## 11. What would falsify it
 
 - **The key fold dominates a build.** Then §5's "resolve is already whole-program" stops

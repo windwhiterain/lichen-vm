@@ -90,11 +90,14 @@ fn main() {
         return;
     }
     let starts = lichen_language::lex::line_starts(PIPELINE);
+    // Its own root: the vocabulary scopes the directory, and a probe must start cold.
+    let _ = std::fs::remove_dir_all("target/compute-cells");
     let mut session = BufferSession::<LangProgram>::with_registry(
         preprocessed.code,
         "pipeline.lichen",
         store.registry(),
-    );
+    )
+    .with_cell_cache("target/compute-cells");
     session.set_view(
         preprocessed.code,
         preprocessed.code_base,

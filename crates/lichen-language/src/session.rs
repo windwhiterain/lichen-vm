@@ -437,7 +437,7 @@ where
         let Some(dir) = self.cell_cache.clone() else {
             return;
         };
-        for record in crate::cellcache::read(&dir, &self.source_id) {
+        for record in crate::cellcache::read(&dir, &self.source_id, std::any::type_name::<P>()) {
             let key = ModuleKey::from_raw(record.module);
             let mut registry = self
                 .registry
@@ -512,9 +512,10 @@ where
                 artifact,
             });
         }
-        let _ = crate::cellcache::write(dir, &self.source_id, &records);
+        let _ = crate::cellcache::write(dir, &self.source_id, std::any::type_name::<P>(), &records);
         let retained: Vec<Path> = self.cells.paths().cloned().collect();
-        let _ = crate::cellcache::prune(dir, &self.source_id, &retained);
+        let _ =
+            crate::cellcache::prune(dir, &self.source_id, std::any::type_name::<P>(), &retained);
     }
 
     pub fn compile(&mut self) -> SessionReport<P> {
