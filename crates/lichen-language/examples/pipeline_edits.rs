@@ -208,6 +208,46 @@ fn main() {
         rows.len() - mismatched,
         rows.len(),
     );
+
+    // Restart: a session with an empty registry over a cache the earlier one stored.
+    let settled = pipeline.source();
+    let dir = "target/pipeline-cells";
+    let _ = std::fs::remove_dir_all(dir);
+    let start = Instant::now();
+    let cold = session_with_cache(&settled, dir).compile();
+    let cold_ms = ms(start.elapsed());
+    let start = Instant::now();
+    let warm = session_with_cache(&settled, dir).compile();
+    let warm_ms = ms(start.elapsed());
+    let start = Instant::now();
+    let loaded = session_with_loader(&settled, dir).compile();
+    let loaded_ms = ms(start.elapsed());
+    let start = Instant::now();
+    let _ = compile(&settled);
+    let fresh_ms = ms(start.elapsed());
+    println!(
+        "\nrestart on the same source: fresh {fresh_ms:.2} ms; cold {cold_ms:.2} ms (frozen {}); \
+         warm {warm_ms:.2} ms (reused {}, frozen {}); load-only {loaded_ms:.2} ms (reused {})",
+        cold.cells.frozen, warm.cells.reused, warm.cells.frozen, loaded.cells.reused,
+    );
+}
+
+/// A session over an empty registry that also writes the cache back.
+fn session_with_cache(source: &str, dir: &str) -> BufferSession<LangProgram> {
+    use std::sync::{Arc, RwLock};
+
+    let registry = Arc::new(RwLock::new(lichen_lowlevel::Registry::<LangProgram>::new()));
+    BufferSession::<LangProgram>::with_registry(source, "pipeline.lichen", registry)
+        .with_cell_cache(dir)
+}
+
+/// A session over an empty registry that only reads the cache.
+fn session_with_loader(source: &str, dir: &str) -> BufferSession<LangProgram> {
+    use std::sync::{Arc, RwLock};
+
+    let registry = Arc::new(RwLock::new(lichen_lowlevel::Registry::<LangProgram>::new()));
+    BufferSession::<LangProgram>::with_registry(source, "pipeline.lichen", registry)
+        .with_cell_cache_loading(dir)
 }
 
 fn measure(session: &mut BufferSession<LangProgram>, source: &str, label: String) -> Row {

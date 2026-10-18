@@ -109,6 +109,8 @@ where
     last: Option<LastState>,
     /// Where retained cells persist across processes, when the caller asked for it.
     cell_cache: Option<PathBuf>,
+    /// Whether a compile writes the cache back; a reader-only consumer loads and stops.
+    cell_cache_save: bool,
 }
 
 /// The snapshot of the buffer a compile ran under.
@@ -247,6 +249,7 @@ where
             cache: None,
             last: None,
             cell_cache: None,
+            cell_cache_save: true,
         }
     }
 
@@ -257,6 +260,16 @@ where
     /// process-local, so a collision is a missed cell, never a shadowed one.
     pub fn with_cell_cache(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cell_cache = Some(dir.into());
+        self
+    }
+
+    /// [`Self::with_cell_cache`] for a consumer that only reads what another session stored.
+    ///
+    /// # Invariant
+    /// Nothing is written, so a reader cannot disturb the cache a writer owns.
+    pub fn with_cell_cache_loading(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cell_cache = Some(dir.into());
+        self.cell_cache_save = false;
         self
     }
 
@@ -459,13 +472,13 @@ where
         }
     }
 
-    /// Store the retained cells for this source; a failed write is a missed cache.
-    fn save_cells(&self, dir: &PathBuf) {
+    /// Store the cells this compile froze; a failed write is a missed cache.
+    fn save_cells(&self, dir: &PathBuf, frozen: &[Path]) {
         if !<P::Codec as crate::persist::ArtifactCodec<P>>::PERSISTENT {
             return;
         }
         let mut records = Vec::new();
-        for path in self.cells.paths() {
+        for path in frozen {
             let Some(reference) = self.cells.reference(path) else {
                 continue;
             };
@@ -712,6 +725,11 @@ where
             &resolved.prelude,
             Some(&self.cells),
         );
+        // Only what this compile froze is written: a reused cell's file is already there.
+        let frozen: Vec<Path> = compiled_cells
+            .iter()
+            .map(|cell| cell.path.clone())
+            .collect();
         let mut report: Report<P> = build_report::<P>(
             Some(ir),
             Some(span_index),
@@ -722,11 +740,13 @@ where
             compiled_cells,
             &self.source_id,
         );
-        if let Some(dir) = self.cell_cache.clone() {
+        if self.cell_cache_save
+            && let Some(dir) = self.cell_cache.clone()
+        {
             for (path, key) in &after {
                 self.cells.set_key(path, key.clone());
             }
-            self.save_cells(&dir);
+            self.save_cells(&dir, &frozen);
         }
         let check_diagnostics: Vec<Diag<P>> = report
             .diagnostics

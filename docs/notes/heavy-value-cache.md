@@ -676,6 +676,8 @@ The limits, stated rather than discovered:
   artifact store already is.
 
 
+## 10. Costs and failure modes
+
 - **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
   its value and not its template.** Measured in §9.2 and §9.3: freezing six cells whose
   values came from ~900-application applies cost **≈22 ms per cell in release** (≈165 ms in
@@ -711,6 +713,33 @@ The limits, stated rather than discovered:
 - **The window is an accelerator, so it may be wrong without being unsound** — but only once
   the key path is the judge. Until then it is still load-bearing, which is why propagation
   is kept rather than deleted (§1).
+
+### 9.14 A restart on the pipeline, and what the write costs
+
+The tuned pipeline (§9.11) restarted over a cache an earlier session stored, release build:
+
+| arm | ms | cells |
+|---|---|---|
+| a fresh compile | 215.84 | — |
+| cold: empty cache, compile and write | 521.28 | frozen 7 |
+| **warm: load, reuse, write** | **96.42** | reused 7, frozen 0 |
+| load only, no write | 85.57 | reused 7 |
+
+So **a restart over its own cache is 2.24× cheaper than recompiling**, and the value is the
+same. A second run read warm 123.09 ms against fresh 229.59, so the ratio is **1.9–2.2×**
+across runs — §9.2's variance, not a different result.
+
+**The first version of this row read 180.55 ms and that was the finding.** It rewrote *every*
+retained cell, so the write of seven 14 030-to-43 148-node closures cost ≈90 ms — as much as
+the reuse saved, and the restart measured 1.15×. Two changes fixed it: the container became
+**one file per cell** (so a rewritten cell replaces only its own file), and `save_cells` now
+takes the paths `compile_resolved_with_cells` actually froze instead of every retained path. On
+the warm arm nothing is frozen, so nothing is serialized, and the write drops to ~11 ms.
+
+The price is on the other side. The cold arm pays **≈305 ms to persist seven heavy closures** —
+a cell's freeze is its operand chain (§9.3), and writing it is writing that chain. So the cache
+pays for itself when a source is opened again, and a program compiled once and abandoned pays
+for nothing but the file.
 
 ## 11. What would falsify it
 

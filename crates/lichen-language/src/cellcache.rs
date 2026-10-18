@@ -25,9 +25,14 @@ pub struct Record {
     pub artifact: Vec<u8>,
 }
 
-/// One source's cache file.
-fn file(dir: &HostPath, source_id: &str) -> PathBuf {
-    dir.join(format!("cells-{:016x}.bin", tag(source_id)))
+/// One source's cache directory.
+fn dir_of(dir: &HostPath, source_id: &str) -> PathBuf {
+    dir.join(format!("cells-{:016x}", tag(source_id)))
+}
+
+/// One cell's file, named by its path so a rewritten cell replaces its own file.
+fn file_of(source_dir: &HostPath, path: &Path) -> PathBuf {
+    source_dir.join(format!("{:016x}.bin", tag(&format!("{path:?}"))))
 }
 
 /// A stable tag for a source id: a name, hashed so any id is a legal file name.
@@ -40,11 +45,12 @@ fn tag(source_id: &str) -> u64 {
         })
 }
 
-/// Write `records` for `source_id`, replacing whatever was there.
+/// Write `records` for `source_id`, one file per cell, leaving the other cells alone.
 pub fn write(dir: &HostPath, source_id: &str, records: &[Record]) -> io::Result<()> {
-    let mut bytes = vec![FORMAT];
-    put_u32(&mut bytes, records.len() as u32);
+    let source_dir = dir_of(dir, source_id);
+    fs::create_dir_all(&source_dir)?;
     for record in records {
+        let mut bytes = vec![FORMAT];
         put_path(&mut bytes, &record.path);
         bytes.extend_from_slice(&record.module.to_le_bytes());
         put_u32(&mut bytes, record.key.len() as u32);
@@ -53,47 +59,54 @@ pub fn write(dir: &HostPath, source_id: &str, records: &[Record]) -> io::Result<
         }
         bytes.extend_from_slice(&(record.artifact.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&record.artifact);
+        let target = file_of(&source_dir, &record.path);
+        let temporary = target.with_extension("tmp");
+        fs::write(&temporary, &bytes)?;
+        fs::rename(&temporary, &target)?;
     }
-    fs::create_dir_all(dir)?;
-    let target = file(dir, source_id);
-    let temporary = target.with_extension("tmp");
-    fs::write(&temporary, &bytes)?;
-    fs::rename(&temporary, &target)
+    Ok(())
 }
 
-/// Read `source_id`'s records; a missing or malformed file is an empty cache.
+/// Read `source_id`'s records; a missing directory or a malformed file is a miss.
 pub fn read(dir: &HostPath, source_id: &str) -> Vec<Record> {
-    match fs::read(file(dir, source_id)) {
-        Ok(bytes) => decode(&bytes).unwrap_or_default(),
-        Err(_) => Vec::new(),
+    let Ok(entries) = fs::read_dir(dir_of(dir, source_id)) else {
+        return Vec::new();
+    };
+    let mut records = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "bin") {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&path)
+            && let Some(record) = decode(&bytes)
+        {
+            records.push(record);
+        }
     }
+    records
 }
 
-fn decode(bytes: &[u8]) -> Option<Vec<Record>> {
+fn decode(bytes: &[u8]) -> Option<Record> {
     let mut cursor = 0usize;
     if take(bytes, &mut cursor, 1)?[0] != FORMAT {
         return None;
     }
-    let count = u32_of(take(bytes, &mut cursor, 4)?)?;
-    let mut records = Vec::new();
-    for _ in 0..count {
-        let path = read_path(bytes, &mut cursor)?;
-        let module = u64_of(take(bytes, &mut cursor, 8)?)?;
-        let key_len = u32_of(take(bytes, &mut cursor, 4)?)? as usize;
-        let mut key = Vec::with_capacity(key_len.min(1024));
-        for _ in 0..key_len {
-            key.push(u64_of(take(bytes, &mut cursor, 8)?)?);
-        }
-        let len = u64::from_le_bytes(take(bytes, &mut cursor, 8)?.try_into().ok()?) as usize;
-        let artifact = take(bytes, &mut cursor, len)?.to_vec();
-        records.push(Record {
-            path,
-            module,
-            key,
-            artifact,
-        });
+    let path = read_path(bytes, &mut cursor)?;
+    let module = u64_of(take(bytes, &mut cursor, 8)?)?;
+    let key_len = u32_of(take(bytes, &mut cursor, 4)?)? as usize;
+    let mut key = Vec::with_capacity(key_len.min(1024));
+    for _ in 0..key_len {
+        key.push(u64_of(take(bytes, &mut cursor, 8)?)?);
     }
-    Some(records)
+    let len = u64::from_le_bytes(take(bytes, &mut cursor, 8)?.try_into().ok()?) as usize;
+    let artifact = take(bytes, &mut cursor, len)?.to_vec();
+    Some(Record {
+        path,
+        module,
+        key,
+        artifact,
+    })
 }
 
 fn put_u32(out: &mut Vec<u8>, value: u32) {
