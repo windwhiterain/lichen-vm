@@ -50,6 +50,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
 | P1-46 | high | highlevel, language | An under-supplied instantiation through a parameter is accepted with a short value | todo — measured `S = struct{.a Int, .b Int}` ; `g = c => c(.a 1)` ; `g S` answers `raw[raw 1]: struct{…}`, and a later `.b` read panics the run with `index 1 out of bounds (array length 1)` |
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | fixed — the miss now carries the argument names the checker recorded, so `S = struct{.a Int}` ; `g = c => c(.z 1)` ; `g S` answers `no argument is named a — the arguments are named z` |
+| P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | todo — measured `f = (x : Int # 4) => x` ; `f (1 # 4)` is refused at the argument, while `S = struct{.a Int # 4}` ; `S(.a 1 # 4)` is accepted; the perspective rule (`attributes.md` line 172) says `declared ⊑ value`, so equal perspectives must pass, and the message prints the two types as equal |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -808,7 +809,44 @@ argument's name and the key's field name are both known at diag time — so it n
 runtime check at all. A valid named set and a duplicate are unchanged; `D3`'s smallest
 test extends the deferred-instantiation test with the unknown name.
 
-## Decisions## Decisions## Decisions
+### P1-48 — An equal perspective is refused at an apply, with `expected Int, found Int` `verified`
+
+Found while auditing P1-44's requirement mechanism (`# n` is the `Perspective`
+attribute). The intended rule is stated in [attributes](attributes.md) §"The lattice":
+`declared ⊑ value` (`declared | value`), `0` is the top with
+`divides(0, sup) ⟺ sup == 0` and `divides(n, 0)` holding. The **instantiation** path
+follows it; the **apply** path refuses an equal perspective:
+
+```lichen
+S = struct{.a Int # 4}
+S(.a 1 # 4)              -- accepted (`1: Int`), and `S(.a 1 # 8)` too (4 | 8)
+S(.a 1 # 2)              -- refused `expected 4, found 2`, by the rule
+
+f = (x : Int # 4) => x
+f (1 # 4)                -- refused `expected Int, found Int` at the argument
+```
+
+Pressured four ways and refused every time: a bound value (`y = 1 # 4; f y`), a
+literal, a body that ignores the parameter (`f = (x : Int # 4) => 1`), and an inner
+call (`g = x => x; f = (x : Int # 4) => g x`). The *other* combinations are
+consistent with the rule, so the defect is narrow: `f 1` is accepted
+(`divides(n, 0)`), and `f (1 # 8)` is refused by the same nonsense message (fine by
+the rule's letter — `0` declared is not the top for a *value* — but the sentence says
+nothing about perspectives). The message prints the two *types* equal, so it is not
+the perspective unify's `expected 4, found 2` either: the failing unify is a type
+unify over two `Int`s, and the perspective-annotated argument's pair reaches it with
+something the plain one does not.
+
+Fix direction: the apply's parameter slot unify must compare the perspective element
+the way the instantiation does (`Perspective::unify_slots`, relaxed by
+`is_subtype`), and a failure must print the two perspectives, never two equal types.
+The first step is to find which unify refuses: the apply's `argument_pair` carries the
+perspective as element 2 (`lambda.rs`'s `parameter/argument` slots), so a plain unify
+of the two pairs meets `[1, Int, 4]` against a parameter slot whose attribute cell is
+still undecided — the trap P4-12 and P1-44 both measured. A regression test belongs
+with the fix (`D3`).
+
+## Decisions## Decisions## Decisions## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
