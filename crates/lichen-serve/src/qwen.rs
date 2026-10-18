@@ -338,7 +338,7 @@ pub struct Qwen<'session> {
     /// What the weights are held and handed over at.
     width: Width,
     /// The embedding's own bytes, which the head reads whole and unconverted when narrowed.
-    embedding_bytes: Option<Vec<u8>>,
+    embedding_bytes: Option<std::sync::Arc<[u8]>>,
     /// The layers' bytes read once, in the order they are used, when the model holds them.
     ///
     /// # Invariant
@@ -346,6 +346,8 @@ pub struct Qwen<'session> {
     /// doing this job for 3.2 GB of halves: holding them here is the same saving made deliberate rather
     /// than hoped for, and it is the one that needs no device memory.
     held: Vec<Vec<std::sync::Arc<[u8]>>>,
+    /// The vocabulary head's weight, when it is on the device.
+    head: Option<crate::ResidentBuffer>,
     /// The tensors held on the device, one entry per layer that does not stream.
     ///
     /// # Invariant
@@ -392,7 +394,7 @@ impl<'session> Qwen<'session> {
                 (
                     halves_to_floats(&norm),
                     halves_to_floats(&bytes[..HIDDEN_SIZE * 2]),
-                    Some(bytes),
+                    Some(std::sync::Arc::from(bytes)),
                 )
             }
         };
@@ -404,6 +406,7 @@ impl<'session> Qwen<'session> {
             width,
             embedding_bytes,
             held: Vec::new(),
+            head: None,
             resident: (0..LAYERS).map(|_| None).collect(),
         })
     }
@@ -531,13 +534,35 @@ impl<'session> Qwen<'session> {
 
     /// The vocabulary head's weight, which is the embedding's own tensor.
     fn head_weight(&self) -> RunArgument {
+        if let Some(head) = self.head {
+            return RunArgument::Resident(head);
+        }
         match &self.embedding_bytes {
             None => floats(&self.embedding),
-            Some(bytes) => RunArgument::Buffer {
+            Some(bytes) => RunArgument::BufferShared {
                 class: lichen_kernel_ir::ScalarClass::BFloat16,
-                data: bytes.clone(),
+                data: std::sync::Arc::clone(bytes),
             },
         }
+    }
+
+    /// Place the vocabulary head's weight, which is the embedding's own tensor and the largest one.
+    ///
+    /// # Invariant
+    /// The head is read once a token and is 593 MB, so a token that streams it pays a staging buffer of the
+    /// same size beside the weights already on the device: placed, it is one reference count.
+    pub fn place_head(&mut self) -> Result<(), QwenRefusal> {
+        let Some(bytes) = &self.embedding_bytes else {
+            return Err(QwenRefusal::Weights(
+                "the wide model's head is not a half-width tensor".to_string(),
+            ));
+        };
+        let placed = self
+            .session
+            .place(bytes, lichen_kernel_ir::ScalarClass::BFloat16)
+            .map_err(QwenRefusal::Step)?;
+        self.head = Some(placed);
+        Ok(())
     }
 
     /// The argument one tensor of a layer is handed over as.
