@@ -203,6 +203,15 @@ reads one buffer**, so weigh, exponentiate and scale each bind what they combine
 the scale writes transposed so the last fold reads a contiguous run. That rule is what made the
 earlier two-kernel and one-kernel attempts fail.
 
+**A transformer block is one step: twelve kernels, one submission.** Attention over the resident cache,
+then a residual, a reduce-and-broadcast, and a projection — over two sequences of two units
+(`crates/lichen-serve/tests/block_step.rs`). Measured: the step answered
+`42.555138, 56.740185, 12.516237, 15.980333` against an **independently written** host block's
+`42.555157, 56.740208, 12.51623, 15.980322` — agreement to six significant digits, from two
+implementations that share no code. Twelve dispatches is near the low end of the 13 to 18 a real layer
+takes and nowhere near the 64 cap, so **a block is one submission and a stack of blocks is what needs
+the scoped-step plan**: at five blocks the count reaches sixty, and the sixth crosses.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a
