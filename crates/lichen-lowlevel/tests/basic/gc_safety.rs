@@ -243,7 +243,7 @@ fn a_table_entry_naming_a_scope_node_moves_with_the_collect() {
     assert_eq!(m.node_block(value_node), root);
 }
 
-/// The repro for `P1-52`: a parent-block payload names a non-root scope node.
+/// A hand-built module may break the block boundary; the engine does not validate it.
 #[test]
 #[ignore = "P1-52: a parent-block payload may name a non-root scope node"]
 fn a_parent_block_array_naming_a_scope_node_keeps_it() {

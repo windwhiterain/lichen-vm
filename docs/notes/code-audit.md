@@ -56,7 +56,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 | P1-51 | high | lowlevel | A surviving function's template list names released nodes after a collect | fixed — measured on the example corpus before the fix: `FunctionId(3v1)`, homed in `4v1`, listed 23 nodes of the released `5v1`. A node's owner records its function, so `garbage_collect` now keeps every node of a function whose home outlives the block (`owned_by_surviving_function`) and moves it into the target; after the fix the corpus leaves no dangling function node, and the contracts are pinned in `basic::gc_safety` |
-| P1-52 | high | lowlevel, language | A collect releases a node a live parent-block payload names | blocked:D21 — the walk cannot see an incoming edge from the parent block; measured repo (`#[ignore]`d in `basic::gc_safety`) has the parent's array name `[scope_root, sibling]` and the collect releases `sibling`, and the language layer produces the shape itself (`x = [@gc 1, 2]`, pinned by the ignored `block_boundary` test). The retired deep trigger panicked on this shape; options in D21, readings in [gc-trigger-design](gc-trigger-design.md) §8 |
+| P1-52 | high | lowlevel, language | A collect releases a node a live parent-block payload names | fixed — the language layer guarantees the boundary: `check_gc` gives the parent `Index(pair, 0)`/`Index(pair, 1)` reads, so `x = [@gc 1, 2]` names a parent node instead of the scope's value cell; pinned by `block_boundary`, which scans every payload and operand of a language corpus (0 violations). The engine does not validate the contract, so a hand-built module can still break it — the ignored `basic::gc_safety` repro records that host contract (`D21`) |
 
 ## P1 — correctness
 
@@ -1547,18 +1547,16 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   function's template body:* it keeps a whole scope alive for the module's lifetime to serve
   calls that may never come.
 
-- **D21 — How does a collect keep a node only a parent-block payload names? — OPEN.** The
-  block boundary permits only a scope's root to be named from outside, and the language layer
-  does **not** hold it: `check_gc` re-exports the inner's value and type cells as the parent's
-  handles, so `x = [@gc 1, 2]` builds a parent array naming the scope's value cell — measured
-  by the (ignored) boundary pin in `crates/lichen-language/tests/language/block_boundary.rs`,
-  which scans every payload and operand of a language corpus. The aliasing repair was tried and
-  **rejected by measurement**: giving the parent its own cell and unifying it with the inner's
-  makes `@gc f 41` answer `none` (the engine does not redirect a class member's read through
-  its representative), and using the declared root as the value handle breaks a block scope
-  (its value is its tail, not its root). Candidates: **(a) change the engine's read model** so
-  a class member without a value reads the class's value, which makes the alias repair sound
-  and keeps the checker boundary-clean; **(b) a per-block incoming-reference count**,
-  maintained on every edge write and re-keyed on every block move; **(c) a parent-block scan
-  at the collect** — O(parent) per collect, which makes a per-call scope in a loop quadratic.
-  The maintainer's call; the engine repro is ignored in `basic::gc_safety`.
+- **D21 — How does a collect keep a node only a parent-block payload names? — DECIDED: the
+  language layer guarantees the boundary; the engine does not validate.** A referrer may name
+  its own block, an ancestor (the ancestor outlives it), a parentless block (never released),
+  or a child scope's declared root. The language front end holds it **by construction**:
+  `check_gc` gives the parent `Index(pair, 0)` and `Index(pair, 1)` reads of the scope's pair,
+  so the declared root is the only child node a parent names, and reading that handle is what
+  collects the scope. Measured: the `block_boundary` pin scans every payload and operand of a
+  language corpus and finds 0 violations (it failed on `x = [@gc 1, 2]` before the change).
+  *Rejected — a parent cell aliased to the inner's:* `@gc f 41` answered `none`, because the
+  engine does not redirect a class member's read through its representative; *rejected — the
+  declared root as the value handle:* a block scope's value is its tail, not its root. The
+  engine stays unvalidated by decision, so a hand-built module may still break the boundary —
+  the ignored repro in `basic::gc_safety` records that contract.

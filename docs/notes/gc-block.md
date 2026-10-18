@@ -128,12 +128,18 @@ leave **no** dangling function node.
 **The safety contracts are pinned in `gc_safety.rs`**: a surviving function's template and
 its assert conditions move with the collect, a function homed in the released block dies
 with its template, a class member's payload is re-allocated in its own arena, a value cycle
-terminates, and a table entry's nodes move. One shape is still open and its repro is
-`#[ignore]`d there: a **parent-block payload naming a non-root scope node** (a node id the
-walk cannot see from its root). The language layer produces that shape itself — `x = [@gc 1,
-2]` builds a parent array naming the scope's value cell, which the boundary pin in
-`block_boundary.rs` measures — so this is `P1-52`'s open decision in
-[code-audit](code-audit.md).
+terminates, and a table entry's nodes move.
+
+**The block boundary holds at the language layer.** The collector may release only what no
+surviving structure names, and the contract is: a referrer may name its own block, an
+ancestor (the ancestor outlives it), a parentless block (a function body or the module root,
+never released), or a child scope's **declared root**. The front end holds it by
+construction: `check_gc` gives the parent `Index(pair, 0)` and `Index(pair, 1)` reads of the
+scope's pair, so the parent names the declared root only, and reading that handle is what
+collects the scope. The `block_boundary` test scans every payload and operand of a language
+corpus and measures **0** violations. The engine does not validate the contract, by decision,
+so a hand-built module can still break it — the `#[ignore]`d repro in `gc_safety.rs` records
+that host contract (`D21` in [code-audit](code-audit.md)).
 
 ## What it actually frees, measured
 
@@ -193,9 +199,8 @@ and the tables are pruned in the build that follows it. A host that reads a
   release is not promised for a body whose scope a definition-pass read already
   finished.
 - **An undecided scope is not collected at all**, by the rule above.
-- **A parent-block payload naming a non-root scope node is not prevented.** The block
-  boundary says only the scope's root may be named from outside, and the language layer
-  does not hold it: `@gc` re-exports the inner's value and type cells as the parent's
-  handles, so `x = [@gc 1, 2]` names the scope's value cell from the parent. The collector
-  keeps such a node only when another edge reaches it. Open as `P1-52`; the language-side
-  boundary pin is `#[ignore]`d in `block_boundary.rs`, the engine repro in `gc_safety.rs`.
+- **The engine does not validate the block boundary.** The language front end holds it by
+  construction (`check_gc`'s parent reads, pinned by `block_boundary.rs`), but a hand-built
+  module may still name a non-root scope node from its parent; the collector then keeps it
+  only when another edge reaches it. That is the `#[ignore]`d host-contract repro in
+  `gc_safety.rs` (`D21`).

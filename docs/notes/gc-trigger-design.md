@@ -186,17 +186,18 @@ walks the block subtree and re-walks those nodes, which moves them into the targ
 fix the corpus' two collects leave **no** dangling function node, and the closure-escape
 programs are unit tests (`gc_block::a_closure_released_from_a_scope_is_still_callable`).
 
-**Open — a parent-block payload naming a non-root scope node** (`P1-52`). The block boundary
-says only a scope's root may be named from outside, and the language layer does not hold it:
-`check_gc` re-exports the inner's value and type cells as the parent's handles, so
-`x = [@gc 1, 2]` builds a parent array naming the scope's value cell (measured by the ignored
-`block_boundary` pin). The aliasing repair was tried and rejected by measurement: a parent
-cell unified with the inner's makes `@gc f 41` answer `none` — the engine does not redirect a
-class member's read through its representative — and the declared root as the value handle
-breaks a block scope. So the candidates are a **read-model change** (a class member without a
-value reads the class's value, which makes aliasing sound), a per-block incoming-reference
-count, or a parent-block scan — the last two cost what this collector is built to avoid. The
-repros are `#[ignore]`d in `basic::gc_safety` (engine) and `block_boundary` (language).
+**Fixed — the language layer holds the block boundary** (`P1-52`, decided `D21`). The
+collector may release only what no surviving structure names; the contract is that a referrer
+may name its own block, an ancestor, a parentless block, or a child scope's declared root.
+The front end holds it by construction: `check_gc` gives the parent `Index(pair, 0)` and
+`Index(pair, 1)` reads of the scope's pair, so the parent names the declared root only. The
+`block_boundary` pin scans every payload and operand of a language corpus and measures 0
+violations (it failed on `x = [@gc 1, 2]` before the change). *Rejected by measurement —*
+*a parent cell aliased to the inner's:* `@gc f 41` answered `none` (the engine does not
+redirect a class member's read); *rejected — the declared root as the value handle:* a block
+scope's value is its tail, not its root. The engine does not validate the contract, by
+decision, so a hand-built module can still break it — the ignored repro in
+`basic::gc_safety` records that host contract.
 
 ## 9. What the sources do not answer
 

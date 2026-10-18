@@ -70,13 +70,11 @@ fn violations(module: &Module<LangProgram>) -> Vec<(NodeId, BlockId, NodeId, Blo
 /// The checker's built IR never names a non-root node of a descendant block.
 ///
 /// # Invariant
-/// It does not hold yet: `@gc` re-exports the inner's value and type cells as the parent's
-/// handles, so `x = [@gc 1, 2]` builds a parent array naming the scope's value cell. The
-/// aliasing repairs were measured and rejected (`@gc f 41` answers `none`, and a block
-/// scope's value is not its root), so this is `P1-52`'s open decision in
-/// `docs/notes/code-audit.md`.
+/// `@gc` gives the parent `Index(pair, 0/1)` reads, so the declared root is the only child
+/// node a parent names. The aliasing repairs were measured and rejected: a parent cell
+/// united with the inner's answers `none` for `@gc f 41`, and the root as the value handle
+/// breaks a block scope. See `docs/notes/gc-block.md`.
 #[test]
-#[ignore = "D21: @gc re-exports the inner's value and type cells into the parent"]
 fn the_checker_builds_every_cross_block_reference_to_outlive_its_referrer() {
     let corpus = [
         "@gc { a = 1; b = 2 }",
