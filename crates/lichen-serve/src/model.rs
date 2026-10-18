@@ -801,3 +801,71 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// Attention over a cache of any length: the four dispatches a growing context needs.
+///
+/// # Invariant
+/// The position count is the caller's, so nothing here is written for two: one dispatch scores every
+/// `(head, position)` pair by folding the head's width, one sums each head's exponentials by folding the
+/// positions, one divides them into weights, and one mixes the cached values by folding the positions
+/// again. A lane writes exactly once in each, so the four are separate dispatches.
+pub const ATTEND_CACHE_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In       = struct{.q (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float)}
+Scored   = struct{.s (compute.Buf Float)}
+Totaled  = struct{.t (compute.Buf Float)}
+Weighted = struct{.w (compute.Buf Float)}
+Mixed    = struct{.o (compute.Buf Float)}
+ScorePar = struct{.n Int, .p Int, .in In, .out Scored}
+ScoreArg = struct{.n Int, .p Int, .I In}
+score_raw = (k : ScorePar) => {
+  lane = compute.range k.n
+  head = lane / k.p
+  at = lane - head * k.p
+  offset = at * 1024 + (head / 2) * 128
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (128, 0.0 ~ "identity") * 0.0883883476)))
+}
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+TotalIn  = struct{.s (compute.Buf Float)}
+TotalPar = struct{.n Int, .p Int, .in TotalIn, .out Totaled}
+TotalArg = struct{.n Int, .p Int, .I TotalIn}
+total_raw = (k : TotalPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.p + (s(0) - 1))))))) ~ "combine"))
+  compute.write ((compute.Write _)(.to k.out.t, .at lane, .value (fold (k.p, 0.0 ~ "identity"))))
+}
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+WeightIn  = struct{.s (compute.Buf Float), .t (compute.Buf Float)}
+WeightPar = struct{.n Int, .p Int, .in WeightIn, .out Weighted}
+WeightArg = struct{.n Int, .p Int, .I WeightIn}
+weight_raw = (k : WeightPar) => {
+  lane = compute.range k.n
+  head = lane / k.p
+  whole = compute.read ((compute.Read _)(.from k.in.t, .at head))
+  part = exp (compute.read ((compute.Read _)(.from k.in.s, .at lane)))
+  compute.write ((compute.Write _)(.to k.out.w, .at lane, .value (part / whole)))
+}
+weight = compute.parallel weight_raw "gpu"
+MixIn  = struct{.w (compute.Buf Float), .v (compute.Buf Float)}
+MixPar = struct{.n Int, .p Int, .in MixIn, .out Mixed}
+MixArg = struct{.n Int, .p Int, .I MixIn}
+mix_raw = (k : MixPar) => {
+  lane = compute.range k.n
+  head = lane / 128
+  column = lane - head * 128
+  key = head / 2
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (head * k.p + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.v, .at (((s(0) - 1) * 1024 + key * 128) + column))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.o, .at lane, .value (fold (k.p, 0.0 ~ "identity"))))
+}
+mix = compute.parallel (mix_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+GArg = struct{.n Int, .p Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun score ((ScoreArg)(.n s.n, .p s.p, .I In(.q s.in.q, .k s.in.k, .v s.in.v))) : Scored)
+  b = (compute.plrun total ((TotalArg)(.n 16, .p s.p, .I TotalIn(.s a.s))) : Totaled)
+  c = (compute.plrun weight ((WeightArg)(.n s.n, .p s.p, .I WeightIn(.s a.s, .t b.t))) : Weighted)
+  compute.plrun mix ((MixArg)(.n 2048, .p s.p, .I MixIn(.w c.w, .v s.in.v)))
+}
+built = compute.graph step
+built
+"#;
