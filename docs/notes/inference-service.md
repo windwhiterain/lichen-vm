@@ -207,6 +207,20 @@ extent is **one of the step's arguments**, because an extent cannot be computed 
 `sequences × rows` lanes, the sampler `sequences`, the append `sequences × capacity × columns`, so
 the step takes three counts and the host passes all three.
 
+**A model's weights have to be a resident, and a step's own output is the only public way to make
+one.** `RunArgument::Resident` is what keeps a buffer on the device, and `graph::run` needs a
+`ResidentBuffer` for it, which only `RunResult::Resident` produces: `GpuContext` exposes `fetch` and
+`release` but **no upload**. So a service loads its weights with a **load step** — a graph whose only
+job is to copy a host buffer into a resident, run once when the model opens. One dispatch at load
+costs nothing, and it keeps the per-token path free of a weight upload, which the residency
+measurement above says would otherwise be 99% of the step.
+
+**And a decode-shaped step takes a different argument list from the append-shaped one.** The append
+step is `count, k, v, nk, nv, positions`, while the whole decode step is three counts and six
+buffers, because its three dispatches have three different extents and the weights come before the
+caches. So `Service` as written serves the append shape, and a decode-shaped service needs its own
+open — with the weights resident from the load step — rather than a flag on the existing one.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
