@@ -737,3 +737,67 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// Attention over two positions, which is the first place the query and the key decide anything.
+///
+/// # Invariant
+/// The three dispatches are the model's own: every query head scores both cached positions against
+/// its grouped key head, the two scores become a softmax, and the answer mixes the two values by it.
+/// Each lane writes exactly once, because a lane is one `(head, position)` in the first two and one
+/// element of one head in the third.
+pub const ATTEND_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In       = struct{.q (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float)}
+Scored   = struct{.s (compute.Buf Float)}
+Weighted = struct{.w (compute.Buf Float)}
+Mixed    = struct{.o (compute.Buf Float)}
+ScorePar = struct{.n Int, .in In, .out Scored}
+ScoreArg = struct{.n Int, .I In}
+score_raw = (k : ScorePar) => {
+  lane = compute.range k.n
+  head = lane / 2
+  at = lane - head * 2
+  offset = at * 1024 + (head / 2) * 128
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (128, 0.0 ~ "identity") * 0.0883883476)))
+}
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+WeightPar = struct{.n Int, .in Scored, .out Weighted}
+WeightArg = struct{.n Int, .I Scored}
+weight_raw = (k : WeightPar) => {
+  lane = compute.range k.n
+  head = lane / 2
+  first = compute.read ((compute.Read _)(.from k.in.s, .at (head * 2)))
+  second = compute.read ((compute.Read _)(.from k.in.s, .at (head * 2 + 1)))
+  top = max first second
+  high = exp (first - top)
+  low = exp (second - top)
+  total = high + low
+  mine = if lane - (head * 2) == 0 then high else low
+  compute.write ((compute.Write _)(.to k.out.w, .at lane, .value (mine / total)))
+}
+weight = compute.parallel weight_raw "gpu"
+MixIn = struct{.w (compute.Buf Float), .v (compute.Buf Float)}
+MixPar = struct{.n Int, .in MixIn, .out Mixed}
+MixArg = struct{.n Int, .I MixIn}
+mix_raw = (k : MixPar) => {
+  lane = compute.range k.n
+  head = lane / 128
+  column = lane - head * 128
+  offset = (head / 2) * 128 + column
+  first = compute.read ((compute.Read _)(.from k.in.w, .at (head * 2)))
+  second = compute.read ((compute.Read _)(.from k.in.w, .at (head * 2 + 1)))
+  early = compute.read ((compute.Read _)(.from k.in.v, .at offset))
+  late = compute.read ((compute.Read _)(.from k.in.v, .at (1024 + offset)))
+  compute.write ((compute.Write _)(.to k.out.o, .at lane, .value ((first * early) + (second * late))))
+}
+mix = compute.parallel mix_raw "gpu"
+GArg = struct{.n Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun score ((ScoreArg)(.n s.n, .I In(.q s.in.q, .k s.in.k, .v s.in.v))) : Scored)
+  b = (compute.plrun weight ((WeightArg)(.n s.n, .I Scored(.s a.s))) : Weighted)
+  compute.plrun mix ((MixArg)(.n 2048, .I MixIn(.w b.w, .v s.in.v)))
+}
+built = compute.graph step
+built
+"#;
