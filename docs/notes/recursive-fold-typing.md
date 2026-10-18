@@ -118,6 +118,19 @@ class) is rebuilt only from members the walk reaches. The next step is to instru
 `wire_apply_result` for the outer apply and print the return pair's type clone and its
 class, so the missing link is measured rather than inferred.
 
+**The third reading (dev@8ba354a6), and it names the class.** Instrumenting
+`apply_type`'s bind: the outer apply binds `cell=235v1` (the read's container type) to
+`codomain=366v1` (the applied pair's type item), and the unify forms the class
+`{356v1, 366v1, 235v1}` — **every member is a bare cell with no operation and no
+value** (`op=false value=false` for all three). All six *body* applies in the same run
+bind with `value=true` on both sides; only the outer apply's codomain arrives open. So
+the fold's return-type clone (`366v1`) is a bare cell whose template decider — the
+`if`'s shared element cell — never joined it, exactly as the singleton-class reading
+said. The class cannot be decided by anything inside it: what is missing is the
+**boundary** between the fold's return type and the `if`'s element cell, not a value
+some member already holds. The next reading is the template node whose clone is
+`366v1` (the fold's return pair's type item) and that node's class at check time.
+
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
 struct-literal base (`@loop f = (n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
