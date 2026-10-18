@@ -1,6 +1,6 @@
-# Incremental update: identity by path, retention by `cache`
+# Incremental update: identity by path, retention by `@cache`
 
-> Status: current — the mechanism (path identity, the `cache` mark, per-cell freeze,
+> Status: current — the mechanism (path identity, the `@cache` mark, per-cell freeze,
 > dirty propagation, eviction, the cell store) is complete, and the language server
 > drives one session per open document, so an edit reuses every marked binding it did
 > not reach. Still open: the keystroke path through the server, the reverse import
@@ -44,7 +44,7 @@ Two things are being made cheap at once, and they need different identities:
   node's **occurrence path** from the program root, so an edit that inserts a statement
   before a retained one does not renumber it.
 - **retention** — which units are worth keeping at all. That is the user's choice,
-  spelled with the `cache` mark, so memory is bounded by what the program asked for.
+  spelled with the `@cache` mark, so memory is bounded by what the program asked for.
 
 The **requirement is external mutation, under two constraints**: an agent edits the
 generator program *and* its graph data between runs, so the consequences of an edit must
@@ -55,7 +55,7 @@ propagation** over the program's own read graph.
 The target consumer is an agentic PCG graph: the graph is long-lived, its expensive
 outputs are generated content, and the agent's edit loop is what has to get cheap. The
 one consumer designed so far is [whiting-scene-document](whiting-scene-document.md),
-where a `cache`d generator is the thing a scene document keeps not re-deriving.
+where a `@cache`d generator is the thing a scene document keeps not re-deriving.
 
 ### What this is *not*: the JIT's graph IR
 
@@ -64,7 +64,7 @@ that has been *evaluated once and whose evaluation was recorded* — kernel and 
 nodes, and the submission policy that decides when the host observes completion. It is
 JIT-specific and shares no identity and no node set with this design.
 
-A `cache` cell is a **language-level retention point**: a marked position in the source,
+A `@cache` cell is a **language-level retention point**: a marked position in the source,
 identified by its occurrence path, whose value survives a build. A graph node is
 something that *ran*; a cell is something the user *marked*. Where they meet is
 residency only: a cached cell's value may hold a device buffer the compute layer
@@ -88,7 +88,7 @@ are exactly two such allocators: the *structure* (a node's position in the tree)
 
 - **identity** comes from the structure — a node's **occurrence path** from the program
   root (§2);
-- **retention** comes from the user — the **`cache`** mark, which selects *which* paths
+- **retention** comes from the user — the **`@cache`** mark, which selects *which* paths
   are kept across a build (§3).
 
 The two are orthogonal: every node has a path, so dirty propagation is universal; only
@@ -193,13 +193,13 @@ clone walk; one block per lambda, `checker/lambda.rs`). The instance's identity 
 
 > **(the template's path, the paths of the arguments/captures it was instantiated with)**
 
-— all paths, so a `cache` inside a lambda is well-defined and needs no extra mechanism.
+— all paths, so a `@cache` inside a lambda is well-defined and needs no extra mechanism.
 This is the precise form of the observation that an instance "eventually reaches a
 top-level scope with no free variables": the instance is grounded in *paths*, not in
 values, so grounding never requires a key. An anonymous intermediate passed as an
 argument is not a hole either — it has a path of its own.
 
-**Not built.** Nothing instantiates a cell per instance today: `cache` is honored for a
+**Not built.** Nothing instantiates a cell per instance today: `@cache` is honored for a
 binding the compiler walks once (a program or block statement, a record field), and a
 binding inside a lambda body is lowered per apply like any other. The instance explosion
 of §8 is the item that has to be settled before that changes.
@@ -210,22 +210,29 @@ free variable) and is retained at its nested path, exactly like a top-level one 
 outside them. A mark in a **lambda** body is a template, so its pair is not solved and
 nothing is retained.
 
-## 3. Retention: the `cache` mark
+## 3. Retention: the `@cache` mark
 
 ### 3.1 Syntax
 
 ```lichen
-cache terrain = noise(seed) |> erode(200)
-cache scatter = poisson(terrain, density)
+@cache terrain = noise(seed) |> erode(200)
+@cache scatter = poisson(terrain, density)
 ```
 
-`cache` is a **keyword** and a **binding modifier**, in the same position as `pub` and
+`@cache` is a **keyword** and a **binding modifier**, in the same position as `pub` and
 `let` (`pub` is `BlockStmt`-level, `let` is `Binding.restrictive`). It is **allowed in
 any scope**, because §2.5 gives a node inside a lambda a well-defined identity.
 
+It is spelled at the `@` sigil with the other `@`-led words — `@loop`, `@assert`,
+`@shallow`, `@any`, `@gc`, `@in` — and the spelling is the reason the bare word is free:
+**`cache` is an ordinary identifier**, so a program about KV caches may bind it, take it
+as a parameter and read it as a field. The mark moved to the `@` family precisely so that
+name was available; nothing about the mechanism below changed with the spelling, and the
+token kind (`TokenKind::KwCache`) is the same one the parser always read.
+
 It is deliberately **not an attribute**: an attribute's slot is a *runtime* value — the
 annotation's own `[value, type]` term pair ([attributes](attributes.md)) — while this
-mark is static and identity-selecting. A `cache` mark must be visible at lowering, before
+mark is static and identity-selecting. A `@cache` mark must be visible at lowering, before
 any node exists, which is what a keyword is and what a slot is not.
 
 Durability and the equality policy for backdating are deliberately **not** in this
@@ -338,7 +345,7 @@ granularity chosen for *another* file: `CellStore::invalidate_source(source_id)`
 that source's cells and hands back the artifacts they named. The fine one is the
 session's, for an edit to the file it holds: `CellStore::invalidate_paths` drops the
 positions dirty propagation reached (§4) and `CellStore::retain_marked` drops the
-positions the program no longer marks (a removed `cache`, a rename). A cell is reused iff
+positions the program no longer marks (a removed `@cache`, a rename). A cell is reused iff
 neither reached it. Both are sound **without recording a single read** — the AST is the
 read graph.
 
@@ -497,7 +504,7 @@ Two properties of the shape are worth naming, because both are decisions:
 The cell's mark is part of the content key (`KEY_FORMAT_VERSION` 2). The key describes
 "the structure the lowering consumes", and the lowering *does* consume `cached`: it is
 what makes a binding the one a clean cell may replace. A key that ignored it would
-describe a lowering that is not the one that runs — and adding `cache` to a binding would
+describe a lowering that is not the one that runs — and adding `@cache` to a binding would
 silently do nothing until the next structural edit.
 
 A **failed build freezes no cell**: a cell is read back by skipping its body, so one
@@ -623,7 +630,7 @@ the closure's panic cost one request).
   statement. Today it cannot (a nested binder is visible only inside its own statement),
   and that is the invariant to re-check if scoping ever changes. §4.3's cycles and §9's
   differential harness are the oracle, not an argument.
-- **Instance explosion.** A `cache` inside a lambda instantiated per recursion step would
+- **Instance explosion.** A `@cache` inside a lambda instantiated per recursion step would
   create one cell per instance (§2.5). The retention policy must be able to evict, and a
   cell inside a cyclic instance set should be refused (or bounded) rather than silently
   multiplied.
@@ -649,7 +656,7 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
   Send`) means a checker reading another thread's arena.
 - **A cell and its imports must share one registry.** `freeze_closure_mapped` asserts
   every key the **closure** references is registered where the artifact is filed, so a
-  session with imports and a *private* registry panics on the first freeze (a `cache`d
+  session with imports and a *private* registry panics on the first freeze (a `@cache`d
   binding whose value read the import). `BufferSession::with_registry` is the entry point,
   and the two key allocators must not meet: the device's is a dense counter, the cell's is
   the top bit of the key.
@@ -713,7 +720,7 @@ Each of these is a silent wrong answer or a leak, and each is load-bearing:
   match the compiler forces, and each asks a different question of the tree: a step to
   record, a span to shift, a child to rewrite by role, a tag to hash.
 - **`retain_marked` is what keeps the store honest** (§3.3).
-- **The content key carries `cache`** (`KEY_FORMAT_VERSION` 2). **The "bump is free"
+- **The content key carries `@cache`** (`KEY_FORMAT_VERSION` 2). **The "bump is free"
   window is closing**: once a cell key is persisted, a bump retires every cache and becomes
   the same kind of contract as `ARTIFACT_FORMAT_VERSION`, which carries a written version
   history for exactly that reason. Start that history when the first persisted key lands,
@@ -773,9 +780,9 @@ target, since `7ceee3eb`), and the equality suite's class tests.
   is the tree the resolver already walks by name. A path therefore names a position, which
   is what a cell is. Landing it there also keeps the front end's compilation and the
   checker's allocation path untouched, which a name-carrying IR would not.
-- **`cache` is a keyword, not an attribute**: a slot is a runtime value; the mark is
+- **`@cache` is a keyword, not an attribute**: a slot is a runtime value; the mark is
   static and identity-selecting (§3.1).
-- **`cache` is allowed in any scope**: an instance reaches a free-variable-free scope in
+- **`@cache` is allowed in any scope**: an instance reaches a free-variable-free scope in
   which a name/path is again stable (§2.5).
 - **Per-cell freeze, not whole-module**: only a recomputed cell is frozen, so an edit pays
   for what it dirtied. It forces one new entry point (the closure freeze) rather than a
@@ -794,7 +801,7 @@ target, since `7ceee3eb`), and the equality suite's class tests.
   the current one a read that appeared. Each alone is unsound, and neither is a superset of
   the other — the one place where "just dirty what the edit touched" is not enough (§4.2).
 - **A failed build freezes no cell** (§6.1).
-- **The `cache` mark is in the content key** (`KEY_FORMAT_VERSION` 2, §6.1).
+- **The `@cache` mark is in the content key** (`KEY_FORMAT_VERSION` 2, §6.1).
 - **A repeated name falls back to its index**: a path is an identity, so two entries in
   one list must never share a step. Name-preferred survives; only the ambiguity case
   changes (§2.2).
@@ -928,7 +935,7 @@ clone is gone. On the key-reused path it is still shared, and the probe prints
   instrument.** The key is an exact, injective, digest-free serialization of the
   structure the lowering consumes: names by `BinderId` (never their spelling),
   error blocks opaque, spans dropped, literals and field/operator names kept,
-  `pub`/field identity kept for record programs, and the `cache` mark kept (the
+  `pub`/field identity kept for record programs, and the `@cache` mark kept (the
   lowering consumes it: a marked binding is the one the cell store may lower to
   a static read instead of its body). Adding an `Expr` variant or changing any
   tag **bumps** `KEY_FORMAT_VERSION`, and there is no compatibility path — the

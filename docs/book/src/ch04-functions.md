@@ -239,7 +239,7 @@ what run time does.
 
 ## Marks on a binding
 
-Two marks may precede a binding's name. `cache` marks a retained cell
+Two marks may precede a binding's name. `@cache` marks a retained cell
 (Chapter 3), and `@loop` marks a recursion the compiler may compile as a
 loop rather than unroll:
 

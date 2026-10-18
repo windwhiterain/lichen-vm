@@ -423,7 +423,7 @@ entry point, and that nothing further should be built.
   identity derived from content, which the cross-build requirement now forbids. The
   cross-build half returned on different terms:
   [incremental-update](incremental-update.md) identifies a retained unit by its
-  **occurrence path**, selected by the user's `cache` mark, never by a key.
+  **occurrence path**, selected by the user's `@cache` mark, never by a key.
 - **In this scope the invalidation question is answered by the code, not by an
   index.** "Dirty" is the *tracked* form of "may have changed"; §3.3 gives the
   *excluded* form, and within one pass the excluded form is sufficient. So the
@@ -501,7 +501,7 @@ entry point, and that nothing further should be built.
   under **no keys**. That restores the cross-build half, but not on this note's
   terms: identity is an allocated **occurrence path** (name-preferred steps),
   resolved on demand rather than registered, and the retained units are the user's
-  `cache` marks. All of it is [incremental-update](incremental-update.md); this note
+  `@cache` marks. All of it is [incremental-update](incremental-update.md); this note
   keeps the within-build cut.
 - the verdict's in-progress state (named in the previous revision of this note) landed: the verdict's
   `None` now means one thing, with the in-progress case named. The first of the two

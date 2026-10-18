@@ -91,7 +91,7 @@ x
 ```
 
 The second `x` is a new name that shadows the first, and its value reads
-the first. `let` and `cache` (below) may be combined: `cache let x = …`.
+the first. `let` and `@cache` (below) may be combined: `@cache let x = …`.
 
 ### A repeated binding shadows the whole block
 
@@ -128,9 +128,9 @@ x = 1
 (2, 1): tuple{Int, Int}
 ```
 
-### `cache`
+### `@cache`
 
-`cache name = expression` marks a binding whose value is meant to survive
+`@cache name = expression` marks a binding whose value is meant to survive
 a rebuild. The compiler accepts the mark everywhere and it changes
 nothing about evaluation; it exists for the incremental toolchain, which
 identifies a retained cell by the binding's path from the program root and
@@ -142,9 +142,9 @@ can reuse it when an edit does not touch it
 A name is a lowercase or mixed-case identifier (`x`, `id`, `n2`). The
 language's keywords are reserved and cannot be names: `Int`, `Float`,
 `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`,
-`if`, `then`, `else`, `return`, `pub`, `cache`, `int2float`, `float2int`,
+`if`, `then`, `else`, `return`, `pub`, `int2float`, `float2int`,
 `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`, `ln`, and the `@`-led
-words `@loop`, `@assert`, `@shallow`, `@gc`, and `@in`. The underscore `_`
+words `@loop`, `@assert`, `@shallow`, `@gc`, `@in` and `@cache`. The underscore `_`
 is not a name either; it is the inference placeholder of Chapter 5.
 
 ## The atomic types

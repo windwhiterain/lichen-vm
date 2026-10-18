@@ -98,7 +98,7 @@ authority, and this table only names the state.
 | [Type accesses `X{n}` and `X::a`](notes/type-access.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel`, `lichen-render` | current |
 | [`type_of` is a standard-library function](notes/type-of-in-std.md) | `lichen-language`, `lichen-highlevel`, `lichen-compute`, `lichen-std` | current |
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language-lex`/`-parser`, `lichen-language`, `lichen-highlevel` | current — T3/T4 proposed |
-| [Incremental update: identity by path, retention by `cache`](notes/incremental-update.md) | `lichen-language-parser` (`path`), `lichen-language` (`cells`/`session`), `lichen-lowlevel` (`freeze`/`registry`), `lichen-compute` | current — the keystroke fine cut is open |
+| [Incremental update: identity by path, retention by `@cache`](notes/incremental-update.md) | `lichen-language-parser` (`path`), `lichen-language` (`cells`/`session`), `lichen-lowlevel` (`freeze`/`registry`), `lichen-compute` | current — the keystroke fine cut is open |
 | [Cross-edit cache: heavy values retained by key](notes/heavy-value-cache.md) | `lichen-language` (`cells`/`session`/`key`/`cellcache`), `lichen-lowlevel` (`static_module`), `lichen-compute` (buffer value codec) | current — an imported cell does not persist |
 | [Build performance](notes/build-performance.md) | `lichen-language-parser` | current |
 | [Parse performance: the clean probe](notes/parse-clean-probe.md) | `lichen-language-parser`, `lichen-language-lex` | current |

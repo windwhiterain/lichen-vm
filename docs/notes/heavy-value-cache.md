@@ -15,7 +15,7 @@
 > This is the plan for two application domains — data-science dependency graphs and
 > procedural-content dependency graphs — where a long-lived graph is edited by an agent and
 > some nodes carry heavy computed data. The mechanism that already exists is
-> [incremental-update](incremental-update.md)'s: occurrence-path identity, the `cache` mark,
+> [incremental-update](incremental-update.md)'s: occurrence-path identity, the `@cache` mark,
 > per-cell freeze into a `StaticModule` closure, a `CellStore`, and dirty propagation over the
 > resolver's read graph. **This note does not restate any of that**; it records only what the
 > key ruling changes.
@@ -49,7 +49,7 @@ node id) for *retention*, and §2.4's argument about content keys is still right
 
 ## 2. The key, precisely
 
-Every binding gets a key. `cache` decides which keys are *retained*, not which exist. That
+Every binding gets a key. `@cache` decides which keys are *retained*, not which exist. That
 is what lets a marked binding's key be compared against an unmarked dependency's without
 the dependency having to be marked too.
 
@@ -69,9 +69,9 @@ Five properties are contractual, and each one is a decision rather than an accid
   fold would rehash a shared subexpression once per path to it; this shape costs one hash
   per binding per build, which is the same order as the resolve walk that already runs
   (see §5).
-- **A binding's own `cache` mark is NOT in `K_in`.** Marking or unmarking a binding does not
+- **A binding's own `@cache` mark is NOT in `K_in`.** Marking or unmarking a binding does not
   change the computation, so it must not move the key. This is deliberately *unlike* the
-  build content key, where `cache` **is** included (`KEY_FORMAT_VERSION` 2) because the
+  build content key, where `@cache` **is** included (`KEY_FORMAT_VERSION` 2) because the
   lowering consumes it. Two keys, two questions; conflating them would make toggling a mark
   invalidate values it did not change.
 - **`K_in` is over the resolved structure, and a read is named by its occurrence path — not by
@@ -174,7 +174,7 @@ same node, moved' from 'a different node' without also hashing the context, whic
 path again".
 
 That argument was about **the identity of a retention point the user marked**, and it
-remains correct for that job: a `cache` cell is still identified by its occurrence path, and
+remains correct for that job: a `@cache` cell is still identified by its occurrence path, and
 still dropped when the path moves. The key introduced here answers a different question —
 **"is this the same computation?"** — and for that question content identity is exactly
 right, including its one consequence that would have been a defect for retention: two
@@ -272,7 +272,7 @@ because its headline is the one that had to survive a release compile.
 Probes: `crates/lichen-language/examples/{cache_timing,pipeline_edits}.rs` (temporary; delete
 when this closes).
 
-**Shape**: 8 cheap `cache`d bindings in a chain plus 4 heavy ones calling a naive `fib 10`,
+**Shape**: 8 cheap `@cache`d bindings in a chain plus 4 heavy ones calling a naive `fib 10`,
 with a tail that reads every one. Frontend versus check: **2.38 ms against 149.43 ms**, so
 the check is 98.4 % of a build and a key fold that costs "the same order as resolve" is
 competing with under two percent of it.
@@ -306,7 +306,7 @@ Three readings, and the third is a caveat rather than a win:
 ### 9.2 The pipeline application, and the two things it found
 
 `crates/lichen-language/examples/pipeline_edits.rs` is the same question on the shape the two
-domains actually have: a generator pipeline of 6 stages, each `cache`d stage reading the one
+domains actually have: a generator pipeline of 6 stages, each `@cache`d stage reading the one
 before it, each doing a branching recurrence, with a tail that reads all of them. An agent's
 five edits are applied in sequence to one session. **Every row also compares the session's
 root value with the same source's fresh compile** — `Module::node_value` reads the raw answer,
@@ -442,7 +442,7 @@ Three readings:
   mode choice; the knob matters only where an operand chain exists.
 
 **The caveat, stated because the probe is a lower bound**: the module built here has no type
-side. A real `cache out = …` binding carries a `[value, type]` pair, and the type graph is
+side. A real `@cache out = …` binding carries a `[value, type]` pair, and the type graph is
 where the classes are; so a language-level buffer cell's closure is larger than one node. The
 claim measured here is about the value, not about the whole cell.
 
@@ -476,7 +476,7 @@ compute result survives a process.
 The readings above are about a value in a module. The target shape is a *language program* whose
 cached bindings hold buffers, so `crates/lichen-compute/examples/cache_pipeline.rs` (temporary)
 drives one through `BufferSession` over the composed vocabulary: two kernels, `adder` and
-`doubler`, with `cache data = raw.z` and `cache result = raw2.w.native` — the annotation that
+`doubler`, with `@cache data = raw.z` and `@cache result = raw2.w.native` — the annotation that
 `plrun` needs sits on the unmarked binding `raw`, because a marked binding whose value spells
 an annotation is not eligible (§3.3).
 
@@ -552,7 +552,7 @@ Both disagreements are the two documented ways and neither is unsound:
 - **Whitespace**: propagation seeds from the re-parsed statement, so a byte-only edit dirties
   that statement and its readers; the key sees no content change. This is §4.4's over-dirtying,
   not a defect — and it is the one place the key is *better* than the shipped judge.
-- **A duplicate name**: `cache a`'s path stops being `Name("a")` and becomes an `Index`, which
+- **A duplicate name**: `@cache a`'s path stops being `Name("a")` and becomes an `Index`, which
   is the documented "both steps become indices" row of [incremental-update](incremental-update.md)
   §2.2. Every later key folds a read by path, so the whole chain moves. Safe over-dirtying:
   path churn drops cells propagation would have kept.
@@ -625,7 +625,7 @@ The persistence-critical property, measured before any file layout exists
 registry that was **empty**, is restored into a `CellStore`, and a compile that reads it back
 answers the value the freezing compile answered.
 
-For `cache a = 1 + 2` / `cache b = a + 3` / `a + b`: `a`'s artifact is **841 bytes**, `b`'s is
+For `@cache a = 1 + 2` / `@cache b = a + 3` / `a + b`: `a`'s artifact is **841 bytes**, `b`'s is
 **1 073**, and the restored compile's root is `USize(9)` — equal to the original's.
 
 Two things the experiment established, and one it refuted:
@@ -771,7 +771,7 @@ store's `compiler_slot_key` is that shape) instead of a type name; that is not b
 
 The validation §9.7 and §9.11 ran was target-shaped: a pipeline of arithmetic stages whose cells
 only ever produced a value for the root to read. `examples/worldgen.lichen` is the application the
-framework is for — a seeded terrain generator whose twelve `cache` bindings are noise octaves,
+framework is for — a seeded terrain generator whose twelve `@cache` bindings are noise octaves,
 blends, two smoothing passes, a biome classification and a tile atlas, over a `128 × 128` grid —
 and it found a defect that the pipeline could not expose.
 
@@ -937,10 +937,10 @@ start recomputes.
 
 - **Keys are allowed; the key is the judge and propagation is the accelerator.** Where they
   disagree the key wins, and that is a bug in propagation.
-- **Every binding gets a key; `cache` decides retention, not existence.**
+- **Every binding gets a key; `@cache` decides retention, not existence.**
 - **`K_in` folds direct reads' `K_out`, not a transitive rehash**, and is over the resolved
   structure with spans dropped.
-- **A binding's `cache` mark is not in its `K_in`** (unlike the build content key).
+- **A binding's `@cache` mark is not in its `K_in`** (unlike the build content key).
 - **Backdating is obtained from `K_out` folding, not from a recompute heap**, which retires
   `incremental-update.md` §4.4's "not a local addition" conclusion.
 - **The two-program propagation argument is not needed by the key route** (§4); the window

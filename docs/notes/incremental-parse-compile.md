@@ -13,7 +13,7 @@
 > the text *changes* is not wired.
 >
 > The session also carries the **cross-build** half: it holds a cell store and
-> lowers through it, so a rebuild reuses every `cache`d binding the edit did not
+> lowers through it, so a rebuild reuses every `@cache`d binding the edit did not
 > reach.  That is [incremental-update](incremental-update.md) — §3 for the mark
 > and §4 for dirty propagation — and nothing on *this* note's stages
 > (lex → parse → resolve → lower → check) changed for it.

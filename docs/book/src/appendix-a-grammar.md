@@ -11,14 +11,14 @@ The keywords cannot be bound or used as names:
 
 ```text
 Int Float string Type tuple struct array table set
-let if then else return pub cache
+let if then else return pub
 int2float float2int max min exp sqrt floor sin cos ln
 ```
 
 and the `@`-led words:
 
 ```text
-@loop @assert @shallow @gc @in
+@loop @assert @shallow @gc @in @cache
 ```
 
 The underscore `_` is not a name; it is the placeholder (Chapter 5). A
@@ -41,7 +41,7 @@ reserved elsewhere.
 ```text
 program  := (statement separator)* [expr]
 statement := ['pub'] [binding | expr]
-binding  := ['@loop'] ['cache'] ['let'] name '=' expr
+binding  := ['@loop'] ['@cache'] ['let'] name '=' expr
 ```
 
 A program is a block: statements, then an optional tail expression. A

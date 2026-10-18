@@ -38,7 +38,7 @@ checker, which runs *unchanged*.
 
 ```
 program  := (bstmt sep)* [expr]                      -- a block body: statements, then an optional tail (the top level is a block)
-stmt     := ['cache'] ['let'] name '=' expr         -- binding (block-wide by default; `let` restrictive; `cache` a retained cell)
+stmt     := ['@cache'] ['let'] name '=' expr        -- binding (block-wide by default; `let` restrictive; `@cache` a retained cell)
           | expr                                     -- bare expression statement
 bstmt    := ['pub'] stmt                             -- a (possibly `pub`) statement
 sep      := newline | ';' | ','                      -- one uniform Separator token
@@ -98,9 +98,9 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `tuple`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`,
+  `else`, `return`, `pub`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`,
   `ln`, `=>`, `->`, `:`.  The
-  `@`-led keywords — `@loop`, `@assert`, `@shallow`, `@gc`, and the membership operator `@in` — are
+  `@`-led keywords — `@loop`, `@assert`, `@shallow`, `@gc`, `@cache`, and the membership operator `@in` — are
   reserved words too (see the `@` note in §2).
   The
   ten prefix keywords open a prefix expression and so cannot be used as
