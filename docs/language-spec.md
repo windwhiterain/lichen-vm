@@ -863,7 +863,9 @@ maps every span back to the original file.
   longer reachable from source, since every definition is named, and kept for
   hand-built IR).  After
   reordering, each argument's type is checked against its field's type as
-  usual.
+  usual, and a mismatch names the two types — `S = struct{.a Int, .b string}` ;
+  `S("x", 1)` is `expected Int, found string` (one diagnostic, the first field at
+  fault).
   When the struct type is **not statically known** — an undecided callee (a
   parameter) or a placeholder — nothing is refused: the instantiation is
   unresolved too, and the reorder is a **lazy read** that resolves at the

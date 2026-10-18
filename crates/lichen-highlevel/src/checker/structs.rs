@@ -539,10 +539,20 @@ where
                     )
                 }
             };
-        let (value_node, value_shape, valid) = if any_named {
+        let (value_node, value_shape, valid, argument_types) = if any_named {
             let named = self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
             self.unify_named_instantiate_elements(type_expr, value, &named.assign);
-            (named.value, named.value_shape, named.valid)
+            let elem_ids = self.compound_children(value).unwrap_or_default();
+            let tys: Vec<NodeId> = elem_ids
+                .iter()
+                .map(|&a| self.state[a].ty.unwrap())
+                .collect();
+            let in_order = named
+                .assign
+                .iter()
+                .map(|supplied| supplied.and_then(|index| tys.get(index).copied()))
+                .collect();
+            (named.value, named.value_shape, named.valid, in_order)
         } else {
             // A positional instantiation keeps the value's own shape: a tuple's
             // element-type list, or the type itself.
@@ -594,18 +604,28 @@ where
                     self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete);
                 structural = named.valid;
             }
-            (self.value_of(value), value_shape, structural)
+            let types: Vec<Option<NodeId>> = self
+                .compound_children(value)
+                .unwrap_or_default()
+                .iter()
+                .map(|&a| self.state[a].ty)
+                .collect();
+            (self.value_of(value), value_shape, structural, types)
         };
         if valid {
+            let fields_match =
+                self.instantiation_field_types(field_list, &argument_types, self.loc(e, 1));
             // The definition's field-type list: a shape element is a slot, so the
             // list is each slot's type position.
             let field_list = self.slot_types_of(field_list, arg_names.len());
-            self.check_unify(
-                value_shape,
-                field_list,
-                self.loc(e, 1),
-                DiagKind::Annotation,
-            );
+            if fields_match {
+                self.check_unify(
+                    value_shape,
+                    field_list,
+                    self.loc(e, 1),
+                    DiagKind::Annotation,
+                );
+            }
         }
         if !any_named {
             self.unify_instantiate_elements(type_expr, value);
@@ -670,6 +690,38 @@ where
             self.check_element_pair_attributes(field, *argument, &mut seen);
             self.check_element_pair_values(field, *argument, &mut seen);
         }
+    }
+
+    /// One guard per field whose type a supplied argument's type does not match.
+    ///
+    /// # Invariant
+    /// The field's type read is forced before the unify: an undecided `Index` op
+    /// takes the argument's type instead of refusing it.
+    fn instantiation_field_types(
+        &mut self,
+        fields: NodeId,
+        argument_types: &[Option<NodeId>],
+        loc: crate::ir::Loc,
+    ) -> bool {
+        // SAFETY: `fields` is a live node of this module; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(fields) = (unsafe { self.module.array_items(fields) }) else {
+            return true;
+        };
+        let nodes: Vec<AnyNodeId> = fields.iter().map(|field| field.node).collect();
+        for (field, argument) in nodes.into_iter().zip(argument_types) {
+            let Some(argument) = argument else { continue };
+            let field = self.module.as_dynamic(field, self.current_block);
+            let r#type = self.index(field, self.one());
+            self.module.evaluate_node_deep(r#type, None);
+            let before = self.module.unify_errors.len();
+            self.check_unify(*argument, r#type, loc.clone(), DiagKind::Annotation);
+            if self.module.unify_errors.len() > before {
+                // One diagnostic per instantiation: the first field at fault.
+                return false;
+            }
+        }
+        true
     }
 
     /// A written struct type's field expressions, or `None` for any other callee.

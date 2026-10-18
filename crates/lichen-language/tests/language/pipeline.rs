@@ -1508,11 +1508,16 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::StructExcessField);
     assert!(d[0].message.contains("too many fields"), "{}", d[0].message);
-    // field types: the tuple's Ints are not Type
+    // field types: the tuple's Ints are not Type, and the sentence names both
     let d = diags("struct{.f Type, .g Type}(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
+    assert!(
+        d[0].message.contains("expected Type, found Int"),
+        "{}",
+        d[0].message
+    );
     // a different source occurrence is a different nominal type
     let d = diags("s1 = struct{.f Int, .g Int}; s2 = struct{.f Int, .g Int}; [s1(1, 2), s2(1, 2)]");
     assert_eq!(d.len(), 1);
