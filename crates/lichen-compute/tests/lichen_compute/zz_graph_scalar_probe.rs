@@ -46,8 +46,7 @@ built = compute.graph step
 compute.collect (compute.graphrun built (4, 4, x)) : array{Int, 8}
 "#;
 
-/// The control for `RECORDED`: offset 0 through the same graph. Hand answer `[1, 2, 3, 4]`, so
-/// an offset that did not cross and one that answers nothing are told apart.
+/// The control for `RECORDED`: offset 0 through the same graph, hand answer `[1, 2, 3, 4]`.
 const RECORDED_OFFSET_ZERO: &str = r#"
 GArg = struct{.n Int, .off Int, .in PIn}
 step = (s : GArg) => {
@@ -57,8 +56,7 @@ built = compute.graph step
 compute.collect (compute.graphrun built (4, 0, x)) : array{Int, 4}
 "#;
 
-/// The control that names the offset: 2 lands half inside the extent, so the scalar reached
-/// the kernel only if the answer is `[0, 0, 1, 2]`.
+/// The control that names the offset: 2 lands half inside the extent, answer `[0, 0, 1, 2]`.
 const RECORDED_OFFSET_TWO: &str = r#"
 GArg = struct{.n Int, .off Int, .in PIn}
 step = (s : GArg) => {

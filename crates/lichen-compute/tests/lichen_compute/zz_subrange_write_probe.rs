@@ -44,15 +44,13 @@ out = (compute.plrun append ((PArg)(.n 4, .off 4, .I PIn(.x x))) : POut)
 compute.collect out.y : array{Int, 4}
 "#;
 
-/// (d) A control for (b): an offset that lands **half** inside the extent, so an offset that is
-/// applied and one that is dropped answer differently. Hand answer `[0, 0, 1, 2]`.
+/// (d) A control for (b): an offset landing **half** inside the extent, answer `[0, 0, 1, 2]`.
 const OFFSET_TWO: &str = r#"
 out = (compute.plrun append ((PArg)(.n 4, .off 2, .I PIn(.x x))) : POut)
 compute.collect out.y : array{Int, 4}
 "#;
 
-/// (e) A control for the declared length: offset 0 collected at eight, which is the same four
-/// numbers under a longer annotation.
+/// (e) A control for the declared length: offset 0 collected at eight, the same four numbers.
 const OFFSET_ZERO_WIDE: &str = r#"
 out = (compute.plrun append ((PArg)(.n 4, .off 0, .I PIn(.x x))) : POut)
 compute.collect out.y : array{Int, 8}
