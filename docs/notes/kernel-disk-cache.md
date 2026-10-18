@@ -34,16 +34,19 @@ pre-spelled parts joined by `&`; the package manager spells one
 the bytes. A second plugin composed over the bare language lands in a slot of
 its own.
 
-## The key is content, and the id is not
+## The key is content, and so is the id now
 
-**The brief this slice came from states that `KernelId` is
-`fragment_digest(fragment)`. It is not.** `intern_kernel` hands out a fresh
-number per kernel from a monotone counter and uses the digest only as the
-intern index, so the same kernel carries a different id in a process that
-compiled another kernel first. `code-audit.md` `D15` records the *intended*
-semantics ("ids become a content digest with an intern index and a unique-id
-fallback on a genuine collision"), and `compute.rs`/`write_kernel_id` document
-the id as travelling between processes; the allocator is not there yet.
+**When this slice was briefed, `KernelId` was not `fragment_digest`.**
+`intern_kernel` handed out a fresh number per kernel from a monotone counter and
+used the digest only as the intern index, so the same kernel carried a different
+id in a process that compiled another kernel first — while `code-audit.md` `D15`
+recorded the intended semantics ("ids become a content digest with an intern
+index and a unique-id fallback on a genuine collision") and
+`compute.rs`/`write_kernel_id` documented the id as travelling between
+processes. **`D15` landed in the same series**: `intern_kernel` now returns the
+entry's digest as the id (`id_for_digest`); a digest already held by a different
+entry is a genuine collision and probes to the next free slot, so an id can
+never alias another kernel.
 
 Named by the id alone, the cache served **the wrong module**, measured with
 `kernel_disk_cache_probe reverse` (the same two programs, compiled the other
@@ -65,13 +68,15 @@ order. A module is a function of that ordered list and of nothing else — the
 emitter reads no claim, no binding fact and no device — so the name changes
 exactly when the module does. With it the same run reads `42`, correctly.
 
-**What is left.** A fragment that cross-calls another embeds the callee's *id*
-in its body, so the root's digest depends on the order its process compiled in.
-A leaf kernel is order-independent; a cross-calling one is not. The cost is a
-**miss**, never a wrong module: the reverse run above writes a third file holding
-the same 155-byte module under a different name. Removing it belongs to whoever
-owns `intern_kernel`: when the id is the content digest as `D15` decided, the
-file can be named by the root id and this walk disappears with it.
+**The residual is gone with `D15`.** Before it, a cross-calling fragment embedded
+the callee's *slot* in its body, so the root's digest depended on the order its
+process compiled in and the reverse run wrote a third file holding the same
+module under another name — a miss, never a wrong module. With content ids the
+body embeds the callee's *digest*, so the walk is order-independent: the reverse
+run now answers `22` and `42` from the same **5 files**, misses `0`, disk hits
+`1` and `2`. The cache is still keyed by `launch_set_digest` rather than the root
+id alone: the root id folds the entry's **claim**, which the emitter never reads,
+so the launch-set digest remains the module's own name.
 
 ## The payload, and why it is a miss and not an error
 

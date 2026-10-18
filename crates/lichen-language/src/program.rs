@@ -525,49 +525,6 @@ macro_rules! lang_compose_vocabulary {
                 }
                 false
             }
-
-            fn export_is_plain(
-                module: &::lichen_lowlevel::StaticModule<LangProgram>,
-                modules: &std::collections::HashMap<
-                    ::lichen_lowlevel::ModuleKey,
-                    std::sync::Arc<::lichen_lowlevel::StaticModule<LangProgram>>,
-                >,
-                export: ::lichen_lowlevel::LocalNodeId,
-            ) -> bool {
-                module.export_is_plain(
-                    export,
-                    modules,
-                    &|value: &LangValue| {
-                        if let Some(v) =
-                            <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(value)
-                        {
-                            return <$low as ::lichen_lowlevel::codec::ValueCodec>::export_is_plain(
-                                &v,
-                            );
-                        }
-                        if let Some(v) =
-                            <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(value)
-                        {
-                            return <$tyv as ::lichen_lowlevel::codec::ValueCodec>::export_is_plain(
-                                &v,
-                            );
-                        }
-                        $(
-                            if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$extra_v>>::as_enum(value)
-                            {
-                                return <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::export_is_plain(
-                                    &v,
-                                );
-                            }
-                        )*
-                        true
-                    },
-                    &|value: &LangValue| {
-                        <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(value)
-                            .is_some()
-                    },
-                )
-            }
         }
     };
 

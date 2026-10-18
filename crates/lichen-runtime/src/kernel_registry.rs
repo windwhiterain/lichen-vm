@@ -7,7 +7,6 @@
 //! the fragment a body compiled to, and never this crate's business again.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use lichen_kernel_ir::{KernelClaim, KernelFragment, KernelId, KernelInstr, fragment_digest};
@@ -44,22 +43,29 @@ pub struct KernelEntry {
     pub claim: Option<KernelClaim>,
 }
 
-/// The fallback id allocator — monotone, so an id minted here never aliases.
-static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
-
-/// Mint the next id no other kernel holds.
-fn alloc_kernel_id() -> KernelId {
-    NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
+/// The id an entry's digest names: the digest itself, or the next free slot beside it.
+///
+/// # Invariant
+/// **An id is its entry's content digest** (`D15`): the same fragment under the same claim
+/// carries the same id in every process, which the derived-module cache keys on. A digest
+/// already held by a *different* entry is a collision, not an identity, and the probe takes
+/// the next slot — an id never aliases another kernel, so the failure mode is a recompile
+/// rather than a wrong kernel.
+fn id_for_digest(digest: u64, registry: &HashMap<KernelId, KernelEntry>) -> KernelId {
+    let mut id = digest as usize;
+    while registry.contains_key(&id) {
+        id = id.wrapping_add(1);
+    }
+    id
 }
 
 /// The content index: an entry's digest → the id it is registered under.
 ///
 /// # Invariant
-/// Ids are content-addressed (`D15`): the same source recompiled yields the same
-/// id, which the derived-module cache is keyed on. A digest is not an identity —
-/// the index is an intern table, [`intern_kernel`] verifies the entry, and a
-/// collision falls back to a unique id, costing a recompile and never a wrong
-/// entry.
+/// Ids are content-addressed (`D15`): the same source recompiled yields the same id, which the
+/// derived-module cache is keyed on. The index is an intern table — [`intern_kernel`] verifies
+/// the entry before answering with an existing id — and `id_for_digest` is what keeps a
+/// collision from aliasing two entries.
 static KERNEL_INDEX: OnceLock<Mutex<HashMap<u64, KernelId>>> = OnceLock::new();
 
 /// The content index itself.
@@ -99,7 +105,7 @@ pub fn intern_kernel(fragment: KernelFragment, claim: Option<KernelClaim>) -> Ke
     {
         return id;
     }
-    let id = alloc_kernel_id();
+    let id = id_for_digest(digest, &registry);
     registry.insert(id, entry);
     index.insert(digest, id);
     id
@@ -125,9 +131,9 @@ pub fn kernel_fragment(id: KernelId) -> Option<KernelFragment> {
 /// # Invariant
 /// A module is a function of the ordered fragments of that set alone — the emitter
 /// reads no claim and no binding fact — so this digest changes exactly when the
-/// module does. A [`KernelId`] is not that identity: [`alloc_kernel_id`] hands out
-/// a fresh slot per kernel, so one kernel carries different ids in two processes
-/// that compiled in different orders.
+/// module does. A [`KernelId`] is not that identity either: the root id folds the claim,
+/// which the emitter never reads, so this digest stays the module's own name.
+///
 pub fn launch_set_digest(root: KernelId) -> Option<Hash> {
     let fragments = kernels().lock().unwrap();
     let mut folded: Vec<u8> = Vec::new();
