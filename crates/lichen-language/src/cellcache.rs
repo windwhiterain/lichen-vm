@@ -109,6 +109,31 @@ fn decode(bytes: &[u8]) -> Option<Record> {
     })
 }
 
+/// Remove this source's cell files whose path is not in `keep`, and answer how many went.
+///
+/// # Invariant
+/// Only files inside the source's own directory are removed, and only ones this container
+/// wrote: a renamed or unmarked binding's file would otherwise stay forever.
+pub fn prune(dir: &HostPath, source_id: &str, keep: &[Path]) -> io::Result<usize> {
+    let source_dir = dir_of(dir, source_id);
+    let keep: std::collections::HashSet<PathBuf> =
+        keep.iter().map(|path| file_of(&source_dir, path)).collect();
+    let Ok(entries) = fs::read_dir(&source_dir) else {
+        return Ok(0);
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "bin") {
+            continue;
+        }
+        if !keep.contains(&path) && fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 fn put_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }

@@ -489,6 +489,10 @@ where
             let Some(package) = registry.get(reference.module) else {
                 continue;
             };
+            // An import's key is process-local and EXTERNAL hides it: such a cell never persists.
+            if package.refs.iter().any(|key| *key != reference.module) {
+                continue;
+            }
             let mut modules: HashMap<ModuleKey, Arc<lichen_lowlevel::StaticModule<P>>> =
                 HashMap::new();
             modules.insert(reference.module, package.module.clone());
@@ -509,6 +513,8 @@ where
             });
         }
         let _ = crate::cellcache::write(dir, &self.source_id, &records);
+        let retained: Vec<Path> = self.cells.paths().cloned().collect();
+        let _ = crate::cellcache::prune(dir, &self.source_id, &retained);
     }
 
     pub fn compile(&mut self) -> SessionReport<P> {

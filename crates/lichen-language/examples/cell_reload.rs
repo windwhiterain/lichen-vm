@@ -69,4 +69,31 @@ fn main() {
         fourth.cells.reused,
         root(&fourth)
     );
+    println!("cache files: {} (two cells)", files());
+
+    // A rename moves `a`'s path, so the cell is dropped and its file must be reclaimed.
+    let renamed = edited
+        .replace("cache a =", "cache a2 =")
+        .replace("a + 3", "a2 + 3")
+        .replace("a + b", "a2 + b");
+    let report = session(&renamed).compile();
+    println!(
+        "renamed: frozen {}, reused {}, root {:?}; cache files: {}",
+        report.cells.frozen,
+        report.cells.reused,
+        root(&report),
+        files()
+    );
+}
+
+/// The cell files under the cache directory, counted through its one source folder.
+fn files() -> usize {
+    let Ok(entries) = std::fs::read_dir(DIR) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| std::fs::read_dir(entry.path()).ok())
+        .map(|inner| inner.flatten().count())
+        .sum()
 }

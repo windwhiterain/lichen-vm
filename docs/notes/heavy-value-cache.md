@@ -741,6 +741,32 @@ a cell's freeze is its operand chain (§9.3), and writing it is writing that cha
 pays for itself when a source is opened again, and a program compiled once and abandoned pays
 for nothing but the file.
 
+### 9.15 Two defects the vertical had, and their fixes
+
+Both were in the persistence path §9.13 and §9.14 built, and both are found by asking what a
+*stored* cell can be wrong about.
+
+- **A cell that read an import must not persist.** The key's `EXTERNAL` token stands in for
+  "the prelude, or an import's binding", so two runs that read different bytes through the same
+  import compute the *same* key. In-process that is safe — the resolver re-derives the read and
+  the session's import invalidation is the guard — but a persisted cell would be reused by a
+  later process against a source whose import has changed. The fix refuses to save such a cell:
+  a self-contained artifact's `refs` is exactly its own key, so a `refs` with any *other* key
+  means the cell read a dependency. Measured by the first version of the guard, which tested
+  `refs.is_empty()` and skipped **every** cell — that is how "`refs` includes self" was learned;
+  the cache-file count fell to zero and the reload rows stopped reusing. The guard now excludes
+  self, and the four-session probe writes two files again.
+- **A renamed cell's file was never reclaimed.** Per-cell files are named by the path, so a
+  rename leaves the old file behind forever. `cellcache::prune` removes every `*.bin` in the
+  source's own directory that is not the file of a retained path, and `save_cells` calls it with
+  `cells.paths()` after the write. Measured: after four sessions the cache holds **2** files for
+  two cells, and a rename compiles two fresh cells and still holds **2**, not 3.
+
+The import guard's negative case is **not exercised end to end**: constructing an import in a
+probe needs a package store, so what is verified is the predicate's two halves — a
+self-contained cell's `refs` is exactly its own key (`files = 2` after the fix), and any other
+key is what the guard tests.
+
 ## 11. What would falsify it
 
 - **The key fold dominates a build.** Then §5's "resolve is already whole-program" stops
