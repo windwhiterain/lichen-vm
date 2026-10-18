@@ -85,6 +85,10 @@ scores become a softmax, and the answer mixes the values by it. Measured over tw
 queries make the softmax sharp — the first head weights them `0.998` against `0.002` — the answer is the
 host's within `1e-5`, and both sides sum to `82.973585`.
 
+The same attention inside a whole layer, over two tokens of the real model, answers the host''s hidden
+state within `1.1e-6`: the second token''s query reads both cached positions, so this is the first test
+that fails when the query, the key, the rotation or the grouping is wrong.
+
 That closes the last shape a layer needs. What remains is the loop around it: 28 layers in sequence, the
 151936-wide vocabulary projection and sampling, and the precision path (built and merged, not yet used —
 everything here runs at f32, which is why the weights are streamed).
