@@ -6,10 +6,12 @@ documentation in exactly two places, on purpose:
 - **In-code Rust doc comments** (`//!` and `///`) — the authoritative, always-current
   description of what each module and item does. They live next to the code they
   describe, so they cannot drift.
-- **This folder** — human/agent-oriented *feature notes* plus the **language spec**.
-  A note explains what a feature is, why it exists, and how to use it, then points at
-  the modules that implement it. It never repeats the implementation detail the
-  rustdoc already carries.
+- **This folder** — human/agent-oriented *feature notes*, the **language spec**,
+  the user-facing **book**, and reference material. A note explains what a feature
+  is, why it exists, and how to use it, then points at the modules that implement
+  it. It never repeats the implementation detail the rustdoc already carries; the
+  book teaches the language in its own order and defers to the spec where a
+  contract matters.
 
 > **Rule: one doc per concern.** Each feature has exactly one note here, and each fact
 > is stated in exactly one place — the note, the spec, or the rustdoc. If you are
@@ -25,10 +27,11 @@ documentation in exactly two places, on purpose:
 
 ## Read order
 
-1. [README](../README.md) — what lichen is, the crate map, quick start.
-2. [Architecture overview](notes/overview.md) — the core idea (`[value, type]`
+1. [The lichen book](book/src/title-page.md) — the language, taught from scratch.
+2. [README](../README.md) — what lichen is, the crate map, quick start.
+3. [Architecture overview](notes/overview.md) — the core idea (`[value, type]`
    pairs, `Type : Type`) and the layering.
-3. The feature note for the crate you are working in.
+4. The feature note for the crate you are working in.
 
 ## Status legend
 
@@ -161,6 +164,14 @@ authority, and this table only names the state.
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language`, `lichen-lowlevel`, external `whiting-definition` | proposed |
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the live open queue and the design decisions |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule enforced in CI by `comments-check` |
+
+## The book
+
+[book/](book/) is *The lichen Programming Language*, the user-facing book. It is
+written in the Rust book's idiom — one concept at a time, a complete program in
+every chapter, and the compiler's real output — and its
+[summary](book/src/SUMMARY.md) is the table of contents. A language change means
+checking the chapters that state the behaviour it changed.
 
 ## The language spec
 

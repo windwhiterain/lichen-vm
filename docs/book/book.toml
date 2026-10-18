@@ -1,0 +1,14 @@
+[book]
+title = "The lichen Programming Language"
+authors = ["the lichen contributors"]
+description = "A book about lichen: a lazy language where a type is a value."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "output"
+
+[output.html]
+default-theme = "rust"
+git-repository-url = "https://github.com/windwhiterain/lichen-vm"
+edit-url-template = "https://github.com/windwhiterain/lichen-vm/edit/dev/docs/book/src/{path}"

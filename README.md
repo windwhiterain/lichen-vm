@@ -42,6 +42,8 @@ Interpreter that has no type.
 A minimal language built over highlevel.
 
 - [spec](docs/language-spec.md)
+- [The lichen book](docs/book/) — the language, taught from scratch, Rust-book
+  style; every program in it was run against this compiler
 
 ## How To Use
 

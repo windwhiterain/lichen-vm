@@ -6,3 +6,5 @@ target/
 spike-countdown.wasm
 # per-task worktrees, created and deleted per AGENTS.md
 .worktrees/
+# mdBook's build output for docs/book (see docs/book/book.toml)
+docs/book/output/
