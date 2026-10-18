@@ -166,3 +166,9 @@ tokens: [9707, 25, 358]
 
 Those are the host's own tokens, and the test of the same name asserts them — through this module rather
 than a copy of the loop, so the binary and the check cannot drift.
+
+The model's attention is `ATTEND_CACHE_STEP`, whose position count is the cache's, so no length is a
+special case: the first token's own softmax over one weight is the same dispatch as the eleventh's. The
+test walks four positions and asserts the host's whole chain, `9707 → 25 → 358 → 2776 → 4460`, which
+also pins the short length: the first two tokens are the ones the two-position step answered, so a
+regression in either half fails the same assertion.

@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 
 use crate::{
-    ATTEND_STEP, HIDDEN, MATVEC_STEP, RMS_NORM_STEP, ROPE_STEP, SWIGLU_STEP, ServeRefusal, Session,
+    ATTEND_CACHE_STEP, HIDDEN, MATVEC_STEP, RMS_NORM_STEP, ROPE_STEP, SWIGLU_STEP, ServeRefusal,
+    Session,
 };
 
 /// The model's shape, and the flat file's order — the contract with `.model/dump_layers.py`.
@@ -97,7 +98,7 @@ impl<'session> Steps<'session> {
             norm: prepared(RMS_NORM_STEP)?,
             projection: prepared(MATVEC_STEP)?,
             rotation: prepared(ROPE_STEP)?,
-            attention: prepared(ATTEND_STEP)?,
+            attention: prepared(ATTEND_CACHE_STEP)?,
             product: prepared(SWIGLU_STEP)?,
         })
     }
@@ -172,6 +173,12 @@ impl<'session> Steps<'session> {
         answered(session, &stepped)
     }
 
+    /// The attention over the whole cache, whose length is the positions the keys hold.
+    ///
+    /// # Invariant
+    /// One position is not a special case: the softmax over one weight is that weight, so the same
+    /// dispatch answers the first token as the eleventh, and the query and the key are computed for
+    /// both rather than skipped for the first.
     fn attended(
         &self,
         session: &Session,
@@ -179,10 +186,12 @@ impl<'session> Steps<'session> {
         keys: &[f32],
         values: &[f32],
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let positions = keys.len() / (KEY_HEADS as usize * HEAD as usize);
         let stepped = self
             .attention
             .step(vec![
-                RunArgument::Count(HEADS * 2),
+                RunArgument::Count(HEADS * positions as i64),
+                RunArgument::Count(positions as i64),
                 floats(query),
                 floats(keys),
                 floats(values),
@@ -316,26 +325,17 @@ impl<'session> Qwen<'session> {
         )?;
         cache.keys.extend_from_slice(&key);
         cache.values.extend_from_slice(&value);
-        let attended = if position == 0 {
-            // One position exists, so each query head takes its key head's value.
-            (0..HIDDEN_SIZE)
-                .map(|index| {
-                    value[(index / HEAD as usize / 2) * HEAD as usize + index % HEAD as usize]
-                })
-                .collect::<Vec<f32>>()
-        } else {
-            let query = steps.projected(
-                session,
-                &normed,
-                &weights[Q..Q + 2048 * 2048],
-                HEADS * HEAD,
-                HIDDEN as i64,
-            )?;
-            let query =
-                steps.normalised(session, &query, &weights[Q_NORM..Q_NORM + 128], HEADS, HEAD)?;
-            let query = steps.rotated(session, &query, position)?;
-            steps.attended(session, &query, &cache.keys, &cache.values)?
-        };
+        let query = steps.projected(
+            session,
+            &normed,
+            &weights[Q..Q + 2048 * 2048],
+            HEADS * HEAD,
+            HIDDEN as i64,
+        )?;
+        let query =
+            steps.normalised(session, &query, &weights[Q_NORM..Q_NORM + 128], HEADS, HEAD)?;
+        let query = steps.rotated(session, &query, position)?;
+        let attended = steps.attended(session, &query, &cache.keys, &cache.values)?;
         let out = steps.projected(
             session,
             &attended,

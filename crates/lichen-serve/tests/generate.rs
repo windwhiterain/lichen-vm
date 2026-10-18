@@ -6,7 +6,7 @@ use lichen_serve::{Qwen, Session};
 
 /// The starting token, and the two the host's greedy loop names after it.
 const START: usize = 9707;
-const EXPECTED: [usize; 3] = [9707, 25, 358];
+const EXPECTED: [usize; 5] = [9707, 25, 358, 2776, 4460];
 
 /// Two tokens generated through the whole model, the second reading the cache the first filled.
 ///
@@ -29,7 +29,7 @@ fn two_tokens_are_generated_through_the_cache() {
         }
     };
     let generated = model
-        .generate(START, 2)
+        .generate(START, 4)
         .unwrap_or_else(|refusal| panic!("the model generates: {refusal}"));
     println!("tokens: {:?}", generated.tokens);
     for (index, elapsed) in generated.per_token.iter().enumerate() {
