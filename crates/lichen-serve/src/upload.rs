@@ -60,3 +60,31 @@ impl Session {
         }
     }
 }
+
+impl Session {
+    /// Make a resident out of the checkpoint's own halves, which is the width a model keeps them at.
+    ///
+    /// # Invariant
+    /// The copying step is the one above with a pack stating `BFloat16`, so what crosses to the device is
+    /// two bytes an element and the resident is classed as it was written: a half-width model that held
+    /// f32 residents would pay four bytes a weight it never reads at that width.
+    pub fn upload_narrowed(&self, halves: &[u8]) -> Result<ResidentBuffer, ServeRefusal> {
+        let prepared = crate::narrowed(self, UPLOAD).map_err(|refusal| {
+            ServeRefusal::Program(vec![format!("the copying step narrows: {refusal}")])
+        })?;
+        let stepped = prepared.step(vec![
+            RunArgument::Count((halves.len() / 2) as i64),
+            RunArgument::Buffer {
+                class: ScalarClass::BFloat16,
+                data: halves.to_vec(),
+            },
+        ])?;
+        match &stepped.results[..] {
+            [RunResult::Resident(resident)] => Ok(*resident),
+            _ => Err(ServeRefusal::Program(vec![
+                "the copying step answers with one resident, and this one answered otherwise"
+                    .into(),
+            ])),
+        }
+    }
+}

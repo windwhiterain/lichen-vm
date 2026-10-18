@@ -171,8 +171,32 @@ is the other: the checkpoint's own halves are read and handed to the device **un
 costs its 96 MB read and no conversion at all, and the projection that consumes them is the one a pack
 narrowed.
 
-What is left per layer is three uploads of the weights at about 2 GB/s, twelve dispatches at eight
-milliseconds each, and one 96 MB read. So the next lever is the dispatch count, not the bytes.
+What is left per layer is three uploads of the weights at about 2 GB/s, twelve dispatches, and one 96 MB
+read — and the dispatches are **not** the lever the count suggests: fusing the half after the attention
+into one graph of nine dispatches was measured correct (the same tokens) and **slower**, 5.97 s against
+4.52 s. So a submission and a fence cost less than a composed graph's own scheduling, and what a token
+still pays is the bytes: the weights it hands over, and the file it no longer reads because the halves are
+held in memory.
+
+## What the token's seconds are
+
+Read off per-stage timers on the held model, two tokens at half width:
+
+| stage | two tokens | per token |
+|---|---|---|
+| the layer loop | 9.82 s | 4.91 s |
+| — of which reading a layer's tensors | 5.02 s | 2.51 s |
+| — of which reading an answer back | 0.13 s | 0.07 s |
+
+So half of a layer's time is **making a copy of the file it already holds**: `Tensors::Narrowed` clones the
+96 MB a layer is stored in, and `RunArgument::Buffer` takes its bytes by value, so the slice handed to a
+dispatch is a second copy. 28 layers of that is 2.7 GB of `memcpy` a token, and it is the largest single
+line in the budget.
+
+The fix is a borrowed payload — `RunArgument::Buffer` holding `&[u8]` or a shared buffer rather than a
+`Vec` — which is an interface change and not a scheduling one. Until it lands, the honest number for a warm
+token at half width is **4.8 s**, and the 3.25 s measured before this profiling was the same code with a
+page cache warm enough to hide part of the copy.
 
 ## Running it
 

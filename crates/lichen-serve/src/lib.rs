@@ -26,7 +26,7 @@ pub use model::{
 
 mod upload;
 
-pub use narrowed::narrowed_projection;
+pub use narrowed::{narrowed, narrowed_projection};
 pub use qwen::{Generated, Qwen, QwenRefusal, Width};
 pub use service::{Served, Service};
 
@@ -158,6 +158,8 @@ pub struct Prepared<'session> {
     session: &'session Session,
     graph: Graph,
     backend: Backend,
+    /// What the installed passes said while this step was prepared.
+    report: Vec<String>,
 }
 
 /// What one step answered, and what it cost.
@@ -208,6 +210,15 @@ impl Prepared<'_> {
         }
     }
 
+    /// What the installed passes said while this step was prepared.
+    ///
+    /// # Invariant
+    /// The lines name each node's schema, which is how a pack author learns the hash a pack must target:
+    /// a program whose tail only records never prints them from a run.
+    pub fn report(&self) -> &[String] {
+        &self.report
+    }
+
     /// How many nodes the held graph dispatches.
     pub fn nodes(&self) -> usize {
         self.graph.nodes().len()
@@ -255,7 +266,13 @@ impl Session {
         if !packs.is_empty() {
             lichen_compute::automatic_tiling::install_tiling_with_packs(&build.module, packs);
         }
-        let (_module, value, _root) = lichen_language::testing::finish(build);
+        let (module, value, _root) = lichen_language::testing::finish(build);
+        // A pass is asked while the graph is recorded, which is here: its lines are taken below.
+        let report: Vec<String> = module
+            .extension_diagnostics
+            .iter()
+            .map(|entry| entry.message.clone())
+            .collect();
         let Some(ComputeValue::Graph(id, backend)) = AsEnum::<ComputeValue>::as_enum(&value) else {
             return Err(ServeRefusal::Program(vec![
                 "this program's tail is not a recorded graph: preparing wants `compute.graph step` \
@@ -274,14 +291,18 @@ impl Session {
                 _ => None,
             }
         };
+        // The pass hands its lines to this thread while it runs, so they are taken after it.
+        let mut report = report;
         if let Some(rewritten) = lichen_compute::compute::consult_graph_pass(&graph, &extent) {
             graph::store(&rewritten);
             graph = rewritten;
         }
+        report.extend(lichen_compute::compute::take_graph_pass_lines());
         Ok(Prepared {
             session: self,
             graph,
             backend,
+            report,
         })
     }
 
