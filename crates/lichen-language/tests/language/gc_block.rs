@@ -78,3 +78,18 @@ fn an_undecided_scope_is_not_collected() {
     // released, and the build still answers with the hole.
     assert!(build.module.nodes.len() > 1, "nothing was released");
 }
+
+#[test]
+fn a_closure_released_from_a_scope_is_still_callable() {
+    // The closure's template lives in the scope's block; the release must move it too.
+    let out = run::evaluate("mk = n => @gc { f = x => x + n\nf }\na = mk 1\nb = a 2\nb")
+        .expect("the program runs");
+    assert_eq!(out, "3: Int", "the escaped closure still calls");
+}
+
+#[test]
+fn a_closure_stored_in_an_outside_array_is_still_callable() {
+    // The scope's value is stored outside it: the closure must still call afterwards.
+    let out = run::evaluate("y = [@gc (x => x + 1)]\n(y[0]) 3").expect("the program runs");
+    assert_eq!(out, "4: Int");
+}

@@ -8,6 +8,7 @@ mod extension_channel;
 mod function;
 mod gc_class_shape;
 mod gc_class_walk;
+mod gc_safety;
 mod host_loop;
 mod loop_conversion;
 mod recursion;
