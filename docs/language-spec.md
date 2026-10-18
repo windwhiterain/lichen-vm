@@ -186,7 +186,9 @@ farg     := '.' name expr                         -- named instantiation argumen
   [operator-polymorphism](notes/operator-polymorphism.md) §3.
 - **A refinement, and what it refines.**  `e ! p` attaches a predicate to `e`'s
   own **value**: the checker applies `p` to that value and requires the result to
-  be `1` (the assert channel), so `x ! (v => v > 3)` constrains the value.  The
+  be `1` (the assert channel), so `x ! (v => v > 3)` constrains the value, and a
+  refinement's failure names the refinement (`the refinement's predicate did not
+  answer 1`) rather than an `@assert` the program never wrote.  The
   predicate may instead be written **on a type**, inside the type position:
   `x : (T ! p)` makes `T`'s own value — the *type* — the predicate's argument, so
   `x : (_ ! in_num)` refines the **class** a parameter is used at, with `p`

@@ -228,6 +228,8 @@ pub enum AssertSpelling {
     /// A refinement whose contract names the class **domain** in `domain`, to
     /// be rendered beside the failure.
     Refinement { domain: NodeId },
+    /// A **user** refinement: the sentence names the refinement, not a set.
+    Refined,
     /// A named read's container-kind requirement: `a.name`'s container must be
     /// a struct type.
     ///

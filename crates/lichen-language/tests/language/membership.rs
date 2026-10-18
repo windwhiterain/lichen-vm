@@ -51,6 +51,19 @@ fn a_refinement_written_on_a_type_refines_the_class() {
     );
     assert!(!checked("\"a\""), "`string` is not in the domain");
 
+    // The failure names the refinement, not an `@assert` the program never wrote.
+    let report = compile(&format!("{open}f \"a\""));
+    let message = report
+        .diagnostics
+        .first()
+        .expect("a diagnostic")
+        .message
+        .clone();
+    assert!(
+        message.contains("the refinement's predicate did not answer 1"),
+        "{message}"
+    );
+
     // A *concrete* class is enforced at the definition, not per application.
     let closed = |class: &str| {
         format!(

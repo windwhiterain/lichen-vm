@@ -52,7 +52,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-47 | medium | highlevel, language | An unknown argument name through a parameter is reported as a missing field | retired:P1-49 — the sentence landed and its plumbing (`Diag::supplied_names`, the supply-key map) was deleted with the lazy reorder; the refusal removes the miss entirely |
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
-| P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | todo — measured `Num = set(Int, Float)` ; `in_num = t => t @in Num` ; `f = (x : (_ ! in_num)) => x` ; `f "a"` answers `assertion failed: expected 1, found 0`, the assert channel's generic sentence, though the program has no `@assert` and the value's class is what the contract is about; the `AssertSpelling::Refinement { domain }` sentence exists but only the arithmetic domain check registers it (`operators.rs`), not the user refinement's `Refinement::constraint` |
+| P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -950,13 +950,19 @@ enforces, so the checker knows it. A **user** predicate is an arbitrary function
 checker cannot list its accepted set, and `Refinement::constraint` registers its
 condition with no spelling.
 
-Fix direction: `Refinement::constraint` passes a spelling that names the refinement
-without claiming a set it cannot read — e.g. *"the refinement's predicate answered 0 —
-the value does not satisfy the refined type"* — and the render arm uses the predicate's
-label (the same `pair_label` walk a class set's members would use) so a reader knows
-which `!` failed. The contract sentence stays the channel's `expected 1, found 0` form
-for an explicit `@assert`; the two spellings must differ, or the refinement reads as an
-assertion the user never wrote.
+**Fixed.** `AttrExt` gains `assert_spelling` (default `None`), so the *annotation* names
+its own failure rather than the registration site guessing: `Refinement` answers
+`AssertSpelling::Refined`, and the render arm reads *"the refinement's predicate did not
+answer 1 — the value does not satisfy the refined type"*. An explicit `@assert` keeps
+`expected 1, found …`, and the arithmetic domain check keeps its
+`AssertSpelling::Refinement { domain }` sentence. Measured: the class refinement
+(`f "a"`), a tuple-element refinement (`("a", 2)`) and a plain predicate refinement
+(`(x : Int ! p)` with `f 0`) all answer the refinement sentence; `@assert 0` is
+unchanged; a concrete-class pass (`f 1`) is unchanged.
+
+The predicate's **label** is not named: the sentence is deliberately source-blind (the
+spelling carries no node, so the same template answers the same words on every clone),
+which keeps the invariant that a spelling is a fact of the annotation.
 
 ## Decisions## Decisions## Decisions## Decisions## Decisions## Decisions
 

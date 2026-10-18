@@ -167,6 +167,12 @@ where
             "does not satisfy {}",
             class_domain(printer, domain)
         )),
+        // A user refinement: the contract is a predicate, so name the refinement
+        // rather than a set that does not exist.
+        AssertSpelling::Refined => Some(
+            "the refinement's predicate did not answer 1 — the value does not satisfy the refined type"
+                .to_string(),
+        ),
         // The deferred half of the container-kind requirement, in the read's own
         // vocabulary.
         AssertSpelling::StructKind { container } => Some(format!(

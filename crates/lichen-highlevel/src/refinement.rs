@@ -58,6 +58,12 @@ where
         ctx.check_unify(a, b, loc, DiagKind::Attribute);
     }
 
+    /// A refinement's predicate is an arbitrary function, so a failure names the
+    /// refinement: no class set exists to list.
+    fn assert_spelling(&self) -> Option<crate::diagnostic::AssertSpelling> {
+        Some(crate::diagnostic::AssertSpelling::Refined)
+    }
+
     /// The refinement's enforcement: `predicate value`, whose result the assert
     /// channel requires to be `1`.
     ///

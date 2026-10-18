@@ -115,6 +115,16 @@ where
         false
     }
 
+    /// What a failed [`Self::constraint`] should say; `None` reads the failure's own
+    /// value.
+    ///
+    /// # Invariant
+    /// The spelling is a fact of the **annotation**: the same attribute answers the
+    /// same spelling on every failure of its template.
+    fn assert_spelling(&self) -> Option<crate::diagnostic::AssertSpelling> {
+        None
+    }
+
     /// The condition this attribute imposes on the annotated expression's own
     /// value, or `None` when it constrains nothing.
     ///

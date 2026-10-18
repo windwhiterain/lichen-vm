@@ -547,12 +547,8 @@ where
                     // A refinement is enforced: registered while the expression is
                     // lowered, so the apply clone re-checks it per call.
                     if let Some(condition) = ext.constraint(self, value_term, slot) {
-                        self.register_assert(
-                            condition,
-                            self.loc(e, 0),
-                            true,
-                            AssertSpelling::Condition,
-                        );
+                        let spelling = ext.assert_spelling().unwrap_or(AssertSpelling::Condition);
+                        self.register_assert(condition, self.loc(e, 0), true, spelling);
                     }
                 }
             } else {
