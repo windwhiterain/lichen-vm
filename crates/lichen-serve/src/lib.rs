@@ -14,6 +14,7 @@ use lichen_kernel_ir::{
 use lichen_utils::extend::AsEnum;
 
 mod model;
+mod qwen;
 mod service;
 
 pub use model::{
@@ -24,6 +25,7 @@ pub use model::{
 
 mod upload;
 
+pub use qwen::{Generated, Qwen, QwenRefusal};
 pub use service::{Served, Service};
 
 /// What one run asked the device for.
