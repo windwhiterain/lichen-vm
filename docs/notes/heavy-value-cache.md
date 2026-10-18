@@ -163,7 +163,7 @@ value shape, and the key ruling moves two of the three:
 |---|---|---|---|---|---|
 | **T1** | a solved host value (scalar, string, host array, table, struct) | yes | yes | **yes** | `LowValue` codec tags `0,1,5,6,8`; the arena is already flat bytes |
 | **T2** | a packed host buffer `Buffer(AnyHandle<[u8]>, ScalarClass)` | yes | yes | **yes, lifted (§9.6)** | the bytes are in the block arena, so the codec files them like an array: tag, element class, relocated handle; framing is a constant 179 bytes |
-| **T3** | device-resident `DeviceBuffer` / `Graph` / `Kernel` / `ParKernel` | **yes** | **at a cost** | **no** | see below |
+| **T3** | device-resident `DeviceBuffer` / `Graph` / `Kernel` / `ParKernel` | **yes** | **at a cost** | **decided: materialize (§12), not built** | the id names no content, so it cannot be in the bytes; the cell reads back to the host on freeze and persists as T2's `Buffer` |
 
 **T3 is not moved by the key ruling, and the reason is worth stating exactly.** `ResidentId`'s
 own contract is "never compared across backends and never persisted"
@@ -545,6 +545,16 @@ Three readings:
 - **T3 is untouched by the ruling**, and its digest and its persistence share one cost: the
   device→host readback (§7).
 - **Propagation is kept, not deleted**, until the key path is measured (§1, §5).
+- **The freeze granularity is `Portable` by default, `ReadOnly` per cell.** Decided by the
+  superior after §9.3's falsification; built in §9.4, with the key hash refusing a
+  non-portable value rather than mis-hashing it.
+- **T2 is closed on both halves** (§9.5, §9.6): a collected buffer retains as one node plus its
+  bytes, and the codec now files it (`ARTIFACT_FORMAT_VERSION` 11).
+- **T3 materializes on freeze.** Decided by the superior: a device-resident cell reads back to
+  the host when it is frozen, so it persists as T2's `Buffer` rather than needing a device
+  identity in the bytes. The price is one device→host read per freeze — the same read §7 says
+  a `K_out` digest of such a value would already cost — and the restored value is a host
+  buffer, so a consumer that wants it resident again must re-upload. **Not built.**
 
 ## 13. Open
 
