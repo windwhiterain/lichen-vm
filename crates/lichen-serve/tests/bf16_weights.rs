@@ -73,14 +73,12 @@ fn floats(values: &[f32]) -> RunArgument {
     }
 }
 
-/// The projection answers the same numbers when a pack narrows its storage.
+/// A projection a pack narrows refuses to feed a node that reads the wider class.
 ///
 /// # Invariant
 /// The two runs differ only in the class the pack states, so the pair of answers is the whole
 /// measurement: a bf16 element keeps eight mantissa bits, so the two agree to a few parts in a
 /// thousand and to nothing at all if the bytes were reinterpreted the wrong way round.
-// Ignored: the body records each access's class, so narrowing the fragment alone is not enough.
-#[ignore = "the shader honours the class, and the payload path still answers a float"]
 #[test]
 fn a_narrowed_projection_answers_the_same_numbers() {
     let Ok(session) = Session::open() else {
@@ -118,17 +116,21 @@ fn a_narrowed_projection_answers_the_same_numbers() {
     let narrowed = session
         .prepare_with_packs(MATVEC_STEP, &[pack])
         .unwrap_or_else(|refusal| panic!("the narrowed projection prepares: {refusal}"));
-    // The narrowed run goes first: a wrong answer here rules out a cached module per kernel id.
-    let narrowed_answer = run(&session, &narrowed, halves(&values), halves(&weights));
-    println!("in bf16: {narrowed_answer:?}");
-    let reference = run(&session, &plain, floats(&values), floats(&weights));
+    // The narrowed node feeds a node reading Float, and a class is the buffer's: refused, not answered.
+    let refusal = run(&session, &narrowed, halves(&values), halves(&weights))
+        .expect_err("a graph that reads one buffer at two classes is refused");
+    println!("refused: {refusal}");
+    assert!(
+        refusal.contains("a class is the buffer's"),
+        "the refusal names the rule it keeps: {refusal}"
+    );
+    let reference = run(&session, &plain, floats(&values), floats(&weights)).expect("f32 runs");
     println!("in f32: {reference:?}");
-    for (index, (wide, narrow)) in reference.iter().zip(&narrowed_answer).enumerate() {
-        assert!(
-            (wide - narrow).abs() < 1.0e-1,
-            "row {index} answered {narrow} in bf16 where f32 answered {wide}"
-        );
-    }
+    assert_eq!(
+        reference,
+        vec![1.0_f32, 2.0],
+        "the projection multiplies and adds"
+    );
 }
 
 /// Run the projection over one 2x2 matrix and read its two rows.
@@ -137,19 +139,21 @@ fn run(
     prepared: &lichen_serve::Prepared<'_>,
     vector: RunArgument,
     weight: RunArgument,
-) -> Vec<f32> {
-    let stepped = prepared
-        .step(vec![
-            RunArgument::Count(2),
-            RunArgument::Count(2),
-            vector,
-            weight,
-        ])
-        .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
+) -> Result<Vec<f32>, String> {
+    let stepped = match prepared.step(vec![
+        RunArgument::Count(2),
+        RunArgument::Count(2),
+        vector,
+        weight,
+    ]) {
+        Ok(stepped) => stepped,
+        Err(lichen_serve::ServeRefusal::Program(lines)) => return Err(lines.join("; ")),
+        Err(other) => panic!("the projection runs: {other}"),
+    };
     let [RunResult::Resident(resident)] = &stepped.results[..] else {
         panic!("the projection answers with one buffer, and this one answered otherwise");
     };
     let values = read(session, *resident);
     session.release(*resident);
-    values
+    Ok(values)
 }

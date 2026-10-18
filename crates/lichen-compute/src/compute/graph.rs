@@ -632,6 +632,7 @@ pub fn run(
             RunArgument::Float(number) => Value::float(*number),
         })
         .collect();
+    check_value_classes(graph, &arguments)?;
     let table = Runner::new(&*backend, policy)
         .run(graph, inputs)
         .map_err(|refusal| format!("this graph could not be run: {refusal}"))?;
@@ -650,6 +651,50 @@ pub fn run(
         })
         .collect::<Result<_, GraphRefusal>>()
         .map_err(|refusal| format!("this graph could not be read back: {refusal}"))
+}
+
+/// Refuse a graph whose nodes disagree about a buffer's element class.
+///
+/// # Invariant
+/// A class is the **buffer's**: a value has the class its producer's `output_classes` says, and a reader
+/// naming another class moves a different number of bytes per element. Nothing converts between the two
+/// yet, so the disagreement is refused rather than answered as a different number that looks like
+/// arithmetic.
+fn check_value_classes(graph: &Graph, arguments: &[RunArgument]) -> Result<(), String> {
+    let mut classes: Vec<Option<ScalarClass>> = vec![None; graph.value_count()];
+    for (index, argument) in arguments.iter().enumerate().take(graph.input_count()) {
+        if let Some(entry) = classes.get_mut(index) {
+            *entry = match argument {
+                RunArgument::Buffer { class, .. } => Some(*class),
+                RunArgument::Resident(resident) => Some(resident.class),
+                RunArgument::Count(_) | RunArgument::Float(_) => None,
+            };
+        }
+    }
+    let mut next = graph.input_count();
+    for (position, node) in graph.nodes().iter().enumerate() {
+        let Node::Kernel(kernel) = node;
+        for (slot, value) in kernel.inputs.iter().enumerate() {
+            let held = classes.get(*value).copied().flatten();
+            let declared = kernel.fragment.input_classes.get(slot).copied();
+            if let (Some(held), Some(declared)) = (held, declared)
+                && held != declared
+            {
+                return Err(format!(
+                    "node {position} reads input {slot} as {declared:?}, and the value it reads was \
+                     written as {held:?}: a class is the buffer's, and nothing reads one buffer at two \
+                     classes yet"
+                ));
+            }
+        }
+        for (slot, class) in kernel.fragment.output_classes.iter().enumerate() {
+            if let Some(entry) = classes.get_mut(next + slot) {
+                *entry = Some(*class);
+            }
+        }
+        next += kernel.fragment.outputs;
+    }
+    Ok(())
 }
 
 /// What one entry of a finished run is, for the caller to turn into a value.
