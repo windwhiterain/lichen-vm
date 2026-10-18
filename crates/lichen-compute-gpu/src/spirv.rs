@@ -68,6 +68,10 @@ mod op {
     pub const CONVERT_U_TO_F: u16 = 112;
     /// The reinterpretation an integer constant and a float operand meet through.
     pub const BITCAST: u16 = 124;
+    /// `OpShiftLeftLogical` (196) — a widening half's bits up into a float word.
+    pub const SHIFT_LEFT_LOGICAL: u16 = 196;
+    /// `OpShiftRightLogical` (194) — the same shift back down, narrowing.
+    pub const SHIFT_RIGHT_LOGICAL: u16 = 194;
     pub const I_ADD: u16 = 128;
     pub const F_ADD: u16 = 129;
     pub const I_SUB: u16 = 130;
@@ -111,6 +115,16 @@ mod op {
 mod capability {
     pub const SHADER: u32 = 1;
     pub const INT64: u32 = 11;
+    /// The 16-bit integer a brain float is stored as.
+    ///
+    /// # Invariant
+    /// Declared **only** when a `BFloat16` buffer is in use: `spirv-val` refuses the
+    /// `OpTypeInt 16 0` itself without it, and every module paying for it asks a device for
+    /// 16-bit types a kernel that never stores one does not need.
+    ///
+    /// `StorageBuffer16BitAccess` is deliberately **not** declared: it is a Vulkan *device
+    /// feature*, which the module does not carry.
+    pub const INT16: u32 = 22;
     /// The exchange network a `Warp` slice reads through.
     ///
     /// # Invariant
@@ -281,10 +295,10 @@ pub enum SpirvRefusal {
     /// A value in a class this emitter has no SPIR-V type for.
     ///
     /// # Invariant
-    /// Refused by name rather than emitted as the `Float` a brain float is not: SPIR-V's
-    /// 16-bit float is an IEEE half, so a `BFloat16` has no type to declare and no
-    /// arithmetic that rounds in its own width — a module that carried one would compute
-    /// a program nobody wrote.
+    /// **The arithmetic gate, and now the only one**: SPIR-V's 16-bit float is an IEEE half, not
+    /// a brain float, so nothing rounds in a `BFloat16`'s own width and a `Bin` over the class is
+    /// refused by name rather than computed at a width nobody wrote. A `BFloat16` *buffer* is not
+    /// this refusal — it is stored as a 16-bit integer and widened to `Float` on the way in.
     UnsupportedClass { class: ScalarClass },
     /// A value and a buffer index of different classes met in one operation.
     MixedClasses { at: usize },
@@ -696,6 +710,24 @@ struct Ids {
     /// The 32-bit unsigned type: an invocation id's component, a member index, and a
     /// float module's element index.
     uint: u32,
+    /// The 16-bit unsigned type: a `BFloat16` buffer's **element**, and declared only
+    /// when one is in use.
+    ///
+    /// # Invariant
+    /// The storage domain and not the value domain: a brain float is the top sixteen bits
+    /// of the float it rounds to, so its two bytes are those bits and nothing else. Its
+    /// `ArrayStride` is [`ScalarClass::byte_width`], which is what makes the stride and
+    /// the element one number rather than two that happen to agree. Declared
+    /// unconditionally would cost every module the `Int16` capability.
+    half: u32,
+    /// The 32-bit `16` a widening or a narrowing shifts by, and declared with [`Self::half`].
+    ///
+    /// # Invariant
+    /// **32 bits whatever the module's own integer class**, because the widening is
+    /// `OpUConvert` to `uint` and an `OpShiftRightLogical` naming a 64-bit constant is a
+    /// type error. A shift amount is an *id*, so it is one declared constant rather than
+    /// a literal operand.
+    half_shift: u32,
     v3uint: u32,
     /// The per-class storage-buffer type chain, keyed by [`ScalarClass::index`].
     ///
@@ -791,10 +823,9 @@ impl Ids {
     /// The module's scalar: the type of every value the body computes.
     ///
     /// # Invariant
-    /// A `BFloat16` module has no type of its own and is refused by name in the
-    /// body's prologue ([`SpirvRefusal::UnsupportedClass`]) before this answers for
-    /// one; the `Float` arm is the placeholder it takes, because SPIR-V's 16-bit float
-    /// is an IEEE half rather than a brain float.
+    /// A `BFloat16` module computes in the 32-bit float it takes over the `Float` arm: the body
+    /// widens on the way in and narrows on the way out, so no value in it is a brain float. SPIR-V's
+    /// 16-bit float is an IEEE half and is never what this answers.
     fn scalar(&self) -> u32 {
         match self.class {
             ScalarClass::Int => self.ulong,
@@ -830,14 +861,28 @@ impl Ids {
     /// The type a value of `class` has.
     ///
     /// # Invariant
-    /// A buffer's element type and its `ArrayStride` are the same class's facts
-    /// ([`element_stride`]), so a class the module cannot compute in is still typed
-    /// here — as the `Float` a brain float has no SPIR-V type of its own for, which a
-    /// body reading it is refused for before the module is built.
+    /// **The value domain, not the storage one** — [`Self::storage_type_of`] is the storage
+    /// answer. A `BFloat16` is the `Float` here because the body widens on the way in and
+    /// narrows on the way out, so every value a body computes is the 32-bit float; a brain
+    /// float has no SPIR-V type of its own to compute in.
     fn type_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.integer(),
             ScalarClass::Float | ScalarClass::BFloat16 => self.float,
+        }
+    }
+
+    /// The type a buffer of `class` **stores** each element as.
+    ///
+    /// # Invariant
+    /// The storage domain, and deliberately not [`Self::type_of`]: a value a body computes
+    /// is the `Float` a brain float widens to, but a `BFloat16` buffer's element is the
+    /// 16-bit integer its two bytes are. Answering one question with the other's rule is
+    /// how a buffer came to be laid out at the width of a value it never holds.
+    fn storage_type_of(&self, class: ScalarClass) -> u32 {
+        match class {
+            ScalarClass::BFloat16 => self.half,
+            _ => self.type_of(class),
         }
     }
 
@@ -1098,6 +1143,9 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let ulong = take(1);
     let float = take(1);
     let uint = take(1);
+    // **Taken unconditionally**: an id nothing defines is legal.
+    let half = take(1);
+    let half_shift = take(1);
     let v3uint = take(1);
     let ptr_in = take(1);
     let zero = take(1);
@@ -1181,6 +1229,8 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         ulong,
         float,
         uint,
+        half,
+        half_shift,
         v3uint,
         buffer_types,
         ptr_in,
@@ -1374,11 +1424,8 @@ fn emit_function(
                     ));
                     widened
                 }
-                ScalarClass::Float => component,
-                // SPIR-V's 16-bit float is an IEEE half, so there is no type to bind this to.
-                ScalarClass::BFloat16 => {
-                    return Err(SpirvRefusal::UnsupportedClass { class: ids.class });
-                }
+                // **Bound as the `Float` one does**: a brain-float module computes in f32.
+                ScalarClass::Float | ScalarClass::BFloat16 => component,
             };
             (id, ScalarClass::Int)
         } else {
@@ -1893,11 +1940,22 @@ fn emit_function(
                                     ids.zero,
                                 ],
                             ));
+                            // The load is typed by the **storage** element, which for a
+                            // brain float is the 16-bit integer rather than the float.
                             code.push(Inst::new(
                                 op::LOAD,
-                                vec![ids.type_of(element_class), loaded, pointer],
+                                vec![ids.storage_type_of(element_class), loaded, pointer],
                             ));
-                            slots.insert(definition, scalar(loaded, element_class));
+                            // **The widening is the boundary**: what the body holds is the
+                            // `Float`, so no bf16 value exists to compute in.
+                            let (id, read_as) = match element_class {
+                                ScalarClass::BFloat16 => (
+                                    widen_a_half(&ids, loaded, &mut code, &mut next),
+                                    ScalarClass::Float,
+                                ),
+                                _ => (loaded, element_class),
+                            };
+                            slots.insert(definition, scalar(id, read_as));
                         }
                         KernelInstr::BufferWriteCall(_) => {
                             // **The one place a loop changes what `dispatch` may assume**: a
@@ -1919,9 +1977,15 @@ fn emit_function(
                             // off the root as above.
                             let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
+                            // **Narrowed on the way out**, so the value is taken as the
+                            // `Float` the body holds rather than as its own class.
+                            let stored_class = match element_class {
+                                ScalarClass::BFloat16 => ScalarClass::Float,
+                                _ => element_class,
+                            };
                             let value = as_class(
                                 value,
-                                element_class,
+                                stored_class,
                                 &ids,
                                 &mut literals,
                                 &mut code,
@@ -1950,7 +2014,15 @@ fn emit_function(
                                     ids.zero,
                                 ],
                             ));
-                            code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                            // **The store is typed by the storage element**, so a brain
+                            // float is narrowed here rather than stored as a float.
+                            let stored = match element_class {
+                                ScalarClass::BFloat16 => {
+                                    narrow_a_half(&ids, value.id, &mut code, &mut next)
+                                }
+                                _ => value.id,
+                            };
+                            code.push(Inst::new(op::STORE, vec![pointer, stored]));
                         }
                         KernelInstr::SliceWriteCall(_) => {
                             let index = operand(1)?;
@@ -2391,8 +2463,9 @@ fn value_class(
         if matches!(op, KernelInstr::Select) {
             return select_class(fragment, launch, module, args, visiting);
         }
-        // **A call states the callee's result class**, never its first argument's.
+        // **A brain-float read is a `Float`**; a call states the callee's result class.
         let stated = match op {
+            KernelInstr::BufferReadCall(ScalarClass::BFloat16) => Some(ScalarClass::Float),
             KernelInstr::CallKernel(callee) => launch
                 .callee(*callee)
                 .and_then(|(_, target)| target.result_classes.first().copied()),
@@ -3424,11 +3497,14 @@ fn assemble(
         }
     };
 
-    // 1. Capabilities: `Int64` for a 64-bit module, `GroupNonUniformShuffle` for a
-    // `Warp` slice.
+    // 1. Capabilities: `Int64`, `Int16` (a brain float), `GroupNonUniformShuffle` (`Warp`).
+    let bf16_buffered = classes.contains(&ScalarClass::BFloat16);
     let mut capabilities = vec![Inst::new(op::CAPABILITY, vec![capability::SHADER])];
     if ids.class == ScalarClass::Int {
         capabilities.push(Inst::new(op::CAPABILITY, vec![capability::INT64]));
+    }
+    if bf16_buffered {
+        capabilities.push(Inst::new(op::CAPABILITY, vec![capability::INT16]));
     }
     if warp {
         capabilities.push(Inst::new(
@@ -3548,11 +3624,15 @@ fn assemble(
         types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]));
     }
     types.push(Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]));
+    // **Only where a brain float is stored**: without `Int16` the validator refuses the type.
+    if bf16_buffered {
+        types.push(Inst::new(op::TYPE_INT, vec![ids.half, 16, 0]));
+    }
     types.push(Inst::new(op::TYPE_VECTOR, vec![ids.v3uint, ids.uint, 3]));
     // One storage-buffer chain per class in use, each closing over its own scalar.
     for used in classes {
         let chain = ids.chain_of(*used);
-        let scalar = ids.type_of(*used);
+        let scalar = ids.storage_type_of(*used);
         types.extend([
             Inst::new(op::TYPE_STRUCT, vec![chain.elem, scalar]),
             Inst::new(op::TYPE_RUNTIME_ARRAY, vec![chain.array, chain.elem]),
@@ -3648,6 +3728,10 @@ fn assemble(
     emit_all(&mut out, &types);
 
     let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
+    // The 16 both crossings shift by, declared **only** with the half type it belongs to.
+    if bf16_buffered {
+        constants.push(Inst::new(op::CONSTANT, vec![ids.uint, ids.half_shift, 16]));
+    }
     // One 32-bit constant per pushed leaf, the member index its access chain names.
     constants.extend(
         ids.push_index
@@ -4035,4 +4119,49 @@ fn exchange_through_a_warp(
         ],
     ));
     Ok(scalar(exchanged, shape.class))
+}
+
+/// The `Float` a `BFloat16` buffer element is handed to the body as.
+///
+/// # Invariant
+/// A brain float is the **top sixteen bits** of the float it rounds to, so the widening is
+/// `OpUConvert` to the 32-bit unsigned, a logical shift up by sixteen, and an `OpBitcast` —
+/// a bitcast, not a conversion, which would answer the number rather than the bits. The result
+/// is typed `Float` on purpose: a body never holds a `BFloat16`, so no bf16 arithmetic is reachable.
+fn widen_a_half(ids: &Ids, half: u32, code: &mut Vec<Inst>, next: &mut u32) -> u32 {
+    let widened = *next;
+    *next += 1;
+    let shifted = *next;
+    *next += 1;
+    let result = *next;
+    *next += 1;
+    code.push(Inst::new(op::U_CONVERT, vec![ids.uint, widened, half]));
+    code.push(Inst::new(
+        op::SHIFT_LEFT_LOGICAL,
+        vec![ids.uint, shifted, widened, ids.half_shift],
+    ));
+    code.push(Inst::new(op::BITCAST, vec![ids.float, result, shifted]));
+    result
+}
+
+/// The 16-bit integer a `Float` is stored into a `BFloat16` buffer as.
+///
+/// # Invariant
+/// **The mirror of [`widen_a_half`]**, and the pair is the only place a brain float changes
+/// width: the shift drops the low sixteen bits rather than rounding them, because the target is
+/// exactly the high half the value came from.
+fn narrow_a_half(ids: &Ids, value: u32, code: &mut Vec<Inst>, next: &mut u32) -> u32 {
+    let bits = *next;
+    *next += 1;
+    let shifted = *next;
+    *next += 1;
+    let narrowed = *next;
+    *next += 1;
+    code.push(Inst::new(op::BITCAST, vec![ids.uint, bits, value]));
+    code.push(Inst::new(
+        op::SHIFT_RIGHT_LOGICAL,
+        vec![ids.uint, shifted, bits, ids.half_shift],
+    ));
+    code.push(Inst::new(op::U_CONVERT, vec![ids.half, narrowed, shifted]));
+    narrowed
 }

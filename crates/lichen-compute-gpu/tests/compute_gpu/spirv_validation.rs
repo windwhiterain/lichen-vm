@@ -1829,3 +1829,96 @@ fn a_body_that_stages_validates() {
         eprintln!("the staged module was not validated");
     }
 }
+
+/// `OpUConvert` (113), the widening a brain float's two bytes are read through.
+const U_CONVERT: u16 = 113;
+/// `OpShiftLeftLogical` (196) and `OpShiftRightLogical` (194), the widening and the narrowing.
+const SHIFT_LEFT_LOGICAL: u16 = 196;
+const SHIFT_RIGHT_LOGICAL: u16 = 194;
+
+/// `out[i] = in[i] * 2.5` over `BFloat16` buffers: one brain-float read and one brain-float write.
+///
+/// # Invariant
+/// Both buffers are classed `BFloat16` and the body computes in `Float`, which is the whole
+/// design: the element is the 16-bit integer its two bytes are, and the body never holds one.
+/// A copy with no operator would leave the arithmetic unexercised, so the multiply is what shows
+/// a widened value feeds an `OpFMul` and comes back for a narrowing.
+fn scales_a_brain_float() -> KernelFragment {
+    // `[position, index]`, pushed **before** the value: a write reads its three operands in
+    // that order.
+    let access = |body: &mut Vec<FlatOp>| {
+        body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+        body.push(FlatOp::Read(1));
+    };
+    let mut body = Vec::new();
+    access(&mut body); // the output's position and index
+    access(&mut body); // the input's
+    body.push(FlatOp::Instr(KernelInstr::BufferReadCall(
+        ScalarClass::BFloat16,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Const(
+        ScalarClass::Float,
+        TWO_POINT_FIVE,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Float,
+        KernelBin::Mul,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::BufferWriteCall(
+        ScalarClass::BFloat16,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+    KernelFragment {
+        roles: KernelRoles::default(),
+        // `(config, index)`, integers however the buffers are classed.
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(2, &body),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::BFloat16],
+        output_classes: vec![ScalarClass::BFloat16],
+        result_classes: vec![ScalarClass::Int; 1],
+        target: TargetFacts {
+            int_width: IntWidth::I64,
+            lane_width: LaneWidth::new(64),
+            lane_height: LaneHeight::new(1),
+        },
+        slices: Vec::new(),
+        marks: Vec::new(),
+    }
+}
+
+/// A brain-float storage buffer validates: the 16-bit element and both crossings.
+///
+/// # Invariant
+/// The module is the acceptance criterion for the design — a `BFloat16` buffer stored as
+/// `OpTypeInt 16 0` under `Int16`, widened on the read and narrowed on the write. The opcodes
+/// are asserted as well as validated, because `spirv-val` checks a module's **shape** and would
+/// not report a widening that never happened as a wrong number.
+#[test]
+fn a_brain_float_storage_buffer_validates() {
+    let words = spirv::compile(
+        &LaunchSet::single(&scales_a_brain_float()),
+        Binding {
+            inputs: 1,
+            outputs: 1,
+        },
+    )
+    .unwrap_or_else(|refusal| panic!("a brain-float buffer is emitted: {refusal}"));
+
+    let seen = opcodes(&words);
+    assert!(
+        seen.contains(&U_CONVERT),
+        "the half is widened and narrowed through one conversion: {seen:?}"
+    );
+    assert!(
+        seen.contains(&SHIFT_LEFT_LOGICAL) && seen.contains(&SHIFT_RIGHT_LOGICAL),
+        "the half is the float's high sixteen bits, in both directions: {seen:?}"
+    );
+    if !validate("the brain-float module", &words) {
+        eprintln!("the brain-float module was not validated");
+    }
+}
