@@ -111,5 +111,19 @@ the model's own behaviour — the "massive activations" these checkpoints are kn
 
 A forward is 171 s on this machine, which is the number to attack next.
 
-What remains is generation: a forward is one token, so a second token needs the cache and the loop, and
-then the precision path (built and merged, not yet used — everything here runs at f32).
+## Generation
+
+Two positions generated greedily through the whole model, the second reading the cache the first filled,
+name the host's tokens: `[25, 358]` on both sides, the logits within `2.7e-4`. Starting from the row
+`9707` the loop produces `9707 → 25 → 358`, and the second token is the one that proves the cache is
+read: a loop that attended only to the new position would name something else.
+
+A property of the rotation falls out of the same run and is worth recording: at **one** position the
+answer does not depend on the position at all — `0.545759` and `12.312018` are identical at positions 0
+and 5 — because the rotate-half form turns every head's key and query by the same angle, and a dot
+product is invariant under that.
+
+What remains is scale and speed: the loop is two positions because the attention step is written for
+two, so a cache of any length needs the fold over positions; and a token costs **167 s**, which the
+precision path and resident weights are what to attack (built and merged, not yet used — everything here
+runs at f32).
