@@ -14,3 +14,4 @@
 # Values and Types
 
 - [The Value and Its Type](ch05-values-and-types.md)
+- [Laziness, Sharing, and Scope](ch06-laziness.md)
