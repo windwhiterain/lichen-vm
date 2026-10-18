@@ -400,6 +400,19 @@ Three verdicts were given and are recorded here rather than left in a transcript
    which means an example that used it would be unrunnable by the example suite. Keeping the
    probe is deliberate: the failing shapes are the evidence for the defect, and the defect is
    not fixed.
+8. **Compile once, step many — and the language's own API has no such entry.** Every
+   `lichen_language` entry that reaches a program compiles and runs in one call
+   (`evaluate_raw`, `run_at`, `evaluate`), and `compile_with_imports_at` hands back a `Report`
+   whose module runs its root once and answers the cached value afterwards. So
+   `Session::run(source)` recompiles per request: it is a measurement harness, not a service
+   loop. **Every piece of the real shape is already public** — a program whose tail is
+   `compute.graph step` records a `Graph` and registers it, `lichen_compute::graph::lookup(id)`
+   hands it back (`GraphId` is exported from the crate root), and
+   `lichen_graph_ir::Runner::run(&graph, values)` drives it with fresh
+   `Value::host(…)`/`Value::host_data(class, bytes)` inputs under the policy the session set.
+   So the step a service repeats should be a **`Graph` the session holds**, not a source string
+   it re-runs — and the session owes a `compile` that returns that graph, which shifts the
+   crate's surface from "run this program" to "prepare this model, then step it".
 
 The seven probes, in one command:
 
