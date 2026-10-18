@@ -124,7 +124,7 @@ error: a `@shallow` depth of 0 marks no level — …
 The mark is a **value** mark, not a type mark: it says the element's
 value may stay unevaluated, not that its type becomes unknown. The
 precise rules for the two spellings are in the
-[language spec](../../language-spec.md) §2.
+[language spec](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md) §2.
 
 ## The lazy marker `none`
 
@@ -223,7 +223,7 @@ a value may only name nodes that outlive it — its own block, an enclosing
 one, a parentless one, or a child scope's **declared root**. The compiler
 builds cross-block references to satisfy that contract, so no released
 scope leaves a dangling reference. The mechanism's note is
-[gc-block](../../notes/gc-block.md).
+[gc-block](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/gc-block.md).
 
 ## Summary
 

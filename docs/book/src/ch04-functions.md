@@ -253,7 +253,7 @@ fact 5
 ```
 
 The mark changes no answer. It is a hint to the loop-conversion pass
-([the note](../../notes/loop-conversion.md)), which turns an eligible
+([the note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/loop-conversion.md)), which turns an eligible
 recursion into a loop nest when the shape allows it.
 
 ## Higher-order functions

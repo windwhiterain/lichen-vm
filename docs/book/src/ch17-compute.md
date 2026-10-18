@@ -109,8 +109,8 @@ The operator examples use the **graph** path: a chain of kernels is
 recorded as one graph and submitted together, so the fusion pass can
 decide that two kernels are one region and run them as one dispatch. The surface spells it with `compute.graphrun`, and the fusion
 claims are what the pass reads. The whole path is documented in the
-[graph JIT note](../../notes/compute-graph-jit.md) and
-[graph fusion](../../notes/graph-fusion.md); the language-level chapters
+[graph JIT note](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/compute-graph-jit.md) and
+[graph fusion](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/graph-fusion.md); the language-level chapters
 only need to know three positions:
 
 - the **interface claim** — the `~ "claim:…"` mark on a kernel — states the
@@ -136,13 +136,13 @@ device work the notes record:
 - the emitted SPIR-V is validated with `spirv-val` (`--target-env
   vulkan1.1`);
 - the device legs are measured operator by operator
-  ([device operator sweep](../../notes/device-operator-sweep.md));
+  ([device operator sweep](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/device-operator-sweep.md));
 - the transcendental functions are defined in the kernel IR, and the
   emitter forbids the device from contracting or reassociating them
-  ([contraction control](../../notes/contraction-control.md));
+  ([contraction control](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/contraction-control.md));
 - a device's division is not correctly rounded, so a kernel with a
   division can differ in the last bit from the `cpu` path
-  ([division rounding](../../notes/division-rounding-gap.md)).
+  ([division rounding](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/division-rounding-gap.md)).
 
 The point for a language reader is that the compute layer is **part of the
 language's answer**: the same source, run on either backend, is the same
@@ -161,9 +161,9 @@ A few that shape what a kernel can look like:
   reduction folds inside its own lane and writes its result there.
 - **No per-row reduction across lanes yet.** Cross-lane exchange needs a
   shared-memory staging and a barrier; that work is staged in
-  [shared memory and barriers](../../notes/shared-memory-and-barriers.md),
+  [shared memory and barriers](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/shared-memory-and-barriers.md),
   and a two-dimensional workgroup is not yet available
-  ([two-dimensional launch](../../notes/two-dimensional-launch.md)).
+  ([two-dimensional launch](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/two-dimensional-launch.md)).
 - **A boundary chosen at run time** has no spelling; a boundary is the
   padding, a clamp, or a branch you write.
 

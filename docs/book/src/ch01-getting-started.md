@@ -154,7 +154,7 @@ matter to the toolchain are:
 The header is optional, and there can be at most one, before any code. A
 file may also begin with prose of its own before the header — a markdown
 title, say — because everything before the opening `---` is ignored. The
-precise syntax is in the [language spec](../../language-spec.md), §2.2.
+precise syntax is in the [language spec](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md), §2.2.
 
 ## Running a whole directory
 

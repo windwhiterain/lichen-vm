@@ -31,7 +31,7 @@ the suite fails when the program's answer disagrees with it.
 
 ## The suite
 
-The examples live in [`examples/`](../../../examples), and a test in the
+The examples live in [`examples/`](https://github.com/windwhiterain/lichen-vm/tree/dev/examples), and a test in the
 compute crate walks the directory and runs every program:
 
 ```text

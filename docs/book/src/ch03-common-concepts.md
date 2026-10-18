@@ -135,7 +135,7 @@ a rebuild. The compiler accepts the mark everywhere and it changes
 nothing about evaluation; it exists for the incremental toolchain, which
 identifies a retained cell by the binding's path from the program root and
 can reuse it when an edit does not touch it
-([incremental update](../../notes/incremental-update.md)).
+([incremental update](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/incremental-update.md)).
 
 ### Names
 

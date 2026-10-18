@@ -2,7 +2,7 @@
 
 This appendix is a reference, not a lesson: the forms the language has,
 in one place. The precise grammar is in the
-[language spec](../../language-spec.md) §2, and every form below is taught
+[language spec](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md) §2, and every form below is taught
 in the chapter named beside it.
 
 ## Reserved words

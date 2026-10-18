@@ -7,7 +7,7 @@ the mean — and it is small enough to hold in one screen while touching
 buffers, structs, claims, folds, launches, and the answer check.
 
 It is the shape of a real operator. `layernorm` (in
-[`examples/layernorm.lichen`](../../../examples/layernorm.lichen)) is the
+[`examples/layernorm.lichen`](https://github.com/windwhiterain/lichen-vm/blob/dev/examples/layernorm.lichen)) is the
 same program with two reductions and a square root; everything else in the
 transformer's operator set is built the same way.
 
@@ -145,16 +145,16 @@ program, its promise, and the tool that keeps them equal.
 You have now seen the language's model (Parts I and II), its type system
 (Part III), and its programs (this part). The places to go deeper:
 
-- the [language spec](../../language-spec.md) — the precise contract for
+- the [language spec](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md) — the precise contract for
   everything the book taught informally;
-- the [feature notes](../../notes/) — each one records a decision, a
+- the [feature notes](https://github.com/windwhiterain/lichen-vm/tree/dev/docs/notes/) — each one records a decision, a
   measurement, and the alternatives that were rejected;
-- [`examples/`](../../../examples) — the living specification: matmul,
+- [`examples/`](https://github.com/windwhiterain/lichen-vm/tree/dev/examples) — the living specification: matmul,
   softmax, layernorm, attention, and the rest of the operator set, each
   with its worked-out answer;
-- the compute layer's notes — the [graph path](../../notes/compute-graph-jit.md),
-  the [operator ladder](../../notes/llm-operators.md), and the
-  [device legs](../../notes/device-leg-of-the-ladder.md).
+- the compute layer's notes — the [graph path](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/compute-graph-jit.md),
+  the [operator ladder](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/llm-operators.md), and the
+  [device legs](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/device-leg-of-the-ladder.md).
 
 lichen is young, and the book describes the compiler as it is. If
 something here no longer matches what the compiler does, the compiler is

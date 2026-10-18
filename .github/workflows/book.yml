@@ -1,0 +1,72 @@
+name: book
+
+# The book builds only when its sources change ("dirty only"): the `paths`
+# filter makes a push, a pull request or a manual run a no-op unless
+# `docs/book/**` (or this workflow) changed. On `dev` the HTML is deployed to
+# GitHub Pages, so the repository's Pages source must be "GitHub Actions"
+# (Settings -> Pages -> Build and deployment -> Source).
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "docs/book/**"
+      - ".github/workflows/book.yml"
+  pull_request:
+    paths:
+      - "docs/book/**"
+      - ".github/workflows/book.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The release's prebuilt binary, pinned. mdBook is book tooling, not a
+      # workspace dependency, so Cargo.lock does not carry it.
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build the book
+        run: mdbook build docs/book
+      # output/ is the whole deployed site, so a relative link that leaves it
+      # (../../language-spec.html) can never resolve on Pages; references
+      # outside the book must be absolute URLs.
+      - name: Check that no link escapes the book
+        run: |
+          if grep -RIlE 'href="(\.\./)+' docs/book/output --include='*.html'; then
+            echo "a relative link leaves docs/book/output; use an absolute URL"
+            exit 1
+          fi
+      - name: Upload the book
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book/output
+
+  deploy:
+    name: deploy
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

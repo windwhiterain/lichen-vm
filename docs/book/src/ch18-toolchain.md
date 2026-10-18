@@ -61,11 +61,11 @@ lexer, parser and checker; there is no second grammar to drift.
 
 The repository ships editor integrations:
 
-- [`lichen-language-zed/`](../../../lichen-language-zed) is a Zed extension:
+- [`lichen-language-zed/`](https://github.com/windwhiterain/lichen-vm/tree/dev/lichen-language-zed) is a Zed extension:
   a manifest, the LSP command, and the tree-sitter grammar's query files.
-- [`helix/`](../../../helix) holds a Helix configuration that launches the
+- [`helix/`](https://github.com/windwhiterain/lichen-vm/tree/dev/helix) holds a Helix configuration that launches the
   server and the grammar.
-- [`tree-sitter-lichen/`](../../../tree-sitter-lichen) is the grammar
+- [`tree-sitter-lichen/`](https://github.com/windwhiterain/lichen-vm/tree/dev/tree-sitter-lichen) is the grammar
   itself, built from `grammar.js` and kept out of the workspace on purpose
   (the Zed extension builds it).
 
@@ -106,7 +106,7 @@ invalidate it.
 ## The repository's map
 
 The core of the tree is four layers, one per crate (the
-[architecture overview](../../notes/overview.md) is the long form):
+[architecture overview](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/overview.md) is the long form):
 
 ```text
 crates/lichen-language      text → lex → parse → resolve → highlevel IR → checked program

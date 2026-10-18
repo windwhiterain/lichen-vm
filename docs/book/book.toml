@@ -10,5 +10,6 @@ build-dir = "output"
 
 [output.html]
 default-theme = "rust"
+site-url = "/lichen-vm/"
 git-repository-url = "https://github.com/windwhiterain/lichen-vm"
-edit-url-template = "https://github.com/windwhiterain/lichen-vm/edit/dev/docs/book/src/{path}"
+edit-url-template = "https://github.com/windwhiterain/lichen-vm/edit/dev/docs/book/{path}"

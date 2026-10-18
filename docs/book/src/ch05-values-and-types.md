@@ -235,7 +235,7 @@ each application instantiates the parameter fresh; that is the
 let-polymorphism of Chapter 11 in its smallest form.
 
 The standard library ships this as `std.type_of`
-([`lichen-std/_.lichen`](../../../lichen-std/_.lichen)); Chapter 15 shows
+([`lichen-std/_.lichen`](https://github.com/windwhiterain/lichen-vm/blob/dev/lichen-std/_.lichen)); Chapter 15 shows
 how to import it. `type_of` is the source's own two-line definition, not a
 special form.
 

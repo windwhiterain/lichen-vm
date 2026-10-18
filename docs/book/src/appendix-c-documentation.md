@@ -11,7 +11,7 @@ a complete program and the compiler's real output. Start at
 
 ## The language spec
 
-[`docs/language-spec.md`](../../language-spec.md) is the **precise
+[`docs/language-spec.md`](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md) is the **precise
 contract**: the grammar, the desugarings, the name-resolution rules, the
 diagnostic vocabulary, and the semantic decisions. When the book says
 "roughly" and you need "exactly", this is the document. It is the single
@@ -20,7 +20,7 @@ refers to it for syntax rather than restating it.
 
 ## The feature notes
 
-[`docs/notes/`](../../notes/) is the **record of decisions and
+[`docs/notes/`](https://github.com/windwhiterain/lichen-vm/tree/dev/docs/notes/) is the **record of decisions and
 measurements**. Each note takes one concern — a feature, a defect, a
 measurement, a design — and states what was decided, what was rejected,
 and what was measured. They are written for someone changing the system
@@ -31,17 +31,17 @@ A few entry points:
 
 | question | note |
 |---|---|
-| how do values, types and unification work underneath? | [lowlevel VM](../../notes/lowlevel-vm.md) |
-| why does `@gc` collect when it does, and what is safe? | [the `@gc` trigger](../../notes/gc-trigger-design.md) |
-| why is a perspective a divisibility lattice? | [attributes](../../notes/attributes.md) |
-| how do the operators' classes work? | [operator polymorphism](../../notes/operator-polymorphism.md) |
-| what does the compute layer guarantee, and where are its walls? | [the operator ladder](../../notes/llm-operators.md) |
-| how are the examples checked? | [README sync](../../notes/readme-sync.md) |
-| what is the live audit queue? | [code audit](../../notes/code-audit.md) |
+| how do values, types and unification work underneath? | [lowlevel VM](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/lowlevel-vm.md) |
+| why does `@gc` collect when it does, and what is safe? | [the `@gc` trigger](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/gc-trigger-design.md) |
+| why is a perspective a divisibility lattice? | [attributes](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/attributes.md) |
+| how do the operators' classes work? | [operator polymorphism](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/operator-polymorphism.md) |
+| what does the compute layer guarantee, and where are its walls? | [the operator ladder](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/llm-operators.md) |
+| how are the examples checked? | [README sync](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/readme-sync.md) |
+| what is the live audit queue? | [code audit](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/code-audit.md) |
 
 ## The examples
 
-[`examples/`](../../../examples) is the **living specification**: programs
+[`examples/`](https://github.com/windwhiterain/lichen-vm/tree/dev/examples) is the **living specification**: programs
 that compile, run, and declare their output, checked by the suite
 (Chapter 16). Where a note explains a decision, an example shows the
 language doing it. The README's Examples section is generated from the
@@ -52,7 +52,7 @@ files' own headers, so it is always current.
 The crates' `lib.rs` and module documentation is the **authority for the
 implementation**. A note points at the modules it is about; the rustdoc
 is what a change must agree with. The
-[architecture overview](../../notes/overview.md) is the map of the
+[architecture overview](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/overview.md) is the map of the
 layering, and Chapter 18 lists the crates.
 
 ## Which one first?

@@ -192,7 +192,7 @@ failure inside it can name the line that wrote the contract (Chapter 11).
 
 ## The standard library
 
-The repository ships a small library in [`lichen-std/_.lichen`](../../../lichen-std/_.lichen):
+The repository ships a small library in [`lichen-std/_.lichen`](https://github.com/windwhiterain/lichen-vm/blob/dev/lichen-std/_.lichen):
 `id`, `succ`, `add`, `double`, `compose`, `inc_twice`, and `type_of`. It is
 an ordinary module, and a program in the repository's `examples/`
 directory reaches it with a relative path:

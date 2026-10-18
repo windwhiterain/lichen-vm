@@ -92,8 +92,8 @@ The book uses these conventions:
 
 lichen is young and changes quickly. This book describes the behaviour of
 the compiler in the same repository and was verified against it; the
-[the language spec](../../language-spec.md) is the precise reference, and
-the [notes](../../notes/) record the design decisions behind the
+[the language spec](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/language-spec.md) is the precise reference, and
+the [notes](https://github.com/windwhiterain/lichen-vm/tree/dev/docs/notes/) record the design decisions behind the
 behaviour. If you find the compiler disagreeing with the book, trust the
 compiler.
 
