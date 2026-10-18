@@ -465,11 +465,16 @@ Three readings:
   and re-frozen, and the session is still 1.0× — because a buffer cell freezes as one node
   (§9.5), where §9.3's scalar cell froze a 14 030-node operand chain. So the freeze cost that
   made `ReadOnly` necessary for host scalars is simply not there for compute values.
-- **An unexplained row, recorded as a lead rather than a claim**: a whitespace-only edit inside
-  the *preprocessed view* recompiled (`new`) while a same-source recompile reused (`12.1×`), so
-  the content key is stable and the reuse path works — yet the one-byte edit moved the key.
-  The bare-language pipeline does not show this, and it is the path the language server takes
-  (`set_view`), so it is worth a separate investigation before anything is concluded about it.
+- **The whitespace row is a gate defect, and it is now named.** A whitespace-only edit inside a
+  *preprocessed view* recompiled while a same-source recompile reused (`12.1×`). The content key
+  is not at fault: `key_eq` was true in every row, and two *full* parses of the two sources give
+  equal keys. The coarse gate is `view_same && cache.key == key && cache.build.is_some()`, and
+  `view_same` requires `prev.base == self.base && (base == 0 || prev.line_starts == self.line_starts)`.
+  A view's line starts are **absolute byte offsets**, so any edit that shifts an offset changes
+  them — which every real edit does. Measured directly: `base_same true, starts_same false,
+  key_eq true`. The `base == 0` arm short-circuits the check, which is exactly why `set_source`
+  (the bare-language probe) reuses and `set_view` does not. **Every host that compiles a program
+  with imports takes the view path**, and both target domains do. §13 records the proposed fix.
 
 ## 10. Costs and failure modes
 
@@ -586,11 +591,16 @@ Three readings:
   path that read a stored operation would have to repeat the check. And a **persisted**
   `ReadOnly` artifact would need the mode in the wire format; today the loader sets
   `read_only: false`, which is right only because `ReadOnly` cells are not persisted yet.
-- **The heavy case has not been measured on the composed vocabulary.** Every reading in §9
-  is the bare language, where a value is a host scalar or array. The heavy values these
-  domains need are `lichen-compute`'s, so the next probe belongs in
-  `crates/lichen-compute/examples/` over that crate's own `LangProgram`, and it is the
-  reading that decides T2 against T3.
+- **The coarse gate never passes on the view path, and the fix is a split of one predicate**
+  (§9.7). `view_same` conflates two facts: the *coordinate space* is the same (`base` unchanged)
+  and the *line table* is unchanged. Only the first is a correctness requirement for reusing the
+  build; the second matters only to the retained spans, which already have their own refusal
+  (`Cache::moved` returns `None` when a check diagnostic cannot be mapped, and that is the one
+  fatal case). The fix is to gate the build on `base_same && cache.key == key`, derive
+  `previous_starts` from `last` whenever `base_same`, and let `moved` decide the spans — so a
+  whitespace edit reuses the build and maps its spans, and an unmappable diagnostic still
+  recompiles. **Not built**: it rewrites a documented invariant's role, so it waits for the
+  superior.
 - **The measurement** (`incremental-evaluation.md` Q9 is still owed): §9 has the
   frontend-versus-check split now, but not the deep pass separated from the check, and not
   the session's overhead broken out.

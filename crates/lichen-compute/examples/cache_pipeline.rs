@@ -74,6 +74,8 @@ struct Row {
     same: bool,
     build_reused: bool,
     key_len: usize,
+    /// Whether a full parse and this compile's splice produced the same content key.
+    key_matches_fresh: bool,
 }
 
 fn main() {
@@ -113,6 +115,15 @@ fn main() {
     }
 
     let mut rows: Vec<Row> = Vec::new();
+    // A whitespace-only edit on the first build: no resolved structure moves.
+    let first_spaced = PIPELINE.replace("cache data", "cache  data");
+    rows.push(measure(
+        &mut store,
+        &mut session,
+        &first_spaced,
+        &preprocessed.imports,
+        "whitespace, first",
+    ));
     // Editing the first kernel's constant dirties both stages; editing the tail dirties none.
     let steeper = PIPELINE.replace("i + 3", "i + 4");
     rows.push(measure(
@@ -142,13 +153,13 @@ fn main() {
     ));
 
     println!(
-        "\n{:<18} {:>9} {:>10} {:>8} {:>7} {:>7} {:>8} {:>6}",
-        "edit", "fresh ms", "session ms", "speedup", "build", "reused", "frozen", "value"
+        "\n{:<18} {:>9} {:>10} {:>8} {:>7} {:>7} {:>8} {:>6} {:>7}",
+        "edit", "fresh ms", "session ms", "speedup", "build", "reused", "frozen", "value", "key="
     );
     println!("{}", "-".repeat(80));
     for row in &rows {
         println!(
-            "{:<18} {:>9.2} {:>10.2} {:>7.1}x {:>5} {:>7} {:>7} {:>6}",
+            "{:<18} {:>9.2} {:>10.2} {:>7.1}x {:>5} {:>7} {:>7} {:>6} {:>7}",
             row.label,
             row.fresh_ms,
             row.session_ms,
@@ -161,11 +172,45 @@ fn main() {
             row.reused,
             row.frozen,
             if row.same { "same" } else { "DIFF" },
+            if row.key_matches_fresh {
+                "fresh"
+            } else {
+                "DIFFERS"
+            },
         );
     }
     for row in &rows {
         println!("{}: value {:?}", row.label, row.value);
     }
+
+    // Two full parses, no session: is the content key whitespace-sensitive for this program?
+    let plain = fresh_key(PIPELINE);
+    let spaced = fresh_key(&first_spaced);
+    println!(
+        "content key over two full parses: {} entries, equal {}, first difference {:?}",
+        plain.len(),
+        plain == spaced,
+        plain
+            .iter()
+            .zip(&spaced)
+            .position(|(left, right)| left != right),
+    );
+}
+
+/// The content key of `source` from a full parse in a fresh store.
+fn fresh_key(source: &str) -> Vec<u64> {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    let (preprocessed, _) = preprocess(source, None, &mut store);
+    let starts = lichen_language::lex::line_starts(source);
+    let mut session =
+        BufferSession::<LangProgram>::with_registry(preprocessed.code, "key", store.registry());
+    session.set_view(
+        preprocessed.code,
+        preprocessed.code_base,
+        &starts,
+        &preprocessed.imports,
+    );
+    session.compile().key
 }
 
 fn measure(
@@ -217,5 +262,6 @@ fn measure(
         value,
         build_reused: report.reused,
         key_len: report.key.len(),
+        key_matches_fresh: fresh_report.key == report.key,
     }
 }
