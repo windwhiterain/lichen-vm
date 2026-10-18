@@ -605,3 +605,135 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+
+/// Qwen3-1.7B's own layer, one token: twenty-one dispatches from a hidden state to the next.
+///
+/// # Invariant
+/// The order is the model's — normalise, project the query, key and value, normalise each head of the
+/// two that are normalised, rotate both at the token's position, spread the eight keys' values over the
+/// sixteen queries, project out, add the residual, normalise, project the gate and the up, multiply
+/// them through the sigmoid, project down and add the second residual.
+pub const LAYER_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+SqIn   = struct{.x (compute.Buf Float)}
+SqOut  = struct{.s (compute.Buf Float)}
+SqPar  = struct{.n Int, .dim Int, .in SqIn, .out SqOut}
+SqArg  = struct{.n Int, .dim Int, .I SqIn}
+squares_raw = (k : SqPar) => {
+  lane = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) * compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+ScIn   = struct{.s (compute.Buf Float), .x (compute.Buf Float), .w (compute.Buf Float)}
+ScOut  = struct{.y (compute.Buf Float)}
+ScPar  = struct{.n Int, .dim Int, .in ScIn, .out ScOut}
+ScArg  = struct{.n Int, .dim Int, .I ScIn}
+scale_raw = (k : ScPar) => {
+  i = compute.range k.n
+  head = i / k.dim
+  j = i - head * k.dim
+  total = compute.read ((compute.Read _)(.from k.in.s, .at head))
+  mean = total / (int2float k.dim)
+  divisor = sqrt (mean + 0.000001)
+  value = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  weight = compute.read ((compute.Read _)(.from k.in.w, .at j))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((value * weight) / divisor)))
+}
+scale = compute.parallel scale_raw "gpu"
+MvIn   = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+MvOut  = struct{.y (compute.Buf Float)}
+MvPar  = struct{.n Int, .dim Int, .in MvIn, .out MvOut}
+MvArg  = struct{.n Int, .dim Int, .I MvIn}
+matvec_raw = (k : MvPar) => {
+  row = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+RpIn   = struct{.x (compute.Buf Float)}
+RpOut  = struct{.y (compute.Buf Float)}
+RpPar  = struct{.n Int, .position Int, .in RpIn, .out RpOut}
+RpArg  = struct{.n Int, .position Int, .I RpIn}
+rope_raw = (k : RpPar) => {
+  i = compute.range k.n
+  head = i / 128
+  j = i - head * 128
+  low = j < 64
+  other_index = if low then (i + 64) else (i - 64)
+  own = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  other = compute.read ((compute.Read _)(.from k.in.x, .at other_index))
+  turned = if low then j else (j - 64)
+  exponent = (0.0 - (int2float turned)) / 64.0
+  factor = exp (exponent * (ln (1000000.0)))
+  angle = (int2float k.position) * factor
+  cosine = cos angle
+  sine = sin angle
+  signed = if low then (0.0 - 1.0) else 1.0
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((own * cosine) + ((signed * other) * sine))))
+}
+rope = compute.parallel rope_raw "gpu"
+SpIn   = struct{.v (compute.Buf Float)}
+SpOut  = struct{.y (compute.Buf Float)}
+SpPar  = struct{.n Int, .in SpIn, .out SpOut}
+SpArg  = struct{.n Int, .I SpIn}
+spread_raw = (k : SpPar) => {
+  i = compute.range k.n
+  head = i / 128
+  key = head / 2
+  j = i - head * 128
+  value = compute.read ((compute.Read _)(.from k.in.v, .at (key * 128 + j)))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value value))
+}
+spread = compute.parallel spread_raw "gpu"
+AdIn   = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+AdOut  = struct{.y (compute.Buf Float)}
+AdPar  = struct{.n Int, .in AdIn, .out AdOut}
+AdArg  = struct{.n Int, .I AdIn}
+add_raw = (k : AdPar) => {
+  i = compute.range k.n
+  left = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  right = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (left + right)))
+}
+add = compute.parallel add_raw "gpu"
+GlIn   = struct{.g (compute.Buf Float), .u (compute.Buf Float)}
+GlOut  = struct{.m (compute.Buf Float)}
+GlPar  = struct{.n Int, .in GlIn, .out GlOut}
+GlArg  = struct{.n Int, .I GlIn}
+glue_raw = (k : GlPar) => {
+  i = compute.range k.n
+  gate = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  up = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  open = gate / (1.0 + (exp (0.0 - gate)))
+  compute.write ((compute.Write _)(.to k.out.m, .at i, .value (open * up)))
+}
+glue = compute.parallel glue_raw "gpu"
+LIn    = struct{.x (compute.Buf Float), .i (compute.Buf Float), .q (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .qn (compute.Buf Float), .kn (compute.Buf Float), .o (compute.Buf Float), .p (compute.Buf Float), .g (compute.Buf Float), .u (compute.Buf Float), .d (compute.Buf Float)}
+GArg   = struct{.position Int, .in LIn}
+step = (s : GArg) => {
+  s1 = (compute.plrun squares ((SqArg)(.n 1, .dim 2048, .I SqIn(.x s.in.x))) : SqOut)
+  n1 = (compute.plrun scale ((ScArg)(.n 2048, .dim 2048, .I ScIn(.s s1.s, .x s.in.x, .w s.in.i))) : ScOut)
+  qs = (compute.plrun matvec ((MvArg)(.n 2048, .dim 2048, .I MvIn(.x n1.y, .w s.in.q))) : MvOut)
+  ks = (compute.plrun matvec ((MvArg)(.n 1024, .dim 2048, .I MvIn(.x n1.y, .w s.in.k))) : MvOut)
+  vs = (compute.plrun matvec ((MvArg)(.n 1024, .dim 2048, .I MvIn(.x n1.y, .w s.in.v))) : MvOut)
+  sq = (compute.plrun squares ((SqArg)(.n 16, .dim 128, .I SqIn(.x qs.y))) : SqOut)
+  qn = (compute.plrun scale ((ScArg)(.n 2048, .dim 128, .I ScIn(.s sq.s, .x qs.y, .w s.in.qn))) : ScOut)
+  sk = (compute.plrun squares ((SqArg)(.n 8, .dim 128, .I SqIn(.x ks.y))) : SqOut)
+  kn = (compute.plrun scale ((ScArg)(.n 1024, .dim 128, .I ScIn(.s sk.s, .x ks.y, .w s.in.kn))) : ScOut)
+  qr = (compute.plrun rope ((RpArg)(.n 2048, .position s.position, .I RpIn(.x qn.y))) : RpOut)
+  kr = (compute.plrun rope ((RpArg)(.n 1024, .position s.position, .I RpIn(.x kn.y))) : RpOut)
+  at = (compute.plrun spread ((SpArg)(.n 2048, .I SpIn(.v vs.y))) : SpOut)
+  os = (compute.plrun matvec ((MvArg)(.n 2048, .dim 2048, .I MvIn(.x at.y, .w s.in.o))) : MvOut)
+  hs = (compute.plrun add ((AdArg)(.n 2048, .I AdIn(.a s.in.x, .b os.y))) : AdOut)
+  s4 = (compute.plrun squares ((SqArg)(.n 1, .dim 2048, .I SqIn(.x hs.y))) : SqOut)
+  n2 = (compute.plrun scale ((ScArg)(.n 2048, .dim 2048, .I ScIn(.s s4.s, .x hs.y, .w s.in.p))) : ScOut)
+  gs = (compute.plrun matvec ((MvArg)(.n 6144, .dim 2048, .I MvIn(.x n2.y, .w s.in.g))) : MvOut)
+  us = (compute.plrun matvec ((MvArg)(.n 6144, .dim 2048, .I MvIn(.x n2.y, .w s.in.u))) : MvOut)
+  ms = (compute.plrun glue ((GlArg)(.n 6144, .I GlIn(.g gs.y, .u us.y))) : GlOut)
+  ds = (compute.plrun matvec ((MvArg)(.n 2048, .dim 6144, .I MvIn(.x ms.m, .w s.in.d))) : MvOut)
+  compute.plrun add ((AdArg)(.n 2048, .I AdIn(.a hs.y, .b ds.y)))
+}
+built = compute.graph step
+built
+"#;

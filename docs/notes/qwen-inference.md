@@ -62,6 +62,21 @@ Four things cost a round and are worth not re-deriving:
 The CDN itself is fine: `curl -I -L` reaches a `302` to `cdn-lfs-cn-1.modelscope.cn` and answers
 `Content-Length: 3441185608`, and a single ranged read of the same URL returns `206`.
 
+## A whole layer answers the host
+
+Layer 0 of the real model, one token at position 5, from the model's own twelve tensors: **the composed
+path answers the host's hidden state**, element by element within `1.6e-6` and summing to `64.155712`
+where the host sums to `64.155605`. It is composed of the steps that each already answer the host — the
+norm, the projection, the SwiGLU product — plus the grouped spread between the value and the output
+projection, where eight key heads serve sixteen queries two to one.
+
+Two measurements of the interface came out of it, both committed as tests:
+
+| | |
+|---|---|
+| **A struct's fields arrive in descending name order.** | `{.a, .b, .c}` passed `1, 2, 3` answers `321` — `abi_order`. |
+| **A struct of twelve buffer fields binds two of them.** | The same probe with the layer's own twelve field names answers with only `.x` and `.k` bound; the other ten read zero. So the whole layer cannot be **one** step yet, and the fused program is ignored rather than deleted, so the limit stays visible. |
+
 ## What is ahead
 
 The rest of a layer — RoPE, the GQA attention over a growing cache, the SwiGLU — then 28 layers, then
