@@ -321,14 +321,51 @@ Two findings, and the first is a caveat the table forces:
   as a range (2.1–2.7× debug, 2.6× release), and the whole-build-reuse row as the robust one
   because it skips the compile entirely.
 
+### 9.3 The freeze's closure, measured, and why it cannot simply be cut
+
+§10 says a heavy cell is expensive to freeze. This is what the closure actually contains, and
+the experiment that tried to shrink it — it **failed**, and the failure is the result.
+
+A temporary census inside `StaticModule::freeze_closure` (the `CELL_FREEZE_CENSUS` print, gone)
+read, for the 6-stage pipeline's six cells:
+
+| | closure nodes | functions | undecided | with an operation |
+|---|---|---|---|---|
+| `s0` … `s5` | **14 030 – 43 148** | **1** | 1 648 – 5 057 | 4 667 – 14 373 |
+
+So the function-template edge is *not* the cost (one function), and nearly half the closure
+is operation-bearing nodes — the apply clone graph, reached through the operand edge and
+through the classes that undecided nodes pull whole.
+
+**The operand edge is a storage requirement, not a semantic one.** `freeze_set` writes
+`operation.operand` as a reference into the artifact, so every node it stores that has an
+operation must have its operand in the artifact — which is why `closure` follows the operand
+unconditionally, including from nodes that are decided and will never re-run.
+
+**The experiment.** Following an operand only from a *residual* node, and storing no operation
+for a decided one, collapsed a cell's closure from **14 030 nodes to 6** and moved the whole
+pipeline from **2.6× to 6.6×** (the all-dirty edit from "3× slower than fresh" to 1.17×), with
+the differential oracle still at 5 of 5. **It is unsound.** `lichen-lowlevel`'s
+`table::a_function_key_survives_a_freeze_and_a_reload` fails, and the reason is in the key
+hash's own contract: it *"unfolds a node's operation edge in preference to its memoized value,
+so the answer does not depend on how far the definition pass has run"* (`table.rs:74-75`). A
+decided node's operation is part of its **content identity**, so dropping it changes what the
+artifact hashes to and a key taken before a freeze stops matching after a reload. The two
+obvious alternatives are closed for the same reason: keeping the operand chain is what the
+storage requirement demands, and hashing a decided node by its value instead would reintroduce
+exactly the definition-pass dependence that sentence exists to exclude.
+
+**What is left is a contract question, not a performance one**: the cheap freeze is available
+only to a cell that gives up being usable as a table key. That is the granularity knob §13
+records.
 
 ## 10. Costs and failure modes
 
-- **A heavy cell is expensive to freeze, and the cost is its clone graph, not its value.**
-  Measured in §9.2: freezing six cells whose values came from ~900-application applies cost
-  **≈22 ms per cell in release** (≈165 ms in debug), against a 65 ms fresh compile of the
-  whole program. The artifact a cell freezes is the closure of the apply, whose clone graph
-  holds thousands of nodes. So a cell's break-even is
+- **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
+  its value and not its template.** Measured in §9.2 and §9.3: freezing six cells whose
+  values came from ~900-application applies cost **≈22 ms per cell in release** (≈165 ms in
+  debug), against a 65 ms fresh compile of the whole program, and the artifact is 14 030 to
+  43 148 nodes of apply clone graph held open by the operand edge. So a cell's break-even is
   *reused more often than recomputed*, and a policy that freezes a cell on every dirty edit
   can cost more than it saves. This is the retention policy's real constraint and it was not
   visible before a heavy cell existed to freeze.
@@ -419,12 +456,17 @@ Two findings, and the first is a caveat the table forces:
 - **The session's fixed per-edit overhead is unattributed** (§9): 1.6× on the first compile,
   and an edit costing 87 ms against a fresh 57 ms at one heavy cell. Profile before designing
   around it.
-- **Whether a cell can freeze its value without its clone graph.** §10's ≈165 ms per freeze
-  is the closure's clone graph. For a fully decided value the artifact needs the value and
-  the refs it reads in place — not the thousands of nodes the apply cloned to get there. The
-  closure's four edges plus `traced` are the contract that makes the freeze total, so
-  narrowing it is a change to that contract and needs the materialize pass's carry rule
-  re-read first, not a shortcut.
+- **The freeze's granularity, which is now a contract question with a measured price.**
+  §9.3 tried the obvious narrowing and it is unsound, because a decided node's operation is
+  part of its content identity (the table key hash unfolds the operation deliberately). So the
+  cheap freeze — **14 030 nodes down to 6, and 2.6× to 6.6× on the pipeline** — is available
+  only to a cell that gives up being usable as a table key. The shape is a per-cell mode
+  (`Portable` today, a `ReadOnly` that stores values only), owned by the `CellStore` so no
+  syntax changes, defaulting to `Portable`. What it needs before it is built: an answer to
+  whether anything can *enforce* that a `ReadOnly` value never becomes a key — a static ref
+  materializes into an ordinary node, so nothing today distinguishes one — and whether the
+  right default is per-cell or per-source. **Not started; it needs the superior's ruling on
+  the contract, which is why it is here rather than in the code.**
 - **The heavy case has not been measured on the composed vocabulary.** Every reading in §9
   is the bare language, where a value is a host scalar or array. The heavy values these
   domains need are `lichen-compute`'s, so the next probe belongs in
