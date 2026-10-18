@@ -37,6 +37,27 @@ converts at a boundary where the two disagree, or the pack must reach every node
 The model would want the second, because a narrowed weight matrix is read by the projection and by
 nothing else, while a hidden state is read by many.
 
+### The verdict: the class is the buffer's
+
+The user's ruling, recorded: **a class belongs to a buffer, not to a node**. A graph value has one class,
+the one its producer wrote it at, and a consumer that reads it at another class widens explicitly rather
+than reinterpreting. So `input_classes` / `output_classes` name the **buffers'** classes, and a node's
+consent is not what decides them.
+
+What that implies, in the order the work would land:
+
+1. **A value's class is derived from its producer.** A graph input's class is the host argument's; a
+   node's output's is its own `output_classes` entry. The planner already walks nodes in order, so this
+   is a table it can carry.
+2. **A consumer reads at the value's class.** A node whose own `input_classes` entry disagrees within the
+   real family is re-classed at that slot — the same rewrite `states_the_class` performs, so a projection
+   narrowed to `bf16` feeding a `Float` node would have that node read `bf16` and widen.
+3. **A crossing between the real and integer families is refused**, because nothing converts and a
+   reinterpretation would be a wrong number rather than a different precision.
+
+Until (2) lands, a mismatched edge silently answers a different number; that is the one behaviour the
+tree must not keep, whatever else changes.
+
 ## Why the language cannot spell it today
 
 Measured, in the current tree:
