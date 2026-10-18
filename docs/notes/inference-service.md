@@ -125,6 +125,14 @@ order** — one count and the four buffers — runs in **one submission**, and a
 among a later step's arguments. Both answers were hand-derived and matched (`[63, 96]`, then
 `[497, 848]`), so the ABI a service docks onto is the one the language already records.
 
+**And the step that runs is the real one.** `examples/generate.lichen`'s three kernels — the score
+GEMV, the greedy sampler and the cache append — recorded as one graph and prepared once, run twice
+through `Prepared` at **one submission each**, with the key and the value cache handed from step to
+step as **residents** (`crates/lichen-serve/tests/decode_step.rs`). Both answers are that file's own
+hand derivation: step zero samples `2` and leaves the key cache `[1, 2, 2, -1, -1]`, and step one
+samples `0` and leaves it `[1, 2, 2, 0, -1]`. So the cost model above is not a model of a trivial
+kernel: it is the decode step's, and the cache never comes back to the host between tokens.
+
 ## 2. The layers are already split — below the runtime is not where the gap is
 
 The premise this round started from was that the runtime is not low-level enough
