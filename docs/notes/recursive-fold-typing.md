@@ -102,6 +102,22 @@ classes survive into the run module for this cell, or whether the deciding edge 
 the return type through a *reference* rather than a class (a shared cell referenced in
 place, which the walk correctly leaves alone).
 
+**The second reading (dev@725024a6).** Instrumenting both sides, the repro's two `.y`
+reads' container-type nodes come from the checker (`check_named_field`): `95v1` and
+`235v1`. `95v1` is a type node **inside the template** — every call walks it and clones
+it (`enter → clone`), so it is not shared in place. `235v1`, the outer read's container
+type — the cell the final `.y` actually reads — is **never walked** by the clone pass at
+all, and it is the cell that answers `none`. The class sizes in the walk are real: of
+384 clones, 352 arrive at size 1, 20 at 2, 6 at 3 and 6 at 9; every in-place node with a
+class larger than one already carries a **value** (`op=false value=true`), so
+referencing it in place is correct. The read chain therefore reaches an undecided cell
+that no clone pass supplies: the outer apply's result cell is bound by the runtime
+`wire_apply_result` to the fold's cloned return pair, and that pair's type is undecided
+because its decider (the base-arm read, whose type sits in the shared element cell's
+class) is rebuilt only from members the walk reaches. The next step is to instrument
+`wire_apply_result` for the outer apply and print the return pair's type clone and its
+class, so the missing link is measured rather than inferred.
+
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
 struct-literal base (`@loop f = (n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
