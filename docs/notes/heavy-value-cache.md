@@ -684,45 +684,6 @@ The limits, stated rather than discovered:
   set is not guarded at all — the cache directory would have to be scoped per plugin set, as the
   artifact store already is.
 
-
-## 10. Costs and failure modes
-
-- **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
-  its value and not its template.** Measured in §9.2 and §9.3: freezing six cells whose
-  values came from ~900-application applies cost **≈22 ms per cell in release** (≈165 ms in
-  debug), against a 65 ms fresh compile of the whole program, and the artifact is 14 030 to
-  43 148 nodes of apply clone graph held open by the operand edge. So a cell's break-even is
-  *reused more often than recomputed*, and a policy that freezes a cell on every dirty edit
-  can cost more than it saves. This is the retention policy's real constraint and it was not
-  visible before a heavy cell existed to freeze.
-
-- **`KEY_FORMAT_VERSION` stops being free to bump.** `incremental-update.md` §8 currently
-  says a bump "invalidates every cached key; today that is in-memory only … so a bump is
-  free — check that before the keys are ever persisted". **This is that moment.** Once a
-  cell key is persisted, a bump retires every cache and becomes the same kind of contract as
-  `ARTIFACT_FORMAT_VERSION`, which has a written version history for exactly this reason.
-  The version history must be started when the first persisted key lands, not after.
-- **A key that omits a read is unsound, silently.** This is the obligation §4 narrowed, and
-  it is the mechanism's whole risk. The edge set is `dirty.rs`'s exhaustive `walk` over
-  `Expr`, which is written as a full match on purpose so a new expression form is a compile
-  error. **The key must be derived from that same walk, not from a second traversal**,
-  or the two can disagree about what a binding reads.
-- **The duplicate read graph.** `Resolver` already builds `binding_edges`
-  (`resolve.rs:100`), uses it only for cycle detection, and never exposes it; `dirty.rs`
-  re-derives an equivalent graph by AST walk every compile. The key needs the same edges, so
-  this is now a third consumer of one relation. It should be computed once and shared, but
-  note the resolver's is `BinderId`-keyed and reports *unresolved* reads differently from
-  `dirty.rs`'s statement-granular one — they are not interchangeable as they stand, so
-  unifying them is its own step, not a side effect.
-- **`~/.lichen` is untrusted input** (`D1`). A key match decides *whether to use* a stored
-  artifact; it does not decide whether the bytes are *safe*. The `body_digest` and the total
-  field validation stay, and a key is not a signature.
-- **A shared entry has one owner.** Two bindings with one key share one artifact; the byte
-  budget must count it once, and the event report must name the cell that is reading it.
-- **The window is an accelerator, so it may be wrong without being unsound** — but only once
-  the key path is the judge. Until then it is still load-bearing, which is why propagation
-  is kept rather than deleted (§1).
-
 ### 9.14 A restart on the pipeline, and what the write costs
 
 The tuned pipeline (§9.11) restarted over a cache an earlier session stored, release build:
@@ -794,6 +755,102 @@ The honest limit: `type_name` is not a stable ABI. Across builds it moves with t
 structure, which costs a **miss** — safe — and never a read of another vocabulary's bytes. A
 persisted cache that should survive a rebuild would need a deliberate scope key (the artifact
 store's `compiler_slot_key` is that shape) instead of a type name; that is not built.
+
+### 9.17 The world generator, and the defect a real application found
+
+The validation §9.7 and §9.11 ran was target-shaped: a pipeline of arithmetic stages whose cells
+only ever produced a value for the root to read. `examples/worldgen.lichen` is the application the
+framework is for — a seeded terrain generator whose twelve `cache` bindings are noise octaves,
+blends, two smoothing passes, a biome classification and a tile atlas, over a `128 × 128` grid —
+and it found a defect that the pipeline could not expose.
+
+| edit | fresh ms | session ms | ratio | reused |
+|---|---|---|---|---|
+| same source again | 193.67 | 1.88 | 103× | 0 (build reuse) |
+| whitespace only | 185.38 | 0.81 | 229× | 0 (build reuse) |
+| biome sea 0.35 → 0.40 | 181.70 | 53.08 | 3.4× | 10 |
+| octave scale 32 → 40 | 182.58 | 125.30 | 1.5× | 5 |
+| mix weight 0.25 → 0.35 | 191.12 | 95.31 | 2.0× | 7 |
+| moisture seed +3 → +5 | 176.52 | 78.41 | 2.3× | 8 |
+| append a smoothing pass | 206.22 | 65.31 | 3.2× | 10 |
+| seed 7 → 11, everything dirty | 201.13 | 219.73 | 0.9× | 0 |
+| **eight edits** | **1518.32** | **639.83** | **2.4×** | — |
+
+The same application at `512 × 512` — 262 144 cells, 1 MB per buffer, a 3.1 s fresh compile —
+repeats the shape with more room between the arms: 1548× and 3313× on the two edits where no cell
+moved, 4.6× / 1.6× / 2.3× / 2.6× / 3.3× on the five real ones, 1.0× on the all-dirty one, and
+**2.7×** over the eight (25 425.63 ms against 9 443.68). All eight answers equalled a fresh
+compile's at both sizes, element for element, over the whole collected map.
+
+**What broke, and why it was silent.** A launch whose input was a *frozen* buffer answered
+`raw none`: the session reported ten cells reused, recorded no diagnostic, and left the whole map
+undecided. Two refusals sat in the operators' read path, and both outlived their reason:
+
+- `buffer_items` answered `None` for `AnyHandle::Static`, under a comment that the codec "refuses
+  to serialize a frozen one" — which stopped being true when §9.6's buffer encoding landed;
+- `buf_payload` and `value_at_path` walked a value with `node.dynamic()`, so a walk that reached an
+  item *inside* a cell's artifact stopped there. A reused value is an array whose items are
+  static refs, so `items_of` now reads either side.
+
+Before the fix, **0 of 8** rows agreed with a fresh compile while the session was still fast; after
+it, **8 of 8**. That inversion is what the differential oracle is for: the timings alone called the
+broken arm a win.
+
+**The surface needed no new operator.** The kernels use `range`, `row`, `col`, `read`, `write` and
+`if`; the biome classification's nested `if` compiles to `Select`, the same instruction §9.7's
+boundary masking used. What was missing was not an operator but the operators' ability to consume a
+cell at all — and that is the join the two pipelines never made, because their cells only ever fed
+the root.
+
+**A restart still gains nothing, and §9.15's guard is why.** At `512 × 512` the restart reads
+fresh 3356.56 ms, cold 3661.45 ms and warm 3680.10 ms with **0 files written**: every cell of the
+application reads `compute.lichen`, so every cell carries a foreign key in its `refs` and
+`save_cells` skips it. A compute application therefore has *in-process* reuse only, and the
+cross-process half of §9.13 is closed to it until the key's `EXTERNAL` token can say which import
+bytes a cell was computed from. That is a change to §2's key, not a bug fix.
+
+**One reading not chased.** A reused cell's *type* prints `raw` where the fresh build prints the
+type (`(raw Buffer, raw Int)` against `(raw Buffer, Int)`), because the type slot materializes as
+an artifact-shaped array too. Every value agreed at both sizes, so nothing measured is wrong — but
+nothing yet says a reused cell's type is the one it was computed with.
+
+## 10. Costs and failure modes
+
+- **A heavy cell is expensive to freeze, and the cost is its operand chain and classes, not
+  its value and not its template.** Measured in §9.2 and §9.3: freezing six cells whose
+  values came from ~900-application applies cost **≈22 ms per cell in release** (≈165 ms in
+  debug), against a 65 ms fresh compile of the whole program, and the artifact is 14 030 to
+  43 148 nodes of apply clone graph held open by the operand edge. So a cell's break-even is
+  *reused more often than recomputed*, and a policy that freezes a cell on every dirty edit
+  can cost more than it saves. This is the retention policy's real constraint and it was not
+  visible before a heavy cell existed to freeze.
+
+- **`KEY_FORMAT_VERSION` stops being free to bump.** `incremental-update.md` §8 currently
+  says a bump "invalidates every cached key; today that is in-memory only … so a bump is
+  free — check that before the keys are ever persisted". **This is that moment.** Once a
+  cell key is persisted, a bump retires every cache and becomes the same kind of contract as
+  `ARTIFACT_FORMAT_VERSION`, which has a written version history for exactly this reason.
+  The version history must be started when the first persisted key lands, not after.
+- **A key that omits a read is unsound, silently.** This is the obligation §4 narrowed, and
+  it is the mechanism's whole risk. The edge set is `dirty.rs`'s exhaustive `walk` over
+  `Expr`, which is written as a full match on purpose so a new expression form is a compile
+  error. **The key must be derived from that same walk, not from a second traversal**,
+  or the two can disagree about what a binding reads.
+- **The duplicate read graph.** `Resolver` already builds `binding_edges`
+  (`resolve.rs:100`), uses it only for cycle detection, and never exposes it; `dirty.rs`
+  re-derives an equivalent graph by AST walk every compile. The key needs the same edges, so
+  this is now a third consumer of one relation. It should be computed once and shared, but
+  note the resolver's is `BinderId`-keyed and reports *unresolved* reads differently from
+  `dirty.rs`'s statement-granular one — they are not interchangeable as they stand, so
+  unifying them is its own step, not a side effect.
+- **`~/.lichen` is untrusted input** (`D1`). A key match decides *whether to use* a stored
+  artifact; it does not decide whether the bytes are *safe*. The `body_digest` and the total
+  field validation stay, and a key is not a signature.
+- **A shared entry has one owner.** Two bindings with one key share one artifact; the byte
+  budget must count it once, and the event report must name the cell that is reading it.
+- **The window is an accelerator, so it may be wrong without being unsound** — but only once
+  the key path is the judge. Until then it is still load-bearing, which is why propagation
+  is kept rather than deleted (§1).
 
 ## 11. What would falsify it
 
@@ -884,10 +941,19 @@ store's `compiler_slot_key` is that shape) instead of a type name; that is not b
   an edit costing 87 ms against a fresh 57 ms at one heavy cell.
 - **The deep pass is still not separated from the check** (`incremental-evaluation.md` Q9):
   §9.1 splits the frontend from the check, not the check from its evaluation.
-- **No real domain application is integrated.** The validation is a target-shaped pipeline and a
-  compute-vocabulary pipeline (§9.2, §9.7, §9.11, §9.14), not a whiting scene or a data-science
-  notebook. What that leaves open is whether real edits dirty the fraction these shapes assume
-  (§11's last falsifier).
+- **A compute application persists no cell at all.** Every cell of `examples/worldgen.lichen` reads
+  the compute import, so §9.15's guard skips all of them and a restart is a full recompute (§9.17).
+  Closing it means the key's `EXTERNAL` token becomes the imported bytes' digest — a change to §2's
+  key, and the largest remaining gap between the mechanism and a real application.
+- **A reused cell's type is not restored.** Its value is; its type prints `raw` (§9.17). Nothing
+  measured is wrong yet, and nothing says a typed position would be right.
+- **No operator was missing for a real application, and the one §7 predicts is still absent.** The
+  world generator needed only `range`/`row`/`col`/`read`/`write`/`if`; the PCG domain's next
+  workload, a scatter-accumulate, is still silently last-writer-wins on both backends
+  ([gpu-algorithms-ladder](gpu-algorithms-ladder.md#5-a-scatter-accumulate-is-silently-wrong)),
+  and the design on file is to refuse a contended write rather than to add atomics
+  ([shared-memory-and-barriers](shared-memory-and-barriers.md)). Nothing measured since changed
+  that preference.
 
 ## 14. Probes
 
@@ -905,3 +971,5 @@ question it serves stops moving.
 | `lichen-language/examples/cell_reload` | four sessions over one cache directory (§9.13, §9.15) |
 | `lichen-compute/examples/cache_buffer` | a compute value's retention cost and round trip (§9.5, §9.6) |
 | `lichen-compute/examples/cache_pipeline` | buffer cells on a real compute program (§9.7, §9.16) |
+| `lichen-compute/examples/worldgen_edits` | the world generator's edit loop and restart, whole map against whole map (§9.17) |
+| `lichen-compute/examples/buffer_reuse` | one frozen buffer feeding one later launch, alone (§9.17) |

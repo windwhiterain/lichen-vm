@@ -1,0 +1,138 @@
+---
+  order = "35"
+  compute = import "compute.lichen"
+  doc = "A seeded world generator, and the application the heavy-value cache is validated on \
+    (`docs/notes/heavy-value-cache.md` §9.17). Three elevation octaves and two moisture octaves \
+    of hashed value noise, blended by two `mix` kernels, smoothed twice by one five-tap kernel, \
+    classified into five biomes and turned into a tile atlas — twelve `cache` stages over a \
+    `128 × 128` grid of `16 384` cells.\n\n\
+    **The noise is the language's own arithmetic, not a modelled function.** A lattice corner \
+    answers `((x * 7919) + (y * 104729) + (seed * 1299709)) % 65536 / 65535`, every product \
+    staying inside 31 bits, so the integer half is exact on both backends and the float half is \
+    a repeatable reading rather than a driver's. The interpolation between four corners is \
+    smoothstep-weighted (`fx * fx * (3.0 - 2.0 * fx)`), so an octave's `scale` is a real \
+    frequency and not a label.\n\n\
+    **The stages are the dependency graph the cache exists for, and each one is a `cache` binding \
+    whose value is a buffer.** The three elevation octaves and the two moisture octaves are \
+    independent; `blended` and `elevation` fold the first three, `moisture` folds the other two, \
+    `eroded` and `relief` run the same five-tap kernel twice, `biomes` classifies on both fields, \
+    and `tiles` adds a per-cell variant. Editing the biome thresholds therefore dirties `biomes` \
+    and `tiles`; editing an octave's `scale` dirties that octave and everything downstream of it \
+    and nothing on the moisture side; a whitespace edit moves no cell at all. \
+    `crates/lichen-compute/examples/worldgen_edits` drives exactly those edits and compares the \
+    session's whole collected map against a fresh compile's.\n\n\
+    **The declared output samples three cells** — `(0, 0)`, `(63, 127)` and `(127, 127)` — of the \
+    relief, of the biome grid and of the atlas. The relief samples are `0.67571974`, \
+    `0.25864074` and `0.6503648`; the biome ids are `1`, `0` and `2` — low-and-dry, sea, \
+    low-and-wet, under `sea = 0.35` and `ridge = 0.7` — and the atlas entries are `7`, `3` and \
+    `11`, which is `biome * 4 + variant` with variant `3` at all three: 7919 ≡ 3 and 104729 ≡ 1 \
+    and 1299709 ≡ 1 modulo `4`, so the multipliers take `(0, 0)` to `3`, and the two samples \
+    whose coordinates are both `≡ 3` land on the same residue."
+  output = "(0.67571974, 0.25864074, 0.6503648, 1, 0, 2, 7, 3, 11): tuple{Float, Float, Float, Int, Int, Int, Int, Int, Int}"
+---
+InSeed   = struct{.seed Int}
+OutField = struct{.f (compute.Buf Float)}
+OutIds   = struct{.ids (compute.Buf Int)}
+InField  = struct{.f (compute.Buf Float)}
+InField2 = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
+InLand   = struct{.height (compute.Buf Float), .moisture (compute.Buf Float)}
+InTile   = struct{.biomes (compute.Buf Int)}
+
+PNoise = struct{.n Int, .cols Int, .scale Int, .seed Int, .in InSeed, .out OutField}
+ANoise = struct{.n Int, .cols Int, .scale Int, .seed Int, .I InSeed}
+noise_raw = (p : PNoise) => {
+  i = compute.range p.n
+  row = compute.row p
+  col = compute.col p
+  x = col / p.scale
+  y = row / p.scale
+  fx = int2float (col % p.scale) / int2float p.scale
+  fy = int2float (row % p.scale) / int2float p.scale
+  sx = fx * fx * (3.0 - 2.0 * fx)
+  sy = fy * fy * (3.0 - 2.0 * fy)
+  h00 = int2float (((x * 7919) + (y * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
+  h10 = int2float ((((x + 1) * 7919) + (y * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
+  h01 = int2float (((x * 7919) + ((y + 1) * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
+  h11 = int2float ((((x + 1) * 7919) + ((y + 1) * 104729) + (p.seed * 1299709)) % 65536) / 65535.0
+  top = h00 + ((h10 - h00) * sx)
+  bottom = h01 + ((h11 - h01) * sx)
+  value = top + ((bottom - top) * sy)
+  compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
+}
+noise = compute.parallel noise_raw "cpu"
+
+PMix = struct{.n Int, .cols Int, .w Float, .in InField2, .out OutField}
+AMix = struct{.n Int, .cols Int, .w Float, .I InField2}
+mix_raw = (p : PMix) => {
+  i = compute.range p.n
+  a = compute.read ((compute.Read _)(.from p.in.a, .at i))
+  b = compute.read ((compute.Read _)(.from p.in.b, .at i))
+  compute.write ((compute.Write _)(.to p.out.f, .at i, .value (a + ((b - a) * p.w))))
+}
+mix = compute.parallel mix_raw "cpu"
+
+PSmooth = struct{.n Int, .cols Int, .in InField, .out OutField}
+ASmooth = struct{.n Int, .cols Int, .I InField}
+smooth_raw = (p : PSmooth) => {
+  i = compute.range p.n
+  row = compute.row p
+  col = compute.col p
+  rows = p.n / p.cols
+  up = compute.read ((compute.Read _)(.from p.in.f, .at (((max row 1) - 1) * p.cols + col)))
+  down = compute.read ((compute.Read _)(.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col)))
+  left = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1))))
+  right = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1)))))
+  centre = compute.read ((compute.Read _)(.from p.in.f, .at i))
+  value = (centre * 0.5) + ((up + down + left + right) * 0.125)
+  compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
+}
+smooth = compute.parallel smooth_raw "cpu"
+
+PBiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .in InLand, .out OutIds}
+ABiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .I InLand}
+biome_raw = (p : PBiome) => {
+  i = compute.range p.n
+  e = compute.read ((compute.Read _)(.from p.in.height, .at i))
+  m = compute.read ((compute.Read _)(.from p.in.moisture, .at i))
+  b = if e < p.sea then 0 else (if e < p.ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
+  compute.write ((compute.Write _)(.to p.out.ids, .at i, .value b))
+}
+biome = compute.parallel biome_raw "cpu"
+
+PTile = struct{.n Int, .cols Int, .seed Int, .in InTile, .out OutIds}
+ATile = struct{.n Int, .cols Int, .seed Int, .I InTile}
+tile_raw = (p : PTile) => {
+  i = compute.range p.n
+  row = compute.row p
+  col = compute.col p
+  b = compute.read ((compute.Read _)(.from p.in.biomes, .at i))
+  v = ((col * 7919) + (row * 104729) + (p.seed * 1299709)) % 4
+  compute.write ((compute.Write _)(.to p.out.ids, .at i, .value ((b * 4) + v)))
+}
+tile = compute.parallel tile_raw "cpu"
+
+seed = 7
+size = 128
+count = size * size
+
+cache octave_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 32, .seed seed, .I InSeed(.seed seed))) : OutField).f
+cache octave_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 16, .seed (seed + 1), .I InSeed(.seed (seed + 1)))) : OutField).f
+cache octave_c = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 8, .seed (seed + 2), .I InSeed(.seed (seed + 2)))) : OutField).f
+
+cache blended = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a octave_a, .b octave_b))) : OutField).f
+cache elevation = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.25, .I InField2(.a blended, .b octave_c))) : OutField).f
+
+cache damp_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 24, .seed (seed + 3), .I InSeed(.seed (seed + 3)))) : OutField).f
+cache damp_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 12, .seed (seed + 4), .I InSeed(.seed (seed + 4)))) : OutField).f
+cache moisture = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a damp_a, .b damp_b))) : OutField).f
+
+cache eroded = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f elevation))) : OutField).f
+cache relief = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f eroded))) : OutField).f
+
+cache biomes = (compute.plrun biome ((ABiome)(.n count, .cols size, .sea 0.35, .ridge 0.7, .I InLand(.height relief, .moisture moisture))) : OutIds).ids
+cache tiles = (compute.plrun tile ((ATile)(.n count, .cols size, .seed seed, .I InTile(.biomes biomes))) : OutIds).ids
+
+view = (compute.collect relief : array{Float, 16384})
+land = (compute.collect biomes : array{Int, 16384})
+atlas = (compute.collect tiles : array{Int, 16384})
+(view[0], view[8191], view[16383], land[0], land[8191], land[16383], atlas[0], atlas[8191], atlas[16383])

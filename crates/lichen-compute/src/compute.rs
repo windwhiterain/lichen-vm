@@ -334,8 +334,8 @@ fn buffer_items(payload: &BufferPayload) -> Option<&[u8]> {
         // SAFETY: the value is held on a module borrow, so its payload's home
         // block — and this slice — is alive.
         AnyHandle::Dynamic(handle) => Some(unsafe { &*handle.as_ptr() }),
-        // A buffer is runtime-only: the codec refuses to serialize a frozen one.
-        AnyHandle::Static(_) => None,
+        // SAFETY: the artifact that filed these bytes is pinned by its registry entry.
+        AnyHandle::Static(handle) => Some(unsafe { &*handle.as_ptr() }),
     }
 }
 
@@ -3266,28 +3266,38 @@ where
 fn buf_payload<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
-    let dynamic = node.dynamic()?;
-    // SAFETY: `dynamic` is a live node of `module` on this borrow.
-    (unsafe { module.array_items(dynamic) })?
-        .first()
-        .map(|item| item.node)
+    items_of(module, node)?.first().map(|item| item.node)
+}
+
+/// The items of `node`'s array value, whichever side of the freeze the node sits on.
+///
+/// # Invariant
+/// A reused cell's value is an array whose items are refs into its artifact, so a walk
+/// that required a live dynamic node would stop at the cell's own payload.
+fn items_of<P>(module: &Module<P>, node: AnyNodeId) -> Option<&'static [ArrayItem]>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    let value = module.node_value(node)?;
+    let LowValue::Array(array) = value.as_enum()? else {
+        return None;
+    };
+    // SAFETY: the value came from a live node or a pinned artifact; either keeps it.
+    Some(unsafe { array.items() })
 }
 
 /// The node a role path names in a cfg value: each step is an array index.
 fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
 {
     let mut node = AnyNodeId::Dynamic(root);
     for &at in path {
-        let dynamic = node.dynamic()?;
-        // SAFETY: every node on the way is live on this borrow — the root is the
-        // cfg the VM just evaluated.
-        let items = unsafe { module.array_items(dynamic) }?;
-        node = items.get(at)?.node;
+        node = items_of(module, node)?.get(at)?.node;
     }
     Some(node)
 }
