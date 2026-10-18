@@ -492,7 +492,7 @@ impl<P: Program> Module<P> {
 
     /// The function a function-type node names; `None` otherwise. A read. See
     /// docs/notes/function-type-merge.md.
-    pub(crate) fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
+    pub fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
         let carrier = self.class_root(node);
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
             return None;

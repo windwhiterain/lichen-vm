@@ -103,7 +103,13 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
     ) -> Iteration {
-        let Some(instantiation) = self.instantiate(function, argument, block, node, true) else {
+        let Some(instantiation) = self.instantiate(
+            function,
+            argument,
+            block,
+            node,
+            crate::function::ParameterCheck::Value,
+        ) else {
             return Iteration::Refused;
         };
         let mut index = 0;

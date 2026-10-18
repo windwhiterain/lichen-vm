@@ -336,6 +336,23 @@ where
             Some(type_operands),
         );
         self.type_applies.insert(e, type_apply);
+        // The call's own type application; a function still under check is skipped.
+        if self.module.is_function_type(function_ty) {
+            let in_progress = matches!(
+                self.module.function_type_function(function_ty),
+                Some(AnyFunctionId::Dynamic(function))
+                    if self.function_stack.iter().any(|&(checked, _)| checked == function)
+            );
+            if !in_progress {
+                self.module.apply_function_type(
+                    function_ty,
+                    argument_pair,
+                    self.current_block,
+                    type_apply,
+                    c,
+                );
+            }
+        }
         let node = value_apply;
         // The checker alone knows this application's argument span; the
         // edge is per-application even when the node is shared.

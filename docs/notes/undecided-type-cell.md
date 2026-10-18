@@ -318,21 +318,24 @@ and stored as the expression's own type slot:
 self.state[e].ty = Some(c);
 ```
 
-**The checker never reads the callee's return type at all.** `check_app` does not look
-at `self.module.functions[...].return_type` (written at `lambda.rs:147` and
-`lambda.rs:223`), and it does not unify `c` with anything. So the promise in the
-comment is entirely the runtime's, and §6.1's "`check_app`'s `c` → the callee's
-decided return type" join is **not a missing checker call in `check_app`** — the
-checker never had it. Both readers below were found by following the comment's own
-words.
+**The checker now binds `c` at check time for a decided function type.** `check_app`
+asks the engine for the call's own signature instance (`Module::apply_function_type`,
+the `ParameterCheck::Skip` clone) and binds `c` to that instance's codomain, skipping
+a callee still under check; an undecided callee keeps the runtime route alone. Until
+that bind, the promise in the comment was entirely the runtime's, and §6.1's
+"`check_app`'s `c` → the callee's decided return type" join was a missing checker
+call — the checker never had it. The two runtime readers below remain, and the
+checker's bind is the third route.
 
-### 9.2 The two readers of the return pair, and where each binds `c`
+### 9.2 The readers of the return pair, and where each binds `c`
 
 The apply encodes **two** applications — the value's `[function, argument, c, type]` and
-the type's `[type, argument, c, type]` — and each reaches the bind by a different route.
+the type's `[type, argument, c, type]` — and each reaches the bind at run time by a
+different route; the checker adds its own bind for the decided function type.
 
 | route | callee kind | the bind | file |
 |---|---|---|---|
+| the **checker's** instance bind, `apply_function_type` | `Dynamic`, a decided function type | `self.unify(cell, codomain)` where `codomain` is the per-call clone's (`ParameterCheck::Skip`) | `function.rs:apply_function_type`, `lambda.rs:check_app` |
 | the **type** application, `apply_callee_type` → `apply_type` | `Dynamic` | `self.unify(cell, codomain)` where `codomain = self.pair_type_half(applied)` | `evaluation.rs:459`, `function.rs:139` |
 | the **value** application, `static_function_apply`'s tail | `Static` (frozen) | `module.unify(cell, codomain)` where `codomain = module.pair_type_half(applied)` | `static_module/apply.rs:83-88` |
 

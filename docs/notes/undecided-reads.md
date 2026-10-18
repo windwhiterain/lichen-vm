@@ -115,11 +115,22 @@ type unify, which is the property the ruling asks for. The reads in §3 did
 not have that property.
 
 A read's container is not always a parameter. A **call's result** is a cell,
-and the read sees it only when the call expression itself is annotated — `s =
-(f 1 : S); s.y`, or `(f 1 : S).y`. Annotating the callee's function type does
-not decide the apply's result for the read, and binding the result without an
-annotation does not either; the read is refused, not mis-typed, so the
-annotation belongs on the expression whose type the read consumes.
+and the read takes the call's type only when that type is decided. The
+checker asks the engine for the call's **own instance** of the callee's
+signature (the same per-call clone the runtime applies, with the parameter
+check skipped) and binds the result cell to that instance's codomain, so
+`(f 1).y` reads `f`'s return type directly. Measured: `S = struct{.y Int};
+f = (x : Int) => S(.y x); (f 1).y` answers `1: Int` (previously refused), and
+the old deferred-read exploit `f = x => { a = (g x)(0); a : Int; a }; g = x =>
+("s", 2); f 1` is now refused at the read with `expected Int, found string`
+instead of printing a string as `Int`.
+
+The residual: a call to a function **still under check** is skipped (its
+signature is not built, and a clone would disconnect a recursive result from
+it), and an undecided callee's type is not a function type at all, so its
+result stays a cell and the read is refused (`f = g => (g 1).y` still needs the
+call-expression annotation). A call on a cyclic signature shows the instance's
+open cells instead of the shared cut; the spec's §5 states that.
 
 ## 5. The compute ABI change
 
@@ -154,9 +165,11 @@ annotation belongs on the expression whose type the read consumes.
   deferred read build a typed parameter now (`Writer::lam_typed`,
   `Writer::close_binding_typed`).
 - `lichen-language`: 265 tests pass; the deferred-read expectations now assert
-  the refusal, and the programs annotate their containers.
+  the refusal, and the programs annotate their containers. The call-result
+  bind is measured in §4; a cycle through a call result shows the instance's
+  cells (the spec's §5).
 - the example suite: 48/48, each printing the `output` it declares.
-- the book: 194/194 blocks verified against the branch compiler.
-- the compute suite and the serve tests: their programs pass the output type
-  to `parallel` and the element type to `read` (the ABI update is in flight in
-  the same branch).
+- the book: 193/193 blocks verified against the branch compiler (the block
+  count after the raw section's removal).
+- `lichen-compute`: 245 tests pass, and the serve suite is green; both take the
+  new read/parallel ABI.

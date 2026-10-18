@@ -9,6 +9,17 @@ use crate::{
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
+/// How an instantiation treats the parameter check.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParameterCheck {
+    /// Clone the signature only: a call under check binds its codomain.
+    Skip,
+    /// Run the check and discard its errors: the type side detects a mismatch.
+    Type,
+    /// Run the check and report its errors: the value side's binding.
+    Value,
+}
+
 /// A failed apply-time parameter check's context: the key back into [`Module::unify_errors`].
 ///
 /// # Invariant
@@ -116,7 +127,9 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
-        let Some(instantiation) = self.instantiate(function, argument, block, node, true) else {
+        let Some(instantiation) =
+            self.instantiate(function, argument, block, node, ParameterCheck::Value)
+        else {
             // A failed parameter check leaves the apply's result unknown:
             // the body must not run under a mismatched argument.
             return None;
@@ -152,7 +165,20 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) {
-        let Some(instantiation) = self.instantiate(function, argument, block, node, false) else {
+        self.apply_type_with(function, argument, block, node, cell, ParameterCheck::Type);
+    }
+
+    /// The shared body of the two type applications; the check decides the bind.
+    fn apply_type_with(
+        &mut self,
+        function: FunctionId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<NodeId>,
+        check: ParameterCheck,
+    ) {
+        let Some(instantiation) = self.instantiate(function, argument, block, node, check) else {
             return;
         };
         // The result is the clone's return type, resolved before the bind; the
@@ -175,8 +201,37 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Instantiate `function`'s template for `argument`: clone the return pair, then run
-    /// the parameter check.
+    /// Apply a function **type**'s signature for one call, binding `cell` to
+    /// that call's instantiated codomain.
+    ///
+    /// # Invariant
+    /// The domain and codomain are this call's own clones ([`Self::instantiate`]),
+    /// so a call site never monomorphises a polymorphic template; a type that
+    /// names no function binds nothing.
+    pub fn apply_function_type(
+        &mut self,
+        type_node: NodeId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: NodeId,
+    ) -> bool {
+        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function(type_node) else {
+            return false;
+        };
+        self.apply_type_with(
+            function,
+            argument,
+            block,
+            node,
+            Some(cell),
+            ParameterCheck::Skip,
+        );
+        true
+    }
+
+    /// Instantiate `function`'s template for `argument`: clone the return pair, then
+    /// apply the check the mode names.
     ///
     /// # Invariant
     /// Every node created is stamped with the apply node's depth plus one, so a node's
@@ -188,12 +243,11 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
-        check_parameter: bool,
+        check: ParameterCheck,
     ) -> Option<Instantiation> {
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(node) + 1;
-        let instantiation =
-            self.instantiate_stamped(function, argument, block, node, check_parameter);
+        let instantiation = self.instantiate_stamped(function, argument, block, node, check);
         self.stamp_depth = stamp;
         instantiation
     }
@@ -205,7 +259,7 @@ impl<P: Program> Module<P> {
         argument: NodeId,
         block: BlockId,
         node: NodeId,
-        check_parameter: bool,
+        check: ParameterCheck,
     ) -> Option<Instantiation> {
         let (r#return, parameter, assert_count) = {
             let function = &self.functions[function];
@@ -246,7 +300,7 @@ impl<P: Program> Module<P> {
         // remap; only a real clone registers.
 
         // The type side registers nothing: the value side reports each assert.
-        for index in 0..assert_count * usize::from(check_parameter) {
+        for index in 0..assert_count * usize::from(check == ParameterCheck::Value) {
             let condition = self.functions[function].asserts[index];
             let instantiated = self.node_apply(condition, &mut ctx);
             if instantiated != condition {
@@ -270,21 +324,24 @@ impl<P: Program> Module<P> {
                     self.unify(first, clone);
                 });
             }
-            // The type side discards only the errors this check records.
-            let recorded = self.unify_errors.len();
-            let failed = self.apply_parameter_check(
-                cloned_param,
-                argument,
-                block,
-                node,
-                AnyFunctionId::Dynamic(function),
-                parameter,
-            );
-            if !check_parameter {
-                self.unify_errors.truncate(recorded);
-            }
-            if failed {
-                return None;
+            // A signature clone binds nothing; the other modes probe the parameter.
+            if check != ParameterCheck::Skip {
+                let recorded = self.unify_errors.len();
+                let failed = self.apply_parameter_check(
+                    cloned_param,
+                    argument,
+                    block,
+                    node,
+                    AnyFunctionId::Dynamic(function),
+                    parameter,
+                );
+                // The type side discards only the errors this check records.
+                if check == ParameterCheck::Type {
+                    self.unify_errors.truncate(recorded);
+                }
+                if failed {
+                    return None;
+                }
             }
         }
         Some(Instantiation { applied, remap })

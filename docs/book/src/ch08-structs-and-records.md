@@ -217,13 +217,14 @@ error: expected TypeStruct, found TypeTuple
    | ^
 ```
 
-> **A read of a call's result.** A call's result is only as decided as the
-> call expression's type: reading a field from it directly — `(f 1).y` — is
-> refused where that type is not decided (`this field read cannot be
-> checked: the container's type is not decided here — annotate the
-> container's type`). Binding the result first does not decide it either;
-> state the type on the call's result (`s = (f 1 : S); s.y`, or
-> `(f 1 : S).y`). The restriction is the read's, not the value's.
+> **A read of a call's result.** A call's result is that call's own instance
+> of the callee's signature, so a read from it — `(f 1).y` — is checked
+> whenever `f`'s function type is decided. When the callee's type is not a
+> function type at the call, the result stays undecided and the read is
+> refused (`this field read cannot be checked: the container's type is not
+> decided here — annotate the container's type`); state the type on the call
+> expression then (`s = (f 1 : S); s.y`, or `(f 1 : S).y`). The restriction
+> is the read's, not the value's.
 
 ## Field types as values
 

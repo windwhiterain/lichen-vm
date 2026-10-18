@@ -1105,7 +1105,10 @@ finite, so a `…` inside `tuple{…}` is that cut and never an arity marker:
 `tuple{?a, …}` reads as "a cell beside a node the walk has already shown", not
 as a shape the check has not fixed.  A cycle inside a raw dump is cut the same
 way, and that is what keeps the universe's self-loop from unrolling
-([raw-rendering-mark](notes/raw-rendering-mark.md) §1).
+([raw-rendering-mark](notes/raw-rendering-mark.md) §1).  A **call's result** is
+that call's own instance of the callee's signature, so a cycle that closes
+through a call result shows the instance's open cells (`?b`) rather than the
+shared cut: the instance carries the call's own tail, not the callee's cycle.
 
 The printer has a second arm for a tuple type whose field list is **undecided**
 — a shape slot holding no array at all — and it prints that same
