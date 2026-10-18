@@ -921,8 +921,10 @@ const BUFFER_TAG: u8 = 9;
 /// The artifact tag of [`ComputeValue::Kernel`].
 ///
 /// # Invariant
-/// **A kernel id is a content digest**: `KernelId` is `fragment_digest` of the whole fragment, so
-/// the id names the same fragment in every process — the id is the whole handle that travels.
+/// **A written kernel value is inert**: `KernelId` is a registry *slot*, not the content
+/// digest, so the number names a kernel only where the same compile order registered it. A
+/// cell artifact is read, never evaluated, so the slot travels as data; a package artifact
+/// would be different, and `ArtifactCodec::runtime_only` keeps one out of the store.
 const KERNEL_TAG: u8 = 10;
 
 /// The artifact tag of [`ComputeValue::ParKernel`]: the same id, beside where it runs.
@@ -948,12 +950,13 @@ fn read_class(r: &mut Reader<'_>) -> Result<ScalarClass, String> {
     }
 }
 
-/// A kernel's content digest on the wire.
+/// A kernel registry slot on the wire.
 ///
 /// # Invariant
-/// `KernelId` is `fragment_digest` — a `u64` carried in a `usize` — so the wire form is the
-/// `u64`. An id that does not fit the host's `usize` is refused by name rather than truncated
-/// into another kernel's identity.
+/// `KernelId` is a `usize` slot, not a content digest (`KernelId`'s own docs state the slot,
+/// `fragment_digest` the content), so the wire form is the slot's bits and the reader stores
+/// them as the data they are. An id that does not fit the host's `usize` is refused by name
+/// rather than truncated into another kernel's slot.
 fn write_kernel_id(w: &mut Writer, id: KernelId) {
     w.u64(id as u64);
 }
@@ -1066,12 +1069,21 @@ impl ValueCodec for ComputeValue {
         }
     }
 
+    /// A buffer is the one compute value an artifact may export.
+    ///
+    /// # Invariant
+    /// The export is what a reader binds, and every other arm names a registry entry the reading
+    /// process may not hold under that slot — a kernel would be *launched* from it.
+    fn export_is_plain(value: &Self) -> bool {
+        matches!(value, ComputeValue::Buffer(..))
+    }
+
     /// A kernel, a graph and a device buffer name a registry entry the writer's process holds.
     ///
     /// # Invariant
-    /// A cell's artifact is loaded beside its source, so a nested content-addressed kernel id is
-    /// still resolvable; a *package* artifact replaces its source, so any of these makes the
-    /// module runtime-only (`runtime_only_package` is that rule's test).
+    /// A cell's artifact is loaded beside its source, so a nested handle is only ever read as
+    /// data; a *package* artifact replaces its source, so any of these makes the module
+    /// runtime-only (`runtime_only_package` is that rule's test).
     fn names_process_handle(value: &Self) -> bool {
         matches!(
             value,

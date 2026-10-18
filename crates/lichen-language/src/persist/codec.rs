@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lichen_highlevel::program::HighProgram;
-use lichen_lowlevel::{Program, StaticModule};
+use lichen_lowlevel::{LocalNodeId, Program, StaticModule};
 
 /// The vocabulary-specific half of the artifact format.
 ///
@@ -57,11 +57,25 @@ pub trait ArtifactCodec<P: Program> {
     /// # Invariant
     /// **A package artifact replaces its source, so it must be plain data**: a kernel id it
     /// carries would name a registry entry the reader's process never creates. The package
-    /// writer asks this and leaves the module uncached when it answers `true`; a cell artifact
-    /// is loaded beside its source, so a nested content-addressed id is still resolvable and its
-    /// writer does not ask.
+    /// writer asks this and leaves the module uncached when it answers `true`.
     fn runtime_only(_module: &StaticModule<P>) -> bool {
         false
+    }
+
+    /// Whether the value at `export` may be an artifact's **export**.
+    ///
+    /// # Invariant
+    /// **The export is what a reader binds, so it must be plain data**: a handle there is
+    /// launched from whatever this process registered under the slot, and a record could hide
+    /// one in a field, so the walk descends through wrappers
+    /// ([`StaticModule::export_is_plain`]). A handle nested in an operand chain is inert — a
+    /// cell artifact is read, not evaluated.
+    fn export_is_plain(
+        _module: &StaticModule<P>,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+        _export: LocalNodeId,
+    ) -> bool {
+        true
     }
 }
 

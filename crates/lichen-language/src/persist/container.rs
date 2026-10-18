@@ -46,10 +46,18 @@ where
     w.u64(module.arena.len() as u64);
     w.bytes(&module.arena);
     w.u64(module.nodes.len() as u64);
-    for node in &module.nodes {
+    for (index, node) in module.nodes.iter().enumerate() {
         match node.value {
             None => w.u8(0),
             Some(value) => {
+                // The export is the value a reader binds, so only plain data may be one.
+                if index == export.index && !C::export_is_plain(module, modules, export) {
+                    return Err(
+                        "this artifact's export is not plain data, and a reader would bind it \
+                         to whatever its own process holds under that handle"
+                            .into(),
+                    );
+                }
                 w.u8(1);
                 C::write_value(&mut w, value, modules)?;
             }

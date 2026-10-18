@@ -50,6 +50,17 @@ pub trait ValueCodec: Sized {
     fn names_process_handle(_value: &Self) -> bool {
         false
     }
+
+    /// Whether `value` may be an artifact's **export**.
+    ///
+    /// # Invariant
+    /// **The export is what a reader binds, so it must be plain data**: a handle there would be
+    /// launched from whatever this process registered under the slot, and a record could hide
+    /// one in a field. A handle nested in an operand chain is inert — a cell artifact is read,
+    /// never evaluated — so those travel.
+    fn export_is_plain(_value: &Self) -> bool {
+        true
+    }
 }
 
 /// Encode/decode one **operator leaf** enum.
@@ -313,6 +324,31 @@ impl ValueCodec for LowValue {
             )?)),
             tag => return Err(format!("unknown lowlevel value tag {tag}")),
         })
+    }
+
+    /// A scalar is plain data; an array or a table may hold anything, and a function is a ref.
+    ///
+    /// # Invariant
+    /// A function, a table, a scalar, the unit value and the wildcard are plain; a record is an
+    /// array, which the module walks.
+    ///
+    /// # Invariant
+    /// A function is a static ref into the artifact, a table is immutable literal data and the
+    /// wildcard is the absence of a constraint, so none names a handle a launch could read
+    /// through; a type reaches the core prelude's own table and wildcard, so refusing either
+    /// would refuse every typed export.
+    fn export_is_plain(value: &Self) -> bool {
+        matches!(
+            value,
+            LowValue::USize(_)
+                | LowValue::Float(_)
+                | LowValue::Str(_)
+                | LowValue::Function(_)
+                | LowValue::Table(_)
+                | LowValue::None
+                | LowValue::Error
+                | LowValue::Any
+        )
     }
 }
 

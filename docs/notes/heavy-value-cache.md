@@ -875,15 +875,20 @@ So a restart over its own cache is **2.5–3.3× cheaper at `128 × 128`** — t
 `512 × 512`**, the values equal a fresh compile's at both sizes, and all thirteen cells survive
 (§9.19 removed the one that did not).
 
-### 9.19 A `Portable` cell persists, because a kernel id is its content
+### 9.19 A `Portable` cell persists, because a written kernel value is inert
 
 The codec refused compute operations and kernel values, and that refusal was the only reason a
-default-mode cell could not be stored. Both now have an on-disk form, and the form is the identity
-that already existed:
+default-mode cell could not be stored. Both now have an on-disk form:
 
-- **A kernel value is its digest.** `KernelId` is `fragment_digest` — a hash over every field of
-  the fragment — so the id names the same kernel in every process. `Kernel(id)` is the value tag
-  `10` and `ParKernel(id, backend)` `11`, the parallel one adding the backend tag.
+- **A written kernel value is inert.** `KernelId` is a registry **slot** — a counter — not
+  `fragment_digest` (which is the content; `kernel-disk-cache.md` measured the difference: a
+  cache named by a slot served the wrong module). A cell artifact is *read*, never evaluated —
+  its export is decided and a static module is not run — so the slot travels as data: the
+  `Parallel`'s kernel and the `ParLaunch`'s operand chain round-trip, and nothing launches a
+  loaded kernel value. Making the id itself content-addressed is `code-audit.md` D15, still
+  unimplemented, and it is what would make a loaded kernel value *usable*.
+- **A kernel value's on-disk form is the slot**: `Kernel(id)` is the value tag `10` and
+  `ParKernel(id, backend)` `11`, the parallel one adding the backend tag.
 - **An operator is a tag.** All fifteen `ComputeOperator` variants are tagged `0..=14`, never
   reused, so a `Portable` cell's operations — the `Parallel` that made its kernel and the
   `ParLaunch` that filled its buffer — are written like any other node.
@@ -894,7 +899,16 @@ that already existed:
   source, so a handle in it would name a registry entry the reader's process never creates; the
   package writer therefore asks `ArtifactCodec::runtime_only` (does the module hold any handle?)
   and leaves the package uncached, which is the rule `runtime_only_package`'s test states. A cell
-  artifact is loaded *beside* its source, where the same id resolves.
+  artifact is loaded *beside* its source, and the handle in it is only ever read as data.
+- **The export is walked, and a cell whose value is a kernel is not stored.** The export is the
+  value a reader *binds*, so a handle there would be launched from whatever this process
+  registered under the slot, and a record could hide one a field down.
+  `StaticModule::export_is_plain` walks the export's array items — following a ref into the
+  module that owns it — and refuses a `Kernel`/`ParKernel`/`Graph`/`DeviceBuffer` leaf; a type
+  stops the walk, and a scalar, a function, a table and the wildcard are plain. Measured: a cell
+  whose value is the `.native` of a `compute.parallel` result stays at **0 files** while the
+  program still answers, and the application's cells — `Buf` wrappers over a buffer — stay at
+  **13/13**.
 
 Measured, `128 × 128`, the two modes side by side (§9.18's own numbers were `ReadOnly`):
 
