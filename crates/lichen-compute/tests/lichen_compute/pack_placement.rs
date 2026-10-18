@@ -519,3 +519,49 @@ fn combine() -> Expr {
         Expr::Variable(Variable::PRODUCER),
     )
 }
+
+/// The class a pack states is the class the landed fragment reads.
+///
+/// # Invariant
+/// The landed fragment is what the dispatcher compiles, so this is the one reading that separates "the
+/// pack's class was lost" from "the class arrived and the emitter ignored it": the former fails here, and
+/// the latter passes here and fails in the numbers.
+#[test]
+fn the_landed_fragment_reads_the_class_the_pack_states() {
+    let Some((_context, _device)) = device("the_landed_fragment_reads_the_class_the_pack_states")
+    else {
+        return;
+    };
+    clear_graph_pass();
+    let source = declared();
+    let (module, _value, _root) = common::run(&source);
+    let recorded = registered(&module);
+    install_tiling(&module);
+    let (floor_module, _value, _root) = common::run(&source);
+    let schema = reported_schema(&pass_report(&floor_module));
+    let pack = read_placement_pack(&pack_text(
+        &schema,
+        "narrow",
+        "bfloat16",
+        "shared",
+        LOCAL_SIZE_X,
+    ))
+    .expect("the pack reads");
+    install_tiling_with_packs(&module, &[pack]);
+    let (landed_fragment, _lines) = landed(&recorded, COUNT);
+    assert_eq!(
+        recorded.input_classes,
+        vec![ScalarClass::Float],
+        "the recorded fragment reads what the program declared"
+    );
+    assert_eq!(
+        landed_fragment.input_classes,
+        vec![ScalarClass::BFloat16],
+        "the landed fragment reads the class the pack states"
+    );
+    assert_eq!(
+        landed_fragment.output_classes,
+        vec![ScalarClass::BFloat16],
+        "the landed fragment writes the class the pack states"
+    );
+}
