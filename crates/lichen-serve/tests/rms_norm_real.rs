@@ -13,8 +13,15 @@ use lichen_serve::{HIDDEN, RMS_NORM_STEP, Session};
 /// # Invariant
 /// A row of `model.embed_tokens.weight` and `model.layers.0.input_layernorm.weight`, written as f32
 /// by `.model/read_tensor.py`; the reference's numbers below are that script's answer for row 9707.
+///
+/// # Invariant
+/// `LICHEN_MODEL_DIR` names the directory the weights are in, because they live beside the checkout
+/// rather than in a worktree: a worktree's removal deletes what is inside it.
 fn model_files() -> Option<(Vec<f32>, Vec<f32>)> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.model");
+    let root = match std::env::var_os("LICHEN_MODEL_DIR") {
+        Some(found) => PathBuf::from(found),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.model"),
+    };
     let row = std::fs::read(root.join("row9707.bin")).ok()?;
     let gain = std::fs::read(root.join("layer0_norm.bin")).ok()?;
     let as_floats = |bytes: Vec<u8>| -> Vec<f32> {

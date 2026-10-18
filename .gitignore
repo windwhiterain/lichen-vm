@@ -6,5 +6,8 @@ target/
 spike-countdown.wasm
 # per-task worktrees, created and deleted per AGENTS.md
 .worktrees/
+# A model's weights, downloaded by hand and never committed: a worktree's removal
+# deletes what is inside it, so the files sit beside the checkout, not in one.
+.model/
 # mdBook's build output for docs/book (see docs/book/book.toml)
 docs/book/output/
