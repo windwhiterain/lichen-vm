@@ -564,6 +564,24 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
         vec![ScalarClass::BFloat16],
         "the landed fragment writes the class the pack states"
     );
+    let accesses: Vec<ScalarClass> = landed_fragment
+        .body
+        .values
+        .iter()
+        .filter_map(|value| match value {
+            lichen_kernel_ir::ValueDef::Instr { op, .. } => match op {
+                lichen_kernel_ir::KernelInstr::BufferReadCall(class)
+                | lichen_kernel_ir::KernelInstr::BufferWriteCall(class) => Some(*class),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        accesses,
+        vec![ScalarClass::BFloat16, ScalarClass::BFloat16],
+        "every buffer access the landed body makes is at the class the pack states"
+    );
 }
 
 /// The class a landed fragment reads is the class its module's buffer stride declares.
