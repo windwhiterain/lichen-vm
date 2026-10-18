@@ -1,4 +1,5 @@
-//! The emitted-module cache: one assembled, validated wasm module per kernel id.
+//! The emitted-module cache: one assembled, validated wasm module per kernel id,
+//! in memory and on disk.
 //!
 //! # Invariant
 //! The only id in this file is a [`lichen_kernel_ir::KernelId`], so nothing here is a
@@ -7,19 +8,101 @@
 //! caller as a closure, so the assembly — which does read the process kernel
 //! registry — stays on the language side while the cache does not.
 
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Compiled modules this process built rather than served from the cache.
+#[cfg(feature = "wasm")]
+mod disk;
+
+/// Compiled modules this process assembled rather than served from either cache.
 ///
 /// # Invariant
 /// Test- and measurement-visible on purpose: the value of content-addressed ids
 /// (`D15`) is that this stops growing when the same function is compiled again, and a
-/// counter is the only way to see that without timing a compile.
+/// counter is the only way to see that without timing a compile. It counts
+/// **assembles**, so a module the disk supplied is not one — this answers what this
+/// process built, beside the two that answer what the disk did.
 static MODULE_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+
+/// Assembled modules this process read out of the kernel disk cache.
+///
+/// # Invariant
+/// The restart's worth, counted rather than timed: a hit is a module that a process
+/// starting now would otherwise assemble from its fragment again, and it is the only
+/// reading that says a restart got cheaper.
+static MODULE_CACHE_DISK_HITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Assembled modules this process wrote into the kernel disk cache.
+///
+/// # Invariant
+/// Files that landed, not writes that were attempted: a rename is the last step
+/// [`disk::store`] takes, so this is what a later process can actually read back.
+static MODULE_CACHE_DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 /// See [`MODULE_CACHE_MISSES`].
 pub fn module_cache_misses() -> usize {
     MODULE_CACHE_MISSES.load(Ordering::Relaxed)
+}
+
+/// See [`MODULE_CACHE_DISK_HITS`].
+pub fn module_cache_disk_hits() -> usize {
+    MODULE_CACHE_DISK_HITS.load(Ordering::Relaxed)
+}
+
+/// See [`MODULE_CACHE_DISK_WRITES`].
+pub fn module_cache_disk_writes() -> usize {
+    MODULE_CACHE_DISK_WRITES.load(Ordering::Relaxed)
+}
+
+/// The directory under a device root that holds the assembled kernels.
+///
+/// # Invariant
+/// A sibling of the device's own `artifacts`, because the two hold different things:
+/// an artifact is a compiled package keyed by its source file ID, a kernel is an
+/// assembled launch set keyed by the content digest of the fragment it came from.
+const KERNEL_CACHE_DIR: &str = "kernels";
+
+/// The directory `device_root`'s compiler slot assembles its kernels under.
+///
+/// # Invariant
+/// The last component is `compiler_slot_key(core_repo, plugins)`, the one derivation
+/// the package manager and the shipping compiler read too, because this assembler is
+/// one of those binaries: bytes another assembler wrote are bytes this one cannot
+/// vouch for, and the key is what says the two differ.
+pub fn kernel_disk_cache_dir(
+    device_root: &Path,
+    core_repo: &str,
+    plugins: &[String],
+) -> PathBuf {
+    device_root.join(KERNEL_CACHE_DIR).join(lichen_utils::cache::compiler_slot_key(core_repo, plugins))
+}
+
+/// The kernel disk cache this process reads and writes; `None` while no host named one.
+///
+/// # Invariant
+/// **First set wins.** A process has one assembler and one filesystem view of its
+/// cache, so a second root silently serves the first root's modules under the second
+/// root's name; configuring again is not a relocation, and the caller is told which
+/// directory actually took effect.
+static KERNEL_DISK_CACHE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Point the kernel disk cache at `dir`, and report the directory now in effect.
+///
+/// # Invariant
+/// Returns `dir` when this call is the one that set it, and the directory an earlier
+/// call set otherwise, so a host composing two roots learns which one the cache is
+/// really under instead of assuming its own.
+pub fn configure_kernel_disk_cache(dir: PathBuf) -> PathBuf {
+    if KERNEL_DISK_CACHE.set(dir.clone()).is_ok() {
+        return dir;
+    }
+    KERNEL_DISK_CACHE.get().cloned().unwrap_or(dir)
+}
+
+/// The directory the kernel disk cache is configured under, if a host named one.
+pub fn kernel_disk_cache() -> Option<&'static Path> {
+    KERNEL_DISK_CACHE.get().map(PathBuf::as_path)
 }
 
 /// The map of compiled modules, present only where an engine exists to fill it.
@@ -27,7 +110,7 @@ pub fn module_cache_misses() -> usize {
 /// # Invariant
 /// An engine is the only reason a cached module is worth keeping, so without the
 /// `wasm` feature there is no key to key it by and no entry to put in it: the
-/// counter above stands alone rather than reporting misses against a map that
+/// counters above stand alone rather than reporting misses against a map that
 /// cannot exist. Nothing in this crate or outside it reads it either way.
 #[cfg(feature = "wasm")]
 mod cache {
@@ -109,9 +192,10 @@ mod cache {
     ///
     /// # Invariant
     /// One entry per kernel id, and no mode beside it: both launch paths assemble the
-    /// root's relative launch set, so the id decides the module. `assemble` is a
-    /// closure rather than an argument because it reads the process kernel registry,
-    /// which is the language side's to read; a miss is counted before it runs, so a
+    /// root's relative launch set, so the id decides the module. The disk file is read
+    /// only after this map misses, so a kernel this process holds never touches the
+    /// filesystem. `assemble` is a closure because it reads the process kernel registry,
+    /// which is the language side's to read; the miss is counted before it runs, so a
     /// refusal is a miss that stayed a refusal.
     pub fn cached_module(
         root: KernelId,
@@ -121,10 +205,21 @@ mod cache {
         if let Some(cached) = modules().lock().unwrap().get(key) {
             return Ok(cached);
         }
+        // A file this engine refuses is the same miss an absent file is, so the disk
+        // layer answers a module or nothing, and the assembler below is the only
+        // other thing that can.
+        if let Some(cached) = super::disk::load(key) {
+            modules()
+                .lock()
+                .unwrap()
+                .insert(key, cached.0.clone(), cached.1.clone());
+            return Ok(cached);
+        }
         super::MODULE_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
         let bytes = assemble()?;
         let engine = wasmi::Engine::default();
         let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+        super::disk::store(key, &bytes);
         modules()
             .lock()
             .unwrap()

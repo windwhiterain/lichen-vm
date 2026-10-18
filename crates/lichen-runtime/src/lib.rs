@@ -31,6 +31,9 @@ pub use kernel_registry::{KernelEntry, claimed_kernels, kernel_claim, kernel_fra
 pub use load::{LoadRefusal, LoadedKernel, load_fused_kernel};
 #[cfg(feature = "wasm")]
 pub use module_cache::cached_module;
-pub use module_cache::module_cache_misses;
+pub use module_cache::{
+    configure_kernel_disk_cache, kernel_disk_cache, kernel_disk_cache_dir, module_cache_disk_hits,
+    module_cache_disk_writes, module_cache_misses,
+};
 pub use placement_pack::{PlacementPack, read_placement_pack};
 pub use region_merge::{MergeRefusal, region_merge_pass};

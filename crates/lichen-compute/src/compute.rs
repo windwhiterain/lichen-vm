@@ -50,7 +50,9 @@ pub use graph_pass::{
 };
 
 // The emitted-module cache is `lichen-runtime`'s: it takes a `KernelId`, never a `Module`.
-pub use lichen_runtime::{cached_module, module_cache_misses};
+pub use lichen_runtime::{
+    cached_module, module_cache_disk_hits, module_cache_disk_writes, module_cache_misses,
+};
 
 // The kernel registry is `lichen-runtime`'s too, and it is keyed by a `KernelId`.
 pub use lichen_runtime::kernel_registry::{
