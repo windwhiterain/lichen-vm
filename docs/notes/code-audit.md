@@ -44,6 +44,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | partly fixed — the message names the shared fact and lists the three shapes; the missing apply (a kernel compiled against an applied body) is parked under `compute-jit-low-types.md` |
 | P1-40 | medium | lowlevel, language | The apply budget refuses a long **terminating** loop as non-terminating | fixed — the refusal now names the budget it stopped on, not a verdict of non-termination |
 | P4-11 | low | highlevel, language | A purely positional instantiation's arity error renders raw internal shapes | fixed — the structural pass now runs for a positional call once the struct type is decided (gated on the argument list matching the name list); `S(1, "a", 3)` reports `too many fields for the struct type …` and `S(1,)` reports `missing field y …` |
+| P4-12 | low | highlevel, language | A struct instantiation's field-type mismatch renders the two field lists as raw shapes | todo — measured `S = struct{.a Int, .b string}` ; `S("x", 1)` is `expected raw[Int, string], found raw[string, Int]`, naming neither field nor type; a per-field unify before the list unify was attempted and reverted (the lazy field-type read swallows the argument's type instead of refusing) |
 | P1-42 | medium | compute | A `compute.write` the codomain does not reach is silently not written, with no diagnostic | wontfix:D17 |
 | P1-44 | medium | highlevel, language | A field's requirement or pin is silently unchecked when the struct type arrives through a parameter | todo — measured `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ; `g S` accepted with 6, and a `# n` argument requirement is accepted likewise |
 | P1-45 | medium | highlevel, language | An instantiation through a parameter reports a type mismatch as an opaque table miss | fixed — the reorder's miss now names the field and the type the struct states (`no argument supplies field a — the field's type is Int`); a user table's tuple-key miss keeps its own sentence |
@@ -737,7 +738,33 @@ count where both are decided — or a reorder whose length is the field count (w
 needs a runtime-length node operation the encoding does not have today). A regression
 test belongs with the fix (`D3`).
 
-## Decisions
+### P4-12 — A struct instantiation's field-type mismatch renders the two field lists `verified`
+
+The written form's type reconciliation is the **field-list unify**: `value_shape` (the
+arguments' slots, in definition order) against `slot_types_of(shape, n)` (the fields'
+slots), and its mismatch renders the two shorthands whole:
+
+```lichen
+S = struct{.a Int, .b string}
+S("x", 1)          -- expected raw[Int, string], found raw[string, Int]
+S(.b Int, .a 1)    -- expected raw[Int, string], found Int
+```
+
+It names neither the field nor the two types. The *arity* and *pin/requirement*
+mismatches already have their own sentences (`StructExcessField`,
+`StructMissingField`, `expected 5, found 6`); only the field-type mismatch is raw.
+Fix direction, and a measured dead end: a per-field unify before the list unify
+(compare `argument type` against the field slot's type position) **does not fire** —
+the field's type is read lazily (`Index(slot, 1)`), and an undecided read unifies into
+the argument's type rather than refusing, so `S("x", 1)` still answered the list's
+sentence and a hand-built probe even read `expected Type, found raw[Int, Int]` where
+the list's reading had been `expected Type`. The route is either forcing the field's
+type read before the per-field unify (`evaluate_node_deep` on that node) or carrying
+the field's spelled type straight from the written `struct{…}` expression, where the
+argument is decided at check time. Attempted at `ebb4c942`, measured, and reverted;
+nothing of it is in the tree.
+
+## Decisions## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
