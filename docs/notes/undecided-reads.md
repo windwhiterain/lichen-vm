@@ -238,3 +238,19 @@ pre-hoist claim that the captured kernel struct holds no value: `compute.paralle
 runs during the check, so the struct it returns is a value. It reads the three
 declared ports instead.
 
+### What still refuses, and it is not this
+
+Measured by compiling and running each form and printing what answered:
+
+| form | inline | hoisted |
+| --- | --- | --- |
+| `compute.parallel` + `plrun`, `"cpu"` | runs | runs |
+| `compute.parallel` + `plrun`, `"gpu"` | runs | runs |
+| the kernel written **inside** a `compute.graph` step | checks; the run needs a backend installed | the same |
+| two writes into a two-field `.out`, one expression | `codomain names 1 output(s) but its parameter declares 2` | **the same** |
+
+The last row is the codomain-arity rule on a body whose value is the *second*
+write, so it names one output; it is the body's shape, not the lambda's spelling,
+and it is identical either way.
+
+
