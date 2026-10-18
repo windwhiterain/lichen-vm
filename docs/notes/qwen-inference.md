@@ -132,10 +132,15 @@ within `1e-5`.
 
 ## What a token costs, and where
 
-A token costs **167 s**, and the cost is the **upload**, not the arithmetic. Two independent measurements
-say so: the vocabulary head moves its 1.24 GB in 38 s, and a forward moves 5.4 GB in 171 s — both about
-**33 MB/s** — so the time a token takes is the weight bytes divided by that rate, and the dispatches fill
-almost none of it.
+A token costs **167 s**, and the cost is **reading the weights off disk**, not the upload and not the
+arithmetic. The first measurement of this was 33 MB/s across the vocabulary head (1.24 GB in 38 s) and a
+forward (5.4 GB in 171 s), and it was read as an upload rate; a projection at the model's own width, whose
+matrix was already in memory, moves 16 MB in **0.01 s** — a gigabyte a second — so the rate was the disk's
+and what a token pays is 28 file reads of 192 MB each.
+
+That correction changes what to fix. The host has 15.6 GB with about 5 GB free, so the weights at f32
+(6.6 GB) do not fit in memory, but **at bf16 they are 3.3 GB and do**. They are bf16 on disk already, so
+the shape of the fix is to read them once, hold the halves, and upload those.
 
 That makes the next step a memory question rather than a kernel one. The weights are 5.4 GB at f32 and the
 card reports 4 GB, so they cannot be held; at bf16 they are 2.7 GB and they can, which is what the
