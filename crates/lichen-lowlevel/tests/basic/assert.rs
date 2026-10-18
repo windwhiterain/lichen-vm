@@ -302,8 +302,8 @@ fn a_shallow_marked_undecided_cell_keeps_the_condition_lazy() {
 }
 
 #[test]
-fn gc_prunes_asserts_of_dropped_blocks() {
-    // The entry is pruned with its block, so the check pass never walks a dangling id.
+fn gc_moves_a_pending_assert_condition_out_of_a_dropped_block() {
+    // The condition is a root of the collect: the assert pass drains after it.
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
@@ -316,15 +316,20 @@ fn gc_prunes_asserts_of_dropped_blocks() {
 
     assert!(!m.blocks.contains_key(child));
     assert!(
-        !m.nodes.contains_key(condition),
-        "the condition died with its block"
+        m.nodes.contains_key(condition),
+        "the condition moves with the collect"
     );
+    assert_eq!(m.node_block(condition), root, "and lands in the parent");
     assert!(
-        !m.asserts.iter().any(|e| e.condition == condition),
-        "the dropped entry is pruned"
+        m.asserts.iter().any(|e| e.condition == condition),
+        "its entry stays registered"
     );
     m.check_asserts();
-    assert!(m.assert_errors.is_empty());
+    assert_eq!(
+        m.assert_errors.len(),
+        1,
+        "the moved condition is still checked"
+    );
 }
 
 #[test]

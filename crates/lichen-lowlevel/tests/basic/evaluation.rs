@@ -370,10 +370,8 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
     );
 }
 #[test]
-fn a_block_root_the_budget_refuses_yields_an_empty_value() {
-    // The child block's delegation runs a fresh pass whose first frame is the block root.
-
-    // At the limit it refuses before evaluating the root, so the root caches no value.
+fn a_block_root_the_budget_refuses_stays_undecided() {
+    // The root is read shallowly, so the refused operand leaves it undecided.
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
@@ -382,14 +380,14 @@ fn a_block_root_the_budget_refuses_yields_an_empty_value() {
     let read = op_node(&mut m, root, TestOperator::Id, Some(child_op));
     m.evaluate_depth_limit = 2;
 
-    let value = m.evaluate_node_deep(read, None).unwrap();
+    let value = m.evaluate_node_deep(read, None);
 
     assert_eq!(
         m.budget_exhausted,
         Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
         "the guard's verdict is the outcome, not a panic"
     );
-    assert!(matches!(value, TestValue::LowValue(LowValue::Error)));
+    assert!(value.is_none(), "the refused frame stays undecided");
 }
 #[test]
 fn a_block_root_that_stays_lazy_is_not_an_internal_error() {

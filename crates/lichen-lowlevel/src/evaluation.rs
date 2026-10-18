@@ -112,6 +112,16 @@ impl<P: Program> Module<P> {
         self.evaluating_classes.remove(&representative);
     }
 
+    /// Whether reading `node` ends its scope: a declared block at its root, an
+    /// undeclared one at any parent read.
+    fn is_scope_root_read(&self, node: NodeId, referer: Option<BlockId>) -> bool {
+        let block = self.nodes[node].block;
+        match self.blocks[block].scope_root {
+            Some(root) => root == node,
+            None => referer.is_some_and(|referer| self.blocks[block].parent == Some(referer)),
+        }
+    }
+
     /// The body of [`Self::evaluate_node`], past the static-ref leaf rule (no mark to own).
     #[stacksafe]
     fn evaluate_node_body(&mut self, node: NodeId, referer: Option<BlockId>) -> Option<P::Value> {
@@ -120,13 +130,9 @@ impl<P: Program> Module<P> {
             self.blocks.contains_key(block),
             "node {node:?} references released block {block:?}"
         );
-        // A scope ends at its declared root; an undeclared one at the parent read.
-        let declared = self.blocks[block].scope_root;
-        let child_block_root = declared.is_none()
-            && referer.is_some_and(|referer| self.blocks[block].parent == Some(referer));
         // A scope root delegates whole; returning before this frame takes a mark keeps one
         // attempt, one mark.
-        if child_block_root || declared == Some(node) {
+        if self.is_scope_root_read(node, referer) {
             return self.evaluate_block(node);
         }
         // The class before the node runs, so unify's order cannot decide its answer.
@@ -554,17 +560,13 @@ impl<P: Program> Module<P> {
             Dyn(node) => node,
             AnyNodeId::Static(_) => unreachable!(),
         };
-        // RESEARCH: a released node reached by a descent names itself instead of panicking.
-        if std::env::var_os("LICHEN_GC_DEBUG").is_some() && !self.nodes.contains_key(node) {
-            eprintln!(
-                "DEEP DEAD NODE {node:?} visiting-frame depth={}",
-                self.deep_depth
-            );
-            return None;
-        }
+        // A scope root read ends the scope here: the read is the trigger, so the
+        // verdict cache must not answer for it.
+        let scope_read = self.is_scope_root_read(node, current);
         // A concrete verdict is final, so its value is the answer; an `undecided` one is asked
         // again (late-writes-map.md §11).
-        if let Some(deep) = self.nodes[node].evaluated_deep
+        if !scope_read
+            && let Some(deep) = self.nodes[node].evaluated_deep
             && !deep.undecided
             && let Some(value) = self.nodes[node].value
         {
@@ -698,64 +700,24 @@ impl<P: Program> Module<P> {
         )
     }
 
+    /// End a scope at its root's read, releasing it if the read decided its answer.
+    ///
+    /// # Invariant
+    /// The read is **shallow**: nothing is evaluated to find out whether the scope is done,
+    /// so an unread value never runs because of the marker. The root's own slot is the
+    /// signal — a real value, not the wildcard — and the collect's relocation is the value
+    /// the reader receives. An undecided root keeps the marker, so a later read retries; a
+    /// decided one is released in one go.
     fn evaluate_block(&mut self, root: NodeId) -> Option<P::Value> {
-        // One entry per scope: the deep pass below reads the root again, and the
-        // mark is what would send it straight back here.
+        // One entry per scope: the read below would send the root straight back here.
         let block = self.nodes[root].block;
         self.blocks[block].scope_root = None;
-        // RESEARCH: the trigger under measurement. See docs/notes/gc-trigger-design.md.
-        let mode = std::env::var("LICHEN_GC_TRIGGER").unwrap_or_default();
-        let value = if mode == "shallow" {
-            self.evaluate_node(Dyn(root), None)
-        } else {
-            self.evaluate_node_deep(root, None)
-        };
-        let decided = if mode == "shallow" {
-            self.nodes[root]
-                .value
-                .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)))
-        } else {
-            self.nodes[root]
-                .evaluated_deep
-                .is_some_and(|deep| !deep.undecided)
-        };
-        // An undecided root has an open slot, so nothing in the scope is proven
-        // unreachable; a later read may decide it.
-        if !decided || mode.is_empty() {
+        let value = self.evaluate_node(Dyn(root), None);
+        let decided = self.nodes[root]
+            .value
+            .is_some_and(|value| !matches!(value.as_enum(), Some(LowValue::Any)));
+        if !decided {
             self.blocks[block].scope_root = Some(root);
-            return value;
-        }
-        if std::env::var_os("LICHEN_GC_DEBUG").is_some() {
-            let named: Vec<(NodeId, crate::AnyNodeId)> = self
-                .asserts
-                .iter()
-                .filter(|entry| self.nodes.contains_key(entry.condition))
-                .filter(|entry| self.nodes[entry.condition].block == block)
-                .map(|entry| (entry.condition, entry.template))
-                .collect();
-            let snapshot: Vec<(NodeId, bool, bool)> = self.blocks[block]
-                .nodes
-                .iter()
-                .map(|&node| {
-                    (
-                        node,
-                        self.nodes[node].visiting,
-                        self.nodes[node].value.is_some(),
-                    )
-                })
-                .collect();
-            eprintln!(
-                "GC DEBUG mode={mode} collect block={block:?} root={root:?} asserts-in-block={named:?} blocks={} nodes={}",
-                self.blocks.len(),
-                self.nodes.len()
-            );
-            let value = self.garbage_collect(root).or(value);
-            let released: Vec<(NodeId, bool, bool)> = snapshot
-                .iter()
-                .copied()
-                .filter(|(node, _, _)| !self.nodes.contains_key(*node))
-                .collect();
-            eprintln!("GC DEBUG released (node, visiting, has_value): {released:?}");
             return value;
         }
         self.garbage_collect(root).or(value)
