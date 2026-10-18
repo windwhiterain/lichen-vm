@@ -368,17 +368,15 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
          kernel handle has to reach it through the `Index`"
     );
 
-    // What it reads out of is the kernel struct `compute.parallel` built: its
-    // three ports. It is *named* here rather than fresh, because an index
-    // function written as an inline lambda is refused before this shape is ever
-    // built — the output-class walk cannot see a write inside one — so naming
-    // the body is what lets this program check at all. The slot's shape is the
-    // same either way, which is what this test measures.
+    // The target is the kernel struct: `.native`, `.I`, `.O` — three ports.
     let target = through_index(&module, operands[0]);
     let ports = unsafe { module.array_items(target) }
         .expect("the captured struct's payload")
         .len();
-    assert_eq!(ports, 3, "`.native`, `.I` and `.O` — the kernel struct's ports");
+    assert_eq!(
+        ports, 3,
+        "`.native`, `.I` and `.O` — the kernel struct's ports"
+    );
 }
 
 /// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".

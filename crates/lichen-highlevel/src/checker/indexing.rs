@@ -37,10 +37,9 @@ where
         self.check_expr(array);
         self.check_expr(index);
         let array_ty = self.state[array].ty.unwrap();
-        // A written annotation can still be an unevaluated type function; force it
-        // before deciding whether the read can be checked at all.
-        self.module
-            .evaluate_node_deep(array_ty, None);
+        // A written annotation may be unevaluated.
+        // Force it before deciding whether the read can be checked.
+        self.module.evaluate_node_deep(array_ty, None);
         // The requirement names the container's **kind**, never its type, so the
         // container's type cell stays free.
         if self.type_is_concrete(array_ty) {
@@ -126,8 +125,7 @@ where
         // The tuple-kind requirement, a unify on the container's kind: decided
         // here, deferred to the apply otherwise.
         let container_ty = self.state[container].ty.unwrap();
-        self.module
-            .evaluate_node_deep(container_ty, None);
+        self.module.evaluate_node_deep(container_ty, None);
         if !self.type_is_concrete(container_ty) {
             return self.refuse_undecided_container(
                 e,

@@ -326,7 +326,11 @@ fn probe_the_plain_leg() {
     };
     report(
         "plain_unread",
-        &program(KERNELS_OPEN, STEP_OPEN, &format!("out = (step {ARGUMENT} : Out2)")),
+        &program(
+            KERNELS_OPEN,
+            STEP_OPEN,
+            &format!("out = (step {ARGUMENT} : Out2)"),
+        ),
     );
     report(
         "plain_collected",

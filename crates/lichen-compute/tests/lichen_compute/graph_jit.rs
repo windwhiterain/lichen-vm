@@ -271,11 +271,10 @@ compute.collect (compute.graphrun built 3)
 ///
 /// # Invariant
 ///
-/// A graph holds kernel ids, edge numbers and counts — nothing else. `held` is a dispatch the
-/// run forces inside the recording window, so its output buffer is a live device buffer that
-/// did not come in through the parameter, and recording it would mean the graph held it. The
-/// rule names the way out (`ins(0)`), and nothing dispatches at all: the refusal is raised
-/// while the graph is being built, before any launch.
+/// A graph holds kernel ids, edges and counts. `held` is a dispatch forced inside the
+/// recording window, so its output is a live device buffer that did not come in through the
+/// parameter, and recording it would mean the graph held it. The rule names the way out
+/// (`ins(0)`); nothing dispatches: the refusal is raised while the graph is built.
 #[test]
 fn a_dispatch_the_body_closed_over_is_refused_rather_than_recorded() {
     let (_guard, stub) = stub();
@@ -307,9 +306,7 @@ compute.collect (compute.graphrun built 3)
         "the refusal is the graph's, and it names the buffer it would have had to hold: {joined}"
     );
     assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("ins(0)")),
+        messages.iter().any(|message| message.contains("ins(0)")),
         "and it says how to pass the value in instead of closing over it: {joined}"
     );
     assert_eq!(
@@ -400,10 +397,7 @@ compute.collect (compute.graphrun built 3)
         "and it names the cause and the way out: {joined}"
     );
 
-    // A host read of a dispatch's result: the same boundary at one number's size.
-    // The read states **no** element type on purpose: this program is about the
-    // graph's own refusal, and a declared class would let the checker reject the
-    // argument first and the graph would never get to name it.
+    // No element type: a declared class would hide the graph's own refusal.
     let read = fail(&format!(
         r#"---
   compute = import "compute.lichen"

@@ -47,10 +47,9 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
-        // A written annotation can still be an unevaluated type function; force it
-        // before deciding whether the read can be checked at all.
-        self.module
-            .evaluate_node_deep(container_ty, None);
+        // A written annotation may be unevaluated.
+        // Force it before deciding whether the read can be checked.
+        self.module.evaluate_node_deep(container_ty, None);
         // The requirement names the container's **kind**, never its type.
         if self.type_is_concrete(container_ty) {
             let kind = self.tuple_kind_requirement();
@@ -161,8 +160,7 @@ where
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
 
-        self.module
-            .evaluate_node_deep(container_ty, None);
+        self.module.evaluate_node_deep(container_ty, None);
         if !self.type_is_concrete(container_ty) {
             return self.refuse_undecided_container(
                 e,
@@ -251,8 +249,7 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
-        self.module
-            .evaluate_node_deep(container_ty, None);
+        self.module.evaluate_node_deep(container_ty, None);
         let concrete = self.type_is_concrete(container_ty);
         if !concrete && !self.is_loop_state(container) {
             return self.refuse_undecided_container(e, container, container_ty, "field read");
