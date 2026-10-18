@@ -148,3 +148,21 @@ precision path exists for. Reaching it needs two things the interface does not h
 
 So the token rate is gated on the engine, not on the model: the layers, the cache and the loop are all
 verified against the host.
+
+## Running it
+
+`crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
+cache and the greedy loop. The binary is thin and takes the token to start from and how many to
+generate:
+
+```
+cargo run -p lichen-serve --bin qwen-generate -- 9707 2
+generating 2 token(s) after 9707
+tokens: [9707, 25, 358]
+  token 1 took 235.2 s
+  token 2 took 285.4 s
+520.7 s in all, 260.3 s per token
+```
+
+Those are the host's own tokens, and the test of the same name asserts them — through this module rather
+than a copy of the loop, so the binary and the check cannot drift.
