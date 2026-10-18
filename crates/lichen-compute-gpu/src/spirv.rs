@@ -3741,10 +3741,18 @@ fn assemble(
 
     // 2. The extension the atomic float add is registered under — **ahead of the memory model**
     // and of the extended-set import below it.
+    //
+    // **No result id, unlike the import below**: `OpExtension` names a string and nothing else,
+    // and an extra leading operand makes `spirv-val` answer `expected no more operands after 2
+    // words` rather than reading the name.
     if extensions.float_add_atomics {
-        let mut operands = vec![0];
-        operands.extend(spv_string(SHADER_ATOMIC_FLOAT_ADD_EXTENSION));
-        emit_all(&mut out, &[Inst::new(op::EXTENSION, operands)]);
+        emit_all(
+            &mut out,
+            &[Inst::new(
+                op::EXTENSION,
+                spv_string(SHADER_ATOMIC_FLOAT_ADD_EXTENSION),
+            )],
+        );
     }
 
     // 3. The extended sets a body reached for — **ahead of the memory model**.
