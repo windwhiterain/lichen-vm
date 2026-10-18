@@ -17,7 +17,7 @@ use lichen_lowlevel::{AnyNodeId, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 /// The consumer's read of the per-element datum, at input position 0.
-const DATUM: &str = "compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))";
+const DATUM: &str = "(compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)";
 
 fn main() {
     let softmax = chain(
@@ -262,17 +262,17 @@ producer_raw = (k : Par) => {{
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ({producer_combine}) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, {producer_identity} ~ "identity")))
 }}
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu"
+producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer_raw = (k : Par2) => {{
   i = compute.range k.n
-  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
+  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ({consumer_combine}) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, {consumer_identity} ~ "identity")))
 }}
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutZ
 GArg = struct{{.n Int, .in In}}
 step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
@@ -294,20 +294,20 @@ OutR = struct{.r (compute.Buf Float)}
 Par  = compute.P (compute.KT _)(.I In, .O OutR)
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
-  @loop acc = w => if w(0) == 0 then w(1) else acc (w(0) - 1, (compute.read ((compute.Read _)(.from lane.in.d, .at w(0) - 1)) + w(1)) ~ "combine")
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) + s(1)) ~ "combine")
   compute.write ((compute.Write _)(.to lane.out.r, .at at, .value acc (lane.n, 0.0 ~ "identity")))
 }
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu"
+producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer_raw = (lane : Par2) => {
-  running = compute.read ((compute.Read _)(.from lane.in.p, .at 0))
+  running = (compute.read ((compute.Read _)(.from lane.in.p, .at 0)) : Float)
   at = compute.range lane.n
-  @loop acc = w => if w(0) == 0 then w(1) else acc (w(0) - 1, (max w(1) ((compute.read ((compute.Read _)(.from lane.in.d, .at w(0) - 1)) - running) ~ "element")) ~ "combine")
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from lane.in.d, .at s(0) - 1)) : Float) - running) ~ "element")) ~ "combine")
   compute.write ((compute.Write _)(.to lane.out.z, .at at, .value acc (lane.n, (0.0 - 1000000.0) ~ "identity")))
 }
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)

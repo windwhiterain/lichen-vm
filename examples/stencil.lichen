@@ -81,24 +81,24 @@ XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
 XArg = struct{.n Int, .alpha Float, .I XIn}
 stencil_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = compute.read ((compute.Read _)(.from c.in.x, .at (i - 1)))
-  right = compute.read ((compute.Read _)(.from c.in.x, .at (i + 1)))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float)
+  right = (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-stencil = compute.parallel stencil_raw "cpu"
+stencil = compute.parallel stencil_raw "cpu" XOut
 ring_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = if i == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
-  right = if i == (c.n - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at 0))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = if i == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
+  right = if i == (c.n - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-ring = compute.parallel ring_raw "cpu"
+ring = compute.parallel ring_raw "cpu" XOut
 x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 seed = looped.y
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
+@loop march = (((s : tuple{Int, compute.Buf Float}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (2, seed)
 (compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, compute.collect solved : array{Float, 6})

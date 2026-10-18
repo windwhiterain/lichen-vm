@@ -66,10 +66,10 @@ matmul_raw = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (k.k, 0.0 ~ "identity"))))
 }
-matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutC
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 b = (compute.buffer ([7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun matmul ((Arg)(.n 4, .cols 2, .k 3, .I Ain(.a a, .b b))) : OutC)

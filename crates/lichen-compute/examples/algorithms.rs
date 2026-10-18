@@ -22,7 +22,7 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 7))
 }
-k = compute.parallel f "BACKEND"
+k = compute.parallel f "BACKEND" Out
 out = (compute.plrun k ((compute.A In)(.n 8, .I In(.a 0))) : Out)
 compute.collect out.z
 "#,
@@ -38,20 +38,20 @@ mk = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-kx = compute.parallel mk "BACKEND"
+kx = compute.parallel mk "BACKEND" Out1
 x = (compute.plrun kx ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
-ky = compute.parallel mk "BACKEND"
+ky = compute.parallel mk "BACKEND" Out1
 y = (compute.plrun ky ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.x (compute.Buf _), .y (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 axpy = (k : Par2) => {
   i = compute.range k.n
-  xv = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  yv = compute.read ((compute.Read _)(.from k.in.y, .at i))
+  xv = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Int)
+  yv = (compute.read ((compute.Read _)(.from k.in.y, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 3 * xv + yv))
 }
-ka = compute.parallel axpy "BACKEND"
+ka = compute.parallel axpy "BACKEND" Out2
 out = (compute.plrun ka ((compute.A In2)(.n 8, .I In2(.x x.z, .y y.z))) : Out2)
 compute.collect out.z
 "#,
@@ -67,17 +67,17 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 tr = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.s, .at i % 4))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at i % 4)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
 }
-kt = compute.parallel tr "BACKEND"
+kt = compute.parallel tr "BACKEND" Out2
 out = (compute.plrun kt ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -93,7 +93,7 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
@@ -101,10 +101,10 @@ Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 st = (k : Par2) => {
   i = compute.range k.n
   left = if i == 0 then 0 else i - 1
-  v = compute.read ((compute.Read _)(.from k.in.s, .at left))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at left)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
 }
-ks = compute.parallel st "BACKEND"
+ks = compute.parallel st "BACKEND" Out2
 out = (compute.plrun ks ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -120,7 +120,7 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
@@ -128,10 +128,10 @@ Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 st = (k : Par2) => {
   i = compute.range k.n
   j = i - (i == 0) * i
-  v = compute.read ((compute.Read _)(.from k.in.s, .at j))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at j)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
 }
-ks = compute.parallel st "BACKEND"
+ks = compute.parallel st "BACKEND" Out2
 out = (compute.plrun ks ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -147,22 +147,22 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 dot = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.s, .at 0))
-  b = compute.read ((compute.Read _)(.from k.in.s, .at 1))
-  c = compute.read ((compute.Read _)(.from k.in.s, .at 2))
-  d = compute.read ((compute.Read _)(.from k.in.s, .at 3))
+  a = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Int)
+  b = (compute.read ((compute.Read _)(.from k.in.s, .at 1)) : Int)
+  c = (compute.read ((compute.Read _)(.from k.in.s, .at 2)) : Int)
+  d = (compute.read ((compute.Read _)(.from k.in.s, .at 3)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a * a + b * b + c * c + d * d))
 }
-kd = compute.parallel dot "BACKEND"
+kd = compute.parallel dot "BACKEND" Out2
 out = (compute.plrun kd ((compute.A In2)(.n 1, .I In2(.s src.z))) : Out2)
-compute.read ((compute.Read _)(.from out.z, .at 0))
+(compute.read ((compute.Read _)(.from out.z, .at 0)) : Int)
 "#,
     ),
     (
@@ -176,7 +176,7 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
 In2  = struct{.a (compute.Buf _), .b (compute.Buf _)}
 Out2 = struct{.p (compute.Buf _), .q (compute.Buf _)}
@@ -185,16 +185,16 @@ mm = (k : Par2) => {
   i = compute.range k.n
   row = i / 2
   col = i % 2
-  a00 = compute.read ((compute.Read _)(.from k.in.a, .at 0))
-  a01 = compute.read ((compute.Read _)(.from k.in.a, .at 1))
-  a10 = compute.read ((compute.Read _)(.from k.in.a, .at 2))
-  a11 = compute.read ((compute.Read _)(.from k.in.a, .at 3))
-  b0 = compute.read ((compute.Read _)(.from k.in.b, .at col * 2 + 0))
-  b1 = compute.read ((compute.Read _)(.from k.in.b, .at col * 2 + 1))
+  a00 = (compute.read ((compute.Read _)(.from k.in.a, .at 0)) : Int)
+  a01 = (compute.read ((compute.Read _)(.from k.in.a, .at 1)) : Int)
+  a10 = (compute.read ((compute.Read _)(.from k.in.a, .at 2)) : Int)
+  a11 = (compute.read ((compute.Read _)(.from k.in.a, .at 3)) : Int)
+  b0 = (compute.read ((compute.Read _)(.from k.in.b, .at col * 2 + 0)) : Int)
+  b1 = (compute.read ((compute.Read _)(.from k.in.b, .at col * 2 + 1)) : Int)
   (compute.write ((compute.Write _)(.to k.out.p, .at i, .value a00 * b0 + a01 * b1)),
    compute.write ((compute.Write _)(.to k.out.q, .at i, .value a10 * b0 + a11 * b1)))
 }
-km = compute.parallel mm "BACKEND"
+km = compute.parallel mm "BACKEND" Out2
 outs = (compute.plrun km ((compute.A In2)(.n 4, .I In2(.a src.z, .b src.z))) : Out2)
 (compute.collect outs.p, compute.collect outs.q)
 "#,
@@ -210,19 +210,19 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 red = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + 1))
 }
-kr = compute.parallel red "BACKEND"
+kr = compute.parallel red "BACKEND" Out2
 out = (compute.plrun kr ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
-compute.read ((compute.Read _)(.from out.z, .at 3))
+(compute.read ((compute.Read _)(.from out.z, .at 3)) : Int)
 "#,
     ),
     (
@@ -236,20 +236,20 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 2))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 mix = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.s, .at i))
-  b = compute.read ((compute.Read _)(.from k.in.s, .at i - i))
+  a = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Int)
+  b = (compute.read ((compute.Read _)(.from k.in.s, .at i - i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + b))
 }
-km = compute.parallel mix "BACKEND"
+km = compute.parallel mix "BACKEND" Out2
 out = (compute.plrun km ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
-compute.read ((compute.Read _)(.from out.z, .at 3))
+(compute.read ((compute.Read _)(.from out.z, .at 3)) : Int)
 "#,
     ),
     (
@@ -263,23 +263,23 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 a = (compute.plrun k0 ((compute.A In1)(.n 16, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 pair = (k : Par2) => {
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.s, .at i * 2))
-  y = compute.read ((compute.Read _)(.from k.in.s, .at i * 2 + 1))
+  x = (compute.read ((compute.Read _)(.from k.in.s, .at i * 2)) : Int)
+  y = (compute.read ((compute.Read _)(.from k.in.s, .at i * 2 + 1)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value x + y))
 }
-kp = compute.parallel pair "BACKEND"
+kp = compute.parallel pair "BACKEND" Out2
 b = (compute.plrun kp ((compute.A In2)(.n 8, .I In2(.s a.z))) : Out2)
 c = (compute.plrun kp ((compute.A In2)(.n 4, .I In2(.s b.z))) : Out2)
 d = (compute.plrun kp ((compute.A In2)(.n 2, .I In2(.s c.z))) : Out2)
 e = (compute.plrun kp ((compute.A In2)(.n 1, .I In2(.s d.z))) : Out2)
-compute.read ((compute.Read _)(.from e.z, .at 0))
+(compute.read ((compute.Read _)(.from e.z, .at 0)) : Int)
 "#,
     ),
     (
@@ -293,20 +293,20 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 scan = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.s, .at 0))
-  b = compute.read ((compute.Read _)(.from k.in.s, .at 1))
-  c = compute.read ((compute.Read _)(.from k.in.s, .at 2))
-  d = compute.read ((compute.Read _)(.from k.in.s, .at 3))
+  a = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Int)
+  b = (compute.read ((compute.Read _)(.from k.in.s, .at 1)) : Int)
+  c = (compute.read ((compute.Read _)(.from k.in.s, .at 2)) : Int)
+  d = (compute.read ((compute.Read _)(.from k.in.s, .at 3)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + b + c + d))
 }
-ks = compute.parallel scan "BACKEND"
+ks = compute.parallel scan "BACKEND" Out2
 out = (compute.plrun ks ((compute.A In2)(.n 4, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -322,17 +322,17 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 oob = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.s, .at 4))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at 4)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
 }
-ko = compute.parallel oob "BACKEND"
+ko = compute.parallel oob "BACKEND" Out2
 out = (compute.plrun ko ((compute.A In2)(.n 2, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -348,17 +348,17 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 4, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _), .k Int}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 sc = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * k.in.k))
 }
-ks = compute.parallel sc "BACKEND"
+ks = compute.parallel sc "BACKEND" Out2
 out = (compute.plrun ks ((compute.A In2)(.n 4, .I In2(.s src.z, .k 5))) : Out2)
 compute.collect out.z
 "#,
@@ -375,17 +375,17 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 8, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 use = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value helper.native v))
 }
-ku = compute.parallel use "BACKEND"
+ku = compute.parallel use "BACKEND" Out2
 out = (compute.plrun ku ((compute.A In2)(.n 8, .I In2(.s src.z))) : Out2)
 compute.collect out.z
 "#,
@@ -401,19 +401,19 @@ n0 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 3))
 }
-k0 = compute.parallel n0 "BACKEND"
+k0 = compute.parallel n0 "BACKEND" Out1
 src = (compute.plrun k0 ((compute.A In1)(.n 64, .I In1(.a 0))) : Out1)
 In2  = struct{.s (compute.Buf _)}
 Out2 = struct{.z (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 hist = (k : Par2) => {
   i = compute.range k.n
-  key = compute.read ((compute.Read _)(.from k.in.s, .at i))
+  key = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at key, .value 1))
 }
-kh = compute.parallel hist "BACKEND"
+kh = compute.parallel hist "BACKEND" Out2
 out = (compute.plrun kh ((compute.A In2)(.n 64, .I In2(.s src.z))) : Out2)
-(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at 2)))
+((compute.read ((compute.Read _)(.from out.z, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 2)) : Int))
 "#,
     ),
     (
@@ -426,10 +426,10 @@ Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + 1))
 }
-kk = compute.parallel f "BACKEND"
+kk = compute.parallel f "BACKEND" Out
 out = (compute.plrun kk ((compute.A In)(.n 8, .I In(.a data))) : Out)
 compute.collect out.z
 "#,
@@ -452,16 +452,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "BACKEND"
+k1 = compute.parallel f1 "BACKEND" Out1
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "BACKEND"
+k2 = compute.parallel f2 "BACKEND" Out2
 GArg = struct{.n Int, .in In1}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)

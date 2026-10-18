@@ -63,30 +63,30 @@ OutR = struct{{.r (compute.Buf Float)}}
 Par  = compute.P (compute.KT Float)(.I In, .O OutR)
 total_raw = (k : Par) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }}
-total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 shift_raw = (k : Par2) => {{
   i = compute.range k.n
-  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) - r) ~ "element")) ~ "combine")
+  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
 }}
-shift = compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+shift = compute.parallel (shift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 In3  = struct{{.d (compute.Buf Float), .q (compute.Buf Float)}}
 OutY = struct{{.y (compute.Buf Float)}}
 Par3 = compute.P (compute.KT Float)(.I In3, .O OutY)
 lift_raw = (k : Par3) => {{
   i = compute.range k.n
-  q = compute.read ((compute.Read _)(.from k.in.q, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) - q + {BIAS:.1}) ~ "element")) ~ "combine")
+  q = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - q + {BIAS:.1}) ~ "element")) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
 }}
-lift = compute.parallel (lift_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+lift = compute.parallel (lift_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutY
 GArg = struct{{.n Int, .in In}}
 {step}
 built = compute.graph step

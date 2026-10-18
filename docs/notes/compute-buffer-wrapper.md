@@ -3,7 +3,10 @@
 > Status: current — a parallel result's fields are read by name only after the
 > host annotates the run's result once with its codomain type; an unannotated
 > result stays `?a`, and the residue is recorded under
-> [What is still open](#what-is-still-open).
+> [What is still open](#what-is-still-open). The compute ABI changed after the
+> strict read ruling ([undecided-reads](undecided-reads.md) §5): `parallel`
+> takes the output type as its third argument, and a `read`'s element type is
+> stated at the call site; the forms below are current.
 >
 > What this note is: the model a parallel kernel's parameter and its buffers
 > have. A **buffer is a lichen struct wrapper**, exactly as a kernel is; a
@@ -54,10 +57,11 @@ Buf     = T => struct{.native _, .element T}
 Read    = T => struct{.from (Buf T), .at Int}
 Write   = T => struct{.to (Buf T), .at Int, .value T}
 WriteAtomic = T => struct{.to (Buf T), .at Int, .value T}
-read    = (x : (Read _))  => $read(x.from, x.at): x.from.element
+read    = (x : (Read _))  => $read(x.from, x.at)
 write   = (x : (Write _)) => $write(x.to, x.at, x.value)
 write_atomic = (x : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
 collect = (b : (Buf _))   => $collect(b)
+parallel = f => b: string => o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
 ```
 
 - **`write` is disjoint by contract; `write_atomic` accumulates.** A lane's `write` names its own
@@ -76,11 +80,14 @@ collect = (b : (Buf _))   => $collect(b)
   run's input decoding and the two VM arms that consume a buffer (`Read`,
   `BufferCollect`) each fall back to the operand itself, so nothing that already
   names a payload breaks.
-- `read`'s result is **`x.from.element`**, the buffer's own element cell: a fact
-  of the value, now *stated* where it lives instead of left to the call's fresh
-  cell. A program that only forwards a buffer still prints `?a` — the cell is
-  open until the run binds it — but one whose buffer's element is decided reads
-  precisely.
+- `read`'s result is **stated at the call site**, `(compute.read … : Float)`.
+  The buffer's `.element` field's *declared* type is the element class, while
+  the value stored there is the element type; a type annotation whose type
+  expression read that value would have the class as its static type, not
+  `Type`, and the strict read rule refuses it ([undecided-reads](undecided-reads.md)
+  §5). A program that only forwards a buffer still prints `?a` — the cell is
+  open until the run binds it — but one whose read states its element type
+  reads precisely.
 - `Read`/`Write` keep their `_` instantiation spelling at the call sites
   (`(compute.Read _)(…)`): the element cell is what the buffer's `.element` binds.
 - **A buffer's type carries `(element, length, DP)`, and its length is stated only where
@@ -112,20 +119,23 @@ Three consequences, and they are the decisions the model rests on:
   which is what the emitter already works from (it never read the first operand
   at all — the emitter reads the buffer and the index operands and takes the
   ordinal from its own write tally).
-- **`O` is the *parameter's* `.out` group, not the body's codomain.** A parallel
-  body **produces no value**: it dispatches writes, and the result is the
-  structure the author declared under `.out`. So `parallel` sets the kernel
-  struct's `.O` to the parameter type's `.out` field — `(K _)(.native
-  $parallel(f, b), .I I, .O I::out)`. Setting it to the body's codomain is what
-  left `k.O` bound to the body's own (unconstrained) value cell, which is why
-  `plrun`'s `r: k.O` could not name the output fields.
+- **`O` is the output type the caller passes, and the parameter's `.out`
+  group is what it names.** A parallel body **produces no value**: it
+  dispatches writes, and the result is the structure the author declared
+  under `.out`. The wrapper therefore takes the output type as its third
+  argument — `parallel = f => b: string => o: _ => … (.O o)` — instead of
+  reading it off the kernel type's fields, which hold type values and have no
+  value to take the element from (the ruling of [undecided-reads](undecided-reads.md)
+  §5). Setting `.O` to the body's codomain is what left `k.O` bound to the
+  body's own (unconstrained) value cell, which is why `plrun`'s `r: k.O` could
+  not name the output fields.
 - **The ABI tells the same story from the other side.** A parallel fragment's
   emitted function "only has side effects", and `compile_parallel_fragment`
   appends a trailing `Const(0)` purely so the `-> i64` signature has a result.
   The language has **no unit type** to spell `P -> None` with (the kind markers
   are int/float/string/`Type`/function/tuple/array/struct/table/set), so the
-  prelude leaves a parallel `f`'s codomain unconstrained (`f: I -> _`) and the
-  writes' roles are the real contract.
+  prelude leaves a parallel `f`'s codomain unconstrained (`f: I -> O`, with
+  `O` a hole) and the writes' roles are the real contract.
 
 The parameter's **role paths** (`scalars`/`inputs`/`outputs`) are one
 `KernelRoles` value read from the parameter's *type* by `parallel_roles` and

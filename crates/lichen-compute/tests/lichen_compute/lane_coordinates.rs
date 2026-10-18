@@ -27,9 +27,9 @@ body = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.stride + c))))))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.stride + c))) : Float))))
 }
-k = compute.parallel body "cpu"
+k = compute.parallel body "cpu" Out
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun k ((Host)(.n 6, .cols 3, .stride 2, .I In(.a a))) : Out)
 compute.collect out.z
@@ -51,9 +51,9 @@ Host = struct{.n Int, .I In}
 body = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (compute.read ((compute.Read _)(.from k.in.a, .at r)))))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.a, .at r)) : Float))))
 }
-k = compute.parallel body "cpu"
+k = compute.parallel body "cpu" Out
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun k ((Host)(.n 6, .I In(.a a))) : Out)
 compute.collect out.z

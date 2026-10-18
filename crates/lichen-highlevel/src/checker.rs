@@ -829,6 +829,43 @@ where
         self.function_stack.last().map(|&(function, _)| function)
     }
 
+    /// Whether a read's container is the current `@loop` function's state
+    /// parameter, or a read rooted at it.
+    ///
+    /// # Invariant
+    /// The loop conversion derives the state tuple's element types from the
+    /// recursive call and unifies them after the body, so a state read is
+    /// deferred to that conversion; every other undecided container is refused.
+    fn is_loop_state(&self, e: ExprId) -> bool {
+        let Some(&(function, Some(lambda))) = self.function_stack.last() else {
+            return false;
+        };
+        if !self.module.functions[function].looping {
+            return false;
+        }
+        let ExprKind::Function { parameter, .. } = self.ir[lambda].kind else {
+            return false;
+        };
+        self.loop_state_rooted(e, parameter)
+    }
+
+    /// The rooted test behind [`Self::is_loop_state`]: the state parameter
+    /// itself, or a read whose container is one.
+    fn loop_state_rooted(&self, e: ExprId, parameter: ExprId) -> bool {
+        if e == parameter {
+            return true;
+        }
+        let container = match self.ir[e].kind {
+            ExprKind::Field { container, .. }
+            | ExprKind::NamedField { container, .. }
+            | ExprKind::NamedTypeAccess { container, .. }
+            | ExprKind::TypeAccess { container, .. } => Some(container),
+            ExprKind::Index { array, .. } => Some(array),
+            _ => None,
+        };
+        container.is_some_and(|container| self.loop_state_rooted(container, parameter))
+    }
+
     /// A node owned by the current function — the checker's only node creation
     /// point.
     ///

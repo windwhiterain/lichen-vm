@@ -5,7 +5,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
-use crate::diagnostic::{AssertSpelling, DiagKind};
+use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
@@ -47,6 +47,10 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
+        // A written annotation can still be an unevaluated type function; force it
+        // before deciding whether the read can be checked at all.
+        self.module
+            .evaluate_node_deep(container_ty, None);
         // The requirement names the container's **kind**, never its type.
         if self.type_is_concrete(container_ty) {
             let kind = self.tuple_kind_requirement();
@@ -61,23 +65,8 @@ where
                 self.loc(container, 1),
                 DiagKind::Guard,
             );
-        } else {
-            // An undecided container is registered as an assert condition,
-            // re-checked per apply clone (`eval-before-unify.md` §6.2).
-            let operands = self.array_node(self.current_block, &[container_ty, self.type_expr]);
-            let condition = self.op_node(
-                self.current_block,
-                P::Operator::from(TypeOperator::IsTupleType),
-                Some(operands),
-            );
-            self.register_assert(
-                condition,
-                self.loc(container, 1),
-                true,
-                AssertSpelling::TupleKind {
-                    container: container_ty,
-                },
-            );
+        } else if !self.is_loop_state(container) {
+            return self.refuse_undecided_container(e, container, container_ty, "tuple read");
         }
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
@@ -172,6 +161,16 @@ where
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
 
+        self.module
+            .evaluate_node_deep(container_ty, None);
+        if !self.type_is_concrete(container_ty) {
+            return self.refuse_undecided_container(
+                e,
+                container,
+                container_ty,
+                "named type access",
+            );
+        }
         // The requirement, as a unify: the container's type must be a struct
         // kind — its `TypeStruct` tag, not a payload shape.
         let kind = self.struct_kind_requirement();
@@ -252,7 +251,12 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
+        self.module
+            .evaluate_node_deep(container_ty, None);
         let concrete = self.type_is_concrete(container_ty);
+        if !concrete && !self.is_loop_state(container) {
+            return self.refuse_undecided_container(e, container, container_ty, "field read");
+        }
         // The field's position, resolved once for the guard below and the
         // read's type.
 

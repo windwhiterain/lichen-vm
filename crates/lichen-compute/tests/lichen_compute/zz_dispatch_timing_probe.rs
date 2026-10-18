@@ -22,12 +22,12 @@ XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
 XArg = struct{.n Int, .alpha Float, .I XIn}
 stencil_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = compute.read ((compute.Read _)(.from c.in.x, .at (i - 1)))
-  right = compute.read ((compute.Read _)(.from c.in.x, .at (i + 1)))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float)
+  right = (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-one = compute.parallel stencil_raw "@BACKEND@"
+one = compute.parallel stencil_raw "@BACKEND@" XOut
 "#;
 
 /// The nine-tap convolution, from `examples/filter.lichen`.
@@ -38,10 +38,10 @@ FPar = struct{.n Int, .taps Int, .in FIn, .out FOut}
 FArg = struct{.n Int, .taps Int, .I FIn}
 filter_raw = (c : FPar) => {
   i = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
-one = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "@BACKEND@"
+one = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "@BACKEND@" FOut
 "#;
 
 /// The nine-tap window max, from `examples/pooling.lichen`.
@@ -54,10 +54,10 @@ pool_raw = (c : PPar) => {
   i = compute.range c.n
   row = compute.row c
   col = compute.col c
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at ((row + (s(0) - 1) / 3) * c.stride + (col + (s(0) - 1) % 3)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at ((row + (s(0) - 1) / 3) * c.stride + (col + (s(0) - 1) % 3)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, c.least ~ "identity"))))
 }
-one = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "@BACKEND@"
+one = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "@BACKEND@" POut
 "#;
 
 /// One program: `steps` dispatches of `kernel` over `lanes` elements on `backend`.

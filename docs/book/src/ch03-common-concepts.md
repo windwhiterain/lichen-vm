@@ -458,10 +458,12 @@ addpair (1, 2)
 3: Int
 ```
 
-Without the annotation, the tuple's element types stay open, and the
-answer prints with the `raw` mark (`raw 3: raw[?a, ?b]`): the value is
-right, but the arithmetic's class was not decided until run time.
-Chapter 5 explains why, and Chapter 10 shows what the annotation writes.
+Without the annotation the read on `p` is refused — `this tuple read
+cannot be checked: the container's type is not decided here — annotate
+the container's type` — because a read states its requirement from the
+container's type (Chapter 4's `gcd` is the same rule). The annotation
+states the container's type, and the answer is `3: Int`. Chapter 10 shows
+what the annotation writes.
 
 Parentheses group, and they also make a difference in application:
 

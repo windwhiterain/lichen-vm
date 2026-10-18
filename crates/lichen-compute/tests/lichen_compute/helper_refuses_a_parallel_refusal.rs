@@ -17,7 +17,7 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.s, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.c, .at i, .value i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 compute.collect (compute.collect outs.c, compute.collect outs.s)
 "#;

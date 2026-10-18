@@ -68,10 +68,10 @@ Out  = struct{{.v (compute.Buf Float)}}
 Par  = compute.P (compute.KT Float)(.I Args, .O Out)
 applied = (k : Par) => {{
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.v, .at i, .value (ln x ~ "element")))
 }}
-kernel = compute.parallel (applied ~ "claim:Elementwise(element)") "cpu"
+kernel = compute.parallel (applied ~ "claim:Elementwise(element)") "cpu" Out
 args = (compute.buffer ([{}] : array{{Float, {}}}) : (compute.Buf Float))
 out = (compute.plrun kernel ((compute.A Args)(.n {}, .I Args(.x args))) : Out)
 compute.collect out.v : array{{Float, {}}}

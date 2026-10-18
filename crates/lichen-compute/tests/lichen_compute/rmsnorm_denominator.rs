@@ -16,7 +16,7 @@ use lichen_utils::extend::AsEnum;
 const COUNT: usize = 8;
 
 /// The producer's value, read as RMSNorm's consumer reads it.
-const SUM: &str = "compute.read ((compute.Read _)(.from k.in.s, .at 0))";
+const SUM: &str = "(compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)";
 
 /// The RMSNorm pair with `denominator` written into the consumer's `element`.
 ///
@@ -35,21 +35,21 @@ Sums = struct{{.s (compute.Buf Float)}}
 ParS = compute.P (compute.KT Float)(.I Row, .O Sums)
 sumsq_raw = (k : ParS) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }}
-sumsq = compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+sumsq = compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sums
 Scale = struct{{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float)}}
 OutY  = struct{{.y (compute.Buf Float)}}
 ParY  = compute.P (compute.KT Float)(.I Scale, .O OutY)
 rescale_raw = (k : ParY) => {{
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  w = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
   d = {denominator}
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((x / d) * w) ~ "element"))
 }}
-rescale = compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu"
+rescale = compute.parallel (rescale_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg = struct{{.n Int, .in All}}
 All  = struct{{.x (compute.Buf Float), .w (compute.Buf Float)}}
 step = (s : GArg) => {{

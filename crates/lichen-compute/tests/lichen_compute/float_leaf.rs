@@ -63,10 +63,10 @@ scale_raw = (k : Par) => {{
   i = compute.range k.n
   r = i / k.cols
   c = i % k.cols
-  v = compute.read ((compute.Read _)(.from k.in.a, .at (r + c)))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at (r + c))) : Float)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v * k.scale ~ "element")))
 }}
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step = (s : GA) => {{
   compute.plrun scale ((Arg)(.n s.n, .cols s.cols, .scale s.scale, .I In1(.a s.in.a))) : Out1
 }}
@@ -98,7 +98,7 @@ mismatch_raw = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (k.scale ~ "element")))
 }}
-mismatch = compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu"
+mismatch = compute.parallel (mismatch_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step = (s : GA) => {{
   compute.plrun mismatch ((Arg)(.n s.n, .scale s.scale, .I In1(.a s.in.a))) : Out1
 }}

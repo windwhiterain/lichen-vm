@@ -162,18 +162,20 @@ const CHAIN: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder = compute.parallel ((k : ParA) => {
+adder_raw = (k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "cpu"
+}
+adder = compute.parallel adder_raw "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
-doubler = compute.parallel ((k : ParB) => {
+doubler_raw = (k : ParB) => {
   i = compute.range k.n
-  j = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}) "cpu"
+}
+doubler = compute.parallel doubler_raw "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 InS  = struct{.b (compute.Buf _)}
 OutS = struct{.unused (compute.Buf _)}
@@ -252,10 +254,11 @@ const FROM_PARAMETER: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder = compute.parallel ((k : ParA) => {
+adder_raw = (k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "cpu"
+}
+adder = compute.parallel adder_raw "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
@@ -349,8 +352,8 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // `k.native` — an `Index` into the captured kernel struct;
-    // neither it nor the field index holds a value until applied.
+    // `k.native` — an `Index` into the captured kernel struct, and the slot
+    // itself holds no value until it is applied.
     assert_eq!(
         format!(
             "{:?}",
@@ -358,12 +361,24 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         ),
         "Some(LowOperator(Index))"
     );
-    let target = through_index(&module, operands[0]);
     assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(target)),
+        module.node_value(AnyNodeId::Dynamic(operands[0])),
         None,
-        "and the captured struct it reads out of has no value yet either"
+        "the slot is a node rather than a read value, so a lowering that wants the \
+         kernel handle has to reach it through the `Index`"
     );
+
+    // What it reads out of is the kernel struct `compute.parallel` built: its
+    // three ports. It is *named* here rather than fresh, because an index
+    // function written as an inline lambda is refused before this shape is ever
+    // built — the output-class walk cannot see a write inside one — so naming
+    // the body is what lets this program check at all. The slot's shape is the
+    // same either way, which is what this test measures.
+    let target = through_index(&module, operands[0]);
+    let ports = unsafe { module.array_items(target) }
+        .expect("the captured struct's payload")
+        .len();
+    assert_eq!(ports, 3, "`.native`, `.I` and `.O` — the kernel struct's ports");
 }
 
 /// Reads its parameter **back to front**: classes declared, so the first read sees no "not yet".
@@ -373,18 +388,20 @@ const BACK_TO_FRONT: &str = r#"---
 InA  = struct{.a Int}
 OutA = struct{.z (compute.Buf Int)}
 ParA = compute.P (compute.KT _)(.I InA, .O OutA)
-adder = compute.parallel ((k : ParA) => {
+adder_raw = (k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "cpu"
+}
+adder = compute.parallel adder_raw "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
-doubler = compute.parallel ((k : ParB) => {
+doubler_raw = (k : ParB) => {
   i = compute.range k.n
-  j = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}) "cpu"
+}
+doubler = compute.parallel doubler_raw "cpu" OutB
 data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 step = (s : ParB) => {
   buffer = s.in.b

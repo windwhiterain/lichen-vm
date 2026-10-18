@@ -25,29 +25,29 @@ ScaleArg = struct{.n Int, .dim Int, .I TwoIn}
 scale_raw = (k : ScalePar) => {
   i = compute.range k.n
   column = i - (i / k.dim) * k.dim
-  value = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  weight = compute.read ((compute.Read _)(.from k.in.w, .at column))
+  value = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  weight = (compute.read ((compute.Read _)(.from k.in.w, .at column)) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value * weight)))
 }
-scale = compute.parallel scale_raw "gpu"
+scale = compute.parallel scale_raw "gpu" Out
 ReducePar = struct{.n Int, .dim Int, .in OneIn, .out Out}
 ReduceArg = struct{.n Int, .dim Int, .I OneIn}
 reduce_raw = (k : ReducePar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.y, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.y, .at (lane * k.dim + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-reduce = compute.parallel (reduce_raw ~ "claim:Reduction(combine,identity)") "gpu"
+reduce = compute.parallel (reduce_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 MixPar = struct{.n Int, .dim Int, .in MixIn, .out Out}
 MixArg = struct{.n Int, .dim Int, .I MixIn}
 mix_raw = (k : MixPar) => {
   i = compute.range k.n
   sequence = i / k.dim
-  value = compute.read ((compute.Read _)(.from k.in.y, .at i))
-  summary = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  value = (compute.read ((compute.Read _)(.from k.in.y, .at i)) : Float)
+  summary = (compute.read ((compute.Read _)(.from k.in.m, .at sequence)) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value + summary)))
 }
-mix = compute.parallel mix_raw "gpu"
+mix = compute.parallel mix_raw "gpu" Out
 StepIn = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
 GArg = struct{.n Int, .lanes Int, .in StepIn}
 step = (s : GArg) => {

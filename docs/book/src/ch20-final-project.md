@@ -36,20 +36,20 @@ Sums = struct{.s (compute.Buf Float)}
 ParS = compute.P (compute.KT Float)(.I Row, .O Sums)
 row_sum_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
 }
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu"
+row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
 Moments = struct{.x (compute.Buf Float), .s (compute.Buf Float)}
 Centred = struct{.y (compute.Buf Float)}
 ParC = compute.P (compute.KT Float)(.I Moments, .O Centred)
 centre_raw = (k : ParC) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.s, .at 0)) / int2float k.n
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  m = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / int2float k.n
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((x - m) ~ "element")))
 }
-centre = compute.parallel (centre_raw ~ "claim:Reduction(element)") "cpu"
+centre = compute.parallel (centre_raw ~ "claim:Reduction(element)") "cpu" Centred
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 s = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
 out = (compute.plrun centre ((compute.A Moments)(.n 4, .I Moments(.x x, .s s.s))) : Centred)
@@ -79,8 +79,9 @@ type is `compute.P (compute.KT Float)(.I … , .O …)`: the element class
 
 `s(0)` is the remaining count and `s(1)` the accumulator. The fold counts
 **down** to zero in its own lane, reading the row at `s(0) - 1` — an
-in-lane loop, not a cross-lane reduction. The accumulator's seed,
-`0.0 ~ "identity"`, is marked as the fold's identity, and each addend is
+in-lane loop, not a cross-lane reduction. The read's `: Float` is its
+element type, stated at the call site (Chapter 17), and the accumulator's
+seed, `0.0 ~ "identity"`, is marked as the fold's identity; each addend is
 marked as the `combine` — the two marks the `Reduction(combine,identity)`
 claim names.
 

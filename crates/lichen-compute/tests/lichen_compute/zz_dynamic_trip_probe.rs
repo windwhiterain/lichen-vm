@@ -20,11 +20,11 @@ PPar = struct{.n Int, .least Float, .in PIn, .out POut}
 PArg = struct{.n Int, .least Float, .I PIn}
 sum_raw = (c : PPar) => {
   i = compute.range c.n
-  lim = compute.read ((compute.Read _)(.from c.in.lim, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.x, .at (lim - s(0)))))) ~ "combine" ~ "element"))
+  lim = (compute.read ((compute.Read _)(.from c.in.lim, .at 0)) : Int)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.x, .at (lim - s(0)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (lim, c.least ~ "identity"))))
 }
-sumk = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+sumk = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" POut
 x = (compute.buffer ([1.0, 2.0, 4.0, 8.0, 16.0, 32.0] : array{Float, 6}) : (compute.Buf Float))
 "#;
 

@@ -28,18 +28,18 @@ OutC  = struct{.c (compute.Buf Float)}
 ParC  = compute.P (compute.KT Float)(.I Turn, .O OutC)
 cos_raw = (k : ParC) => {
   i = compute.range k.n
-  angle = compute.read ((compute.Read _)(.from k.in.position, .at i)) * compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i))
+  angle = (compute.read ((compute.Read _)(.from k.in.position, .at i)) : Float) * (compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (cos angle ~ "element")))
 }
-cosine = compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu"
+cosine = compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu" OutC
 OutS  = struct{.s (compute.Buf Float)}
 ParS  = compute.P (compute.KT Float)(.I Turn, .O OutS)
 sin_raw = (k : ParS) => {
   i = compute.range k.n
-  angle = compute.read ((compute.Read _)(.from k.in.position, .at i)) * compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i))
+  angle = (compute.read ((compute.Read _)(.from k.in.position, .at i)) : Float) * (compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value (sin angle ~ "element")))
 }
-sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu"
+sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" OutS
 Pair  = struct{.x (compute.Buf Float), .c (compute.Buf Float), .s (compute.Buf Float)}
 OutY  = struct{.y (compute.Buf Float)}
 ParR  = compute.P (compute.KT Float)(.I Pair, .O OutY)
@@ -48,14 +48,14 @@ rotate_raw = (k : ParR) => {
   odd = j % 2
   pair = (j - odd) / 2
   partner = j + 1 - 2 * odd
-  c = compute.read ((compute.Read _)(.from k.in.c, .at pair))
-  s = compute.read ((compute.Read _)(.from k.in.s, .at pair))
-  here = compute.read ((compute.Read _)(.from k.in.x, .at j))
-  other = compute.read ((compute.Read _)(.from k.in.x, .at partner))
+  c = (compute.read ((compute.Read _)(.from k.in.c, .at pair)) : Float)
+  s = (compute.read ((compute.Read _)(.from k.in.s, .at pair)) : Float)
+  here = (compute.read ((compute.Read _)(.from k.in.x, .at j)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at partner)) : Float)
   turned = here * c - (1.0 - 2.0 * int2float odd) * other * s
   compute.write ((compute.Write _)(.to k.out.y, .at j, .value (turned ~ "element")))
 }
-rotate = compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu"
+rotate = compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu" OutY
 position = (compute.buffer ([0.0, 1.0, 2.0, 3.0] : array{Float, 4}) : (compute.Buf Float))
 inverse_frequency = (compute.buffer ([1.0, 1.0, 1.0, 1.0] : array{Float, 4}) : (compute.Buf Float))
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))

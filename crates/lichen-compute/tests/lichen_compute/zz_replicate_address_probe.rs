@@ -26,7 +26,7 @@ sum_raw = (c : APar) => {
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + int2float (min (max (row + (s(0) - 1) / 3 - 1) 0) (rows - 1) * c.cols + (min (max (col + (s(0) - 1) % 3 - 1) 0) (c.cols - 1)))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
-sums = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+sums = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity,element)") "gpu" AOut
 x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 25}) : (compute.Buf Float))
 out = (compute.plrun sums ((AArg)(.n 25, .cols 5, .taps @TAPS@, .I AIn(.x x))) : AOut)
 compute.collect out.y : array{Float, 25}
@@ -53,7 +53,7 @@ term_raw = (c : TPar) => {
   rows = (c.n / c.cols)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (int2float @EXPR@)))
 }
-kterm = compute.parallel term_raw "gpu"
+kterm = compute.parallel term_raw "gpu" TOut
 x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 25}) : (compute.Buf Float))
 out = (compute.plrun kterm ((TArg)(.n 25, .cols 5, .I TIn(.x x))) : TOut)
 compute.collect out.y : array{Float, 25}

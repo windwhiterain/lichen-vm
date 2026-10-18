@@ -33,17 +33,17 @@ OutE = struct{.e (compute.Buf Float)}
 ParE = compute.P (compute.KT Float)(.I In, .O OutE)
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
 }
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 offset_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) + compute.read ((compute.Read _)(.from k.in.p, .at i))) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)) ~ "element")))
 }
-offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu"
+offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 "#;
 
 /// The step `fuse_licence.rs` records, reading the one buffer its argument names.
@@ -392,7 +392,7 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
     let report = compile(&chain(UNANNOTATED));
     assert!(
         !report.ok(),
-        "the fallback records a refusal and this program records no graph, so the check now
+        "the step never names its parameter's type, so the program records no graph, and the check
          fails on it: the entry says `fails_build`, and a program that answers nothing is what
          that flag is for"
     );
@@ -414,12 +414,13 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
     );
     let run = run_lines.join(" | ");
     assert!(
-        run.contains("not a buffer") || run.contains("names no backend"),
-        "so what refuses an unannotated step is the fallback's own rule, never this one: {run}"
+        run.contains("this tuple read cannot be checked"),
+        "so what refuses an unannotated step is the language's own read rule — `ins(0)` reads \
+         a container whose type the step never names — never this one: {run}"
     );
     assert!(
         !run.contains("outside `.in`/`.out`"),
         "and never the buffer rule, which would blame a declaration this step did not make: {run}"
     );
-    println!("the unannotated step is judged by the fallback alone:\n  {run}");
+    println!("the unannotated step is judged by the read rule alone:\n  {run}");
 }

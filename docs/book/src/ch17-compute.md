@@ -25,10 +25,10 @@ Out = struct{.y (compute.Buf Float)}
 Par = compute.P (compute.KT Float)(.I In, .O Out)
 double_raw = (k : Par) => {
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (x * 2.0 ~ "element")))
 }
-double = compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu"
+double = compute.parallel (double_raw ~ "claim:Elementwise(element)") "cpu" Out
 b = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 out = (compute.plrun double ((compute.A In)(.n 3, .I In(.x b))) : Out)
 compute.collect out.y : array{Float, 3}
@@ -54,10 +54,14 @@ writes its output at `i`. That shape — one lane per element, read at the
 lane index, write at the lane index — is the compute language's model.
 
 **Reads and writes name their buffer and position.** `compute.read` takes
-a `Read` value built with `(.from buf, .at i)`; `compute.write` takes a
-`Write` built with `(.to buf, .at i, .value v)`. The `_` placeholders are
-the constructors' own type parameters (Chapter 5's `_`), which the checker
-decides.
+a `Read` value built with `(.from buf, .at i)`, and the call states its
+element type — `(compute.read … : Float)` — because the buffer's element
+type is a value in the buffer's struct and the read's result is the type
+the caller states, not one read off the buffer's value (Chapter 4's rule:
+a value whose declared type is the element class does not carry a type for
+the read to take). `compute.write` takes a `Write` built with
+`(.to buf, .at i, .value v)`. The `_` placeholders are the constructors'
+own type parameters (Chapter 5's `_`), which the checker decides.
 
 **Marks label the computation.** The body is marked
 `~ "claim:Elementwise(element)"` before `compute.parallel` builds the
@@ -72,11 +76,15 @@ extent (`.n 3`) and the input struct (`.I In(.x b)`). `compute.collect
 out.y : array{Float, 3}` reads a buffer back as an ordinary array, and the
 annotation is what decides the resulting array type.
 
-**The backend is a string.** `compute.parallel … "cpu"` binds the kernel
-to the CPU path. The other backend is `"gpu"`; the same kernel program,
-dispatched to the device backend, runs the kernel's compiled form on a
-GPU. The example suite's kernels run on `"cpu"` so the suite is
-device-independent; the device legs are measured separately (below).
+**The backend is a string.** `compute.parallel … "cpu" Out` binds the
+kernel to the CPU path and names its output struct type. The output type
+is passed rather than read off the kernel type's fields: those fields hold
+type values, and a read takes its type from a value that has one (Chapter
+4's rule), so the caller states it. The other backend is `"gpu"`; the same
+kernel program, dispatched to the device backend, runs the kernel's
+compiled form on a GPU. The example suite's kernels run on `"cpu"` so the
+suite is device-independent; the device legs are measured separately
+(below).
 
 ## The scalar JIT path
 
@@ -179,7 +187,8 @@ was measured and what is next.
   writing buffers at its lane's index.
 - `compute.P`/`compute.KT` describe a parallel kernel's parameter;
   `compute.Buf` is a buffer; `compute.range` is the lane index;
-  `compute.read`/`compute.write` are the buffer reads and writes;
+  `compute.read`/`compute.write` are the buffer reads and writes, and a
+  read names its element type at the call site;
   `compute.parallel` builds a kernel and `compute.plrun` runs it;
   `compute.collect` reads a buffer back as an array.
 - The backend is a string, `"cpu"` or `"gpu"`, and both run the same kernel.

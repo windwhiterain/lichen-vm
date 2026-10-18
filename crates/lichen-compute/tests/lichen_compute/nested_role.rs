@@ -43,14 +43,14 @@ fill = (k : SrcPar) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value int2float (i + 10)))
 }}
-source_kernel = compute.parallel fill "cpu"
+source_kernel = compute.parallel fill "cpu" SrcOut
 inbuf = (compute.plrun source_kernel ((compute.A Src)(.n 3, .I Src(.a 0))) : SrcOut)
 {declarations}
 f = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value {written}))
 }}
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ({argument}) : Out)
 compute.collect out.w
 "#,
@@ -70,7 +70,7 @@ fn a_buffer_under_a_grouped_input_is_read_at_its_own_depth() {
 In = struct{.b (compute.Buf Float)}
 Out = struct{.w (compute.Buf Float)}
 Par = compute.P (compute.KT _)(.I In, .O Out)"#,
-        "(compute.read ((compute.Read _)(.from k.in.b, .at i)) * 2.0)",
+        "((compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float) * 2.0)",
         "(compute.A In)(.n 3, .I In(.b inbuf.z))",
     ));
     let (grouped_module, grouped, _root) = run(&kernel(
@@ -79,7 +79,7 @@ Inner = struct{.b (compute.Buf Float)}
 In = struct{.g Inner}
 Out = struct{.w (compute.Buf Float)}
 Par = compute.P (compute.KT _)(.I In, .O Out)"#,
-        "(compute.read ((compute.Read _)(.from k.in.g.b, .at i)) * 2.0)",
+        "((compute.read ((compute.Read _)(.from k.in.g.b, .at i)) : Float) * 2.0)",
         "(compute.A In)(.n 3, .I In(.g Inner(.b inbuf.z)))",
     ));
     let doubled: Vec<f32> = (0..LANES).map(|lane| source_at(lane) * 2.0).collect();

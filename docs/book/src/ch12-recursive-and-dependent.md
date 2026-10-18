@@ -68,7 +68,7 @@ A recursive function's result is as decided as its signature. When the
 signature is stated, the recursive calls read it and the result follows:
 
 ```lichen
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
+gcd = ((p : tuple{Int, Int}) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 gcd (48, 18)
 ```
 
@@ -76,10 +76,10 @@ gcd (48, 18)
 6: Int
 ```
 
-Without the annotation the function's own cells stay open, and the
-recursive result stays an open cell — Chapter 4's `raw 6: ?a`. The
-annotation is not a separate check; it is the function's parameter and
-return cells, stated by hand.
+Without the annotation the function's own cells stay open, and Chapter 4's
+refusal is what the checker answers: a read states its requirement from the
+type of its container, and `p` has none. The annotation is not a separate
+check; it is the function's parameter and return cells, stated by hand.
 
 ## A type that depends on a value
 

@@ -26,16 +26,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 "#;
 
 /// The same kernels with every class decided, which the graph path needs anyway.
@@ -47,16 +47,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 In2  = struct{.b (compute.Buf Int)}
 Out2 = struct{.w (compute.Buf Int)}
 Par2 = compute.P (compute.KT Int)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 "#;
 
 /// The argument the step is applied to.
@@ -326,14 +326,14 @@ fn probe_the_plain_leg() {
     };
     report(
         "plain_unread",
-        &program(KERNELS_OPEN, STEP_OPEN, &format!("out = step {ARGUMENT}")),
+        &program(KERNELS_OPEN, STEP_OPEN, &format!("out = (step {ARGUMENT} : Out2)")),
     );
     report(
         "plain_collected",
         &program(
             KERNELS_OPEN,
             STEP_OPEN,
-            &format!("out = step {ARGUMENT}\ncompute.collect out.w"),
+            &format!("out = (step {ARGUMENT} : Out2)\ncompute.collect out.w"),
         ),
     );
     report(
@@ -341,7 +341,7 @@ fn probe_the_plain_leg() {
         &program(
             KERNELS_INT,
             STEP_OPEN,
-            &format!("out = step {ARGUMENT}\ncompute.collect out.w"),
+            &format!("out = (step {ARGUMENT} : Out2)\ncompute.collect out.w"),
         ),
     );
     report(
@@ -349,7 +349,7 @@ fn probe_the_plain_leg() {
         &program(
             KERNELS_OPEN,
             STEP_OPEN,
-            &format!("compute.collect (step {ARGUMENT}).w"),
+            &format!("compute.collect ((step {ARGUMENT}) : Out2).w"),
         ),
     );
     report(
@@ -357,7 +357,7 @@ fn probe_the_plain_leg() {
         &program(
             KERNELS_OPEN,
             STEP_ANNOTATED,
-            &format!("out = step {ARGUMENT}\ncompute.collect out.w"),
+            &format!("out = (step {ARGUMENT} : Out2)\ncompute.collect out.w"),
         ),
     );
     report("direct_no_apply", &program(KERNELS_OPEN, DIRECT, "0"));

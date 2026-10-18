@@ -217,11 +217,13 @@ error: expected TypeStruct, found TypeTuple
    | ^
 ```
 
-> **A read of a call's result.** Reading a field from an application
-> directly — `(f 1).y` — answers an open cell (`raw none: ?a`) in the
-> current checker. Bind the result first and the read works:
-> `s = f 1; s.y`. The restriction is in how the read is checked, not in
-> the value.
+> **A read of a call's result.** A call's result is only as decided as the
+> call expression's type: reading a field from it directly — `(f 1).y` — is
+> refused where that type is not decided (`this field read cannot be
+> checked: the container's type is not decided here — annotate the
+> container's type`). Binding the result first does not decide it either;
+> state the type on the call's result (`s = (f 1 : S); s.y`, or
+> `(f 1 : S).y`). The restriction is the read's, not the value's.
 
 ## Field types as values
 

@@ -31,7 +31,7 @@ read_raw = (k : ReadPar) => {
     for (index, field) in FIELDS.iter().enumerate() {
         let weight = 1u32 << index;
         source.push_str(&format!(
-            "  first_{field} = compute.read ((compute.Read _)(.from k.in.{field}, .at 0))\n"
+            "  first_{field} = (compute.read ((compute.Read _)(.from k.in.{field}, .at 0)) : Float)\n"
         ));
         total = format!("(({total}) + (first_{field} * {weight}.0))");
     }
@@ -40,15 +40,15 @@ read_raw = (k : ReadPar) => {
     ));
     source.push_str(
         r#"}
-read = compute.parallel read_raw "gpu"
+read = compute.parallel read_raw "gpu" Out
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
   i = compute.range k.n
-  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.position Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun read ((ReadArg)(.n 1, .I In(.x s.in.x, .i s.in.i, .q s.in.q, .k s.in.k, .v s.in.v, .qn s.in.qn, .kn s.in.kn, .o s.in.o, .p s.in.p, .g s.in.g, .u s.in.u, .d s.in.d))) : Out)

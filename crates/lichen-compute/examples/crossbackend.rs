@@ -18,18 +18,18 @@ ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 seed = compute.parallel ((k : ParS) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
-}) "BACKEND"
+}) "BACKEND" OutS
 InK  = struct{.b (compute.Buf _)}
 OutK = struct{.w (compute.Buf _)}
 ParK = compute.P (compute.KT _)(.I InK, .O OutK)
 k = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + 1))
-}) "BACKEND"
+}) "BACKEND" OutK
 s = (compute.plrun seed ((compute.A InS)(.n 4, .I InS(.a 0))) : OutS)
 out = (compute.plrun k ((compute.A InK)(.n 4, .I InK(.b s.z))) : OutK)
-compute.read ((compute.Read _)(.from out.w, .at 2))
+(compute.read ((compute.Read _)(.from out.w, .at 2)) : Int)
 "#;
 
 /// The same `v + 1` body, twice over, recorded as a graph.
@@ -41,22 +41,22 @@ ParS = compute.P (compute.KT _)(.I InS, .O OutS)
 seed = compute.parallel ((k : ParS) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
-}) "BACKEND"
+}) "BACKEND" OutS
 InK  = struct{.b (compute.Buf _)}
 OutK = struct{.w (compute.Buf _)}
 ParK = compute.P (compute.KT _)(.I InK, .O OutK)
 k = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + 1))
-}) "BACKEND"
+}) "BACKEND" OutK
 InG  = struct{.b (compute.Buf _)}
 OutG = struct{.unused (compute.Buf _)}
 ParG = compute.P (compute.KT _)(.I InG, .O OutG)
 grow = (g : ParG) => compute.plrun k ((compute.A InK)(.n g.n, .I InK(.b g.in.b)))
 built = compute.graph grow
 s = (compute.plrun seed ((compute.A InS)(.n 4, .I InS(.a 0))) : OutS)
-compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n 4, .I InG(.b s.z))) : (compute.Buf _)), .at 2))
+(compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n 4, .I InG(.b s.z))) : (compute.Buf _)), .at 2)) : Int)
 "#;
 
 /// The bench's 16-link chain, verbatim, which is the shape that broke.
@@ -69,20 +69,20 @@ mk = (k : ParX) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
-kx = compute.parallel mk "BACKEND"
+kx = compute.parallel mk "BACKEND" OutX
 InK  = struct{.b (compute.Buf _)}
 OutK = struct{.w (compute.Buf _)}
 ParK = compute.P (compute.KT _)(.I InK, .O OutK)
 k1 = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + 1))
-}) "BACKEND"
+}) "BACKEND" OutK
 k2 = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + v))
-}) "BACKEND"
+}) "BACKEND" OutK
 InG  = struct{.b (compute.Buf _)}
 OutG = struct{.unused (compute.Buf _)}
 ParG = compute.P (compute.KT _)(.I InG, .O OutG)
@@ -94,7 +94,7 @@ grow = (g : ParG) => {
 }
 built = compute.graph grow
 seed = (compute.plrun kx ((compute.A InX)(.n 4, .I InX(.a 0))) : OutX)
-compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n 4, .I InG(.b seed.z))) : (compute.Buf _)), .at 1))
+(compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n 4, .I InG(.b seed.z))) : (compute.Buf _)), .at 1)) : Int)
 "#;
 
 fn probe(label: &str, template: &str, backend: &str) {

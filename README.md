@@ -185,8 +185,8 @@ double = n => @gc { a = n + 1
   order = "2"
   output = "(1, 2, 3): tuple{Int, Int, Int}"
 ---
-f = x => [x, @shallow f (x + 1)]
-inf = f 0
+f = (x : Int) => [x, @shallow f (x + 1)]
+inf = (f 0 : tuple{Int, tuple{Int, tuple{Int, tuple{Int, _}}}})
 (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))
 ```
 
@@ -421,21 +421,21 @@ Sums = struct{.s (compute.Buf Float)}
 ParS = compute.P (compute.KT Float)(.I Row, .O Sums)
 sumsq_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-sumsq = compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+sumsq = compute.parallel (sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sums
 Scale = struct{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float)}
 OutY  = struct{.y (compute.Buf Float)}
 ParY  = compute.P (compute.KT Float)(.I Scale, .O OutY)
 rescale_raw = (k : ParY) => {
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  w = compute.read ((compute.Read _)(.from k.in.w, .at i))
-  d = sqrt (compute.read ((compute.Read _)(.from k.in.s, .at 0)) / int2float k.n + 0.25)
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
+  d = sqrt ((compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / int2float k.n + 0.25)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((x / d) * w ~ "element")))
 }
-rescale = compute.parallel (rescale_raw ~ "claim:Reduction(element)") "cpu"
+rescale = compute.parallel (rescale_raw ~ "claim:Reduction(element)") "cpu" OutY
 x = (compute.buffer ([7.0, 3.0, 1.0, 2.0] : array{Float, 4}) : (compute.Buf Float))
 w = (compute.buffer ([2.0, 4.0, 8.0, 16.0] : array{Float, 4}) : (compute.Buf Float))
 sums = (compute.plrun sumsq ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
@@ -481,7 +481,7 @@ and the self-recursive result's type follows from it (`6: Int`).  Nothing carrie
 the `raw` mark, because the type is decided."
   output = "6: Int"
 ---
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
+gcd = ((p : tuple{Int, Int}) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 gcd (48, 18)
 ```
 
@@ -543,20 +543,20 @@ SiluA = struct{.a (compute.Buf Float)}
 ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
 silu_raw = (k : ParA) => {
   i = compute.range k.n
-  g = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
 }
-silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu"
+silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
 UpIn  = struct{.a (compute.Buf Float), .u (compute.Buf Float)}
 OutY  = struct{.y (compute.Buf Float)}
 ParB  = compute.P (compute.KT Float)(.I UpIn, .O OutY)
 up_raw = (k : ParB) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  u = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Float)
+  u = (compute.read ((compute.Read _)(.from k.in.u, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((a * u) ~ "element")))
 }
-up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu"
+up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu" OutY
 g = (compute.buffer ([0.0, 1.0, (0.0 - 1.0), 2.0] : array{Float, 4}) : (compute.Buf Float))
 u = (compute.buffer ([3.0, 1.0, 0.5, 4.0] : array{Float, 4}) : (compute.Buf Float))
 act = (compute.plrun silu ((compute.A Gate)(.n 4, .I Gate(.g g))) : SiluA)
@@ -589,22 +589,22 @@ Maxs = struct{.m (compute.Buf Float)}
 ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
 }
-rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu" Maxs
 Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
 OutY = struct{.y (compute.Buf Float)}
 ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
 softmax_raw = (k : ParY) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
   total = fold (k.n, 0.0 ~ "identity")
-  here = exp (compute.read ((compute.Read _)(.from k.in.x, .at i)) - m)
+  here = exp ((compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float) - m)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
 }
-softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutY
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 mx = (compute.plrun rowmax ((compute.A Row)(.n 4, .I Row(.x x))) : Maxs)
 out = (compute.plrun softmax ((compute.A Soft)(.n 4, .I Soft(.x x, .m mx.m))) : OutY)
@@ -644,18 +644,18 @@ OutC  = struct{.c (compute.Buf Float)}
 ParC  = compute.P (compute.KT Float)(.I Turn, .O OutC)
 cos_raw = (k : ParC) => {
   i = compute.range k.n
-  angle = compute.read ((compute.Read _)(.from k.in.position, .at i)) * compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i))
+  angle = (compute.read ((compute.Read _)(.from k.in.position, .at i)) : Float) * (compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (cos angle ~ "element")))
 }
-cosine = compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu"
+cosine = compute.parallel (cos_raw ~ "claim:Elementwise(element)") "cpu" OutC
 OutS  = struct{.s (compute.Buf Float)}
 ParS  = compute.P (compute.KT Float)(.I Turn, .O OutS)
 sin_raw = (k : ParS) => {
   i = compute.range k.n
-  angle = compute.read ((compute.Read _)(.from k.in.position, .at i)) * compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i))
+  angle = (compute.read ((compute.Read _)(.from k.in.position, .at i)) : Float) * (compute.read ((compute.Read _)(.from k.in.inverse_frequency, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value (sin angle ~ "element")))
 }
-sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu"
+sine = compute.parallel (sin_raw ~ "claim:Elementwise(element)") "cpu" OutS
 Pair  = struct{.x (compute.Buf Float), .c (compute.Buf Float), .s (compute.Buf Float)}
 OutY  = struct{.y (compute.Buf Float)}
 ParR  = compute.P (compute.KT Float)(.I Pair, .O OutY)
@@ -664,14 +664,14 @@ rotate_raw = (k : ParR) => {
   odd = j % 2
   pair = (j - odd) / 2
   partner = j + 1 - 2 * odd
-  c = compute.read ((compute.Read _)(.from k.in.c, .at pair))
-  s = compute.read ((compute.Read _)(.from k.in.s, .at pair))
-  here = compute.read ((compute.Read _)(.from k.in.x, .at j))
-  other = compute.read ((compute.Read _)(.from k.in.x, .at partner))
+  c = (compute.read ((compute.Read _)(.from k.in.c, .at pair)) : Float)
+  s = (compute.read ((compute.Read _)(.from k.in.s, .at pair)) : Float)
+  here = (compute.read ((compute.Read _)(.from k.in.x, .at j)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at partner)) : Float)
   turned = here * c - (1.0 - 2.0 * int2float odd) * other * s
   compute.write ((compute.Write _)(.to k.out.y, .at j, .value (turned ~ "element")))
 }
-rotate = compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu"
+rotate = compute.parallel (rotate_raw ~ "claim:Elementwise(element)") "cpu" OutY
 position = (compute.buffer ([0.0, 1.0, 2.0, 3.0] : array{Float, 4}) : (compute.Buf Float))
 inverse_frequency = (compute.buffer ([1.0, 1.0, 1.0, 1.0] : array{Float, 4}) : (compute.Buf Float))
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
@@ -752,10 +752,10 @@ matmul_raw = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (r * k.k + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * k.cols + c))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (k.k, 0.0 ~ "identity"))))
 }
-matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+matmul = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutC
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 b = (compute.buffer ([7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun matmul ((Arg)(.n 4, .cols 2, .k 3, .I Ain(.a a, .b b))) : OutC)
@@ -828,18 +828,18 @@ Sums  = struct{.s (compute.Buf Float)}
 ParS  = compute.P (compute.KT Float)(.I Row, .O Sums)
 row_sum_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
 }
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu"
+row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
 Sumsq = struct{.q (compute.Buf Float)}
 ParQ  = compute.P (compute.KT Float)(.I Row, .O Sumsq)
 row_sumsq_raw = (k : ParQ) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.q, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
 }
-row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
 Moments = struct{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}
 OutY    = struct{.y (compute.Buf Float)}
 ArgY    = struct{.n Int, .eps Float, .I Moments}
@@ -847,14 +847,14 @@ ParY    = struct{.n Int, .eps Float, .in Moments, .out OutY}
 normalise_raw = (k : ParY) => {
   i = compute.range k.n
   count = int2float k.n
-  m = compute.read ((compute.Read _)(.from k.in.s, .at 0)) / count
-  v = compute.read ((compute.Read _)(.from k.in.q, .at 0)) / count - m * m
+  m = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / count
+  v = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float) / count - m * m
   d = sqrt (v + k.eps)
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  w = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((x - m) / d * w) ~ "element")))
 }
-normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu"
+normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 w = (compute.buffer ([3.0, 6.0, 3.0, 6.0] : array{Float, 4}) : (compute.Buf Float))
 sm = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
@@ -1006,10 +1006,10 @@ scores_raw = (k : ParS) => {
   i = compute.range k.n
   query = compute.row k
   key = compute.col k
-  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.k, .at (key * k.dim + s(0) - 1)))) ~ "combine")
+  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.k, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")))
 }
-scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Scored
 QSV = struct{.s (compute.Buf Float), .v (compute.Buf Float)}
 OutA = struct{.o (compute.Buf Float)}
 ParA = struct{.n Int, .dim Int, .keys Int, .in QSV, .out OutA}
@@ -1018,14 +1018,14 @@ attend_raw = (k : ParA) => {
   i = compute.range k.n
   query = compute.row k
   column = compute.col k
-  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) ~ "element")) ~ "combine")
+  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) ~ "element")) ~ "combine")
   m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
-  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element")) ~ "combine")
+  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
   denominator = den (k.keys, 0.0 ~ "identity")
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element") * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column)))) ~ "combine", s(2))
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
   compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")))
 }
-attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutA
 qm = (compute.buffer ([2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
 kk = (compute.buffer ([1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 vv = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
@@ -1159,14 +1159,14 @@ append_raw = (k : Par) => {
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
 kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 nk = (compute.buffer ([100.0, 200.0] : array{Float, 2}) : (compute.Buf Float))
@@ -1291,10 +1291,10 @@ Par  = struct{.n Int, .kdim Int, .in Gin, .out Gout}
 Arg  = struct{.n Int, .kdim Int, .I Gin}
 gemv_raw = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-gemv = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+gemv = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
 w = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 12}) : (compute.Buf Float))
 x = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 out = (compute.plrun gemv ((Arg)(.n 4, .kdim 3, .I Gin(.w w, .x x))) : Gout)
@@ -1498,45 +1498,45 @@ append_raw = (k : ParK) => {
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
 Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
 Gout = struct{.y (compute.Buf Float)}
 ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
 ArgS = struct{.n Int, .kdim Int, .I Gin}
 score_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
 Row  = struct{.x (compute.Buf Float)}
 Maxs = struct{.m (compute.Buf Float)}
 ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
 }
-rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu" Maxs
 Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
 OutY = struct{.y (compute.Buf Float)}
 ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
 softmax_raw = (k : ParY) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
   total = fold (k.n, 0.0 ~ "identity")
-  here = exp (compute.read ((compute.Read _)(.from k.in.x, .at i)) - m)
+  here = exp ((compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float) - m)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
 }
-softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutY
 AV   = struct{.a (compute.Buf Float), .v (compute.Buf Float)}
 OutW = struct{.o (compute.Buf Float)}
 ParW = struct{.n Int, .dim Int, .keys Int, .in AV, .out OutW}
@@ -1544,10 +1544,10 @@ ArgW = struct{.n Int, .dim Int, .keys Int, .I AV}
 weigh_raw = (k : ParW) => {
   i = compute.range k.n
   column = compute.col k
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))))) ~ "combine"))
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element")))
 }
-weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutW
 kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 nk = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
@@ -1738,45 +1738,45 @@ append_raw = (k : ParK) => {
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
 Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
 Gout = struct{.y (compute.Buf Float)}
 ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
 ArgS = struct{.n Int, .kdim Int, .I Gin}
 score_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
 Row  = struct{.x (compute.Buf Float)}
 Maxs = struct{.m (compute.Buf Float)}
 ParM = compute.P (compute.KT Float)(.I Row, .O Maxs)
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
 }
-rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu"
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "cpu" Maxs
 Soft = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
 OutY = struct{.y (compute.Buf Float)}
 ParY = compute.P (compute.KT Float)(.I Soft, .O OutY)
 softmax_raw = (k : ParY) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
   total = fold (k.n, 0.0 ~ "identity")
-  here = exp (compute.read ((compute.Read _)(.from k.in.x, .at i)) - m)
+  here = exp ((compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float) - m)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (here / total)))
 }
-softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+softmax = compute.parallel (softmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutY
 AV   = struct{.a (compute.Buf Float), .v (compute.Buf Float)}
 OutW = struct{.o (compute.Buf Float)}
 ParW = struct{.n Int, .dim Int, .keys Int, .in AV, .out OutW}
@@ -1784,10 +1784,10 @@ ArgW = struct{.n Int, .dim Int, .keys Int, .I AV}
 weigh_raw = (k : ParW) => {
   i = compute.range k.n
   column = compute.col k
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))))) ~ "combine"))
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity")) ~ "element")))
 }
-weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+weigh = compute.parallel (weigh_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutW
 KTIn  = struct{.o (compute.Buf Float), .x (compute.Buf Float)}
 KTOut = struct{.y (compute.Buf Float)}
 ParT  = struct{.n Int, .j Int, .dim Int, .in KTIn, .out KTOut}
@@ -1795,13 +1795,13 @@ ArgT  = struct{.n Int, .j Int, .dim Int, .I KTIn}
 keep_raw = (k : ParT) => {
   lane = compute.range k.n
   base = k.j * k.dim
-  held = compute.read ((compute.Read _)(.from k.in.x, .at lane))
-  here = compute.read ((compute.Read _)(.from k.in.o, .at (lane % k.dim)))
+  held = (compute.read ((compute.Read _)(.from k.in.x, .at lane)) : Float)
+  here = (compute.read ((compute.Read _)(.from k.in.o, .at (lane % k.dim))) : Float)
   fresh = (lane >= base) & (lane - base < k.dim)
   mine = if fresh then here else held
   compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (mine ~ "element")))
 }
-keep = compute.parallel (keep_raw ~ "claim:Reduction(element)") "cpu"
+keep = compute.parallel (keep_raw ~ "claim:Reduction(element)") "cpu" KTOut
 kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 vbuf = (compute.buffer ([5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
 nk = (compute.buffer ([1.0, 1.0] : array{Float, 2}) : (compute.Buf Float))
@@ -1809,14 +1809,14 @@ nv = (compute.buffer ([30.0, 40.0] : array{Float, 2}) : (compute.Buf Float))
 q = (compute.buffer ([1.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
 log = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
 spare = (compute.buffer ([0.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
-drive = s => if s(0) == 2 then s else { cached = (compute.plrun append ((ArgK)(.n 8, .cap 4, .dim 2, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk nk, .nv nv))) : KVOut)
+drive = (s : tuple{Int, KVOut, compute.Buf Float, OutW}) => if s(0) == 2 then s else { cached = (compute.plrun append ((ArgK)(.n 8, .cap 4, .dim 2, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk nk, .nv nv))) : KVOut)
   scored = (compute.plrun score ((ArgS)(.n 4, .kdim 2, .I Gin(.w cached.k, .x q))) : Gout)
   topped = (compute.plrun rowmax ((compute.A Row)(.n 4, .I Row(.x scored.y))) : Maxs)
   weights = (compute.plrun softmax ((compute.A Soft)(.n 4, .I Soft(.x scored.y, .m topped.m))) : OutY)
   out = (compute.plrun weigh ((ArgW)(.n 2, .dim 2, .keys 4, .I AV(.a weights.y, .v cached.v))) : OutW)
   logged = (compute.plrun keep ((ArgT)(.n 4, .j s(0), .dim 2, .I KTIn(.o out.o, .x s(2)))) : KTOut)
   drive (s(0) + 1, cached, logged.y, out) }
-final = drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare))
+final = (drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare)) : tuple{Int, KVOut, compute.Buf Float, OutW})
 (compute.collect final(2) : array{Float, 4}, compute.collect final(3).o : array{Float, 2}, final(0))
 ```
 
@@ -1922,61 +1922,61 @@ SPar = struct{.n Int, .k Float, .in SIn, .out SOut}
 SArg = struct{.n Int, .k Float, .I SIn}
 scale_raw = (c : SPar) => {
   i = compute.range c.n
-  x = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  x = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (x * c.k)))
 }
-scale = compute.parallel scale_raw "cpu"
+scale = compute.parallel scale_raw "cpu" SOut
 LIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
 LOut = struct{.y (compute.Buf Float)}
 LPar = struct{.n Int, .t Float, .in LIn, .out LOut}
 LArg = struct{.n Int, .t Float, .I LIn}
 lerp_raw = (c : LPar) => {
   i = compute.range c.n
-  a = compute.read ((compute.Read _)(.from c.in.a, .at i))
-  b = compute.read ((compute.Read _)(.from c.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from c.in.a, .at i)) : Float)
+  b = (compute.read ((compute.Read _)(.from c.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (a + c.t * (b - a))))
 }
-lerp = compute.parallel lerp_raw "cpu"
+lerp = compute.parallel lerp_raw "cpu" LOut
 CIn  = struct{.x (compute.Buf Float)}
 COut = struct{.y (compute.Buf Float)}
 CPar = struct{.n Int, .lo Float, .hi Float, .in CIn, .out COut}
 CArg = struct{.n Int, .lo Float, .hi Float, .I CIn}
 clamp_raw = (c : CPar) => {
   i = compute.range c.n
-  x = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  x = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (max c.lo (min c.hi x))))
 }
-clamp = compute.parallel clamp_raw "cpu"
+clamp = compute.parallel clamp_raw "cpu" COut
 RIn  = struct{.x (compute.Buf Float)}
 ROut = struct{.y (compute.Buf Float)}
 RPar = struct{.n Int, .kdim Int, .in RIn, .out ROut}
 RArg = struct{.n Int, .kdim Int, .I RIn}
 rowsum_raw = (c : RPar) => {
   r = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1)))) : Float)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 }
-rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+rowsum = compute.parallel (rowsum_raw ~ "claim:Reduction(combine,identity,element)") "cpu" ROut
 MIn  = struct{.x (compute.Buf Float)}
 MOut = struct{.y (compute.Buf Float)}
 MPar = struct{.n Int, .kdim Int, .least Float, .in MIn, .out MOut}
 MArg = struct{.n Int, .kdim Int, .least Float, .I MIn}
 rowmax_raw = (c : MPar) => {
   r = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at (r * c.kdim + (s(0) - 1)))) : Float)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, c.least ~ "identity"))))
 }
-rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity,element)") "cpu" MOut
 DIn  = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
 DOut = struct{.y (compute.Buf Float)}
 DPar = struct{.n Int, .kdim Int, .in DIn, .out DOut}
 DArg = struct{.n Int, .kdim Int, .I DIn}
 dot_raw = (c : DPar) => {
   r = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.a, .at (r * c.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from c.in.b, .at (r * c.kdim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.a, .at (r * c.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from c.in.b, .at (r * c.kdim + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at r, .value (fold (c.kdim, 0.0 ~ "identity"))))
 }
-dot = compute.parallel (dot_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+dot = compute.parallel (dot_raw ~ "claim:Reduction(combine,identity,element)") "cpu" DOut
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 up = (compute.plrun scale ((SArg)(.n 4, .k 2.0, .I SIn(.x x))) : SOut)
 down = (compute.plrun scale ((SArg)(.n 4, .k (0.0 - 1.0), .I SIn(.x x))) : SOut)
@@ -2140,10 +2140,10 @@ Arg  = struct{.n Int, .w Int, .I Row}
 greedy_raw = (k : Par) => {
   lane = compute.range k.n
   base = lane * k.w
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
 }
-greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu"
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
 scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
 out = (compute.plrun greedy ((Arg)(.n 5, .w 4, .I Row(.x scores))) : Pick)
 compute.collect out.p : array{Float, 5}
@@ -2277,10 +2277,10 @@ Arg0 = struct{.n Int, .w Int, .I Row}
 rank0_raw = (k : Par0) => {
   lane = compute.range k.n
   base = lane * k.w
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
 }
-rank0 = compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu"
+rank0 = compute.parallel (rank0_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
 Sel  = struct{.x (compute.Buf Float), .q (compute.Buf Float)}
 Cat1 = struct{.p (compute.Buf Float)}
 Cat2 = struct{.p (compute.Buf Float), .t (compute.Buf Float)}
@@ -2291,15 +2291,15 @@ rank1_raw = (k : Par1) => {
   rank = lane / k.rows
   row = lane % k.rows
   base = row * k.w
-  low = float2int (compute.read ((compute.Read _)(.from k.in.q, .at row)))
+  low = float2int ((compute.read ((compute.Read _)(.from k.in.q, .at row)) : Float))
   @loop fold = s => if s(0) == 0 then s(2) else { i = s(0) - 1
-    ri = float2int (compute.read ((compute.Read _)(.from k.in.x, .at (base + i))))
+    ri = float2int ((compute.read ((compute.Read _)(.from k.in.x, .at (base + i))) : Float))
     hit = (1 * (ri >= s(1))) * (1 * (i != low))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
   mine = if rank == 0 then low else (fold (k.w, 0, 0))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element")))
 }
-rank1 = compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu"
+rank1 = compute.parallel (rank1_raw ~ "claim:Reduction(combine)") "cpu" Cat1
 Par2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .in Sel, .out Cat2}
 Arg2 = struct{.n Int, .w Int, .rows Int, .ranks Int, .I Sel}
 rank2_raw = (k : Par2) => {
@@ -2307,16 +2307,16 @@ rank2_raw = (k : Par2) => {
   rank = lane / k.rows
   row = lane % k.rows
   base = row * k.w
-  low = float2int (compute.read ((compute.Read _)(.from k.in.q, .at row)))
-  mid = float2int (compute.read ((compute.Read _)(.from k.in.q, .at (k.rows + row))))
+  low = float2int ((compute.read ((compute.Read _)(.from k.in.q, .at row)) : Float))
+  mid = float2int ((compute.read ((compute.Read _)(.from k.in.q, .at (k.rows + row))) : Float))
   @loop fold = s => if s(0) == 0 then s(2) else { i = s(0) - 1
-    ri = float2int (compute.read ((compute.Read _)(.from k.in.x, .at (base + i))))
+    ri = float2int ((compute.read ((compute.Read _)(.from k.in.x, .at (base + i))) : Float))
     hit = (1 * (ri >= s(1))) * (1 * (i != low)) * (1 * (i != mid))
     fold (s(0) - 1, ((s(1) + (hit * (ri - s(1)))) ~ "combine"), ((s(2) + (hit * (i - s(2)))) ~ "combine")) }
   mine = if rank == 0 then low else (if rank == 1 then mid else (fold (k.w, 0, 0)))
   (compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float mine ~ "element"))), compute.write ((compute.Write _)(.to k.out.t, .at (row * k.ranks + rank), .value (int2float mine ~ "element"))))
 }
-rank2 = compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu"
+rank2 = compute.parallel (rank2_raw ~ "claim:Reduction(combine)") "cpu" Cat2
 scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
 r0 = (compute.plrun rank0 ((Arg0)(.n 5, .w 4, .I Row(.x scores))) : Pick)
 r1 = (compute.plrun rank1 ((Arg1)(.n 10, .w 4, .rows 5, .ranks 2, .I Sel(.x scores, .q r0.p))) : Cat1)
@@ -2518,24 +2518,24 @@ append_raw = (k : ParK) => {
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
 Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
 Gout = struct{.y (compute.Buf Float)}
 ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
 ArgS = struct{.n Int, .kdim Int, .I Gin}
 logits_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
 Row  = struct{.x (compute.Buf Float)}
 Pick = struct{.p (compute.Buf Float)}
 Par  = struct{.n Int, .w Int, .in Row, .out Pick}
@@ -2543,10 +2543,10 @@ Arg  = struct{.n Int, .w Int, .I Row}
 greedy_raw = (k : Par) => {
   lane = compute.range k.n
   base = lane * k.w
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
 }
-greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu"
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
 weights = (compute.buffer ([2.0, 2.0, (0.0 - 3.0), 3.0, 1.0, 4.0, 2.0, (0.0 - 5.0), 3.0, 2.0, 0.0, 4.0, (0.0 - 6.0), 3.0, 3.0, 5.0, 4.0, (0.0 - 3.0), 8.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
 kbuf = (compute.buffer ([1.0, 2.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0)] : array{Float, 5}) : (compute.Buf Float))
 vbuf = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
@@ -2559,7 +2559,7 @@ sentinel = 3.0
   cached = (compute.plrun append ((ArgK)(.n 5, .cap 5, .dim 1, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk tok.p, .nv nv))) : KVOut)
   bit = (compute.collect tok.p : array{Float, 1})[0]
   if bit == sentinel then (s(0) + 1, cached, scored) else generate (s(0) + 1, cached, scored) }
-final = generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank))
+final = (generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank)) : tuple{Int, KVOut, Gout})
 (compute.collect final(1).k : array{Float, 5}, final(0), compute.collect final(2).y : array{Float, 4})
 ```
 
@@ -2649,25 +2649,25 @@ XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
 XArg = struct{.n Int, .alpha Float, .I XIn}
 stencil_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = compute.read ((compute.Read _)(.from c.in.x, .at (i - 1)))
-  right = compute.read ((compute.Read _)(.from c.in.x, .at (i + 1)))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float)
+  right = (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-stencil = compute.parallel stencil_raw "cpu"
+stencil = compute.parallel stencil_raw "cpu" XOut
 ring_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = if i == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
-  right = if i == (c.n - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at 0))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = if i == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
+  right = if i == (c.n - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-ring = compute.parallel ring_raw "cpu"
+ring = compute.parallel ring_raw "cpu" XOut
 x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun stencil ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 looped = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 seed = looped.y
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
+@loop march = (((s : tuple{Int, compute.Buf Float}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x s(1)))) : XOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (2, seed)
 (compute.collect out.y : array{Float, 6}, compute.collect looped.y : array{Float, 6}, compute.collect solved : array{Float, 6})
 ```
@@ -2740,32 +2740,32 @@ grid_raw = (c : GPar) => {
   i = compute.range c.n
   row = compute.row c
   col = compute.col c
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  above = compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col)))
-  below = compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col)))
-  left = if col == 0 then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
-  right = if col == (c.cols - 1) then 0.0 else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  above = (compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col))) : Float)
+  below = (compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))) : Float)
+  left = if col == 0 then 0.0 else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
+  right = if col == (c.cols - 1) then 0.0 else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
 }
-grid = compute.parallel grid_raw "cpu"
+grid = compute.parallel grid_raw "cpu" GOut
 torus_raw = (c : GPar) => {
   i = compute.range c.n
   row = compute.row c
   col = compute.col c
   rows = (c.n / c.cols)
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  above = if row == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at ((rows - 1) * c.cols + col)))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col))))
-  below = if row == (rows - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at col))) else (compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))))
-  left = if col == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (i + c.cols - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
-  right = if col == (c.cols - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at (i - c.cols + 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  above = if row == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at ((rows - 1) * c.cols + col))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at ((row - 1) * c.cols + col))) : Float))
+  below = if row == (rows - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at col)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))) : Float))
+  left = if col == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (i + c.cols - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
+  right = if col == (c.cols - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at (i - c.cols + 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
 }
-torus = compute.parallel torus_raw "cpu"
+torus = compute.parallel torus_raw "cpu" GOut
 plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 seed = wrapped.y
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
+@loop march = (((s : tuple{Int, compute.Buf Float}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
 solved = march (1, seed)
 (compute.collect stepped.y : array{Float, 9}, (compute.collect solved : array{Float, 9}))
 ```
@@ -2817,10 +2817,10 @@ FPar = struct{.n Int, .taps Int, .in FIn, .out FOut}
 FArg = struct{.n Int, .taps Int, .I FIn}
 filter_raw = (c : FPar) => {
   i = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (i - (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
-filter = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+filter = compute.parallel (filter_raw ~ "claim:Reduction(combine,identity,element)") "cpu" FOut
 x = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
 smooth = (compute.buffer ([1.0, 2.0, 1.0] : array{Float, 3}) : (compute.Buf Float))
 difference = (compute.buffer ([1.0, (0.0 - 1.0), 0.0] : array{Float, 3}) : (compute.Buf Float))
@@ -2890,7 +2890,7 @@ convolve_raw = (c : CPar) => {
   row = compute.row c
   col = compute.col c
   base = ((row - 1) * c.cols + (col - 1))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
 replicate_raw = (c : CPar) => {
@@ -2898,11 +2898,11 @@ replicate_raw = (c : CPar) => {
   row = compute.row c
   col = compute.col c
   rows = (c.n / c.cols)
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) * compute.read ((compute.Read _)(.from c.in.x, .at (min ((max (row + (s(0) - 1) / 3) 1) - 1) (rows - 1) * c.cols + (min ((max (col + (s(0) - 1) % 3) 1) - 1) (c.cols - 1))))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from c.in.w, .at (s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from c.in.x, .at (min ((max (row + (s(0) - 1) / 3) 1) - 1) (rows - 1) * c.cols + (min ((max (col + (s(0) - 1) % 3) 1) - 1) (c.cols - 1))))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
-convolve = compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
-replicate = compute.parallel (replicate_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+convolve = compute.parallel (convolve_raw ~ "claim:Reduction(combine,identity,element)") "cpu" COut
+replicate = compute.parallel (replicate_raw ~ "claim:Reduction(combine,identity,element)") "cpu" COut
 x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 25}) : (compute.Buf Float))
 weights = (compute.buffer ([0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125] : array{Float, 9}) : (compute.Buf Float))
 blurred = (compute.plrun convolve ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x x, .w weights))) : COut)
@@ -2956,10 +2956,10 @@ pool_raw = (c : PPar) => {
   i = compute.range c.n
   row = compute.row c
   col = compute.col c
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at ((row + (s(0) - 1) / 3) * c.stride + (col + (s(0) - 1) % 3)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at ((row + (s(0) - 1) / 3) * c.stride + (col + (s(0) - 1) % 3)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, c.least ~ "identity"))))
 }
-pool = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "cpu"
+pool = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "cpu" POut
 padded = (compute.buffer ([(0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), 4.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0), (0.0 - 1000000.0)] : array{Float, 49}) : (compute.Buf Float))
 pooled = (compute.plrun pool ((PArg)(.n 25, .cols 5, .stride 7, .taps 9, .least (0.0 - 100.0), .I PIn(.x padded))) : POut)
 compute.collect pooled.y : array{Float, 25}
@@ -3029,17 +3029,17 @@ noise_raw = (p : PNoise) => {
   value = top + ((bottom - top) * sy)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
 }
-noise = compute.parallel noise_raw "cpu"
+noise = compute.parallel noise_raw "cpu" OutField
 
 PMix = struct{.n Int, .cols Int, .w Float, .in InField2, .out OutField}
 AMix = struct{.n Int, .cols Int, .w Float, .I InField2}
 mix_raw = (p : PMix) => {
   i = compute.range p.n
-  a = compute.read ((compute.Read _)(.from p.in.a, .at i))
-  b = compute.read ((compute.Read _)(.from p.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from p.in.a, .at i)) : Float)
+  b = (compute.read ((compute.Read _)(.from p.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value (a + ((b - a) * p.w))))
 }
-mix = compute.parallel mix_raw "cpu"
+mix = compute.parallel mix_raw "cpu" OutField
 
 PSmooth = struct{.n Int, .cols Int, .in InField, .out OutField}
 ASmooth = struct{.n Int, .cols Int, .I InField}
@@ -3048,26 +3048,26 @@ smooth_raw = (p : PSmooth) => {
   row = compute.row p
   col = compute.col p
   rows = p.n / p.cols
-  up = compute.read ((compute.Read _)(.from p.in.f, .at (((max row 1) - 1) * p.cols + col)))
-  down = compute.read ((compute.Read _)(.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col)))
-  left = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1))))
-  right = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1)))))
-  centre = compute.read ((compute.Read _)(.from p.in.f, .at i))
+  up = (compute.read ((compute.Read _)(.from p.in.f, .at (((max row 1) - 1) * p.cols + col))) : Float)
+  down = (compute.read ((compute.Read _)(.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col))) : Float)
+  left = (compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1)))) : Float)
+  right = (compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1))))) : Float)
+  centre = (compute.read ((compute.Read _)(.from p.in.f, .at i)) : Float)
   value = (centre * 0.5) + ((up + down + left + right) * 0.125)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
 }
-smooth = compute.parallel smooth_raw "cpu"
+smooth = compute.parallel smooth_raw "cpu" OutField
 
 PBiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .in InLand, .out OutIds}
 ABiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .I InLand}
 biome_raw = (p : PBiome) => {
   i = compute.range p.n
-  e = compute.read ((compute.Read _)(.from p.in.height, .at i))
-  m = compute.read ((compute.Read _)(.from p.in.moisture, .at i))
+  e = (compute.read ((compute.Read _)(.from p.in.height, .at i)) : Float)
+  m = (compute.read ((compute.Read _)(.from p.in.moisture, .at i)) : Float)
   b = if e < p.sea then 0 else (if e < p.ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
   compute.write ((compute.Write _)(.to p.out.ids, .at i, .value b))
 }
-biome = compute.parallel biome_raw "cpu"
+biome = compute.parallel biome_raw "cpu" OutIds
 
 PTile = struct{.n Int, .cols Int, .seed Int, .in InTile, .out OutIds}
 ATile = struct{.n Int, .cols Int, .seed Int, .I InTile}
@@ -3075,11 +3075,11 @@ tile_raw = (p : PTile) => {
   i = compute.range p.n
   row = compute.row p
   col = compute.col p
-  b = compute.read ((compute.Read _)(.from p.in.biomes, .at i))
+  b = (compute.read ((compute.Read _)(.from p.in.biomes, .at i)) : Int)
   v = ((col * 7919) + (row * 104729) + (p.seed * 1299709)) % 4
   compute.write ((compute.Write _)(.to p.out.ids, .at i, .value ((b * 4) + v)))
 }
-tile = compute.parallel tile_raw "cpu"
+tile = compute.parallel tile_raw "cpu" OutIds
 
 seed = 7
 size = 128

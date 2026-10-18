@@ -22,7 +22,7 @@ probe_raw = (c : IPar) => {
   i = compute.range c.n
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (int2float @EXPR@)))
 }
-probe = compute.parallel probe_raw "gpu"
+probe = compute.parallel probe_raw "gpu" IOut
 x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 6}) : (compute.Buf Float))
 out = (compute.plrun probe ((IArg)(.n 6, .I IIn(.x x))) : IOut)
 compute.collect out.y : array{Float, 6}
@@ -42,7 +42,7 @@ clamped_raw = (c : FPar) => {
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (min (max (s(0) - 1) 0) 4)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, 0.0 ~ "identity"))))
 }
-clamped = compute.parallel (clamped_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+clamped = compute.parallel (clamped_raw ~ "claim:Reduction(combine,identity,element)") "gpu" FOut
 x = (compute.buffer ([0.0, 0.0] : array{Float, 2}) : (compute.Buf Float))
 out = (compute.plrun clamped ((FArg)(.n 2, .taps 4, .I FIn(.x x))) : FOut)
 compute.collect out.y : array{Float, 2}
@@ -66,7 +66,7 @@ address_raw = (c : APar) => {
   rows = (c.n / c.cols)
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (int2float (min (max (row + 2 - 1) 0) (rows - 1) * c.cols + (min (max (col + 2 - 1) 0) (c.cols - 1))))))
 }
-address = compute.parallel address_raw "gpu"
+address = compute.parallel address_raw "gpu" AOut
 x = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 25}) : (compute.Buf Float))
 out = (compute.plrun address ((AArg)(.n 25, .cols 5, .I AIn(.x x))) : AOut)
 compute.collect out.y : array{Float, 25}

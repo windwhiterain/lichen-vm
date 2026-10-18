@@ -45,7 +45,7 @@ strip_raw = (k : Par) => {
   i = compute.range k.n
   r = i / k.cols
   c = i % k.cols
-  v = compute.read ((compute.Read _)(.from k.in.a, .at (r * 2 + c)))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at (r * 2 + c))) : Int)
   compute.write ((compute.Write _)(.to k.out.b, .at i, .value (v ~ "element")))
 }
 "#;
@@ -64,14 +64,14 @@ Arg2  = struct{.n Int, .cols Int, .I In2}
 /// `body`, declared over the control's parameter, as the kernel `compute.parallel` takes it.
 fn control_kernel(name: &str, body: &str) -> String {
     format!(
-        "{CONTROL}\n{body}\nkernel = compute.parallel ({name} ~ \"claim:Elementwise(element)\") \"gpu\"\n"
+        "{CONTROL}\n{body}\nkernel = compute.parallel ({name} ~ \"claim:Elementwise(element)\") \"gpu\" Out2\n"
     )
 }
 
 /// A step over one extent and one buffer, recording `strip` as its dispatch.
 fn recording() -> String {
     format!(
-        "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\"\n\
+        "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          GA = struct{{.n Int, .cols Int, .in In}}\nstep = (s : GA) => {{\n  \
          compute.plrun strip ((Arg)(.n s.n, .cols s.cols, .I In(.a s.in.a))) : Out\n}}\n\
          built = compute.graph step\nbuilt\n"
@@ -213,7 +213,7 @@ fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
         return;
     };
     let direct = format!(
-        "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\"\n\
+        "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          a = (compute.buffer ([{elements}] : array{{Int, {n}}}) : (compute.Buf Int))\n\
          out = (compute.plrun strip ((Arg)(.n {n}, .cols {cols}, .I In(.a a))) : Out)\n\
          compute.collect out.b\n",
@@ -244,15 +244,15 @@ fn what_makes_a_second_extent_admissible_does_not_depend_on_the_reads() {
     let both = r#"
 both_raw = (k : Par2) => {
   i = compute.range k.n
-  x = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  y = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
+  y = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((x + y) ~ "element")))
 }
 "#;
     let only_b = r#"
 only_b_raw = (k : Par2) => {
   i = compute.range k.n
-  y = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  y = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (y ~ "element")))
 }
 "#;
@@ -309,9 +309,9 @@ fn a_second_runtime_scalar_is_carried_beside_the_extent() {
         "{HEAD}\nPar3 = struct{{.n Int, .cols Int, .rows Int, .in In, .out Out}}\n\
          Arg3 = struct{{.n Int, .cols Int, .rows Int, .I In}}\n\
          three_raw = (k : Par3) => {{\n  i = compute.range k.n\n  \
-         v = compute.read ((compute.Read _)(.from k.in.a, .at (i / k.cols)))\n  \
+         v = (compute.read ((compute.Read _)(.from k.in.a, .at (i / k.cols))) : Int)\n  \
          compute.write ((compute.Write _)(.to k.out.b, .at i, .value ((v + k.rows) ~ \"element\")))\n}}\n\
-         three = compute.parallel (three_raw ~ \"claim:Elementwise(element)\") \"gpu\"\n\
+         three = compute.parallel (three_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          GA = struct{{.n Int, .cols Int, .rows Int, .in In}}\nstep = (s : GA) => {{\n  \
          compute.plrun three ((Arg3)(.n s.n, .cols s.cols, .rows s.rows, .I In(.a s.in.a))) : Out\n}}\n\
          built = compute.graph step\nbuilt\n"

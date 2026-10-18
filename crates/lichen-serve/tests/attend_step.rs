@@ -26,26 +26,26 @@ weigh_raw = (k : WeighPar) => {
   i = compute.range k.n
   sequence = i / (3 * k.dim)
   column = i - (i / k.dim) * k.dim
-  value = compute.read ((compute.Read _)(.from k.in.k, .at i))
-  query = compute.read ((compute.Read _)(.from k.in.q, .at (sequence * k.dim + column)))
+  value = (compute.read ((compute.Read _)(.from k.in.k, .at i)) : Float)
+  query = (compute.read ((compute.Read _)(.from k.in.q, .at (sequence * k.dim + column))) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value * query)))
 }
-weigh = compute.parallel weigh_raw "gpu"
+weigh = compute.parallel weigh_raw "gpu" Out
 SumPar = struct{.n Int, .dim Int, .in SumIn, .out Out}
 SumArg = struct{.n Int, .dim Int, .I SumIn}
 sum_raw = (k : SumPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.dim + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-sum = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity)") "gpu"
+sum = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 CopyPar = struct{.n Int, .in CopIn, .out Out}
 CopyArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopyPar) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)))))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float))))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" Out
 StepIn = struct{.k (compute.Buf Float), .q (compute.Buf Float)}
 GArg = struct{.n Int, .words Int, .in StepIn}
 step = (s : GArg) => {

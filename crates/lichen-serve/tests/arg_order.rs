@@ -20,20 +20,20 @@ CopIn  = struct{.d (compute.Buf Float)}
 MixPar = struct{.n Int, .in In, .out Out}
 MixArg = struct{.n Int, .I In}
 mix_raw = (k : MixPar) => {
-  first = compute.read ((compute.Read _)(.from k.in.a, .at 0))
-  second = compute.read ((compute.Read _)(.from k.in.b, .at 0))
-  third = compute.read ((compute.Read _)(.from k.in.c, .at 0))
+  first = (compute.read ((compute.Read _)(.from k.in.a, .at 0)) : Float)
+  second = (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)
+  third = (compute.read ((compute.Read _)(.from k.in.c, .at 0)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at 0, .value (first + (second * 10.0) + (third * 100.0))))
 }
-mix = compute.parallel mix_raw "gpu"
+mix = compute.parallel mix_raw "gpu" Out
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
   i = compute.range k.n
-  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun mix ((MixArg)(.n s.n, .I In(.a s.in.a, .b s.in.b, .c s.in.c))) : Out)

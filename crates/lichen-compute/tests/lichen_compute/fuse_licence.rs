@@ -51,17 +51,17 @@ OutE = struct{.e (compute.Buf Float)}
 ParE = compute.P (compute.KT Float)(.I In, .O OutE)
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
 }
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 offset_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.p, .at i)) + 1.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element")))
 }
-offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu"
+offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
@@ -147,10 +147,10 @@ OutT = struct{{.z (compute.Buf Float)}}
 Par3 = compute.P (compute.KT Float)(.I In3, .O OutT)
 total_raw = (k : Par3) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) ~ "element") + 1.0)) ~ "combine")
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (((compute.read ((compute.Read _)(.from k.in.e, .at s(0) - 1)) : Float) ~ "element") + 1.0)) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }}
-total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutT
 GArg = struct{{.n Int, .in In}}
 step = (s : GArg) => {{
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
@@ -807,20 +807,20 @@ OutR = struct{.r (compute.Buf Float)}
 Par  = compute.P (compute.KT Float)(.I In, .O OutR)
 producer_raw = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu"
+producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
-  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) - r) ~ "element")) ~ "combine")
+  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
 }
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)

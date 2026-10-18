@@ -18,16 +18,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 GArg = struct{.n Int, .in In1}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
@@ -45,10 +45,10 @@ Par  = struct{.n Int, .kdim Int, .in InG, .out OutG}
 ArgK = struct{.n Int, .kdim Int, .I InG}
 gemv_raw = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-kg = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+kg = compute.parallel (gemv_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutG
 step = (g : Par) => (compute.plrun kg ((ArgK)(.n g.n, .kdim g.kdim, .I InG(.w g.in.w, .x g.in.x))) : OutG)
 built = compute.graph step
 w = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0] : array{Float, 12}) : (compute.Buf Float))
@@ -67,10 +67,10 @@ matmul_raw = (k : Par) => {
   i = compute.range k.n
   r = compute.row k
   c = compute.col k
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.a, .at (r * 3 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * 3 + c))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.a, .at (r * 3 + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.b, .at ((s(0) - 1) * 3 + c))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.c, .at i, .value (fold (3, 0.0 ~ "identity"))))
 }
-kg = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+kg = compute.parallel (matmul_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutG
 step = (g : Par) => compute.plrun kg ((ArgK)(.n g.n, .cols g.cols, .I InG(.a g.in.a, .b g.in.b)))
 built = compute.graph step
 a = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0] : array{Float, 6}) : (compute.Buf Float))
@@ -86,10 +86,10 @@ Out2 = struct{.w (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 GArg = struct{.n Int, .in In2}
 step = (s : GArg) => {
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b)))
@@ -108,7 +108,7 @@ f2 = (k : Par2) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value i + 10))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 GArg = struct{.n Int, .in In2}
 step = (s : GArg) => {
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b s.in.b)))

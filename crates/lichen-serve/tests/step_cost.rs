@@ -14,9 +14,9 @@ Out = struct{.e (compute.Buf Float)}
 Par = struct{.n Int, .in Inc, .out Out}
 double_raw = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0)))
 }
-double = compute.parallel double_raw "gpu"
+double = compute.parallel double_raw "gpu" Out
 data = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 "#;
 
@@ -49,7 +49,7 @@ compute.collect (compute.graphrun built (3, data)) : array{Float, 3}
 /// A dispatch whose count is neither a literal nor an argument, which the recorder refuses.
 const REFUSED: &str = r#"
 a = (compute.plrun double ((compute.A Inc)(.n 3, .I Inc(.d data))) : Out)
-b = (compute.plrun double ((compute.A Inc)(.n (compute.read ((compute.Read _)(.from a.e, .at 0))), .I Inc(.d a.e))) : Out)
+b = (compute.plrun double ((compute.A Inc)(.n ((compute.read ((compute.Read _)(.from a.e, .at 0)) : Float)), .I Inc(.d a.e))) : Out)
 compute.collect b.e : array{Float, 3}
 "#;
 
@@ -178,7 +178,7 @@ step = (s : GArg) => {{
   compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d b.e)))
 }}
 built = compute.graph step
-@loop march = ((s => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.graphrun built (3, s(1))))) : tuple{{Int, compute.Buf Float}} -> compute.Buf Float)
+@loop march = (((s : tuple{{Int, compute.Buf Float}}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.graphrun built (3, s(1))))) : tuple{{Int, compute.Buf Float}} -> compute.Buf Float)
 compute.collect (march ({steps}, data)) : array{{Float, 3}}
 "
     )
@@ -435,9 +435,9 @@ ShiftPar = struct{.n Int, .in ShiftIn, .out Out}
 shift_raw = (k : ShiftPar) => {
   i = compute.range k.n
   seq = i / 3
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) + (compute.read ((compute.Read _)(.from k.in.d, .at (k.n + seq)))))))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) + ((compute.read ((compute.Read _)(.from k.in.d, .at (k.n + seq))) : Float)))))
 }
-shift = compute.parallel shift_raw "gpu"
+shift = compute.parallel shift_raw "gpu" Out
 GArg = struct{.n Int, .in ShiftIn}
 step = (s : GArg) => {
   a = (compute.plrun shift ((compute.A ShiftIn)(.n s.n, .I ShiftIn(.d s.in.d))) : Out)
@@ -548,9 +548,9 @@ const RESIDENT: &str = r#"
 BumpPar = struct{.n Int, .in Inc, .out Out}
 bump_raw = (k : BumpPar) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) + 1.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) + 1.0)))
 }
-bump = compute.parallel bump_raw "gpu"
+bump = compute.parallel bump_raw "gpu" Out
 GArg = struct{.n Int, .in Inc}
 step = (s : GArg) => {
   a = (compute.plrun bump ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)
@@ -719,14 +719,14 @@ AddPar = struct{.n Int, .in Sub1, .out Out}
 MulPar = struct{.n Int, .in Sub2, .out Out}
 add_raw = (k : AddPar) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.p, .at i)) + (compute.read ((compute.Read _)(.from k.in.q, .at i))))))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + ((compute.read ((compute.Read _)(.from k.in.q, .at i)) : Float)))))
 }
-add = compute.parallel add_raw "gpu"
+add = compute.parallel add_raw "gpu" Out
 mul_raw = (k : MulPar) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.p, .at i)) * (compute.read ((compute.Read _)(.from k.in.q, .at i))))))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) * ((compute.read ((compute.Read _)(.from k.in.q, .at i)) : Float)))))
 }
-mul = compute.parallel mul_raw "gpu"
+mul = compute.parallel mul_raw "gpu" Out
 GArg = struct{.n Int, .in Quad}
 step = (s : GArg) => {
   a = (compute.plrun add ((compute.A Sub1)(.n s.n, .I Sub1(.p s.in.alpha, .q s.in.beta))) : Out)

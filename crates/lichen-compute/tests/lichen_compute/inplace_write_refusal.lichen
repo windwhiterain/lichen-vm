@@ -9,7 +9,7 @@ raw = (lane : Par) => {
   i = compute.range lane.n
   compute.write ((compute.Write _)(.to lane.in.k, .at i, .value (99.0 : Float)))
 }
-k = compute.parallel raw "cpu"
+k = compute.parallel raw "cpu" OutE
 kbuf = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
 out = (compute.plrun k ((Arg)(.n 4, .I In(.k kbuf))) : OutE)
 compute.collect kbuf

@@ -62,7 +62,7 @@ fn fold_over(combine: &str, seed: &str, data: &[f32]) -> String {
         .map(literal)
         .collect::<Vec<String>>()
         .join(", ");
-    let read = "compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))";
+    let read = "(compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)";
     format!(
         r#"
 ---
@@ -76,7 +76,7 @@ reduction = (k : Par) => {{
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, {combine} ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (i + 1, {seed} ~ "identity")))
 }}
-kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu"
+kernel = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 step = (s : Par) => {{
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b))) : Out
 }}

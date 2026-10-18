@@ -19,54 +19,54 @@ MPar = struct{.n Int, .w Int, .least Float, .in MIn, .out MOut}
 MArg = struct{.n Int, .w Int, .least Float, .I MIn}
 peak_raw = (c : MPar) => {
   lane = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at (lane * c.w + (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at (lane * c.w + (s(0) - 1)))) : Float)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.m, .at lane, .value (fold (c.w, c.least ~ "identity"))))
 }
-peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity,element)") "gpu" MOut
 HIn  = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
 HOut = struct{.h (compute.Buf Int)}
 HPar = struct{.n Int, .big Int, .in HIn, .out HOut}
 HArg = struct{.n Int, .big Int, .I HIn}
 mark_raw = (c : HPar) => {
   i = compute.range c.n
-  v = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  m = compute.read ((compute.Read _)(.from c.in.m, .at 0))
+  v = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  m = (compute.read ((compute.Read _)(.from c.in.m, .at 0)) : Float)
   hit = if v == m then i else c.big
   compute.write ((compute.Write _)(.to c.out.h, .at i, .value hit))
 }
-mark = compute.parallel mark_raw "gpu"
+mark = compute.parallel mark_raw "gpu" HOut
 FIn  = struct{.x (compute.Buf Float), .m (compute.Buf Float)}
 FOut = struct{.h (compute.Buf Float)}
 FPar = struct{.n Int, .big Float, .in FIn, .out FOut}
 FArg = struct{.n Int, .big Float, .I FIn}
 markf_raw = (c : FPar) => {
   i = compute.range c.n
-  v = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  m = compute.read ((compute.Read _)(.from c.in.m, .at 0))
+  v = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  m = (compute.read ((compute.Read _)(.from c.in.m, .at 0)) : Float)
   hit = if v == m then int2float i else c.big
   compute.write ((compute.Write _)(.to c.out.h, .at i, .value hit))
 }
-markf = compute.parallel markf_raw "gpu"
+markf = compute.parallel markf_raw "gpu" FOut
 TIn  = struct{.h (compute.Buf Int)}
 TOut = struct{.t (compute.Buf Int)}
 TPar = struct{.n Int, .w Int, .big Int, .in TIn, .out TOut}
 TArg = struct{.n Int, .w Int, .big Int, .I TIn}
 pick_raw = (c : TPar) => {
   lane = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) (compute.read ((compute.Read _)(.from c.in.h, .at (lane * c.w + (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _)(.from c.in.h, .at (lane * c.w + (s(0) - 1)))) : Int)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))))
 }
-pick = compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+pick = compute.parallel (pick_raw ~ "claim:Reduction(combine,identity,element)") "gpu" TOut
 UIn  = struct{.h (compute.Buf Float)}
 UOut = struct{.t (compute.Buf Float)}
 UPar = struct{.n Int, .w Int, .big Float, .in UIn, .out UOut}
 UArg = struct{.n Int, .w Int, .big Float, .I UIn}
 pickf_raw = (c : UPar) => {
   lane = compute.range c.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) (compute.read ((compute.Read _)(.from c.in.h, .at (lane * c.w + (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (min s(1) ((compute.read ((compute.Read _)(.from c.in.h, .at (lane * c.w + (s(0) - 1)))) : Int)) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.t, .at lane, .value (fold (c.w, c.big ~ "identity"))))
 }
-pickf = compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+pickf = compute.parallel (pickf_raw ~ "claim:Reduction(combine,identity,element)") "gpu" UOut
 ZIn  = struct{.a Int}
 ZOut = struct{.z (compute.Buf Int)}
 ZPar = struct{.n Int, .in ZIn, .out ZOut}
@@ -75,7 +75,7 @@ idx_raw = (c : ZPar) => {
   i = compute.range c.n
   compute.write ((compute.Write _)(.to c.out.z, .at i, .value (i + 10)))
 }
-idx = compute.parallel idx_raw "gpu"
+idx = compute.parallel idx_raw "gpu" ZOut
 x = (compute.buffer ([1.0, 3.0, 2.0, 7.0, 0.5, 9.0, 4.0, 2.5] : array{Float, 8}) : (compute.Buf Float))
 "#;
 

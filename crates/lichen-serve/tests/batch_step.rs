@@ -27,20 +27,20 @@ bappend_raw = (k : AppPar) => {
   position = rest / k.dim
   column = rest - position * k.dim
   fresh = position == k.t
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column)))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column)))) else old_v
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at lane)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at lane)) : Float)
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column))) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column))) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
 }
-bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu"
+bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu" KVOut
 ScalePar = struct{.n Int, .in KVIn, .out KVOut}
 ScaleArg = struct{.n Int, .I KVIn}
 bscale_raw = (k : ScalePar) => {
   lane = compute.range k.n
-  (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value ((compute.read ((compute.Read _)(.from k.in.k, .at lane)) * 1.0) ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value ((compute.read ((compute.Read _)(.from k.in.v, .at lane)) * 1.0) ~ "element"))))
+  (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (((compute.read ((compute.Read _)(.from k.in.k, .at lane)) : Float) * 1.0) ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (((compute.read ((compute.Read _)(.from k.in.v, .at lane)) : Float) * 1.0) ~ "element"))))
 }
-bscale = compute.parallel (bscale_raw ~ "claim:Reduction(element)") "gpu"
+bscale = compute.parallel (bscale_raw ~ "claim:Reduction(element)") "gpu" KVOut
 StepIn = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
 GArg = struct{.n Int, .in StepIn}
 step = (s : GArg) => {

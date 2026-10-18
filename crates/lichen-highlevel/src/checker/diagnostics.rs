@@ -126,6 +126,31 @@ where
         self.check_seq += 1;
     }
 
+    /// Refuse a read whose container's type is not decided where the read is
+    /// checked, and answer the refused pair.
+    ///
+    /// # Invariant
+    /// A read states its requirement from the container's type; an undecided
+    /// container states none, and the apply that later binds it applies the
+    /// value and type slots separately, so the read cannot be re-checked there
+    /// (`docs/notes/undecided-reads.md`).
+    pub(super) fn refuse_undecided_container(
+        &mut self,
+        e: ExprId,
+        container: ExprId,
+        container_ty: NodeId,
+        read: &'static str,
+    ) -> NodeId {
+        self.record_guard(
+            container_ty,
+            container_ty,
+            self.loc(container, 1),
+            DiagKind::UndecidedContainer,
+            Some(read),
+        );
+        self.refused_pair(e)
+    }
+
     /// Record a failed checker-issued unify.
     ///
     /// # Invariant

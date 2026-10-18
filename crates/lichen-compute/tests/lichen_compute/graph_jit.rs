@@ -148,16 +148,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 "#;
 
 /// A body that dispatches twice, the second over the first's output.
@@ -267,16 +267,20 @@ compute.collect (compute.graphrun built 3)
     );
 }
 
-/// A dispatch the body performs while forcing a free variable is part of its walk.
+/// A dispatch the body performs while forcing a free variable is **refused**, not recorded.
 ///
 /// # Invariant
-/// The run is lazy, so `held` is forced inside the recording window and its dispatch becomes
-/// a node of the graph; `held.z` is then an edge and not a live buffer. Nothing references a
-/// block, so the graph recomputes `held` on each run instead of reading one.
+///
+/// A graph holds kernel ids, edge numbers and counts — nothing else. `held` is a dispatch the
+/// run forces inside the recording window, so its output buffer is a live device buffer that
+/// did not come in through the parameter, and recording it would mean the graph held it. The
+/// rule names the way out (`ins(0)`), and nothing dispatches at all: the refusal is raised
+/// while the graph is being built, before any launch.
 #[test]
-fn a_launch_the_body_closed_over_is_recorded_into_the_graph() {
+fn a_dispatch_the_body_closed_over_is_refused_rather_than_recorded() {
     let (_guard, stub) = stub();
-    let (module, out, _) = run(&format!(
+    // `held` is computed outside the step and read as a free variable inside it.
+    let messages = fail(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
@@ -293,16 +297,26 @@ built = compute.graph step
 compute.collect (compute.graphrun built 3)
 "#
     ));
-    assert_eq!(
-        common::usize_array(&module, &out),
-        vec![2, 2, 2],
-        "the graph answers what the two recorded dispatches compute"
+    let joined = messages.join(" | ");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("compute.graph")
+                && message.contains("argument 0")
+                && message.contains("device")),
+        "the refusal is the graph's, and it names the buffer it would have had to hold: {joined}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("ins(0)")),
+        "and it says how to pass the value in instead of closing over it: {joined}"
     );
     assert_eq!(
         stub.saw().len(),
-        2,
-        "and it dispatches exactly the two the walk performs: the closed-over launch and the \
-         dispatch that reads it: {:?}",
+        1,
+        "only the closed-over dispatch the walk forced while refusing ever runs: the two \
+         inside the step do not, because the graph is refused before they are recorded: {:?}",
         stub.saw()
     );
 }
@@ -387,6 +401,9 @@ compute.collect (compute.graphrun built 3)
     );
 
     // A host read of a dispatch's result: the same boundary at one number's size.
+    // The read states **no** element type on purpose: this program is about the
+    // graph's own refusal, and a declared class would let the checker reject the
+    // argument first and the graph would never get to name it.
     let read = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -420,7 +437,7 @@ compute.collect (compute.graphrun built 3)
 ---
 {KERNELS}
 one = compute.jit (cfg : Int => cfg + 1)
-step = ins => compute.call one (ins(0))
+step = (ins : tuple{{Int}}) => compute.call one (ins(0))
 built = compute.graph step
 compute.collect (compute.graphrun built (3,))
 "#
@@ -457,7 +474,7 @@ fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
         r#"---
   compute = import "compute.lichen"
 ---
-step = ins => ins(0)
+step = (ins : tuple{Int}) => ins(0)
 built = compute.graph step
 compute.graphrun built (3,)
 "#,
@@ -487,16 +504,16 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a))
 }
-k2 = compute.parallel f2 "cpu"
+k2 = compute.parallel f2 "cpu" Out2
 GArg = struct{.n Int, .in In1}
 step = (s : GArg) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
@@ -585,16 +602,16 @@ f1 = (k : Par1) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }}
-k1 = compute.parallel f1 "{backend}"
+k1 = compute.parallel f1 "{backend}" Out1
 In2  = struct{{.b (compute.Buf _)}}
 Out2 = struct{{.w (compute.Buf _)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {{
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }}
-k2 = compute.parallel f2 "{backend}"
+k2 = compute.parallel f2 "{backend}" Out2
 GArg = struct{{.n Int, .in In1}}
 step = (s : GArg) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)

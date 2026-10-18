@@ -43,9 +43,9 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + i))
 }
-k = compute.parallel f "Gpu"
+k = compute.parallel f "Gpu" Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at 0))
+(compute.read ((compute.Read _)(.from out.z, .at 0)) : Int)
 "#,
     );
     let all: Vec<&str> = diags.iter().map(String::as_str).collect();
@@ -73,9 +73,9 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + i))
 }
-k = compute.parallel f 4
+k = compute.parallel f 4 Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at 0))
+(compute.read ((compute.Read _)(.from out.z, .at 0)) : Int)
 "#,
     );
     assert!(
@@ -579,7 +579,7 @@ fn jit_tuple_codomain_elements_are_indexable() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : tuple{Int, Int} => (p(0) + 10, p(1) + 100))
-r = compute.launch k (2, 3)
+r = (compute.launch k (2, 3) : tuple{Int, Int})
 (r(0), r(1))
 "#);
     let elements = common::array_values(&module, &value);
@@ -693,7 +693,7 @@ compute.jit
 compute.launch
 "#
         ),
-        "?a => raw[?b, ?c] -> raw[?d, ?e]: ?a -> raw[?b, ?c] -> raw[?d, ?e]",
+        "struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]} => raw[?g, raw[?c, ?d]] -> raw[?h, raw[?e, ?f]]: struct{.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]} -> raw[?g, raw[?c, ?d]] -> raw[?h, raw[?e, ?f]]",
         "launch wrapper value/type"
     );
 }
@@ -713,9 +713,9 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + i))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at 2))
+(compute.read ((compute.Read _)(.from out.z, .at 2)) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -744,19 +744,19 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "cpu"
+k1 = compute.parallel f1 "cpu" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "cpu"
+k2 = compute.parallel f2 "cpu" Out2
 out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
-compute.read ((compute.Read _)(.from out.w, .at 1))
+(compute.read ((compute.Read _)(.from out.w, .at 1)) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -779,7 +779,7 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 compute.collect out.z
 "#);
@@ -805,9 +805,9 @@ f = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + i))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 2000000, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at 2))
+(compute.read ((compute.Read _)(.from out.z, .at 2)) : Int)
 "#,
     );
     assert_eq!(
@@ -835,7 +835,7 @@ g = (k : Par0) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-kg = compute.parallel g "cpu"
+kg = compute.parallel g "cpu" Out0
 inbuf = (compute.plrun kg ((compute.A In0)(.n 3, .I In0(.a 0))) : Out0)
 In  = struct{.b (compute.Buf _)}
 Out = struct{.w (compute.Buf _)}
@@ -843,12 +843,12 @@ Par = struct{.n Int, .alpha Float, .in In, .out Out}
 Host = struct{.n Int, .alpha Float, .I In}
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value v + float2int k.alpha))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k (Host(.n 3, .alpha 2.0, .I In(.b inbuf.z))) : Out)
-(compute.read ((compute.Read _)(.from out.w, .at 0)), compute.read ((compute.Read _)(.from out.w, .at 1)), compute.read ((compute.Read _)(.from out.w, .at 2)))
+((compute.read ((compute.Read _)(.from out.w, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.w, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.w, .at 2)) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(
@@ -882,7 +882,7 @@ g = (k : Par0) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-kg = compute.parallel g "cpu"
+kg = compute.parallel g "cpu" Out0
 inbuf = (compute.plrun kg ((compute.A In0)(.n 3, .I In0(.a 0))) : Out0)
 In  = struct{.b (compute.Buf _)}
 Out = struct{.w (compute.Buf _)}
@@ -890,12 +890,12 @@ Par = struct{.n Int, .alpha Float, .in In, .out Out}
 Host = struct{.n Int, .alpha _, .I In}
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value v + float2int k.alpha))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k (Host(.n 3, .alpha 2, .I In(.b inbuf.z))) : Out)
-compute.read ((compute.Read _)(.from out.w, .at 0))
+(compute.read ((compute.Read _)(.from out.w, .at 0)) : Int)
 "#,
     );
     assert!(
@@ -914,7 +914,7 @@ fn a_refused_call_argument_element_says_why() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
-k = compute.jit (x => x + 1)
+k = compute.jit (x : tuple{Int, Int} => x(0))
 compute.call k (1, (2, "three"))
 "#,
     );
@@ -998,9 +998,9 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)), compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from outs.x, .at 2)), compute.read ((compute.Read _)(.from outs.y, .at 2)))
+((compute.read ((compute.Read _)(.from outs.x, .at 2)) : Int), (compute.read ((compute.Read _)(.from outs.y, .at 2)) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(common::usize_of(&elements[0]), 2, "the first output's read");
@@ -1023,17 +1023,17 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "cpu"
+k1 = compute.parallel f1 "cpu" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _), .x (compute.Buf _), .y (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   (compute.write ((compute.Write _)(.to k.out.w, .at i, .value a)), compute.write ((compute.Write _)(.to k.out.x, .at i, .value a + a)), compute.write ((compute.Write _)(.to k.out.y, .at i, .value i)))
 }
-k2 = compute.parallel f2 "cpu"
+k2 = compute.parallel f2 "cpu" Out2
 outs = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
 compute.collect outs.x
 "#);
@@ -1057,7 +1057,7 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i + 3)), compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
@@ -1081,7 +1081,7 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i + 3)), compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4096, .I In(.a 0))) : Out)
 (compute.collect outs.x, compute.collect outs.y)
 "#);
@@ -1113,9 +1113,9 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i + 3)), compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4096, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from outs.x, .at 0)), compute.read ((compute.Read _)(.from outs.x, .at 2048)), compute.read ((compute.Read _)(.from outs.x, .at 4095)), compute.read ((compute.Read _)(.from outs.y, .at 0)), compute.read ((compute.Read _)(.from outs.y, .at 2048)), compute.read ((compute.Read _)(.from outs.y, .at 4095)))
+((compute.read ((compute.Read _)(.from outs.x, .at 0)) : Int), (compute.read ((compute.Read _)(.from outs.x, .at 2048)) : Int), (compute.read ((compute.Read _)(.from outs.x, .at 4095)) : Int), (compute.read ((compute.Read _)(.from outs.y, .at 0)) : Int), (compute.read ((compute.Read _)(.from outs.y, .at 2048)) : Int), (compute.read ((compute.Read _)(.from outs.y, .at 4095)) : Int))
 "#);
     let elements = common::array_values(&module, &value);
     assert_eq!(
@@ -1163,19 +1163,19 @@ g = (k : Par) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-kg = compute.parallel g "cpu"
+kg = compute.parallel g "cpu" Out
 inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value v * 2))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out2
 out = (compute.plrun k ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
-compute.read ((compute.Read _)(.from out.w, .at 1))
+(compute.read ((compute.Read _)(.from out.w, .at 1)) : Int)
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -1201,9 +1201,9 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)), (if i <= 1 then compute.write ((compute.Write _)(.to k.out.y, .at i, .value 1)) else compute.write ((compute.Write _)(.to k.out.y, .at i, .value 2))))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from outs.x, .at 2))
+(compute.read ((compute.Read _)(.from outs.x, .at 2)) : Int)
 "#,
     );
     assert_eq!(
@@ -1232,9 +1232,9 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)), i)
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from outs.x, .at 2))
+(compute.read ((compute.Read _)(.from outs.x, .at 2)) : Int)
 "#,
     );
     assert_eq!(
@@ -1267,11 +1267,11 @@ Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + 1))
 }
 data = [3, 1, 4, 1, 5, 9, 2, 6]
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 8, .I In(.a data))) : Out)
 compute.collect out.z
 "#,
@@ -1311,12 +1311,12 @@ Out = struct{.z (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.c, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.c, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
 }
 ones = compute.buffer [1, 1, 1, 1]
 twos = compute.buffer [2, 2, 2, 2]
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b ones, .c twos))) : Out)
 compute.collect out.z
 "#);
@@ -1344,11 +1344,11 @@ Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
   w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
-  r = compute.read ((compute.Read _)(.from w, .at i))
+  r = (compute.read ((compute.Read _)(.from w, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value r + 1))
 }
 data = compute.buffer [0, 0, 0, 0]
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
 compute.collect out.z
 "#,
@@ -1486,19 +1486,19 @@ f1 = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
-k1 = compute.parallel f1 "gpu"
+k1 = compute.parallel f1 "gpu" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
-k2 = compute.parallel f2 "gpu"
+k2 = compute.parallel f2 "gpu" Out2
 out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
-(compute.read ((compute.Read _)(.from out.w, .at 0)), compute.read ((compute.Read _)(.from out.w, .at 1)), compute.read ((compute.Read _)(.from out.w, .at 2)), compute.collect out.w)
+((compute.read ((compute.Read _)(.from out.w, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.w, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.w, .at 2)) : Int), compute.collect out.w)
 "#;
     let (module, value, _) = run(source);
     // Uninstalling drops the context, so its device buffers go back at once.
@@ -1567,19 +1567,19 @@ f1 = (k : Par1) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value 1.5))
 }}
-k1 = compute.parallel f1 "{BACKEND}"
+k1 = compute.parallel f1 "{BACKEND}" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n {ELEMENT_COUNT}, .I In1(.a 0))) : Out1)
 In2  = struct{{.b (compute.Buf _)}}
 Out2 = struct{{.w (compute.Buf _)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {{
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value 0.0 + a + a))
 }}
-k2 = compute.parallel f2 "{BACKEND}"
+k2 = compute.parallel f2 "{BACKEND}" Out2
 out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))) : Out2)
-(compute.read ((compute.Read _)(.from out.w, .at 0)), compute.read ((compute.Read _)(.from out.w, .at {last})), compute.collect out.w)
+((compute.read ((compute.Read _)(.from out.w, .at 0)) : Float), (compute.read ((compute.Read _)(.from out.w, .at {last})) : Float), compute.collect out.w)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1606,19 +1606,19 @@ f1 = (k : Par1) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }}
-k1 = compute.parallel f1 "{BACKEND}"
+k1 = compute.parallel f1 "{BACKEND}" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n {ELEMENT_COUNT}, .I In1(.a 0))) : Out1)
 In2  = struct{{.b (compute.Buf _)}}
 Out2 = struct{{.w (compute.Buf _)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {{
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }}
-k2 = compute.parallel f2 "{BACKEND}"
+k2 = compute.parallel f2 "{BACKEND}" Out2
 out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))) : Out2)
-(compute.read ((compute.Read _)(.from out.w, .at 0)), compute.read ((compute.Read _)(.from out.w, .at {last})), compute.collect out.w)
+((compute.read ((compute.Read _)(.from out.w, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.w, .at {last})) : Int), compute.collect out.w)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1645,9 +1645,9 @@ f = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value int2float i + 0.5))
 }}
-k = compute.parallel f "{BACKEND}"
+k = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at {last})), compute.collect out.z)
+((compute.read ((compute.Read _)(.from out.z, .at 0)) : Float), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Float), (compute.read ((compute.Read _)(.from out.z, .at {last})) : Float), compute.collect out.z)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1796,9 +1796,9 @@ f = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value float2int (int2float i + 0.5)))
 }}
-k = compute.parallel f "{BACKEND}"
+k = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at {last})), compute.collect out.z)
+((compute.read ((compute.Read _)(.from out.z, .at 0)) : Float), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Float), (compute.read ((compute.Read _)(.from out.z, .at {last})) : Float), compute.collect out.z)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1838,17 +1838,17 @@ f1 = (k : Par1) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }}
-k1 = compute.parallel f1 "{BACKEND}"
+k1 = compute.parallel f1 "{BACKEND}" Out1
 inbuf = (compute.plrun k1 ((compute.A In1)(.n {ELEMENT_COUNT}, .I In1(.a 0))) : Out1)
 In2  = struct{{.b (compute.Buf _)}}
 Out2 = struct{{.w (compute.Buf _), .v (compute.Buf _)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 f2 = (k : Par2) => {{
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   (compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + 1)), compute.write ((compute.Write _)(.to k.out.v, .at i, .value int2float a + 0.5)))
 }}
-k2 = compute.parallel f2 "{BACKEND}"
+k2 = compute.parallel f2 "{BACKEND}" Out2
 out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))) : Out2)
 (compute.collect out.w, compute.collect out.v)
 "#,
@@ -1912,9 +1912,9 @@ f = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (compute.launch k0 i)))
 }}
-k = compute.parallel f "{BACKEND}"
+k = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
-(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at {last})), compute.collect out.z)
+((compute.read ((compute.Read _)(.from out.z, .at 0)) : Int), (compute.read ((compute.Read _)(.from out.z, .at 1)) : Int), (compute.read ((compute.Read _)(.from out.z, .at {last})) : Int), compute.collect out.z)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1961,7 +1961,7 @@ seed = (k : Par0) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i - i))
 }}
-kseed = compute.parallel seed "{BACKEND}"
+kseed = compute.parallel seed "{BACKEND}" Out0
 buf = (compute.plrun kseed ((compute.A In0)(.n 1, .I In0(.a 0))) : Out0)
 In  = struct{{.b (compute.Buf _)}}
 Out = struct{{.z (compute.Buf _)}}
@@ -1969,11 +1969,11 @@ Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {{
   @loop pass = s => if s(0) == 0 then s(1) else pass (s(0), s(1))
   i = compute.range 1
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value pass (compute.read ((compute.Read _)(.from k.in.b, .at 0)), 7)))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value pass ((compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Int), 7)))
 }}
-p = compute.parallel f "{BACKEND}"
+p = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun p ((compute.A In)(.n 1, .I In(.b buf.z))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at 0))
+(compute.read ((compute.Read _)(.from out.z, .at 0)) : Int)
 "#
     );
     let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
@@ -2000,8 +2000,8 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
 /// (`docs/notes/loop-conversion.md` §8.6 item 6).
 #[test]
 fn a_kernel_loop_reduces_a_runtime_buffer_length() {
-    let recur = "sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, \
-                 .at s(0) - 1)))";
+    let recur = "sum_to (s(0) - 1, s(1) + (compute.read ((compute.Read _)(.from k.in.b, \
+                 .at s(0) - 1)) : Int))";
     // Both spellings of one reduction: the base-first leg is the emitter's guard.
     let legs = [
         (
@@ -2029,7 +2029,7 @@ seed = (k : Par0) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
 }}
-kseed = compute.parallel seed "{BACKEND}"
+kseed = compute.parallel seed "{BACKEND}" Out0
 data = (compute.plrun kseed ((compute.A In0)(.n {length}, .I In0(.a 0))) : Out0)
 In  = struct{{.b (compute.Buf _)}}
 Out = struct{{.z (compute.Buf _)}}
@@ -2037,12 +2037,12 @@ Par = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {{
   @loop sum_to = s => {arms}
   i = compute.range k.n
-  count = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  count = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to (count, 0)))
 }}
-p = compute.parallel f "{BACKEND}"
+p = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun p ((compute.A In)(.n {length}, .I In(.b data.z))) : Out)
-compute.read ((compute.Read _)(.from out.z, .at {last}))
+(compute.read ((compute.Read _)(.from out.z, .at {last})) : Int)
 "#,
                 length = length,
                 last = length - 1,
@@ -2098,7 +2098,7 @@ f = (k : Par) => {{
   a = k.in.a
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + i))
 }}
-k = compute.parallel f "{BACKEND}"
+k = compute.parallel f "{BACKEND}" Out
 out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a {leaf}))) : Out)
 compute.collect out.z
 "#,
@@ -2163,9 +2163,9 @@ f = (k : Par) => {
   i = compute.range k.n
   (compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
-compute.read ((compute.Read _)(.from outs.x, .at 2))
+(compute.read ((compute.Read _)(.from outs.x, .at 2)) : Int)
 "#,
     );
     assert_eq!(
@@ -2200,7 +2200,7 @@ f = (k : Par) => {
   compute.write ((compute.Write _)(.to k.in.b, .at i, .value i))
 }
 data = compute.buffer [0, 0, 0, 0]
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
 compute.collect out.z
 "#,
@@ -2236,7 +2236,7 @@ f = (k : Par) => {
   w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
   compute.write ((compute.Write _)(.to w, .at i / 2, .value i + 100))
 }
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
 compute.collect outs.z
 "#);

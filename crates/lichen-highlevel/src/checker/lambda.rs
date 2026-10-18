@@ -107,6 +107,9 @@ where
             // The type the annotation names: a type expression's term,
             // unless it carries attributes — then its denotation.
             let denotation = self.type_denotation(parameter_type, Some(parameter));
+            // A written type is a fact about the template: it is decided before
+            // the body, so a body's read can state its requirement from it.
+            self.module.evaluate_node_deep(denotation, None);
             self.check_unify(
                 type_cell,
                 denotation,

@@ -237,11 +237,11 @@ Out  = struct{{.z (compute.Buf Float)}}
 Par  = compute.P (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {{
   i = compute.range k.n
-  d = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  d = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value {operator} d))
 }}
 data = (compute.buffer ([{elements}] : array{{Float, {length}}}) : (compute.Buf _))
-k = compute.parallel f "{backend}"
+k = compute.parallel f "{backend}" Out
 out = (compute.plrun k ((compute.A In)(.n {length}, .I In(.d data))) : Out)
 compute.collect out.z
 "#

@@ -59,17 +59,17 @@ noise_raw = (p : PNoise) => {
   value = top + ((bottom - top) * sy)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
 }
-noise = compute.parallel noise_raw "cpu"
+noise = compute.parallel noise_raw "cpu" OutField
 
 PMix = struct{.n Int, .cols Int, .w Float, .in InField2, .out OutField}
 AMix = struct{.n Int, .cols Int, .w Float, .I InField2}
 mix_raw = (p : PMix) => {
   i = compute.range p.n
-  a = compute.read ((compute.Read _)(.from p.in.a, .at i))
-  b = compute.read ((compute.Read _)(.from p.in.b, .at i))
+  a = (compute.read ((compute.Read _)(.from p.in.a, .at i)) : Float)
+  b = (compute.read ((compute.Read _)(.from p.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value (a + ((b - a) * p.w))))
 }
-mix = compute.parallel mix_raw "cpu"
+mix = compute.parallel mix_raw "cpu" OutField
 
 PSmooth = struct{.n Int, .cols Int, .in InField, .out OutField}
 ASmooth = struct{.n Int, .cols Int, .I InField}
@@ -78,26 +78,26 @@ smooth_raw = (p : PSmooth) => {
   row = compute.row p
   col = compute.col p
   rows = p.n / p.cols
-  up = compute.read ((compute.Read _)(.from p.in.f, .at (((max row 1) - 1) * p.cols + col)))
-  down = compute.read ((compute.Read _)(.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col)))
-  left = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1))))
-  right = compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1)))))
-  centre = compute.read ((compute.Read _)(.from p.in.f, .at i))
+  up = (compute.read ((compute.Read _)(.from p.in.f, .at (((max row 1) - 1) * p.cols + col))) : Float)
+  down = (compute.read ((compute.Read _)(.from p.in.f, .at ((min (row + 1) (rows - 1)) * p.cols + col))) : Float)
+  left = (compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + ((max col 1) - 1)))) : Float)
+  right = (compute.read ((compute.Read _)(.from p.in.f, .at ((row * p.cols) + (min (col + 1) (p.cols - 1))))) : Float)
+  centre = (compute.read ((compute.Read _)(.from p.in.f, .at i)) : Float)
   value = (centre * 0.5) + ((up + down + left + right) * 0.125)
   compute.write ((compute.Write _)(.to p.out.f, .at i, .value value))
 }
-smooth = compute.parallel smooth_raw "cpu"
+smooth = compute.parallel smooth_raw "cpu" OutField
 
 PBiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .in InLand, .out OutIds}
 ABiome = struct{.n Int, .cols Int, .sea Float, .ridge Float, .I InLand}
 biome_raw = (p : PBiome) => {
   i = compute.range p.n
-  e = compute.read ((compute.Read _)(.from p.in.height, .at i))
-  m = compute.read ((compute.Read _)(.from p.in.moisture, .at i))
+  e = (compute.read ((compute.Read _)(.from p.in.height, .at i)) : Float)
+  m = (compute.read ((compute.Read _)(.from p.in.moisture, .at i)) : Float)
   b = if e < p.sea then 0 else (if e < p.ridge then (if m < 0.45 then 1 else 2) else (if m < 0.55 then 3 else 4))
   compute.write ((compute.Write _)(.to p.out.ids, .at i, .value b))
 }
-biome = compute.parallel biome_raw "cpu"
+biome = compute.parallel biome_raw "cpu" OutIds
 
 PTile = struct{.n Int, .cols Int, .seed Int, .in InTile, .out OutIds}
 ATile = struct{.n Int, .cols Int, .seed Int, .I InTile}
@@ -105,11 +105,11 @@ tile_raw = (p : PTile) => {
   i = compute.range p.n
   row = compute.row p
   col = compute.col p
-  b = compute.read ((compute.Read _)(.from p.in.biomes, .at i))
+  b = (compute.read ((compute.Read _)(.from p.in.biomes, .at i)) : Int)
   v = ((col * 7919) + (row * 104729) + (p.seed * 1299709)) % 4
   compute.write ((compute.Write _)(.to p.out.ids, .at i, .value ((b * 4) + v)))
 }
-tile = compute.parallel tile_raw "cpu"
+tile = compute.parallel tile_raw "cpu" OutIds
 
 seed = 7
 size = 128

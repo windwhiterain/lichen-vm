@@ -67,32 +67,32 @@ Sums  = struct{{.s (compute.Buf Float)}}
 ParS  = compute.P (compute.KT Float)(.I Row, .O Sums)
 row_sum_raw = (k : ParS) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
 }}
-row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "gpu"
+row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Sums
 Sumsq = struct{{.q (compute.Buf Float)}}
 ParQ  = compute.P (compute.KT Float)(.I Row, .O Sumsq)
 row_sumsq_raw = (k : ParQ) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) * compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.q, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
 }}
-row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Sumsq
 Moments = struct{{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}}
 OutY    = struct{{.y (compute.Buf Float)}}
 ParY    = struct{{.n Int, .eps Float, .in Moments, .out OutY}}
 normalise_raw = (k : ParY) => {{
   i = compute.range k.n
   count = int2float k.n
-  m = compute.read ((compute.Read _)(.from k.in.s, .at 0)) / count
-  v = compute.read ((compute.Read _)(.from k.in.q, .at 0)) / count - m * m
+  m = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float) / count
+  v = (compute.read ((compute.Read _)(.from k.in.q, .at 0)) : Float) / count - m * m
   d = sqrt (v + k.eps)
-  x = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  w = compute.read ((compute.Read _)(.from k.in.w, .at i))
+  x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value {term}))
 }}
-normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "gpu"
+normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "gpu" OutY
 All   = struct{{.x (compute.Buf Float), .w (compute.Buf Float)}}
 GArg  = struct{{.n Int, .eps Float, .in All}}
 ArgY  = struct{{.n Int, .eps Float, .I Moments}}

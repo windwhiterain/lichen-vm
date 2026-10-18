@@ -1186,7 +1186,10 @@ fn array_index_out_of_bounds_against_a_bound_length() {
     let x = w.param("x");
     let three = w.int("three", 3);
     let body = w.index("body", x, three);
-    let l = w.lam("l", x, body);
+    let int_ty = w.int_type("int_ty");
+    let two = w.int("two", 2);
+    let arr_ty = w.type_array("arr_ty", int_ty, two);
+    let l = w.lam_typed("l", x, Some(arr_ty), body, false);
     let e1 = w.int("e1", 1);
     let e2 = w.int("e2", 2);
     let arr = w.array("arr", &[e1, e2]);

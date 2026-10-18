@@ -51,14 +51,14 @@ append_raw = (k : Par) => {{
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }}
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "{backend}"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "{backend}" Out
 k0 = (compute.buffer ([{cache}] : array{{Float, {count}}}) : (compute.Buf Float))
 v0 = (compute.buffer ([{values}] : array{{Float, {count}}}) : (compute.Buf Float))
 nk = (compute.buffer ([{key}] : array{{Float, {keys_len}}}) : (compute.Buf Float))

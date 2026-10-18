@@ -117,6 +117,29 @@ impl<A: AttrSpec, L> Writer<A, L> {
         reserved
     }
 
+    /// [`Self::close_binding`] with the parameter's annotated type.
+    pub fn close_binding_typed(
+        &self,
+        reserved: ExprId,
+        parameter: ExprId,
+        parameter_type: ExprId,
+        body: ExprId,
+        looping: bool,
+    ) -> ExprId {
+        self.fill(
+            reserved,
+            ExprKind::Function {
+                parameter,
+                parameter_type: Some(parameter_type),
+                parameter_attribute: None,
+                r#return: body,
+                parent: None,
+                looping,
+            },
+        );
+        reserved
+    }
+
     /// `name = \p : T. body` — the annotated parameter's type.
     pub fn lam_typed(
         &self,

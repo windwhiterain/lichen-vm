@@ -224,24 +224,24 @@ OutR = struct{{.r (compute.Buf Float)}}
 Par  = compute.P (compute.KT _)(.I In, .O OutR)
 producer = (k : Par) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0)))
 }}
-prod = compute.parallel producer "cpu"
+prod = compute.parallel producer "cpu" OutR
 In2  = struct{{.d (compute.Buf Float), .p (compute.Buf Float)}}
 OutZ = struct{{.z (compute.Buf Float)}}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer = (k : Par2) => {{
   i = compute.range k.n
-  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, max (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) - r) s(1))
+  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, max ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) - r) s(1))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0))))
 }}
-cons = compute.parallel consumer "cpu"
+cons = compute.parallel consumer "cpu" OutZ
 data  = (compute.buffer ([{elements}] : array{{Float, {length}}}) : (compute.Buf _))
 total = (compute.plrun prod ((compute.A In)(.n {length}, .I In(.d data))) : OutR)
 worst = (compute.plrun cons ((compute.A In2)(.n {length}, .I In2(.d data, .p total.r))) : OutZ)
-compute.read ((compute.Read _)(.from worst.z, .at 0))
+(compute.read ((compute.Read _)(.from worst.z, .at 0)) : Float)
 "#
     )
 }
@@ -428,9 +428,9 @@ Out = struct{.r (compute.Buf _)}
 Par = compute.P (compute.KT _)(.I In, .O Out)
 producer_raw = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine" ~ "accumulator"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (6, 0.0 ~ "identity")))
 }
-compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu"
+compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "cpu" Out
 "#
 }

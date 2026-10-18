@@ -49,17 +49,17 @@ OutE = struct{.e (compute.Buf Float)}
 ParE = compute.P (compute.KT Float)(.I In, .O OutE)
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
 }
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 offset_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((compute.read ((compute.Read _)(.from k.in.p, .at i)) + 1.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element")))
 }
-offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu"
+offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
@@ -87,7 +87,7 @@ fn recording() -> String {
 fn running() -> String {
     format!(
         "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nr = compute.graphrun built (count, data)\n\
+         (compute.Buf Float))\nr = (compute.graphrun built (count, data) : array{{(compute.Buf Float), 2}})\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
         recording(),
         count = COUNT,

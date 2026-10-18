@@ -108,10 +108,10 @@ Out = struct{.z (compute.Buf Float)}
 Par = compute.P (compute.KT Float)(.I In, .O Out)
 reduction = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) ~ "combine" ~ "accumulator"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu"
+k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k
 "#
 }

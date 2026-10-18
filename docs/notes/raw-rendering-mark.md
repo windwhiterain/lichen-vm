@@ -3,6 +3,13 @@
 > Status: **current.** Points at: `crates/lichen-render`
 > (`render/type_printer.rs`, `render/value_printer.rs`).
 >
+> **The author's ruling is later than this note** (see
+> [undecided-reads](undecided-reads.md)): a `raw` mark in a program's answer is
+> a defect, never a result. The mark is the printer's fallback for a value the
+> type chain cannot explain; it exists to make such a defect visible, not to
+> bless it. The printer design below stands; an answer that prints a raw value
+> as normal does not.
+>
 > Companions: [type-rendering-inconsistent](type-rendering-inconsistent.md) (the
 > tag-against-structured split, which this mark does **not** fix),
 > [eval-before-unify](eval-before-unify.md) (whose diagnostics are

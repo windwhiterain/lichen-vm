@@ -1,5 +1,5 @@
 //! `a(k)` is the tuple read and every struct field is named.
-//! See eval-before-unify.md §2.2.
+//! See docs/notes/undecided-reads.md.
 
 use lichen_highlevel::diagnostic::DiagKind;
 
@@ -22,17 +22,36 @@ fn output(source: &str) -> String {
     evaluate(source).expect("the program runs clean")
 }
 
+/// A read on an undecided container: the form the refusal names, and the
+/// caret, which is the container.
+fn undecided_read(source: &str, form: &str) -> Option<(u32, u32)> {
+    let report = compile(source);
+    assert!(!report.ok(), "expected {source:?} to be refused");
+    let first = report.diagnostics.first().expect("a diagnostic");
+    assert_eq!(first.stage, Stage::Check, "a check-stage refusal");
+    let check = first.check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::UndecidedContainer);
+    assert_eq!(check.field.as_deref(), Some(form), "the read form");
+    assert_eq!(
+        first.message,
+        format!(
+            "this {form} cannot be checked: the container's type is not decided \
+             here — annotate the container's type"
+        )
+    );
+    first.span
+}
+
 // --- `a(k)` is the tuple read --------------------------------------------
 
-/// A parameter container: the apply reconciles the requirement's assert, as the
-/// named read's does.
+/// A parameter container: the read is refused where it is checked, because
+/// its type is not decided there.
 #[test]
-fn a_paren_read_of_a_deferred_array_is_refused_at_the_application() {
-    let (message, kind) = refused("f = x => x(0)\nf [10, 20]");
-    assert_eq!(kind, DiagKind::Assert);
-    assert!(
-        message.contains("expected a tuple type") && message.contains("array{Int, 2}"),
-        "the requirement is the tuple kind, the found side the array: {message}"
+fn a_paren_read_of_a_deferred_array_is_refused_at_the_read() {
+    assert_eq!(
+        undecided_read("f = x => x(0)\nf [10, 20]", "tuple read"),
+        Some((1, 5)),
+        "the caret is the container, not the read"
     );
 }
 
@@ -65,17 +84,18 @@ fn a_paren_read_of_a_tuple_resolves() {
     assert_eq!(output("l = (10, 20, 30)\nl(2)"), "30: Int");
 }
 
-/// The array read is the mirror, refused on a tuple.
+/// The array read is the mirror, refused on a tuple. The parameter's written
+/// type is what decides the container.
 #[test]
 fn a_bracket_read_of_a_tuple_is_refused() {
-    let (message, kind) = refused("f = x => x[0]\nf (10, 20)");
+    let (message, kind) = refused("f = (x : tuple{Int, Int}) => x[0]\nf (10, 20)");
     assert_eq!(
         kind,
-        DiagKind::Assert,
-        "the same apply tier the tuple read uses"
+        DiagKind::Guard,
+        "the same decided tier the tuple read uses"
     );
     assert!(
-        message.contains("expected an array type") && message.contains("found tuple{Int, Int}"),
+        message.contains("expected TypeArray") && message.contains("TypeTuple"),
         "the array requirement refuses a tuple: {message}"
     );
 }
@@ -145,30 +165,28 @@ fn a_named_read_of_an_array_is_refused() {
     assert_eq!(message, "expected TypeStruct, found array{Int, 2}");
 }
 
-/// A deferred container is refused at the argument; this used to panic inside
-/// the apply.
+/// A deferred container has no read at all: the type access is refused where
+/// it is checked, before the apply.
 #[test]
-fn a_named_type_access_of_a_deferred_array_is_refused_at_the_application() {
-    let (message, kind) = refused("f = x => x::a\nf [10, 20]");
-    assert_eq!(kind, DiagKind::Runtime);
-    assert_eq!(message, "expected TypeStruct, found array{Int, 2}");
+fn a_named_type_access_of_a_deferred_array_is_refused_at_the_read() {
+    assert_eq!(
+        undecided_read("f = x => x::a\nf [10, 20]", "named type access"),
+        Some((1, 5)),
+        "the caret is the container, not the access"
+    );
 }
 
-// --- the deferred `.a`: a registered condition, not a pin ------------------
+// --- the deferred `.a`: no read until the container's type is decided ------
 
-/// The requirement is an assert-channel condition, re-checked per apply.
-/// See eval-before-unify.md §6.2.
+/// A deferred container is refused at the read itself, so nothing is evaluated
+/// behind it.
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
-    // No requirement node: the read evaluates on the bound argument and fails there.
-    let report = compile("f = x => x.a\nf [10, 20]");
-    assert!(!report.ok(), "the deferred read is refused");
-    let diag = report
-        .diagnostics
-        .iter()
-        .find(|d| d.message.contains("not a container"))
-        .expect("the read's runtime failure is reported");
-    assert_eq!(diag.span, Some((1, 10)), "the caret is the read");
+    assert_eq!(
+        undecided_read("f = x => x.a\nf [10, 20]", "field read"),
+        Some((1, 5)),
+        "the caret is the container, not the read"
+    );
 }
 
 /// A decided container registers no condition at all, so nothing the decided
@@ -176,27 +194,26 @@ fn a_named_read_of_a_deferred_array_is_refused_at_the_read() {
 #[test]
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
-        output("S = struct{.a Int, .b string}\nf = x => x.a\nf (S(.a 1, .b \"h\"))"),
+        output("S = struct{.a Int, .b string}\nf = (x : S) => x.a\nf (S(.a 1, .b \"h\"))"),
         "1: Int"
     );
+    // A block's type is decided where it stands; its struct type is nominal
+    // per occurrence, so no annotation names it.
     assert_eq!(
-        output("f = k => (k.a, k.b)\nf { a = 1; b = 2 }"),
+        output("k = { a = 1; b = 2 }\n(k.a, k.b)"),
         "(1, 2): tuple{Int, Int}"
     );
 }
 
-/// A deferred tuple and a deferred atomic type are the same requirement
-/// failing.
+/// A deferred tuple and a deferred atomic type are the same refusal: neither
+/// has a read.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
     for source in ["f = x => x.a\nf (1, 2)", "f = x => x.a\nf 5"] {
-        let report = compile(source);
-        assert!(!report.ok(), "{source:?} is refused");
-        let diag = report
-            .diagnostics
-            .iter()
-            .find(|d| d.message.contains("not a container"))
-            .unwrap_or_else(|| panic!("{source:?} carries the read's diagnostic"));
-        assert_eq!(diag.span, Some((1, 10)), "the caret is the read");
+        assert_eq!(
+            undecided_read(source, "field read"),
+            Some((1, 5)),
+            "{source:?} names the container the read would have used"
+        );
     }
 }

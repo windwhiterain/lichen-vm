@@ -20,24 +20,24 @@ append_raw = (k : ParK) => {
   column = compute.row k
   position = compute.col k
   slot = position * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at slot))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at slot))
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
   fresh = position == k.t
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at column))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at column))) else old_v
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
 }
-append = compute.parallel (append_raw ~ "claim:Reduction(element)") "gpu"
+append = compute.parallel (append_raw ~ "claim:Reduction(element)") "gpu" KVOut
 Gin   = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
 Gout  = struct{.y (compute.Buf Float)}
 ParS  = struct{.n Int, .kdim Int, .in Gin, .out Gout}
 ArgS  = struct{.n Int, .kdim Int, .I Gin}
 logits_raw = (k : ParS) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
 }
-logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Gout
 Row   = struct{.x (compute.Buf Float)}
 Pick  = struct{.p (compute.Buf Float)}
 Par   = struct{.n Int, .w Int, .in Row, .out Pick}
@@ -45,10 +45,10 @@ Arg   = struct{.n Int, .w Int, .I Row}
 greedy_raw = (k : Par) => {
   lane = compute.range k.n
   base = lane * k.w
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
 }
-greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "gpu"
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "gpu" Pick
 StepIn = struct{.w (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .nv (compute.Buf Float)}
 GArg = struct{.n Int, .in StepIn}
 step = (s : GArg) => {

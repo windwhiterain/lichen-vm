@@ -28,7 +28,9 @@ fn sum_to(marked: bool, count: usize) -> Probe<ProgramImpl> {
     let recursive = w.app("recursive", sum_to, next);
     let branches = w.tuple("branches", &[recursive, second]);
     let body = w.field("body", branches, condition);
-    let sum_to = w.close_binding(sum_to, s, body, marked);
+    let int_ty = w.int_type("int_ty");
+    let pair_ty = w.type_tuple("pair_ty", &[int_ty, int_ty]);
+    let sum_to = w.close_binding_typed(sum_to, s, pair_ty, body, marked);
     let argument = w.tuple("argument", &[w.int("count", count), w.int("acc", 0)]);
     let root = w.app("root", sum_to, argument);
     Probe::build(w.finish(root))

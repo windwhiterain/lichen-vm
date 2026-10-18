@@ -18,12 +18,12 @@ XPar = struct{.n Int, .alpha Float, .in XIn, .out XOut}
 XArg = struct{.n Int, .alpha Float, .I XIn}
 ring_raw = (c : XPar) => {
   i = compute.range c.n
-  centre = compute.read ((compute.Read _)(.from c.in.x, .at i))
-  left = if i == 0 then (compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1)))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))))
-  right = if i == (c.n - 1) then (compute.read ((compute.Read _)(.from c.in.x, .at 0))) else (compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))))
+  centre = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Float)
+  left = if i == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (c.n - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
+  right = if i == (c.n - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at 0)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((left + right) - 2.0 * centre))))
 }
-ring = compute.parallel ring_raw "cpu"
+ring = compute.parallel ring_raw "cpu" XOut
 x = (compute.buffer ([4.0, 0.0, 0.0, 0.0, 0.0, 4.0] : array{Float, 6}) : (compute.Buf Float))
 seed = (compute.plrun ring ((XArg)(.n 6, .alpha 0.25, .I XIn(.x x))) : XOut)
 "#;

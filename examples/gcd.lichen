@@ -9,5 +9,5 @@ and the self-recursive result's type follows from it (`6: Int`).  Nothing carrie
 the `raw` mark, because the type is decided."
   output = "6: Int"
 ---
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
+gcd = ((p : tuple{Int, Int}) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 gcd (48, 18)

@@ -163,25 +163,17 @@ The hole has no value of its own, so it prints as `none`; its type is
 `Int` because the annotation says so. `_` is never a name: it cannot be
 bound or used as a parameter (Chapter 3).
 
-### The `raw` mark
+### A `raw` mark is a defect
 
-When an answer's type is not decided by the program, the printed value
-carries the `raw` mark:
-
-```lichen
-gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
-gcd (48, 18)
-```
-
-```text
-raw 6: ?a
-```
-
-The value is `6`, but its type is an open cell, and the `raw` mark says so.
-The mark is the printer's word for "this answer is not a decided type"; it
-appears in the value half too, as in Chapter 4's `raw 3: raw[?a, ?b]`
-where even the class of the arithmetic was open. A program that decides
-every type prints neither `?` nor `raw`.
+The printer marks a value it cannot explain with `raw`. The mark is never
+an answer: it says the value/type pair is not decided enough to print, and
+a correct program does not produce one. The strict read rule (Chapter 4)
+refuses the read that would have produced it; a program that still prints
+`raw` has left a type open somewhere — a hole, an unannotated recursion, a
+call result whose type nothing states — and the fix is to state the type
+(an annotation on the container or on the call's result), not to read the
+mark as a result. Chapter 14 lists the mark among the printer's words for
+a defect.
 
 ## Annotations state, they do not check
 
@@ -298,8 +290,8 @@ types; Chapter 13 records what a perspective adds to the pair.
   have kind types such as `TypeTuple` and `TypeStruct`.
 - An expression's type is found by unification, not declared and checked.
 - An undecided type is an open cell named `?a`; the same name means one
-  cell. `_` is a placeholder, and an answer whose type stays open prints
-  with the `raw` mark.
+  cell. `_` is a placeholder. An answer whose type stays open is a defect,
+  and the printer's `raw` mark is its symptom (Chapter 14).
 - An annotation is a unification, and it can state what the program did not
   decide.
 - `type_of` is an ordinary function: placeholder plus annotation.
@@ -313,7 +305,7 @@ types; Chapter 13 records what a perspective adds to the pair.
 2. Explain why `(1 : Type)` is refused, in terms of the chain of types.
 3. Write `pair_up = x => (x, x)` and read its type with `type_of`. Which
    cell names appear in the printed type, and why?
-4. Write a program that prints an open cell and one that prints a `raw`
-   value. Explain the difference between the two marks.
+4. Explain why a `raw`-marked answer is a defect rather than a result, and
+   name the annotation that removes one.
 5. Why is `array{Int, 3} : Type` a kinding error? What is that type
    value's type?

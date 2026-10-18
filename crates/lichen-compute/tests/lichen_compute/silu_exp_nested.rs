@@ -26,10 +26,10 @@ SiluA = struct{.a (compute.Buf Float)}
 ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
 silu_raw = (k : ParA) => {
   i = compute.range k.n
-  g = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
 }
-silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu"
+silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
 silu
 "#
     .to_string()

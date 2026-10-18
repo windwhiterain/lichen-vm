@@ -89,8 +89,8 @@ therefore be unfolded forever. The marker `@shallow` says the element's
 value stays lazy in the checker's evaluation:
 
 ```lichen
-nats = n => [n, @shallow nats (n + 1)]
-ns = nats 0
+nats = (n : Int) => [n, @shallow nats (n + 1)]
+ns = (nats 0 : tuple{Int, tuple{Int, tuple{Int, tuple{Int, tuple{Int, _}}}}})
 (ns(1)(0), ns(1)(1)(0), ns(1)(1)(1)(0), ns(1)(1)(1)(1)(0))
 ```
 

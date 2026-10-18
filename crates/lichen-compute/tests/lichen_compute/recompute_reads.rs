@@ -47,19 +47,19 @@ OutE = struct{.e (compute.Buf Float)}
 ParE = compute.P (compute.KT Float)(.I In, .O OutE)
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0) ~ "element")))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
 }
-scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu"
+scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 pair_raw = (k : Par2) => {
   i = compute.range k.n
-  left = compute.read ((compute.Read _)(.from k.in.p, .at i))
-  right = compute.read ((compute.Read _)(.from k.in.p, .at i + 1))
+  left = (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)
+  right = (compute.read ((compute.Read _)(.from k.in.p, .at i + 1)) : Float)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((left + right) ~ "element")))
 }
-pair = compute.parallel (pair_raw ~ "claim:Elementwise(element)") "gpu"
+pair = compute.parallel (pair_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)

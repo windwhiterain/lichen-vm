@@ -22,19 +22,19 @@ mk = (k : Par1) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
-kx = compute.parallel mk "BACKEND"
+kx = compute.parallel mk "BACKEND" Out1
 x = (compute.plrun kx ((compute.A In1)(.n COUNT, .I In1(.a 0))) : Out1)
 In2  = struct{.b (compute.Buf _)}
 Out2 = struct{.w (compute.Buf _)}
 Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
 axpy = (k : Par2) => {
   i = compute.range k.n
-  xv = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  xv = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value 3 * xv))
 }
-ka = compute.parallel axpy "BACKEND"
+ka = compute.parallel axpy "BACKEND" Out2
 out = (compute.plrun ka ((compute.A In2)(.n COUNT, .I In2(.b x.z))) : Out2)
-compute.read ((compute.Read _)(.from out.w, .at COUNT / 2))
+(compute.read ((compute.Read _)(.from out.w, .at COUNT / 2)) : Int)
 "#;
 
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
@@ -47,20 +47,20 @@ mk = (k : ParX) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
-kx = compute.parallel mk "BACKEND"
+kx = compute.parallel mk "BACKEND" OutX
 InK  = struct{.b (compute.Buf _)}
 OutK = struct{.w (compute.Buf _)}
 ParK = compute.P (compute.KT _)(.I InK, .O OutK)
 k1 = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + 1))
-}) "BACKEND"
+}) "BACKEND" OutK
 k2 = compute.parallel ((h : ParK) => {
   i = compute.range h.n
-  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from h.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + v))
-}) "BACKEND"
+}) "BACKEND" OutK
 InG  = struct{.b (compute.Buf _)}
 OutG = struct{.unused (compute.Buf _)}
 ParG = compute.P (compute.KT _)(.I InG, .O OutG)
@@ -84,7 +84,7 @@ grow = (g : ParG) => {
 }
 built = compute.graph grow
 seed = (compute.plrun kx ((compute.A InX)(.n COUNT, .I InX(.a 0))) : OutX)
-compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n COUNT, .I InG(.b seed.z))) : (compute.Buf _)), .at COUNT / 2))
+(compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n COUNT, .I InG(.b seed.z))) : (compute.Buf _)), .at COUNT / 2)) : Int)
 "#;
 
 fn timed(template: &str, backend: &str, count: usize, repeats: usize) -> Result<f64, String> {

@@ -16,15 +16,15 @@ ParA = compute.P (compute.KT _)(.I InA, .O OutA)
 adder = compute.parallel ((k : ParA) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
-}) "cpu"
+}) "cpu" OutA
 InB  = struct{.b (compute.Buf Int)}
 OutB = struct{.w (compute.Buf Int)}
 ParB = compute.P (compute.KT _)(.I InB, .O OutB)
 doubler = compute.parallel ((k : ParB) => {
   i = compute.range k.n
-  j = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  j = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
-}) "cpu"
+}) "cpu" OutB
 raw = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
 @cache mid = raw.z
 raw2 = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b mid))) : OutB)

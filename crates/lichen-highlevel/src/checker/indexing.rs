@@ -37,6 +37,10 @@ where
         self.check_expr(array);
         self.check_expr(index);
         let array_ty = self.state[array].ty.unwrap();
+        // A written annotation can still be an unevaluated type function; force it
+        // before deciding whether the read can be checked at all.
+        self.module
+            .evaluate_node_deep(array_ty, None);
         // The requirement names the container's **kind**, never its type, so the
         // container's type cell stays free.
         if self.type_is_concrete(array_ty) {
@@ -47,23 +51,8 @@ where
             self.module
                 .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
             self.check_unify(container_kind, kind, self.loc(array, 1), DiagKind::Guard);
-        } else {
-            // An undecided container is registered as an assert condition,
-            // re-checked per apply clone.
-            let operands = self.array_node(self.current_block, &[array_ty, self.type_expr]);
-            let condition = self.op_node(
-                self.current_block,
-                P::Operator::from(TypeOperator::IsArrayType),
-                Some(operands),
-            );
-            self.register_assert(
-                condition,
-                self.loc(array, 1),
-                true,
-                AssertSpelling::ArrayKind {
-                    container: array_ty,
-                },
-            );
+        } else if !self.is_loop_state(array) {
+            return self.refuse_undecided_container(e, array, array_ty, "array read");
         }
         // The element type and the length come out of the container's **own**
         // shape; an undecided one keeps the lazy read.
@@ -137,6 +126,16 @@ where
         // The tuple-kind requirement, a unify on the container's kind: decided
         // here, deferred to the apply otherwise.
         let container_ty = self.state[container].ty.unwrap();
+        self.module
+            .evaluate_node_deep(container_ty, None);
+        if !self.type_is_concrete(container_ty) {
+            return self.refuse_undecided_container(
+                e,
+                container,
+                container_ty,
+                "positional type access",
+            );
+        }
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         // A decided container of another kind is refused and not read:
         // its element's type slot would be the container's type.

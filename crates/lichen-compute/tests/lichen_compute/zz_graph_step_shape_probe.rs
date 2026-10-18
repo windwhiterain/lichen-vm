@@ -22,19 +22,19 @@ ParT = compute.P (compute.KT Float)(.I Two, .O Out)
 ParQ = compute.P (compute.KT Float)(.I Single, .O Out)
 dblD_raw = (k : ParD) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0)))
 }
-dblD = compute.parallel dblD_raw "gpu"
+dblD = compute.parallel dblD_raw "gpu" Out
 dblT_raw = (k : ParT) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0)))
 }
-dblT = compute.parallel dblT_raw "gpu"
+dblT = compute.parallel dblT_raw "gpu" Out
 dblQ_raw = (k : ParQ) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.q, .at i)) * 2.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.q, .at i)) : Float) * 2.0)))
 }
-dblQ = compute.parallel dblQ_raw "gpu"
+dblQ = compute.parallel dblQ_raw "gpu" Out
 data = (compute.buffer ([1.0, 2.0, 3.0] : array{Float, 3}) : (compute.Buf Float))
 "#;
 

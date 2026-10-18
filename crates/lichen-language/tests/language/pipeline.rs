@@ -366,9 +366,12 @@ fn a_block_body_checks_and_evaluates() {
     // The block is the lambda's body: its bindings resolve through the graph
     // and its final expression is the value.
     assert_eq!(usize_of(&evaluate("f = x => {y = x; y}; (f 5 : Int)")), 5);
-    // The same with a block binding used by an index, the fib pattern.
+    // The same with a block binding used by an index, the fib pattern; the
+    // written type decides the container.
     assert_eq!(
-        usize_of(&evaluate("f = a => {i = 0; a[i]}; (f ([7, 8]) : Int)")),
+        usize_of(&evaluate(
+            "f = (a : array{Int, 2}) => {i = 0; a[i]}; (f ([7, 8]) : Int)"
+        )),
         7
     );
 }
@@ -637,7 +640,7 @@ fn comparisons_and_the_type_accesses_are_spelled_apart() {
     // A glued `{` reads the component out of the value it follows — here a
     // tuple type value, so the read is positional.
     assert_eq!(
-        usize_of(&evaluate("f = x => x{1}; f tuple{Int, string} == string")),
+        usize_of(&evaluate("f = x => x; f (tuple{Int, string}){1} == string")),
         1
     );
     // The struct form states the *tuple* kind, so a struct type value is read
@@ -1285,9 +1288,10 @@ fn a_type_access_of_a_type_value_reads_the_components_pair() {
     );
     // The element's own *value* slot, which a `Type`-valued element carries.
     assert_eq!(usize_of(&evaluate("tuple{Int, string}{1} == string")), 1);
-    // An undecided container stays lazy and resolves at the apply.
+    // A read result is a container too: the element type states what `p(0)`
+    // is, so the component read checks.
     assert_eq!(
-        usize_of(&evaluate("f = k => k{0}; f tuple{Int, string} == Int")),
+        usize_of(&evaluate("p = (tuple{Int, string}, 1)\np(0){0} == Int")),
         1
     );
 }
@@ -1306,13 +1310,13 @@ fn a_type_access_of_a_non_tuple_container_is_refused_by_kind() {
     let d = diags("x = [1, 2]; x{0}");
     assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
     assert_eq!(d[0].span, Some((1, 5)));
-    // A deferred parameter states the same requirement at the apply
-    // that binds it.
-    let d = diags("f = k => k{0}; f [1, 2]");
+    // A parameter container states the same requirement once its type is
+    // decided, which is what the written annotation does.
+    let d = diags("f = (k : array{Int, 2}) => k{0}; f [1, 2]");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Runtime);
+    assert_eq!(check.kind, DiagKind::Guard);
     assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
-    assert_eq!(d[0].span, Some((1, 18)));
+    assert_eq!(d[0].span, Some((1, 6)), "the caret is the container");
     // A scalar is not a container at all, and gets the same kind refusal.
     let d = diags("5{0}");
     assert_eq!(d[0].message, "expected TypeTuple, found Int");
@@ -1363,15 +1367,20 @@ fn a_named_type_access_yields_the_field_type() {
 }
 
 #[test]
-fn a_type_access_of_a_deferred_non_tuple_is_refused_at_the_application() {
-    // The container is a parameter, so the tuple-kind requirement
-    // is deferred to the apply that binds it.
+fn a_type_access_of_a_deferred_non_tuple_is_refused_at_the_read() {
+    // The container is a parameter whose type is not decided where the read
+    // is checked, so the read has none at all.
     let d = diags("f = s => s{0}; f (1)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Runtime);
-    assert_eq!(d[0].message, "expected TypeTuple, found Int");
-    assert_eq!(d[0].span, Some((1, 19)), "the caret is on the argument");
+    assert_eq!(check.kind, DiagKind::UndecidedContainer);
+    assert_eq!(check.field.as_deref(), Some("positional type access"));
+    assert_eq!(
+        d[0].message,
+        "this positional type access cannot be checked: the container's type \
+         is not decided here — annotate the container's type"
+    );
+    assert_eq!(d[0].span, Some((1, 5)), "the caret is on the container");
 }
 
 #[test]
@@ -1551,12 +1560,13 @@ fn a_struct_instance_reads_its_fields_by_name() {
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
-    // A named read through a parameter: its type is `Index(shape, k)`
-    // over the container shape, indexed from the name table.
+    // A named read through a parameter: the written type decides the
+    // container, so the field reads against the field list.
 
     // The argument is parenthesized: `f s(1, Int)` would parse as
     // `(f s)(1, Int)`.
-    let (module, root) = run("f = a => a.f; s = struct{.f Int, .t Type}; f (s(1, Int)) : Int");
+    let (module, root) =
+        run("s = struct{.f Int, .t Type}; f = (a : s) => a.f; f (s(1, Int)) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 1);
 }
@@ -1690,10 +1700,10 @@ fn a_named_struct_instantiation_with_a_wrong_field_type_is_rejected() {
 
 #[test]
 fn a_named_struct_instantiation_reads_through_a_parameter() {
-    // Lazy resolution through a parameter: the field resolves through the struct's
-    // name table at the call.
+    // A field read through a parameter: the written type names the struct,
+    // so its name table resolves the field.
     let report = compile(
-        "S = struct{.x Int, .y Type}; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type",
+        "S = struct{.x Int, .y Type}; a = S(.y Int, .x 1); apply = (s : S) => s.y; apply (a) : Type",
     );
     assert!(
         report.ok(),
@@ -2286,8 +2296,15 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
 
     // Each index read forces the next apply, so the *values* resolve
     // level by level; the *types* stay underdetermined.
+
+    // An annotated container is what makes each of these reads checkable.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, @shallow f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
+        "f = x => [x, @shallow f (x + 1)]\n\
+         inf = (f 0 : tuple{Int, _})\n\
+         tail = (inf(1) : tuple{_, _})\n\
+         tail1 = (tail(1) : tuple{_, _})\n\
+         tail11 = (tail1(1) : tuple{_, _})\n\
+         (tail(0), tail1(0), tail11(0))",
     );
     let elements = common::array_values(&module, &value);
     assert_eq!(common::usize_of(&elements[0]), 1);
@@ -2302,7 +2319,10 @@ fn an_at_shallow_depth_marks_value_slots_shallow() {
 
     // The wrapped term is a lazy region, so its reads never claim a concrete
     // type that would silently mismatch it.
-    let (module, value, root_ty) = common::evaluate("([1, @shallow(2) [2, 3]])(1)(0)");
+
+    // The written type decides the container the read checks against.
+    let (module, value, root_ty) =
+        common::evaluate("l = ([1, @shallow(2) [2, 3]] : tuple{Int, _})\nl(1)(0)");
     assert_eq!(
         common::usize_array(&module, &value),
         vec![2, 3],
@@ -2334,7 +2354,15 @@ fn an_at_shallow_depth_one_on_a_recursive_tail_terminates() {
     // A length could not tell `1, 2, 3` from a pair, a shape and
     // a kind marker; the numbers are what this asserts.
     let (module, value, _) = common::evaluate(
-        "f = x => [x, @shallow(1) f (x + 1)]; inf = f 0; (inf(1)(0)(0), inf(1)(0)(1)(0)(0), inf(1)(0)(1)(0)(1)(0)(0))",
+        "f = x => [x, @shallow(1) f (x + 1)]\n\
+         inf = (f 0 : tuple{Int, _})\n\
+         step1 = (inf(1) : tuple{_, _})\n\
+         step2 = (step1(0) : tuple{_, _})\n\
+         step3 = (step2(1) : tuple{_, _})\n\
+         step4 = (step3(0) : tuple{_, _})\n\
+         step5 = (step4(1) : tuple{_, _})\n\
+         step6 = (step5(0) : tuple{_, _})\n\
+         (step2(0), step4(0), step6(0))",
     );
     assert_eq!(
         common::usize_array(&module, &value),

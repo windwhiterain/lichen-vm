@@ -17,10 +17,10 @@ score_raw = (k : ScorePar) => {
   lane = compute.range k.n
   sequence = lane / k.rows
   row = lane - sequence * k.rows
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (sequence * k.dim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (sequence * k.dim + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu" ScoreOut
 PickIn  = struct{.y (compute.Buf Float)}
 Pick    = struct{.p (compute.Buf Float)}
 PickPar = struct{.n Int, .rows Int, .in PickIn, .out Pick}
@@ -28,10 +28,10 @@ PickArg = struct{.n Int, .rows Int, .I PickIn}
 greedy_raw = (k : PickPar) => {
   lane = compute.range k.n
   base = lane * k.rows
-  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.y, .at (base + s(0) - 1)))) ~ "combine"), (s(2) + ((1 * ((compute.read ((compute.Read _)(.from k.in.y, .at (base + s(0) - 1))) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.y, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.y, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.rows, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
 }
-greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "gpu"
+greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "gpu" Pick
 AppIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
 KVOut  = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
 AppPar = struct{.n Int, .cap Int, .dim Int, .in AppIn, .out KVOut}
@@ -43,15 +43,15 @@ bappend_raw = (k : AppPar) => {
   rest = lane - sequence * per_sequence
   position = rest / k.dim
   column = rest - position * k.dim
-  mine = compute.read ((compute.Read _)(.from k.in.pos, .at sequence))
+  mine = (compute.read ((compute.Read _)(.from k.in.pos, .at sequence)) : Int)
   fresh = position == mine
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column)))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column)))) else old_v
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at lane)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at lane)) : Float)
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column))) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column))) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
 }
-bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu"
+bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu" KVOut
 StepIn = struct{.w (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
 GArg = struct{.n Int, .lanes Int, .cells Int, .in StepIn}
 step = (s : GArg) => {
@@ -120,28 +120,28 @@ weigh_raw = (k : WeighPar) => {
   i = compute.range k.n
   sequence = i / (k.cap * k.dim)
   column = i - (i / k.dim) * k.dim
-  value = compute.read ((compute.Read _)(.from k.in.k, .at i))
-  query = compute.read ((compute.Read _)(.from k.in.q, .at (sequence * k.dim + column)))
+  value = (compute.read ((compute.Read _)(.from k.in.k, .at i)) : Float)
+  query = (compute.read ((compute.Read _)(.from k.in.q, .at (sequence * k.dim + column))) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value * query)))
 }
-weigh = compute.parallel weigh_raw "gpu"
+weigh = compute.parallel weigh_raw "gpu" Out
 SumPar = struct{.n Int, .cap Int, .dim Int, .in TallyIn, .out Out}
 SumArg = struct{.n Int, .cap Int, .dim Int, .I TallyIn}
 sum_raw = (k : SumPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.dim + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-sum = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity)") "gpu"
+sum = compute.parallel (sum_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 PeakPar = struct{.n Int, .cap Int, .in PeakIn, .out Out}
 PeakArg = struct{.n Int, .cap Int, .I PeakIn}
 peak_raw = (k : PeakPar) => {
   lane = compute.range k.n
   base = lane * k.cap
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, ((0.0 - 1.0) / 0.0) ~ "identity"))))
 }
-peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu"
+peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 MaskIn  = struct{.s (compute.Buf Float), .length (compute.Buf Int)}
 MaskPar = struct{.n Int, .cap Int, .in MaskIn, .out Out}
 MaskArg = struct{.n Int, .cap Int, .I MaskIn}
@@ -149,32 +149,32 @@ mask_raw = (k : MaskPar) => {
   lane = compute.range k.n
   sequence = lane / k.cap
   position = lane - sequence * k.cap
-  limit = compute.read ((compute.Read _)(.from k.in.length, .at sequence))
+  limit = (compute.read ((compute.Read _)(.from k.in.length, .at sequence)) : Int)
   visible = position < limit
-  value = compute.read ((compute.Read _)(.from k.in.s, .at lane))
+  value = (compute.read ((compute.Read _)(.from k.in.s, .at lane)) : Float)
   hidden = (0.0 - 1.0) / 0.0
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (if visible then value else hidden)))
 }
-mask = compute.parallel mask_raw "gpu"
+mask = compute.parallel mask_raw "gpu" Out
 ExpoPar = struct{.n Int, .cap Int, .in ExpoIn, .out Out}
 ExpoArg = struct{.n Int, .cap Int, .I ExpoIn}
 expo_raw = (k : ExpoPar) => {
   i = compute.range k.n
   sequence = i / k.cap
-  value = compute.read ((compute.Read _)(.from k.in.s, .at i))
-  top = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  value = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Float)
+  top = (compute.read ((compute.Read _)(.from k.in.m, .at sequence)) : Float)
   shifted = value - top
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (exp shifted)))
 }
-expo = compute.parallel expo_raw "gpu"
+expo = compute.parallel expo_raw "gpu" Out
 TotalPar = struct{.n Int, .cap Int, .in TallyIn, .out Out}
 TotalArg = struct{.n Int, .cap Int, .I TallyIn}
 total_raw = (k : TotalPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.cap + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.t, .at (lane * k.cap + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, 0.0 ~ "identity"))))
 }
-total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 ScalePar = struct{.n Int, .cap Int, .dim Int, .in ScaleIn, .out Out}
 ScaleArg = struct{.n Int, .cap Int, .dim Int, .I ScaleIn}
 scale_raw = (k : ScalePar) => {
@@ -182,40 +182,40 @@ scale_raw = (k : ScalePar) => {
   sequence = i / (k.cap * k.dim)
   column = i - (i / k.dim) * k.dim
   position = (i / k.dim) - sequence * k.cap
-  weight = compute.read ((compute.Read _)(.from k.in.s, .at (sequence * k.cap + position)))
-  divisor = compute.read ((compute.Read _)(.from k.in.total, .at sequence))
-  value = compute.read ((compute.Read _)(.from k.in.v, .at i))
+  weight = (compute.read ((compute.Read _)(.from k.in.s, .at (sequence * k.cap + position))) : Float)
+  divisor = (compute.read ((compute.Read _)(.from k.in.total, .at sequence)) : Float)
+  value = (compute.read ((compute.Read _)(.from k.in.v, .at i)) : Float)
   share = weight / divisor
   compute.write ((compute.Write _)(.to k.out.e, .at ((sequence * k.dim + column) * k.cap + position), .value (share * value)))
 }
-scale = compute.parallel scale_raw "gpu"
+scale = compute.parallel scale_raw "gpu" Out
 PosPar = struct{.n Int, .cap Int, .in PosIn, .out Out}
 PosArg = struct{.n Int, .cap Int, .I PosIn}
 pos_raw = (k : PosPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.cap + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.cap + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.cap, 0.0 ~ "identity"))))
 }
-positions = compute.parallel (pos_raw ~ "claim:Reduction(combine,identity)") "gpu"
+positions = compute.parallel (pos_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 AddPar = struct{.n Int, .in AddIn, .out Out}
 AddArg = struct{.n Int, .I AddIn}
 add_raw = (k : AddPar) => {
   i = compute.range k.n
-  left = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  right = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  left = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Float)
+  right = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (left + right)))
 }
-add = compute.parallel add_raw "gpu"
+add = compute.parallel add_raw "gpu" Out
 MixPar = struct{.n Int, .dim Int, .in MixIn, .out Out}
 MixArg = struct{.n Int, .dim Int, .I MixIn}
 mix_raw = (k : MixPar) => {
   i = compute.range k.n
   sequence = i / k.dim
-  value = compute.read ((compute.Read _)(.from k.in.h, .at i))
-  summary = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  value = (compute.read ((compute.Read _)(.from k.in.h, .at i)) : Float)
+  summary = (compute.read ((compute.Read _)(.from k.in.m, .at sequence)) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (value + summary)))
 }
-mix = compute.parallel mix_raw "gpu"
+mix = compute.parallel mix_raw "gpu" Out
 SpreadPar = struct{.n Int, .dim Int, .in SpreadIn, .out Out}
 SpreadArg = struct{.n Int, .dim Int, .I SpreadIn}
 spread_raw = (k : SpreadPar) => {
@@ -224,19 +224,19 @@ spread_raw = (k : SpreadPar) => {
   rest = i - sequence * (k.dim * k.dim)
   column = rest / k.dim
   inner = rest - column * k.dim
-  hidden = compute.read ((compute.Read _)(.from k.in.n, .at (sequence * k.dim + inner)))
-  weight = compute.read ((compute.Read _)(.from k.in.w, .at (column * k.dim + inner)))
+  hidden = (compute.read ((compute.Read _)(.from k.in.n, .at (sequence * k.dim + inner))) : Float)
+  weight = (compute.read ((compute.Read _)(.from k.in.w, .at (column * k.dim + inner))) : Float)
   compute.write ((compute.Write _)(.to k.out.e, .at i, .value (hidden * weight)))
 }
-spread = compute.parallel spread_raw "gpu"
+spread = compute.parallel spread_raw "gpu" Out
 ProjectPar = struct{.n Int, .dim Int, .in PosIn, .out Out}
 ProjectArg = struct{.n Int, .dim Int, .I PosIn}
 project_raw = (k : ProjectPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.dim + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (lane * k.dim + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.e, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-project = compute.parallel (project_raw ~ "claim:Reduction(combine,identity)") "gpu"
+project = compute.parallel (project_raw ~ "claim:Reduction(combine,identity)") "gpu" Out
 StepIn = struct{.x (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .q (compute.Buf Float), .w (compute.Buf Float), .length (compute.Buf Int)}
 GArg = struct{.words Int, .slots Int, .sequences Int, .columns Int, .spread Int, .dim Int, .in StepIn}
 step = (s : GArg) => {
@@ -301,50 +301,50 @@ score_raw = (k : ScorePar) => {
   lane = compute.range k.n
   sequence = lane / k.rows
   row = lane - sequence * k.rows
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at (sequence * k.dim + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (sequence * k.dim + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu" ScoreOut
 PeakIn  = struct{.s (compute.Buf Float)}
 PeakPar = struct{.n Int, .rows Int, .in PeakIn, .out ScoreOut}
 PeakArg = struct{.n Int, .rows Int, .I PeakIn}
 peak_raw = (k : PeakPar) => {
   lane = compute.range k.n
   base = lane * k.rows
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1)))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.rows, ((0.0 - 1.0) / 0.0) ~ "identity"))))
 }
-peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu"
+peak = compute.parallel (peak_raw ~ "claim:Reduction(combine,identity)") "gpu" ScoreOut
 ExpoIn  = struct{.s (compute.Buf Float), .m (compute.Buf Float)}
 ExpoPar = struct{.n Int, .rows Int, .temp Float, .in ExpoIn, .out ScoreOut}
 ExpoArg = struct{.n Int, .rows Int, .temp Float, .I ExpoIn}
 expo_raw = (k : ExpoPar) => {
   i = compute.range k.n
   sequence = i / k.rows
-  value = compute.read ((compute.Read _)(.from k.in.s, .at i))
-  top = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  value = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Float)
+  top = (compute.read ((compute.Read _)(.from k.in.m, .at sequence)) : Float)
   shifted = (value - top) / k.temp
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (exp shifted)))
 }
-expo = compute.parallel expo_raw "gpu"
+expo = compute.parallel expo_raw "gpu" ScoreOut
 TotalPar = struct{.n Int, .rows Int, .in PeakIn, .out ScoreOut}
 TotalArg = struct{.n Int, .rows Int, .I PeakIn}
 total_raw = (k : TotalPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.rows + (s(0) - 1))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + ((compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.rows + (s(0) - 1)))) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.y, .at lane, .value (fold (k.rows, 0.0 ~ "identity"))))
 }
-total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" ScoreOut
 SharePar = struct{.n Int, .rows Int, .in ExpoIn, .out ScoreOut}
 ShareArg = struct{.n Int, .rows Int, .I ExpoIn}
 share_raw = (k : SharePar) => {
   i = compute.range k.n
   sequence = i / k.rows
-  weight = compute.read ((compute.Read _)(.from k.in.s, .at i))
-  divisor = compute.read ((compute.Read _)(.from k.in.m, .at sequence))
+  weight = (compute.read ((compute.Read _)(.from k.in.s, .at i)) : Float)
+  divisor = (compute.read ((compute.Read _)(.from k.in.m, .at sequence)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (weight / divisor)))
 }
-share = compute.parallel share_raw "gpu"
+share = compute.parallel share_raw "gpu" ScoreOut
 Pick     = struct{.p (compute.Buf Float)}
 PickPar  = struct{.n Int, .rows Int, .seed Float, .in PeakIn, .out Pick}
 PickArg  = struct{.n Int, .rows Int, .seed Float, .I PeakIn}
@@ -354,10 +354,10 @@ pick_raw = (k : PickPar) => {
   drawn_lane = int2float lane
   noise = sin ((k.seed * 12.9898) + (drawn_lane * 78.233))
   drawn = (noise * 43758.545) - floor (noise * 43758.545)
-  @loop fold = s => if s(0) == 0 then s(3) else fold (s(0) - 1, s(1), (s(2) + (compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1))))) ~ "combine", (s(3) + ((1 * (s(2) <= (1.0 - s(1)))) * ((s(0) - 1) - s(3)))) ~ "combine")
+  @loop fold = s => if s(0) == 0 then s(3) else fold (s(0) - 1, s(1), (s(2) + ((compute.read ((compute.Read _)(.from k.in.s, .at (base + s(0) - 1))) : Float))) ~ "combine", (s(3) + ((1 * (s(2) <= (1.0 - s(1)))) * ((s(0) - 1) - s(3)))) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.rows, drawn, 0.0 ~ "identity", 0)))))
 }
-pick = compute.parallel (pick_raw ~ "claim:Reduction(combine,identity)") "gpu"
+pick = compute.parallel (pick_raw ~ "claim:Reduction(combine,identity)") "gpu" Pick
 AppIn   = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
 KVOut   = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
 AppPar  = struct{.n Int, .cap Int, .dim Int, .in AppIn, .out KVOut}
@@ -369,15 +369,15 @@ bappend_raw = (k : AppPar) => {
   rest = lane - sequence * per_sequence
   position = rest / k.dim
   column = rest - position * k.dim
-  mine = compute.read ((compute.Read _)(.from k.in.pos, .at sequence))
+  mine = (compute.read ((compute.Read _)(.from k.in.pos, .at sequence)) : Int)
   fresh = position == mine
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column)))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column)))) else old_v
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at lane)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at lane)) : Float)
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at (sequence * k.dim + column))) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at (sequence * k.dim + column))) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
 }
-bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu"
+bappend = compute.parallel (bappend_raw ~ "claim:Reduction(element)") "gpu" KVOut
 StepIn = struct{.w (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
 GArg = struct{.n Int, .lanes Int, .cells Int, .temp Float, .seed Float, .in StepIn}
 step = (s : GArg) => {
@@ -414,18 +414,18 @@ fill_raw = (k : FillPar) => {
   rest = lane - sequence * per_sequence
   position = rest / k.dim
   column = rest - position * k.dim
-  first = compute.read ((compute.Read _)(.from k.in.pos, .at sequence))
+  first = (compute.read ((compute.Read _)(.from k.in.pos, .at sequence)) : Int)
   after = 1 * (position >= first)
   before = 1 * (position < (first + k.count))
   fresh = (after * before) == 1
   slot = (sequence * k.count + (position - first)) * k.dim + column
-  old_k = compute.read ((compute.Read _)(.from k.in.k, .at lane))
-  old_v = compute.read ((compute.Read _)(.from k.in.v, .at lane))
-  new_k = if fresh then (compute.read ((compute.Read _)(.from k.in.nk, .at slot))) else old_k
-  new_v = if fresh then (compute.read ((compute.Read _)(.from k.in.nv, .at slot))) else old_v
+  old_k = (compute.read ((compute.Read _)(.from k.in.k, .at lane)) : Float)
+  old_v = (compute.read ((compute.Read _)(.from k.in.v, .at lane)) : Float)
+  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at slot)) : Float)) else old_k
+  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at slot)) : Float)) else old_v
   (compute.write ((compute.Write _)(.to k.out.k, .at lane, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at lane, .value (new_v ~ "element"))))
 }
-fill = compute.parallel (fill_raw ~ "claim:Reduction(element)") "gpu"
+fill = compute.parallel (fill_raw ~ "claim:Reduction(element)") "gpu" KVOut
 StepIn = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float), .pos (compute.Buf Int)}
 GArg = struct{.n Int, .count Int, .in StepIn}
 step = (s : GArg) => {
@@ -454,10 +454,10 @@ SquarePar = struct{.n Int, .dim Int, .in In, .out Squared}
 SquareArg = struct{.n Int, .dim Int, .I In}
 squares_raw = (k : SquarePar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) * compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Squared
 ScaleIn  = struct{.s (compute.Buf Float), .x (compute.Buf Float), .w (compute.Buf Float)}
 ScalePar = struct{.n Int, .dim Int, .in ScaleIn, .out Normed}
 ScaleArg = struct{.n Int, .dim Int, .I ScaleIn}
@@ -465,14 +465,14 @@ scale_raw = (k : ScalePar) => {
   i = compute.range k.n
   head = i / k.dim
   j = i - head * k.dim
-  total = compute.read ((compute.Read _)(.from k.in.s, .at head))
+  total = (compute.read ((compute.Read _)(.from k.in.s, .at head)) : Float)
   mean = total / (int2float k.dim)
   divisor = sqrt (mean + 0.000001)
-  value = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  weight = compute.read ((compute.Read _)(.from k.in.w, .at j))
+  value = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  weight = (compute.read ((compute.Read _)(.from k.in.w, .at j)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((value * weight) / divisor)))
 }
-scale = compute.parallel scale_raw "gpu"
+scale = compute.parallel scale_raw "gpu" Normed
 GArg = struct{.n Int, .rows Int, .dim Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun squares ((SquareArg)(.n s.rows, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Squared)
@@ -498,18 +498,18 @@ MatvecPar = struct{.n Int, .dim Int, .in In, .out Rows}
 MatvecArg = struct{.n Int, .dim Int, .I In}
 matvec_raw = (k : MatvecPar) => {
   row = compute.range k.n
-@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu"
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" Rows
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
   i = compute.range k.n
-  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .dim Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Rows)
@@ -539,8 +539,8 @@ rope_raw = (k : RopePar) => {
   j = i - head * 128
   low = j < 64
   other_index = if low then (i + 64) else (i - 64)
-  own = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  other = compute.read ((compute.Read _)(.from k.in.x, .at other_index))
+  own = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at other_index)) : Float)
   turned = if low then j else (j - 64)
   exponent = (0.0 - (int2float turned)) / 64.0
   scale = exp (exponent * (ln (1000000.0)))
@@ -550,15 +550,15 @@ rope_raw = (k : RopePar) => {
   signed = if low then (0.0 - 1.0) else 1.0
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((own * cosine) + ((signed * other) * sine))))
 }
-rope = compute.parallel rope_raw "gpu"
+rope = compute.parallel rope_raw "gpu" Out
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
   i = compute.range k.n
-  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .position Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun rope ((RopeArg)(.n s.n, .position s.position, .I In(.x s.in.x))) : Out)
@@ -583,20 +583,20 @@ GluePar = struct{.n Int, .in In, .out Out}
 GlueArg = struct{.n Int, .I In}
 glue_raw = (k : GluePar) => {
   i = compute.range k.n
-  gate = compute.read ((compute.Read _)(.from k.in.g, .at i))
-  up = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  gate = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
+  up = (compute.read ((compute.Read _)(.from k.in.u, .at i)) : Float)
   open = gate / (1.0 + (exp (0.0 - gate)))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value (open * up)))
 }
-glue = compute.parallel glue_raw "gpu"
+glue = compute.parallel glue_raw "gpu" Out
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
   i = compute.range k.n
-  value = compute.read ((compute.Read _)(.from k.in.d, .at i))
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
 }
-copy = compute.parallel copy_raw "gpu"
+copy = compute.parallel copy_raw "gpu" CopIn
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun glue ((GlueArg)(.n s.n, .I In(.g s.in.g, .u s.in.u))) : Out)
@@ -621,10 +621,10 @@ SqPar  = struct{.n Int, .dim Int, .in SqIn, .out SqOut}
 SqArg  = struct{.n Int, .dim Int, .I SqIn}
 squares_raw = (k : SqPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) * compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((lane * k.dim + (s(0) - 1))))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+squares = compute.parallel (squares_raw ~ "claim:Reduction(combine,identity,element)") "gpu" SqOut
 ScIn   = struct{.s (compute.Buf Float), .x (compute.Buf Float), .w (compute.Buf Float)}
 ScOut  = struct{.y (compute.Buf Float)}
 ScPar  = struct{.n Int, .dim Int, .in ScIn, .out ScOut}
@@ -633,24 +633,24 @@ scale_raw = (k : ScPar) => {
   i = compute.range k.n
   head = i / k.dim
   j = i - head * k.dim
-  total = compute.read ((compute.Read _)(.from k.in.s, .at head))
+  total = (compute.read ((compute.Read _)(.from k.in.s, .at head)) : Float)
   mean = total / (int2float k.dim)
   divisor = sqrt (mean + 0.000001)
-  value = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  weight = compute.read ((compute.Read _)(.from k.in.w, .at j))
+  value = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  weight = (compute.read ((compute.Read _)(.from k.in.w, .at j)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((value * weight) / divisor)))
 }
-scale = compute.parallel scale_raw "gpu"
+scale = compute.parallel scale_raw "gpu" ScOut
 MvIn   = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
 MvOut  = struct{.y (compute.Buf Float)}
 MvPar  = struct{.n Int, .dim Int, .in MvIn, .out MvOut}
 MvArg  = struct{.n Int, .dim Int, .I MvIn}
 matvec_raw = (k : MvPar) => {
   row = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu"
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" MvOut
 RpIn   = struct{.x (compute.Buf Float)}
 RpOut  = struct{.y (compute.Buf Float)}
 RpPar  = struct{.n Int, .position Int, .in RpIn, .out RpOut}
@@ -661,8 +661,8 @@ rope_raw = (k : RpPar) => {
   j = i - head * 128
   low = j < 64
   other_index = if low then (i + 64) else (i - 64)
-  own = compute.read ((compute.Read _)(.from k.in.x, .at i))
-  other = compute.read ((compute.Read _)(.from k.in.x, .at other_index))
+  own = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
+  other = (compute.read ((compute.Read _)(.from k.in.x, .at other_index)) : Float)
   turned = if low then j else (j - 64)
   exponent = (0.0 - (int2float turned)) / 64.0
   factor = exp (exponent * (ln (1000000.0)))
@@ -672,7 +672,7 @@ rope_raw = (k : RpPar) => {
   signed = if low then (0.0 - 1.0) else 1.0
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((own * cosine) + ((signed * other) * sine))))
 }
-rope = compute.parallel rope_raw "gpu"
+rope = compute.parallel rope_raw "gpu" RpOut
 SpIn   = struct{.v (compute.Buf Float)}
 SpOut  = struct{.y (compute.Buf Float)}
 SpPar  = struct{.n Int, .in SpIn, .out SpOut}
@@ -682,33 +682,33 @@ spread_raw = (k : SpPar) => {
   head = i / 128
   key = head / 2
   j = i - head * 128
-  value = compute.read ((compute.Read _)(.from k.in.v, .at (key * 128 + j)))
+  value = (compute.read ((compute.Read _)(.from k.in.v, .at (key * 128 + j))) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value value))
 }
-spread = compute.parallel spread_raw "gpu"
+spread = compute.parallel spread_raw "gpu" SpOut
 AdIn   = struct{.a (compute.Buf Float), .b (compute.Buf Float)}
 AdOut  = struct{.y (compute.Buf Float)}
 AdPar  = struct{.n Int, .in AdIn, .out AdOut}
 AdArg  = struct{.n Int, .I AdIn}
 add_raw = (k : AdPar) => {
   i = compute.range k.n
-  left = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  right = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  left = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Float)
+  right = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value (left + right)))
 }
-add = compute.parallel add_raw "gpu"
+add = compute.parallel add_raw "gpu" AdOut
 GlIn   = struct{.g (compute.Buf Float), .u (compute.Buf Float)}
 GlOut  = struct{.m (compute.Buf Float)}
 GlPar  = struct{.n Int, .in GlIn, .out GlOut}
 GlArg  = struct{.n Int, .I GlIn}
 glue_raw = (k : GlPar) => {
   i = compute.range k.n
-  gate = compute.read ((compute.Read _)(.from k.in.g, .at i))
-  up = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  gate = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
+  up = (compute.read ((compute.Read _)(.from k.in.u, .at i)) : Float)
   open = gate / (1.0 + (exp (0.0 - gate)))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value (open * up)))
 }
-glue = compute.parallel glue_raw "gpu"
+glue = compute.parallel glue_raw "gpu" GlOut
 LIn    = struct{.x (compute.Buf Float), .i (compute.Buf Float), .q (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float), .qn (compute.Buf Float), .kn (compute.Buf Float), .o (compute.Buf Float), .p (compute.Buf Float), .g (compute.Buf Float), .u (compute.Buf Float), .d (compute.Buf Float)}
 GArg   = struct{.position Int, .in LIn}
 step = (s : GArg) => {
@@ -758,17 +758,17 @@ score_raw = (k : ScorePar) => {
   head = lane / 2
   at = lane - head * 2
   offset = at * 1024 + (head / 2) * 128
-@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))))) ~ "combine" ~ "element"))
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (128, 0.0 ~ "identity") * 0.0883883476)))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
 WeightPar = struct{.n Int, .in Scored, .out Weighted}
 WeightArg = struct{.n Int, .I Scored}
 weight_raw = (k : WeightPar) => {
   lane = compute.range k.n
   head = lane / 2
-  first = compute.read ((compute.Read _)(.from k.in.s, .at (head * 2)))
-  second = compute.read ((compute.Read _)(.from k.in.s, .at (head * 2 + 1)))
+  first = (compute.read ((compute.Read _)(.from k.in.s, .at (head * 2))) : Float)
+  second = (compute.read ((compute.Read _)(.from k.in.s, .at (head * 2 + 1))) : Float)
   top = max first second
   high = exp (first - top)
   low = exp (second - top)
@@ -776,7 +776,7 @@ weight_raw = (k : WeightPar) => {
   mine = if lane - (head * 2) == 0 then high else low
   compute.write ((compute.Write _)(.to k.out.w, .at lane, .value (mine / total)))
 }
-weight = compute.parallel weight_raw "gpu"
+weight = compute.parallel weight_raw "gpu" Weighted
 MixIn = struct{.w (compute.Buf Float), .v (compute.Buf Float)}
 MixPar = struct{.n Int, .in MixIn, .out Mixed}
 MixArg = struct{.n Int, .I MixIn}
@@ -785,13 +785,13 @@ mix_raw = (k : MixPar) => {
   head = lane / 128
   column = lane - head * 128
   offset = (head / 2) * 128 + column
-  first = compute.read ((compute.Read _)(.from k.in.w, .at (head * 2)))
-  second = compute.read ((compute.Read _)(.from k.in.w, .at (head * 2 + 1)))
-  early = compute.read ((compute.Read _)(.from k.in.v, .at offset))
-  late = compute.read ((compute.Read _)(.from k.in.v, .at (1024 + offset)))
+  first = (compute.read ((compute.Read _)(.from k.in.w, .at (head * 2))) : Float)
+  second = (compute.read ((compute.Read _)(.from k.in.w, .at (head * 2 + 1))) : Float)
+  early = (compute.read ((compute.Read _)(.from k.in.v, .at offset)) : Float)
+  late = (compute.read ((compute.Read _)(.from k.in.v, .at (1024 + offset))) : Float)
   compute.write ((compute.Write _)(.to k.out.o, .at lane, .value ((first * early) + (second * late))))
 }
-mix = compute.parallel mix_raw "gpu"
+mix = compute.parallel mix_raw "gpu" Mixed
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun score ((ScoreArg)(.n s.n, .I In(.q s.in.q, .k s.in.k, .v s.in.v))) : Scored)
@@ -823,30 +823,30 @@ score_raw = (k : ScorePar) => {
   head = lane / k.p
   at = lane - head * k.p
   offset = at * 1024 + (head / 2) * 128
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.q, .at (head * 128 + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.k, .at (offset + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.s, .at lane, .value (fold (128, 0.0 ~ "identity") * 0.0883883476)))
 }
-score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+score = compute.parallel (score_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
 TotalIn  = struct{.s (compute.Buf Float)}
 TotalPar = struct{.n Int, .p Int, .in TotalIn, .out Totaled}
 TotalArg = struct{.n Int, .p Int, .I TotalIn}
 total_raw = (k : TotalPar) => {
   lane = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.p + (s(0) - 1))))))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (lane * k.p + (s(0) - 1)))) : Float)))) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.t, .at lane, .value (fold (k.p, 0.0 ~ "identity"))))
 }
-total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu"
+total = compute.parallel (total_raw ~ "claim:Reduction(combine,identity)") "gpu" Totaled
 WeightIn  = struct{.s (compute.Buf Float), .t (compute.Buf Float)}
 WeightPar = struct{.n Int, .p Int, .in WeightIn, .out Weighted}
 WeightArg = struct{.n Int, .p Int, .I WeightIn}
 weight_raw = (k : WeightPar) => {
   lane = compute.range k.n
   head = lane / k.p
-  whole = compute.read ((compute.Read _)(.from k.in.t, .at head))
-  part = exp (compute.read ((compute.Read _)(.from k.in.s, .at lane)))
+  whole = (compute.read ((compute.Read _)(.from k.in.t, .at head)) : Float)
+  part = exp ((compute.read ((compute.Read _)(.from k.in.s, .at lane)) : Float))
   compute.write ((compute.Write _)(.to k.out.w, .at lane, .value (part / whole)))
 }
-weight = compute.parallel weight_raw "gpu"
+weight = compute.parallel weight_raw "gpu" Weighted
 MixIn  = struct{.w (compute.Buf Float), .v (compute.Buf Float)}
 MixPar = struct{.n Int, .p Int, .in MixIn, .out Mixed}
 MixArg = struct{.n Int, .p Int, .I MixIn}
@@ -855,10 +855,10 @@ mix_raw = (k : MixPar) => {
   head = lane / 128
   column = lane - head * 128
   key = head / 2
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (head * k.p + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.v, .at (((s(0) - 1) * 1024 + key * 128) + column))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (head * k.p + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.v, .at (((s(0) - 1) * 1024 + key * 128) + column))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.o, .at lane, .value (fold (k.p, 0.0 ~ "identity"))))
 }
-mix = compute.parallel (mix_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+mix = compute.parallel (mix_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Mixed
 GArg = struct{.n Int, .p Int, .in In}
 step = (s : GArg) => {
   a = (compute.plrun score ((ScoreArg)(.n s.n, .p s.p, .I In(.q s.in.q, .k s.in.k, .v s.in.v))) : Scored)

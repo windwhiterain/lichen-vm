@@ -17,9 +17,9 @@ Out = struct{.e (compute.Buf Float)}
 Par = struct{.n Int, .in Inc, .out Out}
 double_raw = (k : Par) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (compute.read ((compute.Read _)(.from k.in.d, .at i)) * 2.0)))
+  compute.write ((compute.Write _)(.to k.out.e, .at i, .value ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0)))
 }
-double = compute.parallel double_raw "gpu"
+double = compute.parallel double_raw "gpu" Out
 GArg = struct{.n Int, .in Inc}
 step = (s : GArg) => {
   a = (compute.plrun double ((compute.A Inc)(.n s.n, .I Inc(.d s.in.d))) : Out)

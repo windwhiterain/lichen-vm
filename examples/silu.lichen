@@ -17,20 +17,20 @@ SiluA = struct{.a (compute.Buf Float)}
 ParA  = compute.P (compute.KT Float)(.I Gate, .O SiluA)
 silu_raw = (k : ParA) => {
   i = compute.range k.n
-  g = compute.read ((compute.Read _)(.from k.in.g, .at i))
+  g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element")))
 }
-silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu"
+silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
 UpIn  = struct{.a (compute.Buf Float), .u (compute.Buf Float)}
 OutY  = struct{.y (compute.Buf Float)}
 ParB  = compute.P (compute.KT Float)(.I UpIn, .O OutY)
 up_raw = (k : ParB) => {
   i = compute.range k.n
-  a = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  u = compute.read ((compute.Read _)(.from k.in.u, .at i))
+  a = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Float)
+  u = (compute.read ((compute.Read _)(.from k.in.u, .at i)) : Float)
   compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((a * u) ~ "element")))
 }
-up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu"
+up = compute.parallel (up_raw ~ "claim:Elementwise(element)") "cpu" OutY
 g = (compute.buffer ([0.0, 1.0, (0.0 - 1.0), 2.0] : array{Float, 4}) : (compute.Buf Float))
 u = (compute.buffer ([3.0, 1.0, 0.5, 4.0] : array{Float, 4}) : (compute.Buf Float))
 act = (compute.plrun silu ((compute.A Gate)(.n 4, .I Gate(.g g))) : SiluA)

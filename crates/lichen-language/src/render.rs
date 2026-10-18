@@ -234,6 +234,14 @@ where
             "this value is not a container — it has no element to read".to_string()
         }
 
+        DiagKind::UndecidedContainer => {
+            let read = d.field.as_deref().unwrap_or("read");
+            format!(
+                "this {read} cannot be checked: the container's type is not decided \
+                 here — annotate the container's type"
+            )
+        }
+
         DiagKind::RuntimeTypeAccessElement => {
             "this type access found an element that is not a value/type pair — \
              `X{n}` and `X::a` read the element's own pair, so the container \

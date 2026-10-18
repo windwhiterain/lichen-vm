@@ -23,10 +23,10 @@ pool_raw = (c : PPar) => {
   row = compute.row c
   col = compute.col c
   base = ((row - 1) * c.cols + (col - 1))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) (compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))))) ~ "combine" ~ "element"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((max s(1) ((compute.read ((compute.Read _)(.from c.in.x, .at (base + (s(0) - 1) / 3 * c.cols + (s(0) - 1) % 3))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to c.out.y, .at i, .value (fold (c.taps, c.least ~ "identity"))))
 }
-pool = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+pool = compute.parallel (pool_raw ~ "claim:Reduction(combine,identity,element)") "gpu" POut
 x = (compute.buffer ([0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 4.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0] : array{Float, 25}) : (compute.Buf Float))
 "#;
 

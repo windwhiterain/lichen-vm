@@ -41,30 +41,30 @@ OutM = struct{.m (compute.Buf Float)}
 ParM = compute.P (compute.KT Float)(.I In, .O OutM)
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
 }
-rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu"
+rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu" OutM
 Soft = struct{.d (compute.Buf Float), .m (compute.Buf Float)}
 OutS = struct{.s (compute.Buf Float)}
 ParS = compute.P (compute.KT Float)(.I Soft, .O OutS)
 shifted_raw = (k : ParS) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) - m) ~ "element")) ~ "combine"))
+  m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-shifted = compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+shifted = compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutS
 Norm = struct{.d (compute.Buf Float), .m (compute.Buf Float), .s (compute.Buf Float)}
 OutY = struct{.y (compute.Buf Float)}
 ParY = compute.P (compute.KT Float)(.I Norm, .O OutY)
 norm_raw = (k : ParY) => {
   i = compute.range k.n
-  m = compute.read ((compute.Read _)(.from k.in.m, .at 0))
-  s = compute.read ((compute.Read _)(.from k.in.s, .at 0))
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((exp (compute.read ((compute.Read _)(.from k.in.d, .at i)) - m)) / s) ~ "element")))
+  m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  s = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m)) / s) ~ "element")))
 }
-norm = compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu"
+norm = compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   mx = (compute.plrun rowmax ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutM)
@@ -84,8 +84,8 @@ built = compute.graph step
 /// same value, so the refusal is a statement about the derivation and not about the shape.
 fn unnamed() -> String {
     program().replace(
-        "((exp (compute.read ((compute.Read _)(.from k.in.d, .at i)) - m)) / s) ~ \"element\"",
-        "((exp (compute.read ((compute.Read _)(.from k.in.d, .at i)) - m) ~ \"element\") / s)",
+        "((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m)) / s) ~ \"element\"",
+        "((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m) ~ \"element\") / s)",
     )
 }
 

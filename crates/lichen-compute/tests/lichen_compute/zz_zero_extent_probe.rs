@@ -19,7 +19,7 @@ g = (k : Par0) => {
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (i + 10)))
 }
-kg = compute.parallel g "gpu"
+kg = compute.parallel g "gpu" Out0
 "#;
 
 /// The plain form: one `compute.plrun` at extent 0, then the collect.

@@ -1,22 +1,26 @@
 # Evaluation and unification interleave, and a read can be taken too early
 
-> Status: **current.** §2.1 is fixed and the container reads with it: unification
-> merges a class and carries the class's decided value to the members it adds, the
-> paren read `a(k)` is the tuple read. **The author's ruling supersedes the
-> deferral tier, and it has landed**: `.a` does **not** defer — a decided
-> container keeps its kind unify, and an **undecided one carries nothing at all**
-> (no `IsStructType` condition, no requirement node): the application's own
-> parameter unify binds the container's type, and the read evaluates on it, which
-> is the shape `f = (x : _) => x.a` ; `f (struct{.a Int, .b Int}(.a 1, .b 2))` shows
-> (`1 : Int`: the apply's unify binds the hole before the body's read evaluates).
-> A wrong-kind argument therefore fails at the
-> read the body built (`this value is not a container`, caret on `.a`). The
+> **Superseded by a later ruling.** A read on an undecided container is now
+> **refused at the read**, not deferred; the per-apply kind asserts this note's
+> design landed (§2.2, §6.2 option 1) were withdrawn with the rest of the
+> deferral tier. See [undecided-reads](undecided-reads.md). The measurements
+> below still record the facts that led there; passages that describe a deferral
+> as current are history.
+
+> Status: **historical for the deferral tier.** §2.1 is fixed and the container
+> reads with it: unification merges a class and carries the class's decided value
+> to the members it adds, the paren read `a(k)` is the tuple read. `.a` does
+> **not** defer: a decided container keeps its kind unify, and an **undecided
+> one now has no read at all** — the read refuses and the container must be
+> annotated, so the old `f = (x : _) => x.a` shape is a diagnostic rather than
+> `1 : Int`. The
 > requirement node had to be **dropped rather than unified**: merging it into the
 > container's kind class made the empty requirement template the class's value, and
 > `examples/decode_loop.lichen` and `examples/generate.lichen` lost their arrays
 > to `raw none` (measured). The class-attached blocked list remains a sketch; the
 > two `field_read_kinds` tests that pinned the assert were updated to the read's
-> runtime failure. The **ordering** half of the question is settled
+> refusal (see [undecided-reads](undecided-reads.md)). The **ordering** half of
+> the question is settled
 > and measured: reordering evaluation against unification cannot be the fix, and
 > the runtime's own answer was a memoization on the stalled node
 > ([stalled-rerun-epoch](stalled-rerun-epoch.md)), now retired.

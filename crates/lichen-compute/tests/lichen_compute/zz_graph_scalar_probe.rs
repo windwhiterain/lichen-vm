@@ -19,10 +19,10 @@ PPar = struct{.n Int, .off Int, .in PIn, .out POut}
 PArg = struct{.n Int, .off Int, .I PIn}
 append_raw = (c : PPar) => {
   i = compute.range c.n
-  v = compute.read ((compute.Read _)(.from c.in.x, .at i))
+  v = (compute.read ((compute.Read _)(.from c.in.x, .at i)) : Int)
   compute.write ((compute.Write _)(.to c.out.y, .at (i + c.off), .value v))
 }
-append = compute.parallel append_raw "gpu"
+append = compute.parallel append_raw "gpu" POut
 x = (compute.buffer ([1, 2, 3, 4] : array{Int, 4}) : (compute.Buf Int))
 "#;
 

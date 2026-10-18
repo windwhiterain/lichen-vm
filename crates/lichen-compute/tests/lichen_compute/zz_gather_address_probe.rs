@@ -20,10 +20,10 @@ PPar = struct{.n Int, .in PIn, .out POut}
 PArg = struct{.n Int, .I PIn}
 gather_raw = (k : PPar) => {
   i = compute.range k.n
-  j = compute.read ((compute.Read _)(.from k.in.tbl, .at i))
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (compute.read ((compute.Read _)(.from k.in.x, .at j)))))
+  j = (compute.read ((compute.Read _)(.from k.in.tbl, .at i)) : Int)
+  compute.write ((compute.Write _)(.to k.out.y, .at i, .value ((compute.read ((compute.Read _)(.from k.in.x, .at j)) : Int))))
 }
-gather = compute.parallel gather_raw "gpu"
+gather = compute.parallel gather_raw "gpu" POut
 x   = (compute.buffer ([10, 20, 30, 40, 50, 60] : array{Int, 6}) : (compute.Buf Int))
 tbl = (compute.buffer ([5, 0, 4, 1, 3, 2] : array{Int, 6}) : (compute.Buf Int))
 "#;

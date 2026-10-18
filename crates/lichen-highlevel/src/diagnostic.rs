@@ -91,6 +91,17 @@ pub enum DiagKind {
     /// about a *value*, with no type to print, so the wording is self-contained.
     RuntimeIndexTarget,
 
+    /// A read whose container's type is not decided where the read is checked.
+    ///
+    /// # Invariant
+    /// A read states its requirement from the container's type; an undecided
+    /// container states none, and the apply that later binds it applies the
+    /// value and type slots separately, so a requirement deferred there can
+    /// leave a pair whose value and type disagree. The read is refused where it
+    /// stands, and the read's form is carried in [`DiaryEntry::field`]
+    /// (`docs/notes/undecided-reads.md`).
+    UndecidedContainer,
+
     /// A type access (`X{n}`, `X::a`) whose **element** is not a pair at runtime.
     ///
     /// # Invariant

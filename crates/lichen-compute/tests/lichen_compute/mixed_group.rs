@@ -38,14 +38,14 @@ fill = (k : SrcPar) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value int2float (i + 10)))
 }}
-source_kernel = compute.parallel fill "cpu"
+source_kernel = compute.parallel fill "cpu" SrcOut
 inbuf = (compute.plrun source_kernel ((compute.A Src)(.n 3, .I Src(.a 0))) : SrcOut)
 {declarations}
 f = (k : Par) => {{
   i = compute.range k.n
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value {written}))
 }}
-k = compute.parallel f "cpu"
+k = compute.parallel f "cpu" Out
 out = (compute.plrun k ({argument}) : Out)
 compute.collect out.w
 "#,
@@ -66,7 +66,7 @@ In = struct{.b (compute.Buf Float)}
 Out = struct{.w (compute.Buf Float)}
 Par = struct{.n Int, .s Float, .in In, .out Out}
 Host = struct{.n Int, .S Float, .I In}"#,
-        r#"(compute.read ((compute.Read _)(.from k.in.b, .at i)) * 2.0 + int2float (float2int k.s))"#,
+        r#"((compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float) * 2.0 + int2float (float2int k.s))"#,
         "Host(.n 3, .S 7.0, .I In(.b inbuf.z))",
     ));
     let (mixed_module, mixed, _root) = run(&kernel(
@@ -75,7 +75,7 @@ In = struct{.b (compute.Buf Float), .s Float}
 Out = struct{.w (compute.Buf Float)}
 Par = struct{.n Int, .in In, .out Out}
 Host = struct{.n Int, .I In}"#,
-        r#"(compute.read ((compute.Read _)(.from k.in.b, .at i)) * 2.0 + int2float (float2int k.in.s))"#,
+        r#"((compute.read ((compute.Read _)(.from k.in.b, .at i)) : Float) * 2.0 + int2float (float2int k.in.s))"#,
         "Host(.n 3, .I In(.b inbuf.z, .s 7.0))",
     ));
     let expected: Vec<f32> = (0..LANES)

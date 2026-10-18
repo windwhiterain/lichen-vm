@@ -191,8 +191,8 @@ is_odd = n => if n == 0 then 0 else is_even (n - 1)
 ### A recursive function may need its shape stated
 
 A recursive function's result is often only as decided as the function's
-own signature. This `gcd` returns the right number, but not a decided
-type:
+own signature. This `gcd` says nothing about the shape of `p`, so the
+checker cannot read it:
 
 ```lichen
 gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
@@ -200,16 +200,41 @@ gcd (48, 18)
 ```
 
 ```text
-raw 6: ?a
+error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
+  --> 1:7
+   |
+ 1 | gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+   |       ^
+error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
+  --> 1:7
+   |
+ 1 | gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+   |       ^
+error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
+  --> 1:7
+   |
+ 1 | gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+   |       ^
+error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
+  --> 1:7
+   |
+ 1 | gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+   |       ^
+error: this tuple read cannot be checked: the container's type is not decided here — annotate the container's type
+  --> 1:7
+   |
+ 1 | gcd = p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))
+   |       ^
 ```
 
-The value is `6`, but the type is the open cell `?a`: nothing in the
-program has said what type the recursion returns, and a recursive
-function's type is the function itself. An annotation states the
-signature, and then the result follows from it:
+A read states its requirement from the type of its container, and `p`
+has none here: nothing in the program has said what its elements are,
+and a recursive function's type is the function itself. An annotation
+states the shape — on the container, and then on the function — and the
+result follows from it:
 
 ```lichen
-gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
+gcd = ((p : tuple{Int, Int}) => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : tuple{Int, Int} -> Int
 gcd (48, 18)
 ```
 

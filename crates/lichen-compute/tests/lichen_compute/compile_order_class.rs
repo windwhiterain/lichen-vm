@@ -35,10 +35,10 @@ scores_raw = (k : ParS) => {
   i = compute.range k.n
   query = compute.row k
   key = compute.col k
-  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) * compute.read ((compute.Read _)(.from k.in.q, .at (key * k.dim + s(0) - 1)))) ~ "combine")
+  @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.q, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")))
 }
-scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
 QSV = struct{.s (compute.Buf Float), .v (compute.Buf Float)}
 OutA = struct{.o (compute.Buf Float)}
 ParA = struct{.n Int, .dim Int, .keys Int, .in QSV, .out OutA}
@@ -47,14 +47,14 @@ attend_raw = (k : ParA) => {
   i = compute.range k.n
   query = compute.row k
   column = compute.col k
-  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) ~ "element")) ~ "combine")
+  @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) ~ "element")) ~ "combine")
   m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
-  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element")) ~ "combine")
+  @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
   denominator = den (k.keys, 0.0 ~ "identity")
-  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp (compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) - m) ~ "element") * compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column)))) ~ "combine", s(2))
+  @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
   compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")))
 }
-attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutA
 "#;
 
 /// The same two kernels, and nothing that dispatches them.

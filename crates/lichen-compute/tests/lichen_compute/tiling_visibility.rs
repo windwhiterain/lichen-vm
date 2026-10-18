@@ -33,20 +33,20 @@ OutR = struct{.r (compute.Buf Float)}
 Par  = compute.P (compute.KT Float)(.I In, .O OutR)
 producer_raw = (k : Par) => {
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
 }
-producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu"
+producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
-  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) (((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) - r) ~ "element")) ~ "combine")
+  r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
 }
-consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)

@@ -356,8 +356,11 @@ delimiter is a fresh atom — an argument of an application:
   struct type value's kind is `TypeStruct` (its components read by name,
   `X::a`), a tuple *value*'s type is the tuple shape `tuple{Int, Int}` rather than
   the kind, and an atomic type's kind is `Type` — none of the three is accepted,
-  and the requirement is stated as a unify, so an undecided container is refused by
-  the apply that binds it.  The index is a full expression (`X{n + 1}`).  A
+  and the requirement is checked at the read: the container's type must be
+  decided there, so `tuple{Int, string}{0}` is fine and `k => k{0}` is refused
+  at `k{0}` with `this positional type access cannot be checked: the
+  container's type is not decided here — annotate the container's type`.  The
+  index is a full expression (`X{n + 1}`).  A
   **spaced** `{` is never a delimiter: `X {0}` applies `X` to the block `{0}`.
 - **`<` and `>` are comparisons alone.**  No postfix form opens with `<`, so
   adjacency no longer changes the token's job: `a < b`, `a<b`, and `2 > 1` all
@@ -376,21 +379,17 @@ delimiter is a fresh atom — an argument of an application:
   so `(type_of v)::x` is meaningful).  What has no field type to read is the type of
   a *type*: `type_of struct{.a Int}` is that struct type's nominal id and name
   table, so `(type_of struct{.a Int})::a` states no field type and is refused by the
-  requirement's unify.  The requirement is a unify for **both**
-  tiers: a decided non-struct container is refused where it stands
-  (`expected TypeStruct, found array{Int, 2}`), and an undecided one is pinned
-  and refused by the apply that binds it.  It is the
+  requirement's unify.  The requirement is checked at the read: a non-struct
+  container is refused where it stands (`expected TypeStruct, found
+  array{Int, 2}`), and an undecided one is refused — annotate the container.
+  It is the
   named sibling of `X{n}`; `.` (`.a`) is the named field read over a struct
-  *instance*, whose kind (not type) must be TypeStruct.  **Neither `.a` nor `::`
-  defers**: the container's requirement is unified *first* and the read
-  is evaluated on the result — `f = (x : _) => x.a` ;
-  `f (struct{.a Int, .b Int}(.a 1, .b 2))` is `1 : Int`, because the apply's unify
-  binds the placeholder's type to the argument's struct type before the body's read
-  evaluates, so the read sees a decided struct type.  An undecided
-  parameter is bound by the application's unify and the body then runs against it;
-  a wrong-kind argument therefore fails at the read the body built:
-  `f = x => x.a; f [10, 20]` reports `this value is not a container — it has no
-  element to read` with the caret on `.a`.  A spaced `::` is not a
+  *instance*, whose kind (not type) must be TypeStruct.  **A read needs its
+  container's type decided at the read**: `f = (x : struct{.a Int, .b Type}) =>
+  x.a` is accepted, while an unannotated parameter is refused where the read
+  stands — `f = x => x.a` reports `this field read cannot be checked: the
+  container's type is not decided here — annotate the container's type`.  A
+  spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
@@ -733,8 +732,8 @@ maps every span back to the original file.
   type is the tuple shape rather than the kind; `expected TypeTuple, found
   TypeStruct` for a struct type value, whose components are read by name —
   `X::a`; `expected TypeTuple, found array{Int, 2}` for an array), and an
-  undecided one is pinned, refused by the apply that binds it.  Nothing else is
-  a container.
+  undecided one is refused at the read — annotate the container with a written
+  tuple type or bind one.  Nothing else is a container.
   The read's result is **the component's own pair**: its value from the pair's
   value slot, and its type from the type slot — the component type value's *kind*
   (`Type` for `tuple{Int, string}{0}`, and a `TypeStruct` kind for a component that is
@@ -753,9 +752,10 @@ maps every span back to the original file.
   kind (`[[TypeId, names, names_in_order], TypeStruct]` under the kind's
   `[marker, K]` pair, the name→index table centred right there
   at `container_ty[0][0][1]`) — the named sibling of the tuple-kind requirement
-  `X{n}` states, and likewise a **unify**: a decided container is refused where
-  it stands, an undecided one is pinned and refused by the apply that binds it
-  (this is what removed the `TableGet` panic a deferred non-struct used to hit).
+  `X{n}` states, and likewise checked at the read: a non-struct container is
+  refused where it stands, and an undecided one is refused — annotate it.  (A
+  deferred non-struct used to hit a `TableGet` panic; the read-time check is
+  what removed it.)
   It yields the field's *type* as a value, so
   `struct{.a Int, .b string}::a` is `Int : Type` — the type being that field type
   value's *kind*, `Type` for a scalar field and a `TypeStruct` kind for a
@@ -824,10 +824,9 @@ maps every span back to the original file.
   non-struct value is refused by a struct-kind **Guard** at check time —
   `(10, 20).a` reports `expected TypeStruct, found TypeTuple` and `[10, 20].a`
   reports `expected TypeStruct, found TypeArray` — while a container still
-  **undecided** at check carries no requirement there: `f = x => x.a` ; `f (10, 20)`
-  fails at the **read**, with `this value is not a container — it has no element to
-  read` (`table lookup missed — no entry for key …` for a table read), each at the
-  read, per the ruling in [eval-before-unify](notes/eval-before-unify.md) §6.2).  The
+  **undecided** at check is refused at the read with `this field read cannot be
+  checked: the container's type is not decided here — annotate the container's
+  type` (per the ruling in [undecided-reads](notes/undecided-reads.md)).  The
   positional form
   `s(1, 2)(0)` is **not** this read — `a(k)` is the *tuple* read, and a struct
   instance is refused by it (see *Indexing*) — nor is `s(1, 2)[0]`, which is the

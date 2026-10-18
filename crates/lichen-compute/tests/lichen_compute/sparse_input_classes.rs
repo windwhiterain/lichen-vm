@@ -34,18 +34,18 @@ OutE = struct{.e (compute.Buf Float)}
 Par  = compute.P (compute.KT _)(.I In, .O OutE)
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
-  compute.write ((compute.Write _)(.to lane.out.e, .at at, .value (2.0 * compute.read ((compute.Read _)(.from lane.in.d, .at at)))))
+  compute.write ((compute.Write _)(.to lane.out.e, .at at, .value (2.0 * (compute.read ((compute.Read _)(.from lane.in.d, .at at)) : Float))))
 }
-producer = compute.parallel producer_raw "cpu"
+producer = compute.parallel producer_raw "cpu" OutE
 In2  = struct{.d (compute.Buf Float), .e (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
 Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
 consumer_raw = (lane : Par2) => {
   at = compute.range lane.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from lane.in.e, .at s(0) - 1))))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from lane.in.e, .at s(0) - 1)) : Float)))
   compute.write ((compute.Write _)(.to lane.out.z, .at at, .value fold (lane.n, 0.0)))
 }
-consumer = compute.parallel consumer_raw "cpu"
+consumer = compute.parallel consumer_raw "cpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)

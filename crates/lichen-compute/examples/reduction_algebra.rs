@@ -71,10 +71,10 @@ Out = struct{{.z (compute.Buf {class})}}
 Par = compute.P (compute.KT {class})(.I In, .O Out)
 reduction = (k : Par) => {{
   i = compute.range k.n
-  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) ~ "combine"))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Int)) ~ "combine"))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold ({bound}, {seed} ~ "identity")))
 }}
-compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "cpu"
+compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "cpu" Out
 "#
     )
 }

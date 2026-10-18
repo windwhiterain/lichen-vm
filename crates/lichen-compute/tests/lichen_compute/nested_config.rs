@@ -58,11 +58,11 @@ Arg   = struct{{.meta Meta, .I In2}}
 GA    = {ga}
 nested_raw = (k : Par) => {{
   i = compute.range k.meta.rows
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  w = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : {kind})
+  w = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : {kind})
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((v * k.meta.cols + w) ~ "element")))
 }}
-nested = compute.parallel (nested_raw ~ "claim:Elementwise(element)") "gpu"
+nested = compute.parallel (nested_raw ~ "claim:Elementwise(element)") "gpu" Out
 step = (s : GA) => {{
   compute.plrun nested ((Arg)(.meta Meta(.rows s.rows, .cols {cols}), .I In2(.a s.in.a, .b s.in.b))) : Out
 }}
@@ -91,10 +91,10 @@ shape_raw = (k : Par3) => {
   i = compute.range k.n
   r = i / k.cols
   c = i % k.cols
-  v = compute.read ((compute.Read _)(.from k.in.a, .at (r * k.K + c)))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at (r * k.K + c))) : Int)
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v ~ "element")))
 }
-shape = compute.parallel (shape_raw ~ "claim:Elementwise(element)") "gpu"
+shape = compute.parallel (shape_raw ~ "claim:Elementwise(element)") "gpu" Out1
 step3 = (s : GA3) => {
   compute.plrun shape ((Arg3)(.n s.n, .K s.K, .cols s.cols, .I In1(.a s.in.a))) : Out1
 }
@@ -396,10 +396,10 @@ Par  = struct{.n Int, .in In2, .out Out, .spare (compute.Buf Int)}
 Arg  = struct{.n Int, .in In2, .spare (compute.Buf Int)}
 stray_raw = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  v = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : {kind})
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value (v ~ "element")))
 }
-stray = compute.parallel (stray_raw ~ "claim:Elementwise(element)") "gpu"
+stray = compute.parallel (stray_raw ~ "claim:Elementwise(element)") "gpu" Out
 built = compute.graph ((s : Arg) => {
   compute.plrun stray ((Arg)(.n s.n, .in In2(.a s.in.a), .spare s.spare)) : Out
 })
