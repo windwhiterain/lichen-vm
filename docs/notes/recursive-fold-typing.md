@@ -1,9 +1,11 @@
 # The un-annotated recursive fold's type stays open
 
-> Status: current — a measured defect with its handover. The value is right and the
-> **type** is open, so a named read on the fold's result answers `none`; the author
-> ruled that `if` has no typing rule of its own, and the remaining fix is an
-> engine-side clone-walk change (the owner's call). The workaround is an annotation.
+> Status: current — decided `wontfix:D18`. A recursive function whose result type must
+> be known states its **parameter's shape** (the arity cannot be inferred from uses;
+> `(s : tuple{_, _})` is enough, the field types then infer per call), so an open type
+> without one is the documented contract rather than a defect to repair. The value is
+> still right, the mechanism and the engine experiments are kept as the record, and §7
+> states the annotation.
 > Points at: [function-normalization](function-normalization.md) (ruling 1: a
 > function's types are determined at its normalize), `crates/lichen-language/src/
 > compile.rs` (the `if` desugar), `crates/lichen-highlevel/src/checker/indexing.rs`
@@ -86,13 +88,14 @@ Each was implemented, measured on the repro, and reverted:
 
 ## 6. The fix, decided
 
-**The owner's verdict: route A — the clone walk carries a cloned cell's class members.**
-(The alternative, the apply deciding the fold's return cell from the argument, was
-rejected as the narrower special case.) The clone walk must, per call, clone the
-members that decide a cloned cell's class, so the fold's return cell is decided by the
-clone's own derived read instead of the template's. A fix must keep the working cases
-unchanged and must not create a fourth unify site
-([function-normalization](function-normalization.md) ruling 6).
+**The verdict, after the measurements: `wontfix:D18` — the parameter's shape is the
+annotation the contract requires.** The route-A experiments below stay as the record:
+they show the clone walk *can* carry a cloned cell's class members and the topology then
+becomes right, but the decider has nothing to read, and the only thing that made the
+repro answer was an evaluation that hangs the deep budget's test. Meanwhile the arity is
+what the un-annotated form lacks and cannot infer (`g = s => s(1)` prints `?a -> ?b`),
+while `(s : tuple{_, _})` is enough for the field types to infer (§7), so the engine is
+left as is.
 
 **The first attempt, and what it measured.** Implemented as stated: a helper over the
 class's member list, a per-pass `classes` set on the apply context (a class is carried

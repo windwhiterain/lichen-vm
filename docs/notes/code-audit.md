@@ -53,7 +53,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-48 | high | highlevel, language | A perspective-annotated value is refused by a parameter with the *same* perspective, with `expected Int, found Int` | fixed — the engine's apply-time parameter unify compared the pair's attribute tail (the clone's attribute is the absent `0`), and the checker's relaxed check had already accepted it; the tail is now the checker's alone, and `f (1 # 4)` / `f (1 # 8)` pass while `f (1 # 2)` answers `expected 4, found 2` |
 | P1-49 | high | highlevel, language | An instantiation through an undetermined callee is accepted with a lazy reorder | fixed — the maintainer's ruling ([function-normalization](function-normalization.md) §3.7) is implemented: the undetermined callee is refused at the normalize (`the callee of an instantiation is not determined here — name the struct type where the instantiation is written`), and `lazy_named_instantiate` with its supply keys, argument-name map, `Diag::supplied_names` and the two miss sentences is deleted |
 | P4-13 | low | highlevel, language | A user refinement's failure is reported as an `@assert` the program never wrote | fixed — `AttrExt::assert_spelling` (default `None`) lets the annotation name its own failure; `Refinement` answers `AssertSpelling::Refined`, and the sentence is `the refinement's predicate did not answer 1 — the value does not satisfy the refined type`; an explicit `@assert` keeps `expected 1, found …`. D3's assertion is in `membership::a_refinement_written_on_a_type_refines_the_class` |
-| P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | in progress:owner-decided:A — [recursive-fold-typing](recursive-fold-typing.md) has the mechanism, the author's ruling, the measured negative routes and the decided fix (the clone walk carries a cloned cell's class members): `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` answers `raw none: ?a` (re-measured at `dev@064436d6`), and the annotated form answers `3: Int` |
+| P1-50 | high | highlevel, lowlevel, language | An un-annotated recursive fold's struct-state read answers `none` | wontfix:D18 — the recorded `raw none: ?a` of `S = struct{.y Int}` ; `@loop f = (s => if s(0) == 0 then s(1) else f (s(0) - 1, S(.y (s(1).y + 1))))` ; `(f (0, S(.y 3))).y` is the un-annotated shape: the arity cannot be inferred, and `(s : tuple{_, _})` makes it `3: Int`. Mechanism and engine experiments in [recursive-fold-typing](recursive-fold-typing.md) |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -974,6 +974,12 @@ negative routes, the handover and the workaround — is in
 was the only measured type-system defect not in this queue, and the queue is the
 thing a slice reads first.
 
+**Decided `wontfix:D18`** (see the Decisions block): the parameter's **shape** is the
+annotation the language requires — the arity cannot be inferred from uses, while the
+field types infer per call, so `(s : tuple{_, _})` makes the recorded program answer
+`3: Int`. The section stays as the verification record of the un-annotated form and of
+the engine route that was rejected.
+
 What the spec says, and what holds: an annotated recursive function's result is
 decided (`gcd = (…) : tuple{Int, Int} -> Int` answers `6: Int`), without the
 annotation the function's cells stay open (`raw 6: ?a`), the fold form annotates the
@@ -1505,4 +1511,19 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   for it. Whoever lands step 4 has to decide it again for a `block[1]` scope, and the
   honest default there is the opposite one: a staged write is reachable from any lane of
   the workgroup, so reachability from the codomain is not the test.
-
+- **D18 — Can an un-annotated recursive function's result type be decided? — DECIDED:
+  no; the parameter's **shape** is the annotation the language requires, and `P1-50` is
+  `wontfix`.** Measured at `dev@575ad0be`: without any annotation `g = s => s(1)` prints
+  `?a -> ?b` — the **arity** of a tuple a recursive function destructures cannot be
+  inferred from its uses — while the **field types** can: annotating the shape alone,
+  `@loop f = ((s : tuple{_, _}) => …)`, makes the application decide them
+  (`(f (0, S(.y 3))).y` answers `3: Int`, `(s : tuple{_, _}) => s(1)` applied to `(0, 7)`
+  answers `7: Int`, and `tuple{Int, _}` / `tuple{Int, S}` behave the same). So the
+  contract is: **a recursive function whose result type must be known states its
+  parameter's shape**, and every field type may stay `_`. The inference itself is not the
+  defect — it works as soon as the arity is stated. The engine route (the clone walk
+  carrying class members, then evaluating the codomain's deciders) was measured: it fixed
+  the repro and improved the un-annotated `gcd` to `6: Int`, but it hung
+  `recursion::deep_evaluating_an_infinite_stream_records_the_deep_budget`, and gating it
+  to shallow passes regressed the repro — both recorded in
+  [recursive-fold-typing](recursive-fold-typing.md), not carried forward.

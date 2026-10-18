@@ -611,7 +611,12 @@ maps every span back to the original file.
   without the annotation the function's own cells stay open (`?a -> ?b`) and
   every result derived from it is undecided (`?c`) — `examples/gcd.lichen`
   states the constraint, and the fold form annotates the same way, `@loop run =
-  ((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`; and
+  ((s => …) : tuple{Int, array{Float, 6}} -> array{Float, 6})`.  A recursive
+  function's **shape** is what that annotation must state: the arity of a tuple it
+  destructures cannot be inferred from its uses (`g = s => s(1)` prints `?a -> ?b`),
+  while the **field types** can — annotating only the shape, `(s : tuple{_, _})`, is
+  enough: `@loop f = ((s : tuple{_, _}) => …)` answers `3: Int` once the application
+  binds the fields, so every `_` may stay a wildcard; and
   `array{Int, 3} : Type` *fails*
   (the array type's type is the kind `[ArrayType, Type]`).  There is no
   subtyping relation at all (`Int` is not `<: Type`); kinding is an ordinary
