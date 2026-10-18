@@ -236,6 +236,14 @@ model's tables, so a token's path brings back one value, the token itself. The b
 cache the decode step wrote, so the context is the sequence's own, and `Service::step_arguments` is
 what lets the decode step take its words from a resident instead of from the host.
 
+**Each layer has its own tables, so the demo is two layers and not one layer twice.** `QUERIES` and
+`PROJECTIONS` are indexed by depth, uploaded once per layer and handed to it as its own residents; the
+token is still three submissions. The key and value caches stay **shared**, which is the demo's
+simplification — a model gives each layer its own and nothing in the path changes. The sampled tokens
+do not change with the tables, because the toy model's greedy pick is dominated by the key it is
+handed, so **the per-layer wiring is carried by the block's own tests and not by the demo's output**;
+the demo shows the path and its cost, and the layer difference is the block responding to its tables.
+
 **How many dispatches a real layer needs is a reading, not a measurement.** Counting the kernels the
 examples already have — `rmsnorm` 2, `rope` 3, `attention` 2, `softmax` 2, `matmul` 1, `gemv` 1,
 `silu` 2, `layernorm` 3 — a transformer block assembled from them is **13 to 18 dispatches**, so a

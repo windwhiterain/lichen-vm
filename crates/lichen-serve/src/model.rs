@@ -246,11 +246,25 @@ built
 /// How many blocks one token passes through, which is the depth the demo serves.
 pub const BLOCKS: usize = 2;
 
-/// The query every sequence attends with, one row of five per sequence.
-pub const QUERY: [f32; 10] = [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0];
+/// Each layer's query, one row of five per sequence, so the layers differ.
+pub const QUERIES: [[f32; 10]; BLOCKS] = [
+    [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+    [0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+];
 
-/// The block's feed-forward projection, five rows of five.
-pub const PROJECTION: [f32; 25] = [
-    1.0, 2.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 3.0, 1.0,
-    0.0, 0.0, 0.0, 0.0, 1.0, 4.0,
+/// Each layer's feed-forward projection, five rows of five.
+///
+/// # Invariant
+/// The layers' tables differ, so a state the second layer's weights produced is not what the first
+/// layer's would have. The key and value caches are shared by the layers instead, which is the demo's
+/// simplification: a model gives each layer its own and nothing in the path changes.
+pub const PROJECTIONS: [[f32; 25]; BLOCKS] = [
+    [
+        1.0, 2.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 3.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 4.0,
+    ],
+    [
+        0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0,
+        0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    ],
 ];

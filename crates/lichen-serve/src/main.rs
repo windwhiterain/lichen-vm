@@ -12,7 +12,7 @@ use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::ScalarData;
 use lichen_serve::{
-    BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, PROJECTION, QUERY, ROWS, Service, Session,
+    BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, PROJECTIONS, QUERIES, ROWS, Service, Session,
     WEIGHTS, embedding_of,
 };
 
@@ -87,12 +87,20 @@ fn serve() -> Result<(), String> {
     let empty_values = session
         .upload(&zero)
         .map_err(|refusal| format!("the empty value cache did not load: {refusal}"))?;
-    let query = session
-        .upload(&QUERY)
-        .map_err(|refusal| format!("the query did not load: {refusal}"))?;
-    let projection = session
-        .upload(&PROJECTION)
-        .map_err(|refusal| format!("the projection did not load: {refusal}"))?;
+    let mut queries = Vec::with_capacity(BLOCKS);
+    let mut projections = Vec::with_capacity(BLOCKS);
+    for layer in 0..BLOCKS {
+        queries.push(
+            session
+                .upload(&QUERIES[layer])
+                .map_err(|refusal| format!("layer {layer}'s query did not load: {refusal}"))?,
+        );
+        projections.push(
+            session
+                .upload(&PROJECTIONS[layer])
+                .map_err(|refusal| format!("layer {layer}'s projection did not load: {refusal}"))?,
+        );
+    }
 
     let mut service = Service::open_decode(
         &session,
@@ -137,7 +145,13 @@ fn serve() -> Result<(), String> {
                 },
             };
             let stepped = block
-                .step(block_arguments(state, keys, values, query, projection))
+                .step(block_arguments(
+                    state,
+                    keys,
+                    values,
+                    queries[depth],
+                    projections[depth],
+                ))
                 .map_err(|refusal| format!("step {step} block {depth} did not run: {refusal}"))?;
             submissions += stepped.cost.submissions;
             millis += stepped.cost.elapsed.as_secs_f64() * 1.0e3;
@@ -178,7 +192,10 @@ fn serve() -> Result<(), String> {
         SEQUENCES
     );
 
-    for resident in [weights, empty_keys, empty_values, query, projection] {
+    for resident in [weights, empty_keys, empty_values] {
+        session.release(resident);
+    }
+    for resident in queries.into_iter().chain(projections) {
         session.release(resident);
     }
     Ok(())
