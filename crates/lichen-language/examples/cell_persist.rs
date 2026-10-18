@@ -18,8 +18,8 @@ use lichen_language_parser::path::Path;
 use lichen_lowlevel::{AnyNodeId, Registry, StaticModule, StaticNodeId};
 
 const SOURCE: &str = "\
-cache a = 1 + 2
-cache b = a + 3
+@cache a = 1 + 2
+@cache b = a + 3
 a + b
 ";
 

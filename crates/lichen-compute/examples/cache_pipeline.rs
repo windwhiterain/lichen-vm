@@ -35,9 +35,9 @@ doubler = compute.parallel ((k : ParB) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
 }) "cpu"
 raw = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-cache data = raw.z
+@cache data = raw.z
 raw2 = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b data))) : OutB)
-cache result = raw2.w.native
+@cache result = raw2.w.native
 result
 "#;
 
@@ -124,7 +124,7 @@ fn main() {
 
     let mut rows: Vec<Row> = Vec::new();
     // A whitespace-only edit on the first build: no resolved structure moves.
-    let first_spaced = PIPELINE.replace("cache data", "cache  data");
+    let first_spaced = PIPELINE.replace("@cache data", "@cache  data");
     rows.push(measure(
         &mut store,
         &mut session,
@@ -142,7 +142,7 @@ fn main() {
         "kernel constant",
     ));
     // A whitespace edit changes no resolved structure: the whole build is reused.
-    let spaced = steeper.replace("cache data", "cache  data");
+    let spaced = steeper.replace("@cache data", "@cache  data");
     rows.push(measure(
         &mut store,
         &mut session,

@@ -8,8 +8,8 @@ use lichen_language::session::BufferSession;
 use lichen_lowlevel::{AnyNodeId, Registry};
 
 const SOURCE: &str = "\
-cache a = 1 + 2
-cache b = a + 3
+@cache a = 1 + 2
+@cache b = a + 3
 a + b
 ";
 const DIR: &str = "target/cell-cache-probe";
@@ -73,7 +73,7 @@ fn main() {
 
     // A rename moves `a`'s path, so the cell is dropped and its file must be reclaimed.
     let renamed = edited
-        .replace("cache a =", "cache a2 =")
+        .replace("@cache a =", "@cache a2 =")
         .replace("a + 3", "a2 + 3")
         .replace("a + b", "a2 + b");
     let report = session(&renamed).compile();

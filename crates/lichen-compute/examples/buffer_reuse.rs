@@ -26,7 +26,7 @@ doubler = compute.parallel ((k : ParB) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
 }) "cpu"
 raw = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
-cache mid = raw.z
+@cache mid = raw.z
 raw2 = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b mid))) : OutB)
 (mid, raw2.w.native)
 "#;

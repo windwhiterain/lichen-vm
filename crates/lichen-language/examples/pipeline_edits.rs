@@ -38,11 +38,11 @@ impl Pipeline {
                 0 => String::new(),
                 n => format!("s{} + ", n - 1),
             };
-            source.push_str(&format!("cache s{i} = {upstream}step {depth}\n"));
+            source.push_str(&format!("@cache s{i} = {upstream}step {depth}\n"));
         }
         if self.append {
             let n = self.depths.len();
-            source.push_str(&format!("cache s{n} = s{} + step {APPEND_DEPTH}\n", n - 1));
+            source.push_str(&format!("@cache s{n} = s{} + step {APPEND_DEPTH}\n", n - 1));
         }
         source.push_str(&format!("bias = {}\n", self.bias));
         let mut terms: Vec<String> = (0..self.depths.len()).map(|i| format!("s{i}")).collect();
@@ -165,7 +165,7 @@ fn main() {
 
     // Whitespace inside a cell *and* a real change to the unmarked binding: no cell moved.
     pipeline.bias = 8;
-    let combined = pipeline.source().replace("cache s0", "cache  s0");
+    let combined = pipeline.source().replace("@cache s0", "@cache  s0");
     rows.push(measure(
         &mut session,
         &combined,
@@ -173,7 +173,7 @@ fn main() {
     ));
 
     // A whitespace-only edit: no resolved structure moves at all.
-    let spaced = pipeline.source().replace("cache s0", "cache  s0");
+    let spaced = pipeline.source().replace("@cache s0", "@cache  s0");
     rows.push(measure(&mut session, &spaced, "whitespace only".into()));
 
     println!(

@@ -138,7 +138,7 @@ fn main() {
     let edits: Vec<(&str, fn(&str) -> String)> = vec![
         ("same source again", |source| source.to_string()),
         ("whitespace only", |source| {
-            source.replace("cache octave_a", "cache  octave_a")
+            source.replace("@cache octave_a", "@cache  octave_a")
         }),
         ("biome sea 0.35 -> 0.40", |source| {
             source.replace(".sea 0.35", ".sea 0.40")
@@ -153,10 +153,10 @@ fn main() {
             source.replace("(seed + 3)", "(seed + 5)")
         }),
         ("append a smoothing pass", |source| {
-            let inserted = "cache weathered = (compute.plrun smooth ((ASmooth)(.n count, \
+            let inserted = "@cache weathered = (compute.plrun smooth ((ASmooth)(.n count, \
                             .cols size, .I InField(.f relief))) : OutField).f\ncache biomes";
             source
-                .replace("cache biomes", inserted)
+                .replace("@cache biomes", inserted)
                 .replace(".height relief", ".height weathered")
         }),
         ("seed 7 -> 11", |source| {

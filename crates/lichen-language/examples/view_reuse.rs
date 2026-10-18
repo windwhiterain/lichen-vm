@@ -9,7 +9,7 @@
 use lichen_language::program::LangProgram;
 use lichen_language::session::BufferSession;
 
-const CODE: &str = "cache a = 1 + 2\ncache b = a + 3\nb\n";
+const CODE: &str = "@cache a = 1 + 2\n@cache b = a + 3\nb\n";
 
 fn arm(base: u32) {
     let starts = lichen_language::lex::line_starts(CODE);
@@ -17,7 +17,7 @@ fn arm(base: u32) {
     session.set_view(CODE, base, &starts, &[]);
     let first = session.compile();
 
-    let spaced = CODE.replace("cache a", "cache  a");
+    let spaced = CODE.replace("@cache a", "@cache  a");
     session.set_view(&spaced, base, &starts, &[]);
     let whitespace = session.compile();
 

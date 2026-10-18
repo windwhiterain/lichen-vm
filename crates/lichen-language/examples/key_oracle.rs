@@ -28,11 +28,11 @@ fn cases() -> Vec<Case> {
         Case {
             name: "chain",
             source: "\
-cache a = 1 + 2
-cache b = a + 3
-cache c = b + 4
-cache d = c + 5
-cache e = d + 6
+@cache a = 1 + 2
+@cache b = a + 3
+@cache c = b + 4
+@cache d = c + 5
+@cache e = d + 6
 e + 0
 ",
             steps: vec![
@@ -40,14 +40,14 @@ e + 0
                 ("tail only", |s| s.replace("e + 0", "e + 1"), 5..6, 5..6),
                 (
                     "append a binding",
-                    |s| s.replace("e + 1", "cache f = 1\ne + 1"),
+                    |s| s.replace("e + 1", "@cache f = 1\ne + 1"),
                     5..5,
                     5..6,
                 ),
                 ("insert at the top", |s| format!("x = 1\n{s}"), 0..0, 0..1),
                 (
                     "whitespace",
-                    |s| s.replace("cache a", "cache  a"),
+                    |s| s.replace("@cache a", "@cache  a"),
                     1..2,
                     1..2,
                 ),
@@ -58,17 +58,17 @@ e + 0
         Case {
             name: "diamond",
             source: "\
-cache a = 1 + 2
-cache b = a + 3
-cache c = a + 4
-cache d = b + c
+@cache a = 1 + 2
+@cache b = a + 3
+@cache c = a + 4
+@cache d = b + c
 d
 ",
             steps: vec![
                 ("change a", |s| s.replace("1 + 2", "1 + 3"), 0..1, 0..1),
                 (
                     "whitespace on b",
-                    |s| s.replace("cache b", "cache  b"),
+                    |s| s.replace("@cache b", "@cache  b"),
                     1..2,
                     1..2,
                 ),
@@ -78,7 +78,7 @@ d
         Case {
             name: "nested block",
             source: "\
-cache e = { local = 1; local + 2 }
+@cache e = { local = 1; local + 2 }
 e
 ",
             steps: vec![
@@ -99,14 +99,14 @@ e
         Case {
             name: "combined",
             source: "\
-cache a = 1 + 2
-cache b = a + 3
+@cache a = 1 + 2
+@cache b = a + 3
 u = 9
 b + u
 ",
             steps: vec![(
                 "whitespace + unmarked change",
-                |s| s.replace("cache a", "cache  a").replace("u = 9", "u = 8"),
+                |s| s.replace("@cache a", "@cache  a").replace("u = 9", "u = 8"),
                 0..3,
                 0..3,
             )],

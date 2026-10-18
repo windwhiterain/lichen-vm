@@ -46,17 +46,17 @@ impl Shape {
         source.push('\n');
         for i in 0..self.cheap {
             if i == 0 {
-                source.push_str(&format!("cache c0 = 1 + {}\n", self.seed));
+                source.push_str(&format!("@cache c0 = 1 + {}\n", self.seed));
             } else {
-                source.push_str(&format!("cache c{i} = c{} + 1\n", i - 1));
+                source.push_str(&format!("@cache c{i} = c{} + 1\n", i - 1));
             }
         }
         for i in 0..self.heavy {
             let cell_depth = if i == 0 { self.h0_depth } else { self.depth };
-            source.push_str(&format!("cache h{i} = fib {cell_depth}\n"));
+            source.push_str(&format!("@cache h{i} = fib {cell_depth}\n"));
         }
         if self.extra {
-            source.push_str("cache extra = fib 5\n");
+            source.push_str("@cache extra = fib 5\n");
         }
         // The tail reads every retained binding, so dropping any cell is observable.
         let mut terms: Vec<String> = Vec::new();
@@ -176,7 +176,7 @@ fn main() {
     let with_extra = shape.source();
 
     // Edit 4 — whitespace only: no resolved structure changes, so no cell moves.
-    let spaced = with_extra.replace("cache c0", "cache  c0");
+    let spaced = with_extra.replace("@cache c0", "@cache  c0");
     rows.push(measure(&mut session, &spaced, "whitespace only"));
 
     // Edit 5 — the tail only: the consumer changes, no cell does.

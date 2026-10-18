@@ -4,7 +4,7 @@
   doc = "A seeded world generator, and the application the heavy-value cache is validated on \
     (`docs/notes/heavy-value-cache.md` §9.17). Three elevation octaves and two moisture octaves \
     of hashed value noise, blended by two `mix` kernels, smoothed twice by one five-tap kernel, \
-    classified into five biomes and turned into a tile atlas — twelve `cache` stages over a \
+    classified into five biomes and turned into a tile atlas — twelve `@cache` stages over a \
     `128 × 128` grid of `16 384` cells.\n\n\
     **The noise is the language's own arithmetic, not a modelled function.** A lattice corner \
     answers `((x * 7919) + (y * 104729) + (seed * 1299709)) % 65536 / 65535`, every product \
@@ -12,7 +12,7 @@
     a repeatable reading rather than a driver's. The interpolation between four corners is \
     smoothstep-weighted (`fx * fx * (3.0 - 2.0 * fx)`), so an octave's `scale` is a real \
     frequency and not a label.\n\n\
-    **The stages are the dependency graph the cache exists for, and each one is a `cache` binding \
+    **The stages are the dependency graph the cache exists for, and each one is a `@cache` binding \
     whose value is a buffer.** The three elevation octaves and the two moisture octaves are \
     independent; `blended` and `elevation` fold the first three, `moisture` folds the other two, \
     `eroded` and `relief` run the same five-tap kernel twice, `biomes` classifies on both fields, \
@@ -115,22 +115,22 @@ seed = 7
 size = 128
 count = size * size
 
-cache octave_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 32, .seed seed, .I InSeed(.seed seed))) : OutField).f
-cache octave_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 16, .seed (seed + 1), .I InSeed(.seed (seed + 1)))) : OutField).f
-cache octave_c = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 8, .seed (seed + 2), .I InSeed(.seed (seed + 2)))) : OutField).f
+@cache octave_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 32, .seed seed, .I InSeed(.seed seed))) : OutField).f
+@cache octave_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 16, .seed (seed + 1), .I InSeed(.seed (seed + 1)))) : OutField).f
+@cache octave_c = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 8, .seed (seed + 2), .I InSeed(.seed (seed + 2)))) : OutField).f
 
-cache blended = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a octave_a, .b octave_b))) : OutField).f
-cache elevation = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.25, .I InField2(.a blended, .b octave_c))) : OutField).f
+@cache blended = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a octave_a, .b octave_b))) : OutField).f
+@cache elevation = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.25, .I InField2(.a blended, .b octave_c))) : OutField).f
 
-cache damp_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 24, .seed (seed + 3), .I InSeed(.seed (seed + 3)))) : OutField).f
-cache damp_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 12, .seed (seed + 4), .I InSeed(.seed (seed + 4)))) : OutField).f
-cache moisture = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a damp_a, .b damp_b))) : OutField).f
+@cache damp_a = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 24, .seed (seed + 3), .I InSeed(.seed (seed + 3)))) : OutField).f
+@cache damp_b = (compute.plrun noise ((ANoise)(.n count, .cols size, .scale 12, .seed (seed + 4), .I InSeed(.seed (seed + 4)))) : OutField).f
+@cache moisture = (compute.plrun mix ((AMix)(.n count, .cols size, .w 0.5, .I InField2(.a damp_a, .b damp_b))) : OutField).f
 
-cache eroded = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f elevation))) : OutField).f
-cache relief = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f eroded))) : OutField).f
+@cache eroded = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f elevation))) : OutField).f
+@cache relief = (compute.plrun smooth ((ASmooth)(.n count, .cols size, .I InField(.f eroded))) : OutField).f
 
-cache biomes = (compute.plrun biome ((ABiome)(.n count, .cols size, .sea 0.35, .ridge 0.7, .I InLand(.height relief, .moisture moisture))) : OutIds).ids
-cache tiles = (compute.plrun tile ((ATile)(.n count, .cols size, .seed seed, .I InTile(.biomes biomes))) : OutIds).ids
+@cache biomes = (compute.plrun biome ((ABiome)(.n count, .cols size, .sea 0.35, .ridge 0.7, .I InLand(.height relief, .moisture moisture))) : OutIds).ids
+@cache tiles = (compute.plrun tile ((ATile)(.n count, .cols size, .seed seed, .I InTile(.biomes biomes))) : OutIds).ids
 
 view = (compute.collect relief : array{Float, 16384})
 land = (compute.collect biomes : array{Int, 16384})
