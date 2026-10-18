@@ -42,6 +42,11 @@ pub enum BridgeRefusal {
         /// The value computed in the integer class.
         value: ValueId,
     },
+    /// The marked value computes in a class the symbolic language does not carry.
+    UnsupportedClass {
+        /// The class the value computes in.
+        class: ScalarClass,
+    },
     /// The marked value applies an operator the symbolic language has no counterpart for.
     UnsupportedOperator {
         /// The operator, as the lowered kernel IR names it.
@@ -108,6 +113,11 @@ impl BridgeRefusal {
 impl fmt::Display for BridgeRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            BridgeRefusal::UnsupportedClass { class } => write!(
+                formatter,
+                "the marked value computes in {class:?}, which the symbolic language does not carry, \
+                 so there is nothing to lower it to"
+            ),
             BridgeRefusal::NotAValue { marked } => write!(
                 formatter,
                 "the mark names {marked:?}, which is not a value of the body it was read from"

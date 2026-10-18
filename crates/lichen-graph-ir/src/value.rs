@@ -27,6 +27,10 @@ fn pack(class: ScalarClass, words: &[i64]) -> Vec<u8> {
         match class {
             ScalarClass::Int => bytes.extend_from_slice(&word.to_le_bytes()),
             ScalarClass::Float => bytes.extend_from_slice(&(*word as u32).to_le_bytes()),
+            // A bf16 is the top half of the float it rounds to, so the word keeps its high twice.
+            ScalarClass::BFloat16 => {
+                bytes.extend_from_slice(&((*word as u32) >> 16).to_le_bytes()[..2])
+            }
         }
     }
     bytes
@@ -44,6 +48,10 @@ fn elements(class: ScalarClass, bytes: &[u8]) -> Vec<i64> {
             ScalarClass::Int => i64::from_le_bytes(element.try_into().unwrap_or_default()),
             ScalarClass::Float => {
                 i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
+            }
+            // The half is the float's high bits, so the word is its pattern lifted back into place.
+            ScalarClass::BFloat16 => {
+                i64::from(u16::from_le_bytes(element.try_into().unwrap_or_default()) as u32) << 16
             }
         })
         .collect()

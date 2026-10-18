@@ -49,6 +49,8 @@ pub enum ScalarClass {
     Int,
     /// A 32-bit float — the language's `Float`.
     Float,
+    /// A brain float: the top sixteen bits of a `Float`, and the only half a model needs.
+    BFloat16,
 }
 
 impl ScalarClass {
@@ -63,6 +65,7 @@ impl ScalarClass {
         match self {
             ScalarClass::Int => 8,
             ScalarClass::Float => 4,
+            ScalarClass::BFloat16 => 2,
         }
     }
 
@@ -73,12 +76,13 @@ impl ScalarClass {
     /// class — an SPIR-V storage buffer, whose `ArrayStride` is the class's
     /// `byte_width()` — sizes its table by the number of classes, not by a number
     /// restated beside it.
-    pub const ALL: [ScalarClass; 2] = [ScalarClass::Int, ScalarClass::Float];
+    pub const ALL: [ScalarClass; 3] = [ScalarClass::Int, ScalarClass::Float, ScalarClass::BFloat16];
 
     pub fn index(self) -> usize {
         match self {
             ScalarClass::Int => 0,
             ScalarClass::Float => 1,
+            ScalarClass::BFloat16 => 2,
         }
     }
 }

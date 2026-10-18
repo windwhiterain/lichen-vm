@@ -192,6 +192,13 @@ impl Walk<'_> {
             KernelInstr::Bin(ScalarClass::Int, _) => {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
+            KernelInstr::Const(ScalarClass::BFloat16, _)
+            | KernelInstr::Bin(ScalarClass::BFloat16, _)
+            | KernelInstr::BufferReadCall(ScalarClass::BFloat16) => {
+                Err(BridgeRefusal::UnsupportedClass {
+                    class: ScalarClass::BFloat16,
+                })
+            }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
             KernelInstr::Fma => Err(BridgeRefusal::FusedMultiplyAdd),
             KernelInstr::Negate => {

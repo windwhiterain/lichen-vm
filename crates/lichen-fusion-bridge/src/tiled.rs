@@ -170,6 +170,10 @@ impl Identity {
         match class {
             ScalarClass::Int => Identity::Int(value as i64),
             ScalarClass::Float => Identity::Float(value),
+            // The identities a reduction states are `0`, `1` and `-inf`, and all three are exact at
+            // bf16, so the float this carries is the value itself; bf16 *arithmetic* is not modelled
+            // and `lower` refuses it.
+            ScalarClass::BFloat16 => Identity::Float(value),
         }
     }
 }
