@@ -131,6 +131,20 @@ said. The class cannot be decided by anything inside it: what is missing is the
 some member already holds. The next reading is the template node whose clone is
 `366v1` (the fold's return pair's type item) and that node's class at check time.
 
+**The fourth reading: the class has an operation, and it stays open.** Instrumenting
+`instantiate_stamped` for the return pair: the fold's return pair is `210v1`, its type
+item `41v1`, and **before the walk** `41v1`'s class is `{155v1 (bare, open), 41v1 (bare,
+open), 174v1 (op=true, open)}` — all in block 2, function 1. So the class is *not*
+memberless: `174v1` is the derived read that should decide it, and it never gets a value.
+The body's own applies tell the contrast: their return type item `12v1` starts at class
+size 3 and grows 3→8 across the six applies with `value=true` — the class members pile up
+*and* the cell is decided there.
+
+That narrows the remaining question to the clone of an operation member: with the carry
+from the first attempt in place, is `174v1` cloned (present in the pass's `remap`) and is
+its clone evaluated? The next probe answers that and tells whether the fix is
+"carry the members" (already written) or "carry **and evaluate** them at the apply".
+
 The repro above is the whole test surface: `S`-state fold answers `raw none` today and must
 answer `3` once the type is decided; the tuple-of-Ints control must keep answering `7`; the
 struct-literal base (`@loop f = (n => if n == 0 then S(.y 7) else f (n - 1))`) must keep
