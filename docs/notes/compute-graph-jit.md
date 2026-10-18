@@ -747,6 +747,12 @@ wrongly answers with *different* numbers rather than the same ones by luck.
   took it; a **loop body** is not, because a zero-trip count is a lane that never
   runs it, so a write inside a loop is **refused by name** rather than emitted.
   See [lichen-compute-gpu](lichen-compute-gpu.md).
+- **A device-written extent of `0` reaches no invocation, and is not refused.** A
+  host-known zero is `RunError::EmptyRun`; a `Count::Device` reading a zero the device
+  wrote is recorded as an indirect dispatch and runs, dispatching nothing — so that
+  step's output is an allocation's leftover and may never be read. Measured in
+  `crates/lichen-compute-gpu/tests/compute_gpu/indirect_zero_extent.rs`; the stop test
+  built on it is [inference-service](inference-service.md) §4.
 - **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
   memory lives until `GpuContext::drop`.
 - **A count is a value, and a value asked for the wrong role must be refused

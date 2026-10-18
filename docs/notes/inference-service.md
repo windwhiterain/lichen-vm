@@ -138,8 +138,13 @@ Two corollaries worth stating where they will be read:
   program with nothing to do, not a smaller run."* But `dispatch.rs` computes a
   device-held extent's count as its **`capacity`**, not as `0`, and the dispatch it
   records is indirect — so a `Count::Device` reading a device-written `0` does not
-  reach that refusal, and Vulkan accepts an indirect dispatch of zero workgroups.
-  **This row is read off the code and not yet measured**; §8 names the probe.
+  reach that refusal. **Measured** (`indirect_zero_extent.rs`): the run succeeds, the
+  gated step dispatches nothing, and under `Policy::Batch` the graph still costs **one
+  submission and one fence wait** — so a stop test driven by a device flag is
+  expressible at the price the step already paid. **And a gated node's output is
+  unspecified**: no invocation ran, so nothing wrote it, and the zeros a probe saw are
+  an allocation's leftover rather than a computed answer. Never reading a gated step's
+  output is the one rule this pattern owes.
 
 ## 5. Cross-step scheduling in the graph: three forms, and which is blocked
 
@@ -285,26 +290,22 @@ Three verdicts were given and are recorded here rather than left in a transcript
 
 ## 8. What is open, in the order the evidence puts it
 
-1. **Measure the indirect zero extent.** A hand-built two-node graph whose first
-   node writes `0` and whose second takes it as `Count::Device`: does it dispatch
-   zero workgroups, or refuse? `device_extent.rs` holds the machinery. §4's row is
-   a code reading until this runs.
-2. **Output aliasing, in the three layers §6 names.** The `lichen-kernel-ir` entry
+1. **Output aliasing, in the three layers §6 names.** The `lichen-kernel-ir` entry
    first, because nothing can ask for an alias today; then the graph's liveness
    decision; then the backend's binding. The probe — one `VkBuffer` under two
    descriptor bindings — cannot be written before that entry exists, which is why
    §6 puts the contract first.
-3. **A surface for a kernel-level loop with carried state.** The IR expresses it and
+2. **A surface for a kernel-level loop with carried state.** The IR expresses it and
    the emitter's module for it is validated
    ([compute-runtime-scalars](compute-runtime-scalars.md), open item 5); what is
    refused is the lowering's placement of a destructured state.
-4. **The `ServiceImage` package**: a codec beside `write_fused_kernel` holding the
+3. **The `ServiceImage` package**: a codec beside `write_fused_kernel` holding the
    kernels, the serialized graph, the residents with their initializers, and the
    typed coupling holes. `Graph` is already plain data — kernel ids, edge numbers
    and counts — so this is serialization, not a new representation.
-5. **`MAX_DISPATCHES_PER_SUBMISSION`.** 64 is a `max_sets`; raising it is a pool
+4. **`MAX_DISPATCHES_PER_SUBMISSION`.** 64 is a `max_sets`; raising it is a pool
    sizing decision, and form A's cap on N moves with it.
-6. **argmax's class.** The token comes out `Float` (U3), because one kernel cannot
+5. **argmax's class.** The token comes out `Float` (U3), because one kernel cannot
    read `Float` and write `Int`: *"instruction 8 mixed an integer and a float in one
    operation"*. An `Int` min-fold works on its own. So a device-side embedding
    lookup needs either a fourth dispatch to convert, or `float2int` at the point of

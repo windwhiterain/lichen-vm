@@ -8,6 +8,7 @@ mod device_extent;
 mod fused_landing_on_device;
 mod gpu_matches_cpu;
 mod graph_on_device;
+mod indirect_zero_extent;
 mod materialised_integer;
 mod refusals;
 mod spirv_validation;

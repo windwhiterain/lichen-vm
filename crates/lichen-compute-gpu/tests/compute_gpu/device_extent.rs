@@ -17,9 +17,9 @@ use lichen_kernel_ir::{
 };
 
 /// The lane count one workgroup runs, which is also what a fragment declares.
-const LANES: u32 = 64;
+pub(super) const LANES: u32 = 64;
 /// How many elements the counting kernel reads: two per lane, one workgroup.
-const COUNTED: usize = LANES as usize * 2;
+pub(super) const COUNTED: usize = LANES as usize * 2;
 /// The elements that pass `in[i] > 0`, which is what the count comes to.
 const PASSING: i64 = 40;
 
@@ -297,7 +297,7 @@ fn doubles_then_one() -> KernelFragment {
 /// second node's count names the counting node's output and element `0`, and **nothing** in the
 /// graph knows what the number is: the second node's allocation is the whole counting buffer, so
 /// the extent the dispatch ran over can only have come from the device.
-fn counting_chain(device_held: bool) -> Graph {
+pub(super) fn counting_chain(device_held: bool) -> Graph {
     let mut graph = Graph::with_inputs(1);
     let counted = graph
         .push(
@@ -348,7 +348,7 @@ fn data() -> Vec<i64> {
 }
 
 /// The graph's answer, as the `i64` elements this integer fragment produces.
-fn words(data: ScalarData) -> Vec<i64> {
+pub(super) fn words(data: ScalarData) -> Vec<i64> {
     match data {
         ScalarData::Int(elements) => elements,
         ScalarData::Float(elements) => {
@@ -360,14 +360,14 @@ fn words(data: ScalarData) -> Vec<i64> {
     }
 }
 
-fn resident(value: &Value<'_>) -> ResidentId {
+pub(super) fn resident(value: &Value<'_>) -> ResidentId {
     match value.slot().expect("a dispatch's output names a buffer") {
         BufferSlot::Resident(id) => id,
         BufferSlot::Host(_) => panic!("a dispatch's output is a buffer, not host data"),
     }
 }
 
-fn release_all(context: &GpuContext, values: &[Value<'_>]) {
+pub(super) fn release_all(context: &GpuContext, values: &[Value<'_>]) {
     for value in values {
         if let Ok(BufferSlot::Resident(id)) = value.slot() {
             context.release(id);
