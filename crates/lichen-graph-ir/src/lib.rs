@@ -2,9 +2,10 @@
 //! consumed whom.
 //!
 //! # Invariant
-//! Two node kinds and no third: a kernel node over an index range making device
-//! buffers, and a native node making host data. What decides when the host observes
-//! completion is the policy, not the graph. docs/notes/compute-graph-jit.md.
+//! One node kind and no second: a kernel node over an index range making device
+//! buffers. A host call is not a node — a closure is a compiled artifact, so it
+//! lowers to a fragment and is dispatched like one. What decides when the host
+//! observes completion is the policy, not the graph. docs/notes/compute-graph-jit.md.
 
 /// The graph itself and the nodes in it.
 pub mod graph;

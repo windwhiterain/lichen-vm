@@ -12,7 +12,7 @@ use crate::refusal::FragmentShape;
 /// that outlives the arena a reference would point into.
 pub type ValueId = usize;
 
-/// A DAG of kernel launches and host calls.
+/// A DAG of kernel launches.
 ///
 /// # Invariant
 /// Nodes are in evaluation order and a node's inputs are always values earlier nodes

@@ -56,7 +56,7 @@ does not run and nothing says so.
 | Pass them beside the index as the `main` arguments | `run_parallel_range` | the argument list is the leaves in field order with the index appended, and only the index moves per element |
 | Assemble the fragment's signature | `compile_parallel_fragment`'s `param_shape` | landed with the leaf classes — the assembler derives `main`'s parameters from it |
 | Push the scalar leaves to the shader | `lichen-compute-gpu/src/dispatch.rs`'s `scalar_block` | landed: the block's member `0` is the extent (the run's own `count`) and the rest are the runtime scalars, at the offsets `spirv::push_layout` gave the module |
-| Carry a runtime scalar in a **recorded** body | `record_launch` | **refused by name**: a recording carries the extent alone, and a runtime scalar would have to be one of its edges |
+| Carry a runtime scalar in a **recorded** body | `record_launch` | **landed**: `KernelNode.scalars` holds one `Scalar` per leaf, and `Scalar::Value(ValueId)` is an edge the `Runner` resolves against the value table (`graph_runtime_scalar.rs`) |
 
 The decode is **positional**, and that is the ABI's rule rather than a
 convenience: the host struct is the parameter's scalars in field order, then
@@ -174,10 +174,15 @@ independent, not because `_` is impossible.
 
 ## What is still open
 
-1. **A runtime scalar in a recorded body, and in a graph node.** A `KernelNode`
-   carries its extent and its buffers and nothing else, so a node whose fragment
-   declares a runtime scalar is refused by leaf count. The block is written; the
-   graph IR has no value to put in it.
+1. **A scalar the device computed — and only that.** This item once said a
+   `KernelNode` carries its extent and its buffers and nothing else; it now carries
+   `scalars: Vec<Scalar>`, one per leaf, and `Scalar::Value(ValueId)` is an edge the
+   `Runner` resolves against the value table and refuses the wrong length of
+   (`graph_runtime_scalar.rs`). What is still absent is a `Scalar::Device` beside
+   `Count::Device`, and that absence is the invariant's own: a scalar rides a
+   push-constant block the host fills while recording, so a value the device must
+   vary per step has to live in a buffer instead
+   ([inference-service](inference-service.md) §4).
 2. **An interleaved parameter.** The host decode is positional and the fragment
    carries no role table, so a parameter that interleaves scalars with `.in`
    should be refused by name; that refusal is not written.
