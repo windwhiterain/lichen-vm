@@ -154,6 +154,44 @@ impl ScalarData {
     }
 }
 
+impl KernelFragment {
+    /// State one element class for every **real** buffer this fragment touches.
+    ///
+    /// # Invariant
+    /// The body names each access's class, and that name is what a target reads the bytes at, so the
+    /// accesses move with the buffers: a fragment whose classes moved and whose body did not would read
+    /// its payload at the old width. An integer buffer keeps its class, because nothing converts between
+    /// the families and a reinterpretation is a wrong number rather than a different precision.
+    pub fn states_the_class(&mut self, class: ScalarClass) {
+        if !class.is_real() {
+            return;
+        }
+        for held in self.input_classes.iter_mut() {
+            if held.is_real() {
+                *held = class;
+            }
+        }
+        for held in self.output_classes.iter_mut() {
+            if held.is_real() {
+                *held = class;
+            }
+        }
+        for value in self.body.values.iter_mut() {
+            let ValueDef::Instr { op, .. } = value else {
+                continue;
+            };
+            match op {
+                KernelInstr::BufferReadCall(held) | KernelInstr::BufferWriteCall(held)
+                    if held.is_real() =>
+                {
+                    *held = class;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// A backend's own name for a buffer it is holding.
 ///
 /// # Invariant

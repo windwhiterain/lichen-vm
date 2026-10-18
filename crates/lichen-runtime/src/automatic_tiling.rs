@@ -14,8 +14,8 @@ use lichen_fusion::{Reduction, normalize};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    KernelClaim, KernelFragment, KernelId, KernelInstr, Plan, ScalarClass, Slice, Space, Staging,
-    ValueDef, fragment_digest,
+    KernelClaim, KernelFragment, KernelId, Plan, ScalarClass, Slice, Space, Staging,
+    fragment_digest,
 };
 
 use crate::fused::{
@@ -196,41 +196,6 @@ impl GraphPass for AutomaticTiling {
     }
 }
 
-/// Set the element class a pack states on the node's first input buffer.
-///
-/// # Invariant
-/// Applied only when both sides are real numbers: a pack that would cross a float with an integer
-/// names a buffer whose body was not written for it, so the program's own class stands.
-fn states_the_class(fragment: &mut KernelFragment, class: ScalarClass) {
-    if !class.is_real() {
-        return;
-    }
-    for held in fragment.input_classes.iter_mut() {
-        if held.is_real() {
-            *held = class;
-        }
-    }
-    for held in fragment.output_classes.iter_mut() {
-        if held.is_real() {
-            *held = class;
-        }
-    }
-    // A body names each access's class, and that name is what the emitter reads the bytes at.
-    for value in fragment.body.values.iter_mut() {
-        let ValueDef::Instr { op, .. } = value else {
-            continue;
-        };
-        match op {
-            KernelInstr::BufferReadCall(held) | KernelInstr::BufferWriteCall(held)
-                if held.is_real() =>
-            {
-                *held = class;
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Land a node again with the class its pack states, and say what happened.
 ///
 /// # Invariant
@@ -244,7 +209,7 @@ fn classed_node(
 ) -> String {
     let Node::Kernel(node) = &graph.nodes()[position];
     let mut fragment = node.fragment.clone();
-    states_the_class(&mut fragment, class);
+    fragment.states_the_class(class);
     let artifact = write_fused_kernel(&FusedKernel {
         fragment,
         claim: Some(instance.claim.clone()),
@@ -412,7 +377,7 @@ fn tile(
     if let Decision::Fires(pack, _) = decision
         && let Some(class) = pack.class()
     {
-        states_the_class(&mut fragment, class);
+        fragment.states_the_class(class);
     }
     fragment.body = tiled.body().clone();
     let (space, plan, marks) = match decision {

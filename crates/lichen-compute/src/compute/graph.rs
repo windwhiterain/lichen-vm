@@ -632,7 +632,7 @@ pub fn run(
             RunArgument::Float(number) => Value::float(*number),
         })
         .collect();
-    check_value_classes(graph, &arguments)?;
+    let graph = &aligned(graph, &arguments)?;
     let table = Runner::new(&*backend, policy)
         .run(graph, inputs)
         .map_err(|refusal| format!("this graph could not be run: {refusal}"))?;
@@ -653,14 +653,13 @@ pub fn run(
         .map_err(|refusal| format!("this graph could not be read back: {refusal}"))
 }
 
-/// Refuse a graph whose nodes disagree about a buffer's element class.
+/// State one element class along each chain of values a graph runs, or refuse a crossing.
 ///
 /// # Invariant
-/// A class is the **buffer's**: a value has the class its producer's `output_classes` says, and a reader
-/// naming another class moves a different number of bytes per element. Nothing converts between the two
-/// yet, so the disagreement is refused rather than answered as a different number that looks like
-/// arithmetic.
-fn check_value_classes(graph: &Graph, arguments: &[RunArgument]) -> Result<(), String> {
+/// A class is the **buffer's**: a value has the class its producer wrote, and a reader naming another
+/// moves a different number of bytes per element. Within the real family the reader is re-classed, body
+/// accesses included; across the families the run is refused, because nothing converts.
+fn aligned(graph: &Graph, arguments: &[RunArgument]) -> Result<Graph, String> {
     let mut classes: Vec<Option<ScalarClass>> = vec![None; graph.value_count()];
     for (index, argument) in arguments.iter().enumerate().take(graph.input_count()) {
         if let Some(entry) = classes.get_mut(index) {
@@ -671,30 +670,55 @@ fn check_value_classes(graph: &Graph, arguments: &[RunArgument]) -> Result<(), S
             };
         }
     }
-    let mut next = graph.input_count();
-    for (position, node) in graph.nodes().iter().enumerate() {
-        let Node::Kernel(kernel) = node;
+    let mut aligned = Graph::with_inputs(graph.input_count());
+    let mut next = aligned.input_count();
+    for position in 0..graph.nodes().len() {
+        let mut node = graph.nodes()[position].clone();
+        let Node::Kernel(kernel) = &node else {
+            continue;
+        };
+        let mut stated: Option<ScalarClass> = None;
         for (slot, value) in kernel.inputs.iter().enumerate() {
             let held = classes.get(*value).copied().flatten();
             let declared = kernel.fragment.input_classes.get(slot).copied();
-            if let (Some(held), Some(declared)) = (held, declared)
-                && held != declared
-            {
+            let (Some(held), Some(declared)) = (held, declared) else {
+                continue;
+            };
+            if held == declared {
+                continue;
+            }
+            if !(held.is_real() && declared.is_real()) {
                 return Err(format!(
                     "node {position} reads input {slot} as {declared:?}, and the value it reads was \
-                     written as {held:?}: a class is the buffer's, and nothing reads one buffer at two \
-                     classes yet"
+                     written as {held:?}: a class is the buffer's, and nothing converts between the real \
+                     and integer families"
                 ));
             }
+            stated = Some(held);
         }
+        if let (Some(class), Node::Kernel(kernel)) = (stated, &mut node) {
+            kernel.fragment.states_the_class(class);
+        }
+        let Node::Kernel(kernel) = &node else {
+            continue;
+        };
         for (slot, class) in kernel.fragment.output_classes.iter().enumerate() {
             if let Some(entry) = classes.get_mut(next + slot) {
                 *entry = Some(*class);
             }
         }
         next += kernel.fragment.outputs;
+        let outputs = node.outputs();
+        aligned
+            .push(node, outputs)
+            .map_err(|refusal| format!("this graph could not be rebuilt: {refusal}"))?;
     }
-    Ok(())
+    if let Some(returns) = graph.returns() {
+        aligned
+            .returning(returns.to_vec())
+            .map_err(|refusal| format!("this graph could not be rebuilt: {refusal}"))?;
+    }
+    Ok(aligned)
 }
 
 /// What one entry of a finished run is, for the caller to turn into a value.

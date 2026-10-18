@@ -116,20 +116,16 @@ fn a_narrowed_projection_answers_the_same_numbers() {
     let narrowed = session
         .prepare_with_packs(MATVEC_STEP, &[pack])
         .unwrap_or_else(|refusal| panic!("the narrowed projection prepares: {refusal}"));
-    // The narrowed node feeds a node reading Float, and a class is the buffer's: refused, not answered.
-    let refusal = run(&session, &narrowed, halves(&values), halves(&weights))
-        .expect_err("a graph that reads one buffer at two classes is refused");
-    println!("refused: {refusal}");
-    assert!(
-        refusal.contains("a class is the buffer's"),
-        "the refusal names the rule it keeps: {refusal}"
-    );
+    // The consumer still declared Float, and a class is the buffer's: the chain runs at one class.
+    let narrowed_answer = run(&session, &narrowed, halves(&values), halves(&weights))
+        .unwrap_or_else(|refusal| panic!("the narrowed chain runs: {refusal}"));
+    println!("in bf16: {narrowed_answer:?}");
     let reference = run(&session, &plain, floats(&values), floats(&weights)).expect("f32 runs");
     println!("in f32: {reference:?}");
     assert_eq!(
-        reference,
+        narrowed_answer,
         vec![1.0_f32, 2.0],
-        "the projection multiplies and adds"
+        "both classes multiply and add to the same rows"
     );
 }
 
