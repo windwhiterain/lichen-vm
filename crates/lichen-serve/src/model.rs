@@ -501,7 +501,7 @@ matvec_raw = (k : MatvecPar) => {
 @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu"
 CopPar = struct{.n Int, .in CopIn, .out CopIn}
 CopArg = struct{.n Int, .I CopIn}
 copy_raw = (k : CopPar) => {
@@ -650,7 +650,7 @@ matvec_raw = (k : MvPar) => {
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) * compute.read ((compute.Read _)(.from k.in.x, .at ((s(0) - 1)))))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
-matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity,element)") "gpu"
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu"
 RpIn   = struct{.x (compute.Buf Float)}
 RpOut  = struct{.y (compute.Buf Float)}
 RpPar  = struct{.n Int, .position Int, .in RpIn, .out RpOut}

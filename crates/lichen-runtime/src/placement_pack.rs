@@ -84,19 +84,21 @@ struct Constraints {
 }
 
 impl Constraints {
-    /// Whether the element class in hand is the one this pack needs, or which one is not.
+    /// Whether the element class in hand is one this pack's class may hold against, or which is not.
     ///
     /// # Invariant
-    /// The class is **stated** by the pack and read off the body it steers — a node's first
-    /// input buffer, or a region's first input port — never derived: a constraint is the one fact
-    /// a schema hash cannot carry, so a mismatch makes the pack inert rather than wrong.
+    /// The constraint is a **shape**, not a precision: the language's `Float` says the buffer holds real
+    /// numbers and says nothing about how many bits one takes, so a pack stating `BFloat16` holds against
+    /// a node whose buffer states `Float` — that licence is the whole point of a pack. A real/integer
+    /// crossing is the one mismatch that cannot be licensed, because nothing converts.
     fn hold_for(&self, class: Option<ScalarClass>) -> Result<(), ConstraintRefusal> {
-        match self.class {
-            Some(wanted) if class != Some(wanted) => Err(ConstraintRefusal::ClassMismatch {
-                wanted,
-                found: class,
-            }),
-            _ => Ok(()),
+        let Some(wanted) = self.class else {
+            return Ok(());
+        };
+        match class {
+            Some(held) if held == wanted => Ok(()),
+            Some(held) if held.is_real() && wanted.is_real() => Ok(()),
+            found => Err(ConstraintRefusal::ClassMismatch { wanted, found }),
         }
     }
 }
