@@ -188,7 +188,7 @@ where
     /// Value nodes on the current recursion; a cycle renders as `…`.
     path: AncestorNodes<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
-    tpath: AncestorNodes<NodeId>,
+    tpath: AncestorNodes<AnyNodeId>,
     /// Cells the current raw dump has entered; one met again renders `…`, which
     /// stops a self-referential kind unrolling.
     ///

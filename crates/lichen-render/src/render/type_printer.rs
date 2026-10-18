@@ -186,7 +186,7 @@ where
         // A function-type node `[Function(fid), ↺]`: its signature lives in the
         // template, not a `[dom, cod]` shape.
         if elements.len() == 2
-            && self.slot1_is_self(elements[1].node, node)
+            && self.slot1_is_self(elements[1].node, AnyNodeId::Dynamic(node))
             && let Some(fv) = self.module.node_value(elements[0].node)
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)
@@ -339,12 +339,13 @@ where
     /// bound to the function-type counts; and a **static** self-ref, because a
     /// materialized static function-type carries the frozen node's value, so its
     /// slot 1 names that node's cycle, not the copy.
-    pub(super) fn slot1_is_self(&self, slot1: AnyNodeId, node: NodeId) -> bool {
-        match slot1 {
-            AnyNodeId::Dynamic(slot1) => {
-                representative(self.module, slot1) == representative(self.module, node)
+    pub(super) fn slot1_is_self(&self, slot1: AnyNodeId, ty: AnyNodeId) -> bool {
+        match (slot1, ty) {
+            (AnyNodeId::Dynamic(slot1), AnyNodeId::Dynamic(ty)) => {
+                representative(self.module, slot1) == representative(self.module, ty)
             }
-            AnyNodeId::Static(sref) => self.static_function_type_function(sref).is_some(),
+            (AnyNodeId::Static(sref), _) => self.static_function_type_function(sref).is_some(),
+            (AnyNodeId::Dynamic(_), AnyNodeId::Static(_)) => false,
         }
     }
 

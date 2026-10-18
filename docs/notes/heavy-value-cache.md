@@ -840,10 +840,16 @@ its closure still holds the kernel-creation operation — an undecided compute n
 one cell a warm start recomputes. (§9.19 removed the codec refusal itself, so a `Portable` cell
 persists and all thirteen survive; the numbers here are `ReadOnly`'s, as they were.)
 
-**One reading not chased.** A reused cell's *type* prints `raw` where the fresh build prints the
-type (`(raw Buffer, raw Int)` against `(raw Buffer, Int)`), because the type slot materializes as
-an artifact-shaped array too. Every value agreed at both sizes and after the restart, so nothing
-measured is wrong — but nothing yet says a reused cell's type is the one it was computed with.
+**The reading that was not chased, and what it was.** A reused cell printed `(raw Buffer, raw
+Int)` where the fresh build printed `(raw Buffer, Int)`. The **type** was never lost: it prints
+correctly in both arms. The reused binding's `[value, type]` pair is the artifact's own, so the
+type is a **static** node, and `ValuePrinter` had no static path — `element_any` dumped every
+frozen cell through `raw_any`, which is why the value's cells came out raw. `ValuePrinter::value_any`
+now takes an `AnyNodeId` type exactly as the type printer's `static_elements` already did, and
+`slot1_is_self` compares a static self-ref; the same program prints `((1, 2), (2, 2))` and
+`tuple{struct{.x Int, .y Int}, struct{.x Int, .y Int}}` in both arms. The raw mark stays the
+fallback for a value the type chain cannot explain — `raw-rendering-mark.md`'s ruling is that such
+a mark is a defect, and a frozen cell no longer reaches it.
 
 ### 9.18 What the cell record carries, and the restart it bought
 
@@ -1041,8 +1047,9 @@ persist at all.
   registry entry rather than content — a recording's slot, device residency — so the codec
   refuses them by name (§9.19). Encoding a graph's structure and re-registering it on load is the
   step that would close it; §9.19's kernel form does not reach it.
-- **A reused cell's type is not restored.** Its value is; its type prints `raw` (§9.17). Nothing
-  measured is wrong yet, and nothing says a typed position would be right.
+- **A reused cell's type is restored, and its value prints by its form.** The `raw` reading
+  was the *value* printer lacking a static path, not a lost type (§9.17); both halves now read
+  as a fresh compile does.
 - **No operator was missing for a real application, and the one §7 predicts is still absent.** The
   world generator needed only `range`/`row`/`col`/`read`/`write`/`if`; the PCG domain's next
   workload, a scatter-accumulate, is still silently last-writer-wins on both backends

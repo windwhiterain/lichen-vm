@@ -68,6 +68,11 @@ unrolling forever — the previous `[head, K]` collapse cut that cycle by
 | `ValuePrinter::value`'s undecided branch | **not** a dump any more: an undecided type cell prints its class name in both halves |
 | `ValuePrinter::raw_any` | a runtime value whose **decided** type the chain cannot read as a form: a list `raw[…]`, an atomic `raw x` |
 
+A **frozen** value is not one of these sites by construction:
+`ValuePrinter::value_any` takes a `AnyNodeId` type the way the type printer's static path
+already did, so a reused cell reads against its frozen type chain and reaches the mark only
+when the chain genuinely names no class (see `heavy-value-cache.md` §9.17).
+
 ```lichen
 P = ins => struct{.I ins.x, .O ins.y}
 y = (P _)(.I Int, .O Int)

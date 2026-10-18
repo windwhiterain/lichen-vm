@@ -48,15 +48,27 @@ where
     /// When the type chain is opaque the raw layout is the fallback, marking
     /// every reading it dumps (`raw[…]`, `raw Int`).
     fn value(&mut self, value: P::Value, ty: NodeId) -> String {
-        // The universe as the type: the value is an atomic type constant —
-        // `Int`, `Type`, or an extension's own type constant.
-        if self.printer.is_universe_any(AnyNodeId::Dynamic(ty)) {
+        self.value_any(value, AnyNodeId::Dynamic(ty))
+    }
+
+    /// [`Self::value`] for a type node that may be a frozen module's.
+    ///
+    /// # Invariant
+    ///
+    /// A static type is read through the module it belongs to, exactly as a dynamic one is:
+    /// only the *node* is frozen, so the same cascade decides, and the value's cells are
+    /// static refs this path meets in turn.
+    fn value_any(&mut self, value: P::Value, ty: AnyNodeId) -> String {
+        if self.printer.is_universe_any(ty) {
             return self.atomic(value);
         }
-        let Some(type_value) = self.module.node_value(AnyNodeId::Dynamic(ty)) else {
+        let Some(type_value) = self.module.node_value(ty) else {
             // One hole, not a disagreement: the cell's class name is the value's
             // own spelling and the type print reuses it.
-            return self.printer.class_name(ty);
+            return match ty {
+                AnyNodeId::Dynamic(node) => self.printer.class_name(node),
+                AnyNodeId::Static(sref) => self.printer.static_class_name(sref),
+            };
         };
         let Some(LowValue::Array(ty_array)) = type_value.as_enum() else {
             return self.raw(value);
@@ -66,7 +78,7 @@ where
         let tys = unsafe { ty_array.items() };
         // A struct kind: the type node is `[[payload, TypeStruct], K]`, and the
         // value is the field-type list.
-        if is_struct_kind(self.module, ty)
+        if self.is_struct_kind_any(ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
             // SAFETY: `shape` is the payload of the value being printed,
@@ -124,7 +136,7 @@ where
     /// function type is a `Function` value and closes on itself
     /// (`[Function(fid), ↺]`), every other class a type constant whose kind slot
     /// is the self-looping universe (`[Int, ↺]`, `[string, ↺]`, …).
-    fn leaf_class(&mut self, value: P::Value, ty: NodeId, tys: &[ArrayItem]) -> Option<String> {
+    fn leaf_class(&mut self, value: P::Value, ty: AnyNodeId, tys: &[ArrayItem]) -> Option<String> {
         if tys.len() != 2 {
             return None;
         }
@@ -360,31 +372,37 @@ where
     }
 
     /// [`Self::element`] for static or dynamic value/type refs.
+    ///
+    /// # Invariant
+    /// A frozen value reads against the type chain like a live one: its cells are static
+    /// refs, and each is met here in turn, so a reused cell prints as its form rather than as
+    /// a raw dump. The cycle guards cover both halves: a dynamic value node by id, a type node
+    /// by its absolute ref.
     pub(super) fn element_any(&mut self, id: AnyNodeId, ty: AnyNodeId) -> String {
-        match (id, ty) {
-            (AnyNodeId::Dynamic(id), AnyNodeId::Dynamic(ty)) => {
-                if self.path.contains(id) || self.tpath.contains(ty) {
+        if self.tpath.contains(ty) {
+            return "…".to_string();
+        }
+        let pinned = match id {
+            AnyNodeId::Dynamic(node) => {
+                if self.path.contains(node) {
                     return "…".to_string();
                 }
-                self.path.insert(id);
-                self.tpath.insert(ty);
-                let value = self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(id))
-                    .unwrap_or_else(|| P::Value::from(LowValue::None));
-                let out = self.value(value, ty);
-                self.tpath.remove(ty);
-                self.path.remove(id);
-                out
+                self.path.insert(node);
+                Some(node)
             }
-            _ => {
-                let value = self
-                    .module
-                    .node_value(id)
-                    .unwrap_or_else(|| P::Value::from(LowValue::None));
-                self.raw_any(value)
-            }
+            AnyNodeId::Static(_) => None,
+        };
+        self.tpath.insert(ty);
+        let value = self
+            .module
+            .node_value(id)
+            .unwrap_or_else(|| P::Value::from(LowValue::None));
+        let out = self.value_any(value, ty);
+        self.tpath.remove(ty);
+        if let Some(node) = pinned {
+            self.path.remove(node);
         }
+        out
     }
 
     /// Whether an `AnyNodeId` names a struct kind `[[payload, TypeStruct], K]`.
