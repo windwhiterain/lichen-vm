@@ -14,8 +14,8 @@ use lichen_fusion::{Reduction, normalize};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection};
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
-    KernelClaim, KernelFragment, KernelId, Plan, ScalarClass, Slice, Space, Staging,
-    fragment_digest,
+    KernelClaim, KernelFragment, KernelId, KernelInstr, Plan, ScalarClass, Slice, Space, Staging,
+    ValueDef, fragment_digest,
 };
 
 use crate::fused::{
@@ -215,6 +215,20 @@ fn states_the_class(fragment: &mut KernelFragment, class: ScalarClass) {
             *held = class;
         }
     }
+    // A body names each access's class, and that name is what the emitter reads the bytes at.
+    for value in fragment.body.values.iter_mut() {
+        let ValueDef::Instr { op, .. } = value else {
+            continue;
+        };
+        match op {
+            KernelInstr::BufferReadCall(held) | KernelInstr::BufferWriteCall(held)
+                if held.is_real() =>
+            {
+                *held = class;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Land a node again with the class its pack states, and say what happened.
@@ -366,7 +380,12 @@ fn tile(
             ),
         );
     }
-    let Some(class) = node.fragment.input_classes.first().copied() else {
+    // The pack's class wins: a tiled body names the class of every access it makes.
+    let stated = match decision {
+        Decision::Fires(pack, _) => pack.class(),
+        _ => None,
+    };
+    let Some(class) = stated.or_else(|| node.fragment.input_classes.first().copied()) else {
         return declined(
             position,
             &hash,
