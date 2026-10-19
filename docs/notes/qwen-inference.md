@@ -599,6 +599,23 @@ opening left the model thinking, so its reasoning arrived as the reply. After bo
 today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
 alone.
 
+### Is the cap of eight the right number?
+
+The obvious next question, and one constant answers it: the same curve with `SEQUENCES` at sixteen.
+
+| concurrency | batch 8 | batch 16 |
+|---|---|---|
+| 8 | 7.41 tokens a second | 6.45 |
+| 16 | 7.41 | 8.00 |
+| 32 | 7.41 | 8.00 |
+
+Both differences are one run each against a machine other sessions share, and they point opposite ways, so
+the honest reading is that the cap is **nearly free**: at sixteen clients a wider batch is worth about eight
+per cent and at eight it is worth nothing, because a step's extent is the live count either way. What bounds
+the service is the **rate of steps**, not how many rows a step holds — which is the same fact the residency
+measurement found from the other side, where eight sequences cost 1.5 times what one did. Eight therefore
+stays: it halves the caches, and it buys nothing to widen.
+
 ## How many clients the service is worth
 
 Fifty requests of four tokens at each of three concurrencies, measured by the same bucket subtraction:
