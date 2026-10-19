@@ -470,11 +470,11 @@ clone-ownership rule is [apply-clone-ownership](apply-clone-ownership.md). That
 fix stands on its own: it is what makes an apply of *any* static function
 instantiate its signature per call.
 
-### 7.1 Measured: the routing's three costs
+### 7.1 Measured: the routing's costs
 
-The three costs, and what closed each.  **No test on `dev` is red for any of
-them**: each is either refused by name and pinned, or asserted as the property it
-was always about.
+The costs, and what closed each.  **No test on `dev` is red for any of them**:
+each is either refused by name and pinned, asserted as the property it was always
+about, or still open.
 
 1. **A kernel body cannot call the binding.**  `y + y` lowers to
    `Apply(Static(<the prelude's add>), [y, y])`, which has no machine node behind
@@ -521,6 +521,22 @@ was always about.
    lost, and the tests assert the type-only report. Fixing it without the eager
    fold is what the *body-expansion* form would do — expand the binding's own body
    at the call site — recorded here as the open alternative, not the landed shape.
+4. **A routed operator's *type* is undecided under `Mode::Check`** — and it is
+   **open**. The apply reaches `Module::apply_function_type`
+   (`crates/lichen-lowlevel/src/function.rs`), which matches
+   `AnyFunctionId::Dynamic` and answers `false` for a **static** callee, so the
+   call's result cell is never bound; the class is pinned only when the value pass
+   runs. Measured on `feature/lsp-hover-check` (LSP): `x = 3 / y = x + 4` reports
+   `y` as `?a` under `Mode::Check` and `Int` under `Mode::Evaluate`. The control in
+   the bare language, where no prelude is in scope and `+` stays a `BinOp`, answers
+   `Int` under both — the class tie decides it there. The hole is only *named* by
+   the routing: **any** frozen callee's result reads `?a` at check. `add` adds the
+   dependent case — its codomain is the element cell of
+   `array{(_ ! in_num), 2}` — so closing it needs the static signature
+   instantiated **per call at the type side**, which is the value side's landed
+   static-signature instantiation (the chain below) raised one layer. No test pins
+   the check-time reading; [incremental-evaluation](incremental-evaluation.md)
+   Q9's on-demand evaluation is the LSP's short-term answer.
 
 So the chain's three steps: **static-signature instantiation** (landed), **the
 routing** (landed, the call form), **kernel specialize** (the kernel
