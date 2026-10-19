@@ -353,14 +353,16 @@ rather than the attribute check. Measured further: the checker's attribute paths
 fire for it (the provider, element-pair and type-attribute reconciliations were each
 traced), and disabling the frozen return-attribute propagation does not change it — the
 failing unify is the **kernel-type merge** at the value side, where the annotation's
-presence changes the config pair's shape. A meaningful config annotation therefore needs
-the scope perspective *and* an attribute-tolerant kernel-type merge; the scope part is
-the same lane-group question as
-[shared-memory-and-barriers](shared-memory-and-barriers.md) and is the prerequisite for a
-real MMA item. The width a lane-group annotation names now has a vocabulary binding —
-`compute.warp = 32`, the backend's `SUBGROUP_WIDTH` — so a GPU program can state the
-uniform-load requirement in the shipping language ([attributes](attributes.md)
-§"A lane-group requirement"). The design record and the options are
+presence changes the config pair's shape. **The config annotation is not the MMA path**:
+the author's verdict is that the requirement lands on the *register values* — a
+fragment's lane layout is a value fact, and the 32-lane group itself is the dispatch's
+(this backend runs 64-lane workgroups with a 32-lane subgroup), so the config does not
+need to carry a perspective at all. The config finding stays a diagnostic-quality item
+for the kernel-type merge, not a prerequisite. The width a lane-group annotation names
+now has a vocabulary binding — `compute.warp = 32`, the backend's `SUBGROUP_WIDTH` — so a
+GPU program can state the uniform-load requirement in the shipping language
+([attributes](attributes.md) §"A lane-group requirement"). The register-side shape, the
+measurements and the verdict record are
 [perspective-scope-and-mma](perspective-scope-and-mma.md).
 
 **And the part C does not cover.** A lane group that cannot talk to itself buys

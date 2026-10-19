@@ -1,9 +1,10 @@
-# The scope perspective, and what MMA needs that the value lattice cannot say
+# The register perspective MMA needs, and the scope question behind it
 
 This note is the decision record between the `Perspective` work that is landed and the
 MMA item on the roadmap. It states what is enforced today, what the GPU path reads, why
-the kernel-config annotation fails, and the options for closing it. Measurements are on
-dev at `3231542a`.
+the kernel-config annotation fails (a separate diagnostic-quality finding, not the MMA
+path), and the register-side shape the author has ruled is the right home. The verdicts
+are recorded in §6. Measurements are on dev at `3231542a`.
 
 ## 1. What is enforced today
 
@@ -45,6 +46,14 @@ A warp-level MMA operand needs the second. Encoding it as `# 32` on the operands
 be wrong — a fragment is lane-varying — which is why [attributes](attributes.md)
 §"A lane-group requirement" calls the landed check the *uniform-load* shape.
 
+**Where the scope requirement actually lives.** It is not a program annotation. A kernel
+is dispatched with a fixed lane width (this backend: 64-lane workgroups, a 32-lane
+subgroup), so the 32-lane group exists by construction for every body — the paper's
+`requires(thread[32])` is satisfied by the dispatch, not by the config. What the program
+side can and does state is the *register* side: a value the whole group must agree on
+(the tile base, a uniform load) is `# 32`; a fragment's own lane layout stays the value
+lattice's business. That is the author's ruling in §6.
+
 ## 4. The kernel-config annotation, measured
 
 `even_raw = (k : ParA # 4) => …`, where `ParA = compute.P (compute.KT Float)(…)`:
@@ -80,12 +89,29 @@ perspective" is not the trigger — the kernel path is.
    `# p`-uniform (true by construction, since a launch parameter is uniform). Cheap, but
    the claim is vacuous and it still needs option 2's merge tolerance.
 
-**Recommendation.** Option 1 now (a named message, no semantics); option 2 as the MMA
-prerequisite, sequenced after or with Axis C — the same lane-group question
-([shared-memory-and-barriers](shared-memory-and-barriers.md)).
+**Recommendation.** None of the three is needed for MMA (§6): the config annotation is a
+diagnostic-quality question. If it is pursued, option 1 (a named message) is the only low
+-cost one and does not change semantics; option 2 stays parked with the kernel-type
+merge.
 
-## Open questions for the author
+## 6. The author's verdicts
 
-- Option 1 or 2 for the config annotation, and now or after the scope design?
-- Axis C first (the roadmap's recommendation) or the scope perspective first (the MMA
-  item's prerequisite)? They touch different machinery (codegen vs the kernel-type merge).
+- **Registers, not the config.** "为什么mma需要 config 的 perspective，寄存器的
+  perspective 就够了吧" — a fragment's lane layout is a value fact, and the group is the
+  dispatch's; the config annotation is not on the MMA path. The register-side check the
+  value lattice already states is the uniform-operand requirement (`# compute.warp`), and
+  the lane-varying fragment is the default.
+- **Only MMA semantically consumes a perspective.** The emitter's hoist/vectorize (Axis
+  C) is an *optimization* — [the roadmap](gpu-algorithm-roadmap.md) itself calls it "a
+  constant factor, not a capability": a body that ignores the perspective still computes
+  the right answer. The *semantic* consumers are the collectives (matrix multiply,
+  shuffles, reductions), where the lane layout decides the result. So the emitter item
+  should stay parked unless the performance factor is wanted, and the MMA item's next
+  step is the *checking* shape, not the codegen.
+
+## Open questions
+
+- Is the config annotation's named refusal worth a check-side hook now, or does the
+  runtime raw message wait until the kernel-type merge is visited for its own sake?
+- Should Axis C stay parked as an optimization, or be scheduled as a performance item
+  when a uniform-heavy shape exists to measure?
