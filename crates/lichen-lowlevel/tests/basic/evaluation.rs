@@ -215,7 +215,7 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
     m.write_node_value(
         k,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, root),
+            m.alloc_array(&items, root).into(),
         ))),
     );
 

@@ -46,7 +46,7 @@ fn probe_external_operator() {
         ArrayItem::new(AnyNodeId::Dynamic(one_node)),
     ];
     let handle = module.alloc_array(&items, block);
-    let array: TestValue = LowValue::Array(handle).into();
+    let array: TestValue = LowValue::Array(handle.into()).into();
     let operand = module.add_node(block, None, Some(array));
     let external = |module: &mut Module<TestProgram>| {
         module.add_node(

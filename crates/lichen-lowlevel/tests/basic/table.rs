@@ -244,7 +244,7 @@ fn cyclic_keys_hash_and_compare_equal() {
         m.write_node_value(
             node,
             Some(TestValue::LowValue(LowValue::Array(
-                m.alloc_array(&items, root),
+                m.alloc_array(&items, root).into(),
             ))),
         );
         node
@@ -441,7 +441,7 @@ fn cyclic_pair(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
         ],
         block,
     );
-    m.write_node_value(node, Some(TestValue::LowValue(LowValue::Array(items))));
+    m.write_node_value(node, Some(TestValue::LowValue(LowValue::Array(items.into()))));
     node
 }
 
@@ -511,7 +511,7 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
             ],
             block,
         );
-        m.write_node_value(r#return, Some(TestValue::LowValue(LowValue::Array(items))));
+        m.write_node_value(r#return, Some(TestValue::LowValue(LowValue::Array(items.into()))));
     });
     let value = usize_node(&mut m, root, 7);
     let table = table_value(
@@ -604,7 +604,7 @@ fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
         ],
         root,
     );
-    m.write_node_value(b, Some(TestValue::LowValue(LowValue::Array(items))));
+    m.write_node_value(b, Some(TestValue::LowValue(LowValue::Array(items.into()))));
 
     let value = usize_node(&mut m, root, 9);
     let table = table_value(

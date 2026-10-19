@@ -23,7 +23,7 @@ fn a_cyclic_value_is_proven_concrete() {
     m.write_node_value(
         self_ref,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, root),
+            m.alloc_array(&items, root).into(),
         ))),
     );
 
@@ -35,14 +35,14 @@ fn a_cyclic_value_is_proven_concrete() {
     m.write_node_value(
         a,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&a_items, root),
+            m.alloc_array(&a_items, root).into(),
         ))),
     );
     let b_items = [item(a), item(one)];
     m.write_node_value(
         b,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&b_items, root),
+            m.alloc_array(&b_items, root).into(),
         ))),
     );
 

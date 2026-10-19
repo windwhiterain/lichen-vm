@@ -8,7 +8,10 @@ fn array_pointer(m: &Module<TestProgram>, node: NodeId) -> usize {
         .node_value(AnyNodeId::Dynamic(node))
         .and_then(|value| value.as_enum())
     {
-        Some(LowValue::Array(AnyHandle::Dynamic(handle))) => handle.as_ptr() as *const u8 as usize,
+        Some(LowValue::Array(array)) => match *array {
+            AnyHandle::Dynamic(handle) => handle.as_ptr() as *const u8 as usize,
+            AnyHandle::Static(_) => panic!("expected a dynamic array value"),
+        },
         other => panic!("expected a dynamic array value, got {other:?}"),
     }
 }
@@ -26,6 +29,11 @@ fn function_homed_in(
         r#return,
         parameter: NodeId::default(),
         return_type: NodeId::default(),
+        parameter_requirement: None,
+        parameter_marker: None,
+        return_marker: None,
+        return_field: None,
+        return_certificate: None,
         static_origin: None,
         asserts: Vec::new(),
         parent: None,
@@ -204,7 +212,7 @@ fn a_value_cycle_inside_the_scope_survives_the_collect() {
         node: AnyNodeId::Dynamic(first),
         shallow: false,
     }];
-    let value = TestValue::LowValue(LowValue::Array(m.alloc_array(&items, child)));
+    let value = TestValue::LowValue(LowValue::Array(m.alloc_array(&items, child).into()));
     m.write_node_value(second, Some(value));
 
     m.garbage_collect(first);

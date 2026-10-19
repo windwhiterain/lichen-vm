@@ -64,7 +64,7 @@ fn function_call_operator_clones_array_body() {
     m.write_node_value(
         ret,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, f),
+            m.alloc_array(&items, f).into(),
         ))),
     );
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
@@ -679,7 +679,7 @@ fn call_return_is_shallow_for_container_bodies() {
     m.write_node_value(
         ret,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, f),
+            m.alloc_array(&items, f).into(),
         ))),
     );
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
@@ -721,7 +721,7 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
         root,
         None,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, root),
+            m.alloc_array(&items, root).into(),
         ))),
     );
     let f = m.add_function(root, param, param, [param, x0, x1], []);
