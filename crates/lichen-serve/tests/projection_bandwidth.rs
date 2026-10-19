@@ -1,0 +1,72 @@
+//! What one projection costs, and whether its price grows with the rows or with each row's walk.
+
+use std::time::Instant;
+
+use lichen_compute::compute::graph::RunArgument;
+use lichen_kernel_ir::ScalarClass;
+use lichen_serve::{MATVEC_ROW_STEP, Session};
+
+/// The input width every projection walks.
+const DIM: usize = 2048;
+
+/// The rows to time, from one workgroup's worth to enough to fill a device.
+const ROWS: [usize; 4] = [64, 256, 1024, 4096];
+
+/// The walks each run repeats, so a dispatch's own cost is a small part of the measurement.
+const REPEATS: usize = 20;
+
+/// A projection's time per row, and the bytes a second its reads amount to.
+///
+/// # Invariant
+/// Every row reads `DIM` weights, so the bytes a row costs are the same for every row: a constant time per
+/// row is a walk that does not depend on the rows, and a constant time in total would be a launch that is.
+#[test]
+fn a_projection_costs_what_its_rows_walk() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED a_projection_costs_what_its_rows_walk: no device");
+        return;
+    };
+    let prepared = match session.prepare(MATVEC_ROW_STEP) {
+        Ok(prepared) => prepared,
+        Err(refusal) => {
+            eprintln!("SKIPPED: {refusal}");
+            return;
+        }
+    };
+    for rows in ROWS {
+        let weights: Vec<u8> = (0..rows * DIM)
+            .flat_map(|index| ((index % 251) as f32 * 0.001).to_le_bytes())
+            .collect();
+        let values: Vec<u8> = (0..DIM)
+            .flat_map(|index| ((index % 97) as f32 * 0.01).to_le_bytes())
+            .collect();
+        // A resident weight is what the model steps over, not a buffer handed in on every step.
+        let placed = session
+            .place(&weights, ScalarClass::Float)
+            .unwrap_or_else(|refusal| panic!("the weights are placed: {refusal}"));
+        let started = Instant::now();
+        for _ in 0..REPEATS {
+            prepared
+                .step(vec![
+                    RunArgument::Count(rows as i64),
+                    RunArgument::Count(DIM as i64),
+                    RunArgument::Count((rows / DIM).max(1) as i64),
+                    RunArgument::Buffer {
+                        class: ScalarClass::Float,
+                        data: values.clone(),
+                    },
+                    RunArgument::Resident(placed),
+                ])
+                .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
+        }
+        let _ = session.release(placed);
+        let each = started.elapsed().as_secs_f64() / REPEATS as f64;
+        let bytes = (rows * DIM * 4) as f64;
+        println!(
+            "rows {rows:5} time {:.3} ms  per row {:.2} us  bytes/s {:.1} GB/s",
+            each * 1000.0,
+            each * 1e6 / rows as f64,
+            bytes / each / 1e9
+        );
+    }
+}

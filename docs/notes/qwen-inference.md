@@ -385,6 +385,14 @@ was not the whole of the cost. What is left is the fold itself: every lane walks
 one at a time, 2048 of them for most projections, and whether the reduction claim splits that walk across
 lanes is the question the next measurement has to answer.
 
+A projection on its own, measured with its weights **placed once and stepped over as residents**, which
+is what the model does — the same program with a buffer handed in on every step measures the upload
+instead, and did: 33.5 MB a run read as 28 ms for 4096 rows. Resident, the price per row falls away and the
+**time stops falling**: 64 rows 0.366 ms, 256 rows 0.453 ms, 1024 rows 0.411 ms, 4096 rows 0.395 ms — flat at
+about **0.4 ms a dispatch**, at 84.9 GB/s of reads when the rows are many, a quarter of the card. So the fold
+is not where the tokens go: a step's 860 ms holds some **340 dispatches**, and at this floor they account for
+about 136 ms. The rest is a per-stage question the next measurement has to ask, stage by stage.
+
 Two paths read two layouts, which is what the attempts finally settled on: a **held** layer is stored by
 column and read by the column-major program, a layer **read from the file** is stored by row and read by
 the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a
