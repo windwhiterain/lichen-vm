@@ -194,3 +194,31 @@ fn an_annotation_over_a_bound_perspective_rejects_a_broader_requirement() {
     assert!(!ok("x = 1 # 8\nx # 16"));
     assert_eq!(message("x = 1 # 8\nx # 16"), "expected 16, found 8");
 }
+
+// A callee's return perspective is its caller's: the call carries it.
+
+#[test]
+fn a_returned_perspective_reaches_the_call_site() {
+    // `g` returns a value `# 2`, so a caller may require 2 or 1 but not 4.
+    assert_eq!(
+        message("g = x => (x # 2)\n(g 3) # 4"),
+        "expected 4, found 2"
+    );
+    assert!(ok("g = x => (x # 2)\n(g 3) # 2"));
+    assert!(ok("g = x => (x # 2)\n(g 3) # 1"));
+}
+
+#[test]
+fn a_returned_perspective_rides_a_chain_of_calls() {
+    // The certificate is copied at each call site, so it survives two hops.
+    assert_eq!(
+        message("g = x => (x # 2)\nh = y => (g y)\n(h 3) # 4"),
+        "expected 4, found 2"
+    );
+}
+
+#[test]
+fn a_call_of_an_unannotated_return_carries_none() {
+    // `g = x => x` states no return perspective; the call states none either.
+    assert!(ok("g = x => x\n(g 3) # 4"));
+}

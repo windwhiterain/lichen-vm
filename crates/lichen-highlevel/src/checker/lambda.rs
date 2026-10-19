@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
 
+use crate::attr::slot_value_node;
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
 use crate::program::{HighProgram, TypeOperator, ValueType};
@@ -139,6 +140,23 @@ where
             self.function_param_attr.insert(e, (marker, declared));
         }
         let ret = self.check_expr(r#return);
+        // The return's certificate, recorded for a call site (attributes.md).
+        if let Some(slot) = self.state[r#return].attr
+            && self.merged_tails.contains_key(&r#return)
+        {
+            let tail = self.schema_tail(r#return).to_vec();
+            let marker = tail
+                .iter()
+                .rev()
+                .find(|marker| {
+                    self.attribute_extension(*marker)
+                        .is_some_and(|ext| !ext.is_label())
+                })
+                .copied();
+            if let Some(marker) = marker {
+                self.function_return_attr.insert(e, (marker, slot, tail));
+            }
+        }
         self.scopes.pop();
         self.current_block = saved;
         // The value node pre-exists — the self-reference applied it during the
@@ -395,6 +413,19 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
+        // **The callee's return certificate is the call's** (attributes.md).
+        if let Some((_marker, slot, tail)) = self.function_return_attr.get(&function).cloned() {
+            let value = slot_value_node(&*self, slot);
+            if self.module.node_operation(value).is_none()
+                && let Some(decided) = self.node_value(value)
+            {
+                let fresh_value = self.value_node(decided);
+                let fresh = self.pair_of(fresh_value, self.int_type);
+                self.state[e].attr = Some(fresh);
+                self.merged_tails.insert(e, tail);
+                self.node_edges.insert(fresh, self.loc(e, 2));
+            }
+        }
         node
     }
 }

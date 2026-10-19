@@ -208,11 +208,41 @@ annotation:
 | `(5 # 8 ? doc) # 4` | perspective becomes `4`, doc **preserved** |
 | `(5 # 8 ? docA) ? docB` | doc replaced by `docB`, perspective `8` preserved |
 
-The provider is the value's own attribute slot (a value that is itself annotated, or a
-bound name carrying an attribute) or, for a compound, the `gcd`-meet of its
-sub-expressions' slots (which is only ever validated, never kept as the slot). A plain
-leaf with no attribute of its own has no provider, so the annotation *is* the slot
-(`1 # 4` → `4`).
+The provider is the value's own attribute slot (a value that is itself annotated, a
+bound name carrying an attribute, or a call whose callee's return states one) or, for a
+compound, the `gcd`-meet of its sub-expressions' slots (which is only ever validated,
+never kept as the slot). A plain leaf with no attribute of its own has no provider, so
+the annotation *is* the slot (`1 # 4` → `4`).
+
+### A declared return attribute rides to the call site
+
+A function whose returned value is annotated states that attribute as a fact about
+**every** value it returns, so a call carries it: the checker records the return
+expression's constraint slot, and each call site copies it into a slot of its own
+(`Checker::function_return_attr`; the copy is a concrete constant, so the callee's
+slot is read, never bound). An **undecided** return slot is not recorded: the call
+then carries no attribute and its value reads as the absent form.
+
+| program | result |
+|---|---|
+| `g = x => (x # 2); (g 3) # 4` | `4 ∤ 2` ✗ → "expected 4, found 2" |
+| `g = x => (x # 2); (g 3) # 2` | `2 \| 2` ✓ |
+| `g = x => (x # 2); (g 3) # 1` | `1 \| 2` ✓ |
+| `h = y => (g y); (h 3) # 4` | ✗ — the certificate is copied at each hop |
+| `g = x => x; (g 3) # 4` | ✓ — no return attribute is stated, so the call states none |
+
+**A parameter's requirement is not a return attribute.** `f = x # 4 => x` checks
+every argument against `4` at the call, but its result states nothing: a perspective
+on a parameter is a requirement on the caller's value, not a promise about what the
+body returns. The body's reference to `x` is the parameter's own slot, and copying it
+to the call would restate the caller's value as the callee's answer.
+
+**What it does not do.** The certificate reaches the call site, not through a
+compound the caller builds: `h = y => (g y) + 1` states nothing, because its returned
+expression is an unannotated `+` and the combine is only ever validated at an
+annotation site (above). Deriving a provider for an arbitrary expression is the
+inference this note does **not** have, and the certificate's first consumer is still
+unbuilt ([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2).
 
 ### The gate must compute its operands
 
