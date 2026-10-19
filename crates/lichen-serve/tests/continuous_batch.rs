@@ -32,20 +32,36 @@ fn a_batch_of_two_lengths_answers_what_each_answers_alone() {
                 .unwrap_or_else(|refusal| panic!("a request is admitted: {refusal}"))
         })
         .collect();
-    for _ in 0..TOKENS {
+    // A request's prompt fills a step at a time, so a step answers only what it can.
+    let mut said: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
+    let mut steps = 0;
+    while batched.live() > 0 && steps < 64 {
         batched
             .step()
             .unwrap_or_else(|refusal| panic!("the batch steps: {refusal}"));
+        steps += 1;
+        for (index, id) in ids.iter().enumerate() {
+            let enough = batched
+                .answer(*id)
+                .is_some_and(|answer| answer.len() >= TOKENS);
+            if enough {
+                said[index] = batched
+                    .answer(*id)
+                    .map(<[usize]>::to_vec)
+                    .unwrap_or_default();
+                batched.retire(*id);
+            }
+        }
     }
+    println!("{steps} steps");
     for (index, prompt) in PROMPTS.iter().enumerate() {
         let alone = model
             .generate_from(prompt, TOKENS, Sampling::greedy(), |_| {})
             .unwrap_or_else(|refusal| panic!("request {index} alone generates: {refusal}"));
         let wanted = &alone.tokens[prompt.len()..];
-        let answered = batched.answer(ids[index]).expect("the request answers");
-        println!("{prompt:?} alone {wanted:?}, batched {answered:?}");
+        println!("{prompt:?} alone {wanted:?}, batched {:?}", said[index]);
         assert_eq!(
-            answered, wanted,
+            said[index], wanted,
             "request {index} answers what it answers alone"
         );
     }

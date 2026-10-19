@@ -113,6 +113,12 @@ struct Request {
     answer: Vec<usize>,
     /// How many it may answer with.
     limit: usize,
+    /// The prompt, whose tokens feed the first positions a step at a time.
+    prompt: Vec<usize>,
+    /// How many prompt tokens are in the cache already, which is when it answers.
+    filled: usize,
+    /// The token the next step feeds this row, chosen once its prompt is in.
+    pending: Option<usize>,
     /// How its tokens are chosen, which a request states for itself.
     sampling: crate::Sampling,
     /// Its draw, which moves only when its own token is chosen.
@@ -151,18 +157,23 @@ impl<'model, 'session> Batched<'model, 'session> {
         limit: usize,
         sampling: crate::Sampling,
     ) -> Result<usize, QwenRefusal> {
-        let (caches, hidden, position) = self.model.filled(prompt)?;
-        for (layer, cache) in caches.into_iter().enumerate() {
-            self.caches[layer].push(cache);
+        if prompt.is_empty() {
+            return Err(QwenRefusal::Weights("a request with no prompt".into()));
+        }
+        for caches in self.caches.iter_mut() {
+            caches.push(Cache::default());
         }
         let id = self.next;
         self.next += 1;
         self.live.push(Request {
             id,
-            hidden,
-            position,
+            hidden: Vec::new(),
+            position: 0,
             answer: Vec::new(),
             limit,
+            prompt: prompt.to_vec(),
+            filled: 0,
+            pending: None,
             sampling,
             state: sampling.seed ^ (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         });
@@ -174,60 +185,77 @@ impl<'model, 'session> Batched<'model, 'session> {
         self.live.len()
     }
 
-    /// One token for every live request, in the order they were admitted.
+    /// One step: every live row advances one position, and the rows whose prompt is in answer a token.
     ///
     /// # Invariant
-    /// A request's state is the one at its `position`, so its token is chosen before the layer step that
-    /// moves it: choosing after the step answers one position past the state. The step is shared, which is
-    /// what a batch is for, and it runs at each request's own position.
+    /// A filling row feeds its next prompt token and an answering row the token it chose last, so one layer
+    /// pass carries both and a long prompt fills beside the requests already answering. A row answers only
+    /// once its whole prompt is in the cache, and its state is the one at its own position.
     pub fn step(&mut self) -> Result<Vec<(usize, usize)>, QwenRefusal> {
-        let count = self.live.len();
-        if count == 0 {
+        let live = self.live.len();
+        if live == 0 {
             return Ok(Vec::new());
         }
-        let hidden: Vec<f32> = self
-            .live
-            .iter()
-            .flat_map(|request| request.hidden.iter().copied())
-            .collect();
-        let normalised = self.model.steps.normalised(
-            self.model.session,
-            &hidden,
-            self.model.steps.payload(&self.model.final_norm),
-            count as i64,
-            HIDDEN as i64,
-        )?;
-        let logits = self.model.steps.projected(
-            self.model.session,
-            &normalised,
-            self.model.head_weight(),
-            rows(count as i64, VOCABULARY as i64),
-            HIDDEN as i64,
-            VOCABULARY as i64,
-        )?;
-        let mut answered = Vec::with_capacity(count);
-        let mut moved: Vec<f32> = Vec::with_capacity(count * HIDDEN_SIZE);
-        for sequence in 0..count {
-            let row = &logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY];
-            let sampling = self.live[sequence].sampling;
-            let mut state = self.live[sequence].state;
-            let token =
-                crate::sampling::choose(row, &sampling, &mut || crate::sampling::next(&mut state));
-            self.live[sequence].state = state;
-            self.live[sequence].answer.push(token);
-            moved.extend(self.model.embed_row(token));
-            answered.push((self.live[sequence].id, token));
+        let mut fed: Vec<f32> = Vec::with_capacity(live * HIDDEN_SIZE);
+        for request in self.live.iter() {
+            let token = match request.pending {
+                Some(token) => token,
+                None => request.prompt[request.filled],
+            };
+            fed.extend(self.model.embed_row(token));
         }
         let positions: Vec<i64> = self.live.iter().map(|request| request.position).collect();
-        let mut state = moved;
+        let mut state = fed;
         for layer in 0..LAYERS {
             state = self
                 .model
                 .layer_batch(layer, &state, &mut self.caches[layer], &positions)?;
         }
         for (sequence, request) in self.live.iter_mut().enumerate() {
-            request.hidden = state[sequence * HIDDEN_SIZE..(sequence + 1) * HIDDEN_SIZE].to_vec();
             request.position += 1;
+            if request.filled < request.prompt.len() {
+                request.filled += 1;
+            }
+            request.pending = None;
+            request.hidden = state[sequence * HIDDEN_SIZE..(sequence + 1) * HIDDEN_SIZE].to_vec();
+        }
+        let answering: Vec<usize> = (0..live)
+            .filter(|sequence| self.live[*sequence].filled >= self.live[*sequence].prompt.len())
+            .collect();
+        if answering.is_empty() {
+            return Ok(Vec::new());
+        }
+        let joined: Vec<f32> = answering
+            .iter()
+            .flat_map(|sequence| self.live[*sequence].hidden.iter().copied())
+            .collect();
+        let normalised = self.model.steps.normalised(
+            self.model.session,
+            &joined,
+            self.model.steps.payload(&self.model.final_norm),
+            answering.len() as i64,
+            HIDDEN as i64,
+        )?;
+        let logits = self.model.steps.projected(
+            self.model.session,
+            &normalised,
+            self.model.head_weight(),
+            rows(answering.len() as i64, VOCABULARY as i64),
+            HIDDEN as i64,
+            VOCABULARY as i64,
+        )?;
+        let mut answered = Vec::with_capacity(answering.len());
+        for (at, sequence) in answering.iter().copied().enumerate() {
+            let row = &logits[at * VOCABULARY..(at + 1) * VOCABULARY];
+            let sampling = self.live[sequence].sampling;
+            let mut state = self.live[sequence].state;
+            let token =
+                crate::sampling::choose(row, &sampling, &mut || crate::sampling::next(&mut state));
+            let request = &mut self.live[sequence];
+            request.state = state;
+            request.answer.push(token);
+            request.pending = Some(token);
+            answered.push((request.id, token));
         }
         Ok(answered)
     }
