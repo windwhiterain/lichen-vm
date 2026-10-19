@@ -862,9 +862,12 @@ absent `0`, not the declared `4`, and attribute reconciliation is the checker's.
 The fix compares the **value and type** elements when either pair carries an attribute
 tail, leaving plain pairs on the whole-pair unify exactly as before. Measured after:
 `f (1 # 4)` and `f (1 # 8)` are accepted (`1: Int`), `f (1 # 2)` answers
-`expected 4, found 2`, `f 1` and a bound `y = 1 # 4; f y` are accepted, a plain
-parameter with a `# 4` argument still answers `expected 0, found 4` (the rule's
-letter), and the instantiation cases are unchanged. `D3`'s smallest test is
+`expected 4, found 2`, and `f 1` and a bound `y = 1 # 4; f y` are accepted. A plain
+parameter with a `# 4` argument answered `expected 0, found 4` here (the rule's
+letter); that reading is **superseded by the isomorphic rule** — an absent parameter
+attribute states no requirement, exactly as an absent parameter type does
+(`attributes.md` §"A wildcard requirement states none") — so the sentence records
+what that fix measured, not what the checker does now. `D3`'s smallest test is
 `struct_element_attributes::a_perspective_parameter_takes_a_value_that_refines_it`.
 Suites: lowlevel 146/13 (the GC ruling's baseline), language 273/1 (the `gc_block`
 red), highlevel 140/0, compute 229/2/2 (the two known reds).

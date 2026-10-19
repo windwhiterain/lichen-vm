@@ -141,6 +141,72 @@ impl<P: Program> Module<P> {
         true
     }
 
+    /// The frozen return pair's attribute tail, copied into `block` as dynamic nodes.
+    #[stacksafe]
+    pub fn materialize_static_return_tail(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+    ) -> Vec<NodeId> {
+        self.materialize_static_pair_tail(function, block, true)
+    }
+
+    /// The frozen parameter pair's attribute tail, copied into `block`.
+    #[stacksafe]
+    pub fn materialize_static_parameter_tail(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+    ) -> Vec<NodeId> {
+        self.materialize_static_pair_tail(function, block, false)
+    }
+
+    /// `pair`'s attribute tail (the return pair's or the parameter pair's), copied.
+    ///
+    /// # Invariant
+    /// The copies are the dynamic reach the reader needs: which attribute owns a slot is
+    /// not in the artifact, so a checker identifies it through the extensions.
+    #[stacksafe]
+    fn materialize_static_pair_tail(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+        of_return: bool,
+    ) -> Vec<NodeId> {
+        let module = self.static_module(function.module);
+        let Some(entry) = module.functions.get(function.index.0) else {
+            return Vec::new();
+        };
+        let pair = if of_return {
+            entry.r#return
+        } else {
+            entry.parameter
+        };
+        let Some(value) = module.read(pair) else {
+            return Vec::new();
+        };
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return Vec::new();
+        };
+        // SAFETY: the payload lives in the module's arena, pinned by the `Arc`.
+        let items: Vec<AnyNodeId> = unsafe { array.items() }
+            .iter()
+            .skip(2)
+            .map(|item| item.node)
+            .collect();
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        items
+            .into_iter()
+            .filter_map(|node| match node {
+                AnyNodeId::Static(sref) if sref.module == module.key => {
+                    Some(self.clone_static_signature_node(&module, sref.index, block, &mut remap))
+                }
+                AnyNodeId::Dynamic(node) => Some(node),
+                AnyNodeId::Static(_) => None,
+            })
+            .collect()
+    }
+
     /// The frozen signature copied into `block`, its frozen classes preserved.
     #[stacksafe]
     fn materialize_static_signature_with_classes(

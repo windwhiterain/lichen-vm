@@ -3,9 +3,11 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{
+    AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId, StaticFunctionRef,
+};
 
-use crate::attr::slot_value_node;
+use crate::attr::{AttrExt, AttrSet, slot_value_node};
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
 use crate::program::{HighProgram, TypeOperator, ValueType};
@@ -269,6 +271,40 @@ where
         (pair, func_node)
     }
 
+    /// A frozen callee's parameter requirement: the artifact's parameter tail.
+    ///
+    /// # Invariant
+    /// A copied slot whose value is undecided is a wildcard and states nothing; a slot
+    /// the extensions do not recognise is not a constraint this build checks.
+    fn check_static_parameter(&mut self, function: StaticFunctionRef, argument: ExprId, e: ExprId) {
+        let tails = self
+            .module
+            .materialize_static_parameter_tail(function, self.current_block);
+        for slot in tails {
+            let Some((marker, ext)) = self.static_tail_owner(slot) else {
+                continue;
+            };
+            let declared = slot_value_node(&*self, slot);
+            self.module.evaluate_node_deep(declared, None);
+            if self.node_value(declared).is_none() {
+                continue;
+            }
+            let found = self.attr_or_missing(argument, &marker);
+            let loc = self.loc(e, 2);
+            ext.unify_slots(self, found, slot, loc);
+        }
+    }
+
+    /// The attribute that owns a copied frozen tail slot, with its behaviour.
+    fn static_tail_owner(&mut self, slot: NodeId) -> Option<(P::Attr, &'static dyn AttrExt<P>)> {
+        let registry = self.attr_ext.as_deref()?;
+        P::Attr::ORDER.iter().copied().find_map(|marker| {
+            let ext = self.attribute_extension(&marker)?;
+            (!ext.is_label() && ext.render(&self.module, slot, registry).is_some())
+                .then_some((marker, ext))
+        })
+    }
+
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         self.check_expr(argument);
@@ -308,6 +344,12 @@ where
         // The callee's **type** rides with the apply: `f : f`, so an apply
         // whose value is not concrete applies the type. §7.
         let function_ty = self.state[function].ty.unwrap();
+        // A frozen callee's requirements live in the artifact, not in this build's
+        // tables (attributes.md).
+        let static_callee = match self.module.function_type_function(function_ty) {
+            Some(AnyFunctionId::Static(sref)) => Some(sref),
+            _ => None,
+        };
         // A **decided** non-function callee is refused here; an
         // undecided one waits for the runtime apply.
         if self.type_is_concrete(function_ty) && !self.module.is_function_type(function_ty) {
@@ -332,16 +374,8 @@ where
                     ext.unify_slots(self, arg_missing, param_slot, loc2);
                 }
             }
-        } else if self.state[argument].attr.is_some() {
-            let marker = self.schema_tail(argument)[0];
-            if let Some(ext) = self.attribute_extension(&marker) {
-                let found_attr = self.state[argument].attr.unwrap();
-                // The declared side of an unannotated parameter is the
-                // attribute's missing slot, a `[0, int]` term pair.
-                let missing = self.missing_slot_of(&marker, self.loc(e, 2));
-                let loc2 = self.loc(e, 2);
-                ext.unify_slots(self, found_attr, missing, loc2);
-            }
+        } else if let Some(sref) = static_callee {
+            self.check_static_parameter(sref, argument, e);
         }
         // Both slots' applications carry the four elements the apply arm reads.
         let value_operands = self.array_node(
@@ -429,6 +463,19 @@ where
                 self.state[e].attr = Some(fresh);
                 self.merged_tails.insert(e, tail);
                 self.node_edges.insert(fresh, self.loc(e, 2));
+            }
+        }
+        // A frozen callee's return certificate is the call's too (attributes.md).
+        if let Some(sref) = static_callee {
+            let tails = self
+                .module
+                .materialize_static_return_tail(sref, self.current_block);
+            for slot in tails {
+                if let Some((marker, _ext)) = self.static_tail_owner(slot) {
+                    self.state[e].attr = Some(slot);
+                    self.merged_tails.insert(e, vec![marker]);
+                    self.node_edges.insert(slot, self.loc(e, 2));
+                }
             }
         }
         node

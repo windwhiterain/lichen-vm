@@ -174,6 +174,26 @@ where
             })
     }
 
+    /// The node a value carries for `marker`: its term pair's slot, else its
+    /// recorded constraint slot.
+    fn value_attr_for(&mut self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
+        if let Some(node) = self.value_attr_node(value, marker) {
+            return Some(node);
+        }
+        let tail = self.schema_tail(value).to_vec();
+        let constraint = tail
+            .iter()
+            .rev()
+            .find(|m| {
+                self.attribute_extension(m)
+                    .is_some_and(|ext| !ext.is_label())
+            })
+            .copied();
+        (constraint.as_ref() == Some(marker))
+            .then(|| self.state[value].attr)
+            .flatten()
+    }
+
     /// An expression's attribute slot for `marker` — its own slot, else the
     /// attribute's *missing* slot.
     ///
@@ -243,29 +263,19 @@ where
             .expect("a type expression is compiled before its denotation is read")
     }
 
-    /// Unify the attributes of the type expression with those of the annotated
-    /// `value`, one marker at a time.
+    /// Unify the attributes the **type expression carries** with the annotated
+    /// `value`'s, one marker at a time.
     ///
     /// # Invariant
-    /// A side that does not carry a marker contributes the attribute's
-    /// **missing** slot, so a one-sided spelling is reconciled against the other
-    /// side's absence. The two schemas are dense over the attributes each
-    /// carries, so the pairing is by marker, never by position.
+    /// A type that does not carry a marker states no requirement for it: the value's
+    /// own attribute is its provider, and a plain type must not demand the top (a
+    /// `# 1` value under `e : T` would be refused, which is the frozen signature's
+    /// ordinary case). The two schemas are dense over the attributes each carries, so
+    /// the pairing is by marker, never by position.
     fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId, loc: Loc) {
         let type_tail = self.schema_tail(type_expr).to_vec();
-        let value_tail = self.schema_tail(value).to_vec();
-        let mut markers: Vec<P::Attr> = Vec::new();
-        for marker in type_tail.iter().chain(value_tail.iter()) {
-            if markers
-                .iter()
-                .any(|seen| seen.order_index() == marker.order_index())
-            {
-                continue;
-            }
-            markers.push(*marker);
-        }
         let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
-        for marker in markers {
+        for marker in type_tail {
             let type_slot = self.attr_or_missing(type_expr, &marker);
             let value_slot = self.attr_or_missing(value, &marker);
             pairs.push((marker, value_slot, type_slot));
@@ -555,7 +565,7 @@ where
                 // A slot the annotation does not spell is preserved: the value's
                 // existing term pair carries over unchanged.
                 let node = self
-                    .value_attr_node(value, marker)
+                    .value_attr_for(value, marker)
                     .unwrap_or_else(|| self.missing_slot_of(marker, self.loc(e, 2)));
                 if !ext.is_label() {
                     constraint_slot = Some(node);

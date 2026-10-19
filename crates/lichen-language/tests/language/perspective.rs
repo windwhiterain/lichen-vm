@@ -94,11 +94,9 @@ fn an_identity_function_accepts_a_plain_argument() {
 }
 
 #[test]
-fn an_identity_function_rejects_a_perspective_argument() {
-    // `id = x => x; id (5 # 4)` — the argument has perspective 4, the param
-    // reads the missing `0` → 0 ≡ 4 ✗.
-    assert!(!ok("id = x => x; id (5 # 4)"));
-    assert_eq!(message("id = x => x; id (5 # 4)"), "expected 0, found 4");
+fn an_unannotated_parameter_states_no_requirement() {
+    // A parameter without `# p` is unconstrained (attributes.md).
+    assert!(ok("id = x => x; id (5 # 4)"));
 }
 
 #[test]
@@ -228,4 +226,20 @@ fn a_wildcard_parameter_states_no_requirement() {
     // `#_` declares nothing, so no call pins the template: both orders accept.
     assert!(ok("f = (x : Int # _) => x\nf (5 # 8)\nf (5 # 2)"));
     assert!(ok("f = (x : Int # _) => x\nf (5 # 2)\nf (5 # 8)"));
+}
+
+#[test]
+fn a_plain_type_states_no_perspective_requirement() {
+    // `x : T` names a type; the value's own certificate survives the annotation.
+    assert!(ok("x = 5 # 4\n(x : Int) # 4"));
+    assert!(ok("x = 5 # 8\n(x : Int) # 4"));
+}
+
+#[test]
+fn a_returned_perspective_survives_a_type_annotation() {
+    // The call's constraint slot is kept when the call is annotated with a type.
+    assert_eq!(
+        message("g = x => (x # 2)\ny = (g 3 : Int)\ny # 4"),
+        "expected 4, found 2"
+    );
 }

@@ -6,8 +6,8 @@ P = T: KT _ => struct{.n Int, .in T.I, .out T.O}
 S = T: KT _ => A T.I -> T.O
 Buf = T => struct{.native _, .element T}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
-launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}
-call = k: (K _) => a: k.I => {r = $call(k.native, a); r: k.O; r}
+launch = k: (K _) => a: k.I # _ => {r = $launch(k.native, a); r: k.O; r}
+call = k: (K _) => a: k.I # _ => {r = $call(k.native, a); r: k.O; r}
 parallel = f => b: string => o: _ => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O o)}
 plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => (($range(x): Int) # 1)

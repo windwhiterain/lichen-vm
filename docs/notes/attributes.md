@@ -132,18 +132,31 @@ table below is the acceptance suite — but **no part of the runtime reads it**.
 an unused asset, not a half-built one, and it is the static half of a GPU execution
 model: the certificate for which expressions are uniform across an aligned lane group.
 
-**And the certificate's sources are now stated, but not yet readable.** The compute
+**And the certificate's sources are stated, and a call site reads them.** The compute
 sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
-the lattice's bottom: the value is uniform over exactly its own thread. The statement
-is checked in the package's own build and travels in its frozen return pair, but a
-**call site cannot read it yet**: a package's artifact carries no per-expression
-schema, so the frozen return pair's tail slot has no marker, and the type-side apply
-has no static arm either
-([operator-polymorphism](operator-polymorphism.md) §7.1 cost 4). Until that reader
-lands, an annotation over a lane value still reads the absent top and is accepted:
-`(compute.range k.n # 64)` checks. The statement is what the artifact should carry;
-the reader is the scheduled work.
+the lattice's bottom: the value is uniform over exactly its own thread. A frozen
+callee's return pair carries that tail, and the checker reads it the way
+`attr::pair_label` reads a name — the artifact has no per-expression schema, so each
+slot's owner is the attribute that recognises its content — then copies it onto the
+call (`Checker::check_app`, `Module::materialize_static_return_tail`). So a false claim
+is refused: `(compute.range k.n # 64)` answers `expected 64, found 1`.
+
+Two readings changed with it, and both are the same statement — **a type is not a
+uniformity requirement**:
+
+| program | result |
+|---|---|
+| `x = 5 # 4; (x : Int) # 4` | ✓ — the annotation names a type, not a width |
+| `g = x => (x # 2); y = (g 3 : Int); y # 4` | ✗ — the call's certificate survives the annotation |
+| `f = (x : Int # 4) => x; f (1 # 2)` | ✗ — a *parameter* requirement is a requirement |
+
+A plain type used to demand the absent top of the value it annotated (the type's
+missing slot was reconciled as `0` against the value's `# 1`), which refused every
+`(read … : Float)` the moment the seeds stated the bottom; `unify_type_attributes`
+now reconciles only the markers the **type expression carries**. And a call's term is
+its apply node rather than a pair, so its propagated slot lives in the state and is
+read by `value_attr_for` when an annotation preserves it.
 
 It is worth recording a conclusion that was reached the wrong way first, because the
 wrong version is the tempting one. The obvious claim is that a GPU backend *needs*
@@ -198,18 +211,20 @@ The `perspective.rs` integration tests encode this table.
 | `((1 # 4) + (2 # 6)) # 2` | slot `gcd(4,6) = 2`, check `2 ≡ 2` ✓ |
 | `((1 # 4) + (2 # 6)) # 5` | `2 ≢ 5` ✗ |
 | `((1 # 4) + 2) # 4` | `gcd(4,0) = 4` ✓ |
-| `id (5 # 4)` | `0 ≢ 4` ✗ (a `#4` value is not uniform over all threads) |
+| `id (5 # 4)` | ✓ — a parameter without `# p` states nothing, as a parameter without a type does |
 | `f = x # 4 => x; f 5` | `4 \| 0` ✓ (a uniform value satisfies a `#4` requirement) |
 | `f = x # 2 => x; f (5 # 4)` | `2 \| 4` ✓ (real subtype relaxation) |
 | `f = x # 4 => x; f (5 # 2)` | `4 ∤ 2` ✗ |
 | `f = (x : Int # _) => x; f (5 # 8); f (5 # 2)` | ✓ — a wildcard states nothing, so no call pins the template |
 
-**A wildcard requirement states none.** The apply reads the *declared* slot as a value
-and skips the comparison when it is still undecided (a `#_`, or a declaration that
-depends on the parameter). Unifying an undecided declaration instead would bind the
-template's own cell to the first call's argument — the second call would then be
-checked against the first (`f (5 # 8)` then `f (5 # 2)` used to answer
-`expected 8, found 2`).
+**An absent requirement states none, and `#_` spells it.** A parameter without a
+perspective is unconstrained — the same reading a parameter without a type has — so
+`id (5 # 4)` is accepted; `# p` is how a parameter asks for a width, and the explicit
+wildcard `#_` states the same absence in writing. The apply reads the declared slot as
+a value and skips the comparison when it is still undecided; unifying an undecided
+declaration instead would bind the template's own cell to the first call's argument —
+the second call would then be checked against the first (`f (5 # 8)` then `f (5 # 2)`
+used to answer `expected 8, found 2`).
 
 ### Annotation over an existing attribute (requirements & providers)
 

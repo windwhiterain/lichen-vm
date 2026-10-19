@@ -521,22 +521,23 @@ about, or still open.
    lost, and the tests assert the type-only report. Fixing it without the eager
    fold is what the *body-expansion* form would do — expand the binding's own body
    at the call site — recorded here as the open alternative, not the landed shape.
-4. **A routed operator's *type* is undecided under `Mode::Check`** — and it is
-   **open**. The apply reaches `Module::apply_function_type`
-   (`crates/lichen-lowlevel/src/function.rs`), which matches
-   `AnyFunctionId::Dynamic` and answers `false` for a **static** callee, so the
-   call's result cell is never bound; the class is pinned only when the value pass
-   runs. Measured on `feature/lsp-hover-check` (LSP): `x = 3 / y = x + 4` reports
-   `y` as `?a` under `Mode::Check` and `Int` under `Mode::Evaluate`. The control in
-   the bare language, where no prelude is in scope and `+` stays a `BinOp`, answers
-   `Int` under both — the class tie decides it there. The hole is only *named* by
-   the routing: **any** frozen callee's result reads `?a` at check. `add` adds the
-   dependent case — its codomain is the element cell of
-   `array{(_ ! in_num), 2}` — so closing it needs the static signature
-   instantiated **per call at the type side**, which is the value side's landed
-   static-signature instantiation (the chain below) raised one layer. No test pins
-   the check-time reading; [incremental-evaluation](incremental-evaluation.md)
-   Q9's on-demand evaluation is the LSP's short-term answer.
+4. **A routed operator's *type* was undecided under `Mode::Check`** — **closed**.
+   The apply reached `Module::apply_function_type`
+   (`crates/lichen-lowlevel/src/function.rs`), which matched
+   `AnyFunctionId::Dynamic` and answered `false` for a **static** callee, so the
+   call's result cell was never bound; the class was pinned only when the value pass
+   ran. Measured before the fix on `feature/lsp-hover-check`: `x = 3 / y = x + 4`
+   reported `y` as `?a` under `Mode::Check`; the bare-language control, where no
+   prelude is in scope and `+` stays a `BinOp`, answered `Int` in both modes.
+   **The arm that closed it**: `Module::static_function_type_apply` copies the
+   frozen signature — the parameter pair and the return type, and the arrays they
+   hold — with the artifact's equality classes preserved, so `add`'s codomain (one
+   class of its parameter's element cell) is decided by the argument the check
+   binds. The body is never cloned, so no operation of it re-runs, and without
+   `report` the value side still owns the signature (binding the cell there broke
+   the compute kernel's type-time reading, measured). After: `x = 3 / y = x + 4`
+   reads `Int` under both modes, a frozen `Int -> Int` callee reads `Int` under
+   `Check`, and the LSP's `Check` switch is no longer blocked by this cost.
 
 So the chain's three steps: **static-signature instantiation** (landed), **the
 routing** (landed, the call form), **kernel specialize** (the kernel
