@@ -1,8 +1,9 @@
 # The package graph: `import`, `plug`, `link`, and the `depend` edge
 
-> Status: ruling recorded; the refactor is in slices. The current state is measured
-> in [packages](packages.md) and [package-manager](package-manager.md); this note
-> fixes the target.
+> Status: **landed** — all three edges are recursive through `depend`, and each
+> is measured end to end. [packages](packages.md) and
+> [package-manager](package-manager.md) carry the mechanics; this note carries the
+> ruling and the measurements.
 > Points at: `crates/lichen-language/src/package.rs` (`PackageStore`),
 > `crates/lichen-preprocess` (the block grammar), `crates/lichen-package` (the
 > manager), `crates/lichen-language/src/run.rs` and the language server (the root
@@ -38,12 +39,12 @@ the compiler**; `link` **loads a library**.
 
 ## What exists today (measured)
 
-| edge | current behavior |
+| edge | behavior |
 |---|---|
 | `import` | recursive and uniform; a package's own imports load first, cycles refused, artifacts content-cached |
-| `depend` | staged only for the **root** source; an imported package's own `depend` is parsed into `Preprocessed.depends` and dropped |
-| `plug` | parsed and normalized into a plugin-typed `Depend`; the language layer has no consumer. The manager can fetch plugins and rebuild a compiler over them (`lichen rebuild-plugin`), but the compiler is still monomorphic over the shipped program, so the composed binary cannot route a program end to end |
-| `link` | honored only for the **root** (splice + entries in `run`, check-imports in the editor); `build_package` ignores `Preprocessed.links`, and packages compile with `no_native_ops()`, so a package's linked surface is silently dropped |
+| `depend` | every source stages its own: `build_package` registers a package's aliases before its block resolves, and the manager collects the graph's `depend`s by following imports (fetch `a`, then `d`) |
+| `plug` | a compiler declares its plugin set once (`plugins::install`, written into a generated compiler's `main`); a `plug` outside that set is refused, and the manager collects the graph's plugs through imports and rebuilds the compiler over them |
+| `link` | a package's `link` splices its wrapper and installs its entries; the library bytes are part of the package's artifact identity |
 
 ## The slices
 
@@ -55,7 +56,17 @@ the compiler**; `link` **loads a library**.
    entry runs with the package's own argument. A library built from another
    tree is refused by the build tag (§12 of the native-link note), which is why
    the first probe crashed: the dylib came from a different checkout.
-   dependencies are fetched.
-3. **`plug` in a package.** The manager collects the graph's plugin set and
-   rebuilds the compiler over it; the compiler records its own plugin set and
-   refuses a graph whose set differs (the program-tag gate's shape).
+2. **`depend` in a package — landed.** `build_package` stages the block's own
+   `depend`/`plug` before its imports resolve; the manager's `fetch_reachable`
+   walks the graph by `import`, deduplicating by `Depend::identity`, and fetches
+   as the closure grows. Measured: a root depending on `a`, where `a/_.lichen`
+   depends on `d` and imports it, prints `7: Int`.
+3. **`plug` in a package — landed.** The store compares a file's `plug` against
+   the binary's installed set (`crates/lichen-language/src/plugins.rs`), the
+   generated compiler installs its set from its composition, and the manager
+   collects the graph's plugins and rebuilds the compiler
+   (`compiler_cache::ensure`). Measured: a root depending on `a`, where
+   `a/_.lichen` plugs `lichen-std-native` and sorts an array, rebuilds a compiler
+   over the plugin set and prints `[1, 2, 3]: array{Int, ?a}`; the stock compiler
+   refuses the same file with "this file plugs 's'; rebuild the compiler with
+   `lichen rebuild-plugin` to include it".

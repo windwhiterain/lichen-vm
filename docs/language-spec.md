@@ -435,7 +435,10 @@ Separator-separated:
   extends the compiler's value/operator vocabulary, fetched and composed into a
   rebuilt compiler the same way.  A `plug` is always a plugin and never a plain
   import, so it takes the same options as a `depend` minus the `plugin` flag
-  (which is what a `plug` implies).
+  (which is what a `plug` implies).  A plug **specializes the compiler**: the
+  compiler must have been built over the plugin's set, and a `plug` outside it is
+  refused; the package manager collects the reachable graph's plugs and rebuilds
+  the compiler over them (`docs/notes/package-graph.md`).
 
 - `name = link "path"` declares a **linked library** bound to `name`: a dynamic
   library (a Rust `dylib`) whose manifest carries the lichen source that names

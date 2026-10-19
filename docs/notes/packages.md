@@ -23,6 +23,10 @@ never see it; the code to compile is everything after the block.
   one is given).
 - A package is an ordinary lichen source file whose **final expression is the export** —
   a single frozen `[value, type]` ref.
+- A package's own block is staged and resolved like a program's: its `depend`
+  aliases are registered before its imports, its `link` libraries are loaded and
+  spliced, and its `plug` must be in the compiler's plugin set — the graph is
+  recursive (`docs/notes/package-graph.md`).
 - The preprocessor resolves each import through the shared store. A package's own
   imports resolve first (transitive dependencies load and freeze first); a cycle is a
   `cannot load package '…':` diagnostic anchored on the import that closes it.

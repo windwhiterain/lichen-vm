@@ -228,6 +228,13 @@ is one manifest line per plugin.
   compiler passes its own plugin-set slot (`<lichendir>/compilers/<key>`), so
   its compile artifacts never collide with (or reuse) another plugin set's —
   each vocabulary reads/writes its own `artifacts/` store.
+- A **`plug` in a file or a package** is a compiler-set edge: the compiler
+  installs the plugin set it was composed over (`plugins::install`, emitted into
+  a generated compiler's `main`), and a file's `plug` outside that set is
+  refused; the manager collects the graph's plugs through imports and rebuilds
+  the compiler over them (`docs/notes/package-graph.md` §3). Measured: a package
+  that plugs `lichen-std-native` compiles and runs under the rebuilt compiler,
+  and the stock compiler refuses the same file.
 - The per-leaf artifact codecs — `OperatorCodec`, and `ValueCodec` for a value leaf — are
   what a native plugin implements when it wants its *built* compiler to keep a persistent
   `~/.lichen` cache. A scalar operator's codec is a one-tag identical round-trip: `SortOp`'s
