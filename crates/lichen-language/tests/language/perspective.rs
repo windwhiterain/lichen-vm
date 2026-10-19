@@ -278,3 +278,19 @@ fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
         "expected 32, found 1"
     );
 }
+
+#[test]
+fn a_body_provides_what_its_parameter_requires() {
+    // A `# 1` parameter feeding a `# 32` requirement is refused (`32 | 1` fails).
+    assert!(!ok(
+        "f = (x : Int # 32) => x\ng = (i : Int # 1) => f i\ng 0\n"
+    ));
+    assert_eq!(
+        message("f = (x : Int # 32) => x\ng = (i : Int # 1) => f (i % 2)\ng 0\n"),
+        "expected 32, found 1"
+    );
+    // The other direction holds: a `# 32` parameter satisfies the `# 32` requirement.
+    assert!(ok(
+        "f = (x : Int # 32) => x\ng = (i : Int # 32) => f i\ng 0\n"
+    ));
+}

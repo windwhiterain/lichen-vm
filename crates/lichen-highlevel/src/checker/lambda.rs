@@ -142,6 +142,9 @@ where
             }
             parameter_requirement = Some(declared);
             self.function_param_attr.insert(e, (marker, declared));
+            // The body sees the parameter's **declared** slot: the check is for
+            // every caller the requirement admits.
+            self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
         // The requirement rides its own slot, so a body's annotation of the parameter

@@ -152,6 +152,16 @@ merge.
   rebuilt by the import with fresh cells, so their attribute positions freeze undecided —
   a type function's body does not. Pinning down where the import drops the value is an
   open question; the type-function spelling makes the requirement checkable today.
+- **A body provides what its parameter requires.** The function is checked once, for
+  every caller its requirement admits, so the parameter's declared slot is what the body
+  may rely on — the paper's "a variable's perspective is the one of the code where it was
+  declared". The unify hook's subtype direction then decides each use inside the body
+  (`# 32` required of a `# 1` parameter fails, `# 32` of a `# 32` passes), and a compound
+  argument's provided slot is the meet of its components. This is the flow the read/write
+  rules need on the operand side; their *results* still wait on a derived return
+  certificate (a function's return pair carrying the provided slot when the body states
+  no annotation) — without it a wrapper's return can only be a fixed certificate, because
+  the body cannot see which caller's values it will run on.
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is
