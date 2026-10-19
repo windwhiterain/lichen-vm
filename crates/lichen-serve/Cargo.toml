@@ -5,9 +5,12 @@ edition.workspace = true
 description = "A session that owns a compute backend and reports what one run asked the device for."
 
 [dependencies]
+fancy-regex = "0.14"
 lichen-compute.workspace = true
 lichen-compute-gpu.workspace = true
 lichen-graph-ir.workspace = true
 lichen-kernel-ir.workspace = true
 lichen-language.workspace = true
 lichen-utils.workspace = true
+serde_json.workspace = true
+unicode-normalization = "0.1"

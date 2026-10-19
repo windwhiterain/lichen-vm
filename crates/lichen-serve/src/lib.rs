@@ -18,6 +18,7 @@ mod narrowed;
 mod qwen;
 mod sampling;
 mod service;
+mod tokenizer;
 
 pub use model::{
     ATTEND_CACHE_STEP, ATTEND_STEP, BLOCK, BLOCKS, CAPACITY, COLUMNS, DECODE_STEP, EMBEDDING,
@@ -31,6 +32,7 @@ pub use narrowed::{narrowed, narrowed_projection};
 pub use qwen::{Generated, Qwen, QwenRefusal, Width};
 pub use sampling::{Sampling, choose, randomness};
 pub use service::{Served, Service};
+pub use tokenizer::{Tokenizer, TokenizerRefusal};
 
 /// What one run asked the device for.
 ///
