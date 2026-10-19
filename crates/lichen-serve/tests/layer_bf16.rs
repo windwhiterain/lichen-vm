@@ -38,19 +38,18 @@ fn halves(values: &[f32]) -> RunArgument {
 }
 
 /// Run the projection once, answering its rows and how long the step took.
+///
+/// # Invariant
+/// The arguments are the caller's because the two projections are two programs: the wide one takes
+/// the extent and the width, and the narrowed one a `per` beside them, which a single-row
+/// projection passes as its own output count so every output reads the one input row.
 fn run(
     session: &Session,
     prepared: &lichen_serve::Prepared<'_>,
-    vector: RunArgument,
-    weight: RunArgument,
+    arguments: Vec<RunArgument>,
 ) -> (Vec<f32>, Duration) {
     let stepped = prepared
-        .step(vec![
-            RunArgument::Count(ROWS as i64),
-            RunArgument::Count(DIM as i64),
-            vector,
-            weight,
-        ])
+        .step(arguments)
         .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
     let [RunResult::Resident(resident)] = &stepped.results[..] else {
         panic!("the projection answers with one buffer, and this one answered otherwise");
@@ -79,8 +78,27 @@ fn a_projection_at_the_model_width_answers_the_same_rows_at_half_width() {
         .unwrap_or_else(|refusal| panic!("the projection prepares: {refusal}"));
     let narrowed = narrowed_projection(&session)
         .unwrap_or_else(|refusal| panic!("the narrowed projection prepares: {refusal}"));
-    let (wide, wide_time) = run(&session, &plain, floats(&vector()), floats(&weights()));
-    let (narrow, narrow_time) = run(&session, &narrowed, halves(&vector()), halves(&weights()));
+    let (wide, wide_time) = run(
+        &session,
+        &plain,
+        vec![
+            RunArgument::Count(ROWS as i64),
+            RunArgument::Count(DIM as i64),
+            floats(&vector()),
+            floats(&weights()),
+        ],
+    );
+    let (narrow, narrow_time) = run(
+        &session,
+        &narrowed,
+        vec![
+            RunArgument::Count(ROWS as i64),
+            RunArgument::Count(DIM as i64),
+            RunArgument::Count(ROWS as i64),
+            halves(&vector()),
+            halves(&weights()),
+        ],
+    );
     let widest = wide
         .iter()
         .fold(0.0_f32, |held, value| held.max(value.abs()));
