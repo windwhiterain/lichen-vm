@@ -116,8 +116,7 @@ fn which_weight_row_a_batch_reads() {
         ])
         .unwrap_or_else(|refusal| panic!("the single-row projection runs: {refusal}"));
     println!(
-        "[single] rows={ROWS} -> {:?}, wanted {:?}",
-        answered(&session, &stepped),
-        [1.0f32, 2.0, 2.0, 3.0, 4.0, 6.0]
+        "[single] rows={ROWS} -> {:?}, wanted every output over input row zero",
+        answered(&session, &stepped)
     );
 }

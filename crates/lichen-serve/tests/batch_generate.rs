@@ -3,7 +3,7 @@
 use lichen_serve::{Qwen, Session, Width};
 
 /// The two tokens the batch starts from, and how many each generates.
-const STARTS: [usize; 1] = [9707];
+const STARTS: [usize; 2] = [9707, 785];
 const TOKENS: usize = 3;
 
 /// A batch's rows are the rows of the sequences it holds.

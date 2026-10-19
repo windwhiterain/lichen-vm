@@ -482,20 +482,13 @@ built = compute.graph step
 built
 "#;
 
-/// One row of a projection: `y[j] = sum over i of x[i] · w[j][i]`, at the model's own width.
+/// The projection of several input rows at once, one matvec per row in one dispatch.
 ///
 /// # Invariant
-/// A lane is one row of `w` and folds the whole width, so the kernel is the shape every projection
-/// in a layer has — `q`, `k`, `v`, `o`, `gate`, `up`, `down`, and the 151936-wide vocabulary — with
-/// the row count and the width the caller's. The second dispatch copies the rows across, because a
-/// one-node step cannot hand its answer back.
-/// The projection for several input rows, which is one matvec per row in one dispatch.
-///
-/// # Invariant
-/// The input row an output belongs to is `row / per`, so `per` counts the outputs a row produces: the
-/// single-row projection passes `per = n` and this one passes the width it projects to. The matvec it
-/// generalises reads `x` by the reduction index alone, which is why a batch of rows needs this rather than a
-/// larger count.
+/// An output belongs to the input row `row / per` and to the weight row `row - (row / per) * per`,
+/// and the two are different because the weight carries `per` rows while a launch of `n` outputs
+/// covers `n / per` of them: the input rows are the caller's and the weight is the one every row
+/// shares. A single-row projection passes `per = n`, which collapses both to `row`.
 pub const MATVEC_BATCH_STEP: &str = r#"
 --- compute = import "compute.lichen" ---
 In     = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
@@ -505,7 +498,9 @@ MatvecPar = struct{.n Int, .dim Int, .per Int, .in In, .out Rows}
 MatvecArg = struct{.n Int, .dim Int, .per Int, .I In}
 matvec_raw = (k : MatvecPar) => {
   row = compute.range k.n
-@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (row * k.dim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (((row / k.per) * k.dim) + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
+  sequence = row / k.per
+  weight_row = row - (sequence * k.per)
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at ((weight_row * k.dim) + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((sequence * k.dim) + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
   compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
 }
 matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" Rows
@@ -526,6 +521,13 @@ built = compute.graph step
 built
 "#;
 
+/// One row of a projection: `y[j] = sum over i of x[i] · w[j][i]`, at the model's own width.
+///
+/// # Invariant
+/// A lane is one row of `w` and folds the whole width, so the kernel is the shape every projection
+/// in a layer has — `q`, `k`, `v`, `o`, `gate`, `up`, `down`, and the 151936-wide vocabulary — with
+/// the row count and the width the caller's. The second dispatch copies the rows across, because a
+/// one-node step cannot hand its answer back.
 pub const MATVEC_STEP: &str = r#"
 --- compute = import "compute.lichen" ---
 In     = struct{.x (compute.Buf Float), .w (compute.Buf Float)}

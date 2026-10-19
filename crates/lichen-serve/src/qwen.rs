@@ -230,8 +230,10 @@ impl<'session> Steps<'session> {
     /// The projection of one or more input rows, `per` outputs a row.
     ///
     /// # Invariant
-    /// `per` is the outputs one input row produces, so the row an output reads is `output / per`: a single
-    /// input row passes its own output count and every output reads row zero.
+    /// `per` is the outputs one input row produces, which is also the weight's own row count: an
+    /// output reads the input row `rows / per` and the weight row `rows % per`, so every sequence
+    /// shares the one weight. A single input row passes its own output count, and both are then
+    /// row zero's input and the output's own weight.
     fn projected(
         &self,
         session: &Session,
@@ -624,16 +626,6 @@ impl<'session> Qwen<'session> {
                 HIDDEN as i64,
                 VOCABULARY as i64,
             )?;
-            for sequence in 0..sequences {
-                let span = sequence * HIDDEN_SIZE..(sequence + 1) * HIDDEN_SIZE;
-                eprintln!(
-                    "[rows] p={position} row={sequence} hidden {:.4} logits {:.4}",
-                    hidden[span.clone()].iter().sum::<f32>(),
-                    logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY]
-                        .iter()
-                        .sum::<f32>()
-                );
-            }
             let mut next: Vec<f32> = Vec::with_capacity(sequences * HIDDEN_SIZE);
             for (sequence, chosen) in tokens.iter_mut().enumerate() {
                 let row = &logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY];
