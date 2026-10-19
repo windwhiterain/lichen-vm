@@ -1,7 +1,7 @@
 # A native link library: a Rust generic behind a lichen generic
 
 > Status: **proposed — ruled by the maintainer; the phases are not started.**
-> §2 is measured; §4 is ruled (the instantiated code is dynamically loaded);
+> §2 is measured; §4 is ruled (a Rust `dylib` loaded through a `link` directive);
 > §5's lichen surface is designed from existing mechanisms and is not measured.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
@@ -23,9 +23,9 @@ rlib the way a non-generic library's can, and each downstream crate pays the sam
 codegen again.
 
 The request: wrap such a crate into lichen as a **link library** — its generics
-become lichen generics, the instantiations are **explicit**, one `.rlib` holds
-their object code, and downstream Rust crates link that rlib instead of
-instantiating again.
+become lichen generics, the instantiations are **explicit**, one dynamic
+library holds their object code, and downstream Rust crates link that library
+instead of instantiating again.
 
 ## 2. The Rust half: an rlib is not a monomorphization barrier
 
@@ -81,7 +81,7 @@ is linked:
 
 ## 3. The lichen half: the pieces already exist
 
-A native plugin can express the whole wrapping surface. The table names the
+The native-op boundary can express the whole wrapping surface. The table names the
 mechanism each requirement lands on; none of them is new.
 
 | requirement | mechanism | where |
@@ -93,9 +93,9 @@ mechanism each requirement lands on; none of them is new.
 | the closed set itself | a `set` value: `set(Float, Int)` | `crates/lichen-highlevel/src/set.rs` |
 | a native op over several raw values | `ctx.array_node(&[…])` + `ctx.op_node` | `LaunchOp::build`, `compute.rs:7223` |
 | selecting a Rust implementation by a *value* | `OperatorExt::run` reads the operand | `SortOp::run`, `lichen-std-native/src/lib.rs` |
-| the wrapper's own types | the plugin's embedded lichen source | `std.lichen`, [compiler-plugin](compiler-plugin.md) |
+| the wrapper's own types | the source the library's manifest carries | `std.lichen`, [compiler-plugin](compiler-plugin.md) |
 | per-application instantiation of the wrapper | the apply clone walk | `function.rs:72`, `:159`, `:254` |
-| the link library | an ordinary Rust crate | — (§2's instances crate) |
+| the link library | a Rust dynamic library (§4) | `crate-type = ["dylib"]` |
 
 Two facts make the boundary cheap. **A native op sees raw values, never a type**
 (`native.rs:24–43`): the wrapper hands the type argument over as an ordinary
@@ -104,26 +104,23 @@ application** (`function.rs:159`: *"a call site never monomorphises a polymorphi
 template"*), so a wrapper written once dispatches per call on the argument the
 caller actually passed.
 
-## 4. The shape, as ruled: a thin plugin and a dynamically loaded library
+## 4. The shape, as ruled: a self-describing `dylib` and a `link` directive
 
-Two rulings fix it: the instantiated code is **dynamically loaded**, and the
-plugin side is **native-plugin-shaped and depends on lichen**; neither enters the
-lichen compiler (§7).
+Three rulings fix it (§7): the instantiated code is **dynamically loaded**; it is
+a **Rust `dylib` that depends on lichen** and shares the host's lichen; and a
+**`link` directive** in the `---…---` block names it, so the toolchain loads it
+instead of having it built in.
 
 ```
-vbd-lichen      the plugin: the lichen wrapper source, the $vbd ops, the value
-                conversion, the dispatch. Depends on lichen-highlevel/lowlevel,
-                and is composed by the project's own host the way
-                lichen-std-native is.
-      │  loads at run time (libloading)
-vbd-instances   the instantiated code: a dynamic library generated from the
-                recorded set. Its ABI is plain data — scalars, pointer + length,
-                opaque handles — so it can be loaded into a process that already
-                has its own lichen.
-      │
-downstream      the project's Rust crates link the same library dynamically;
-                the heavy code is one file on disk and one mapping per process,
-                not one copy per downstream binary.
+vbd-instances   the instantiated code: a Rust dylib generated from the recorded
+                set. Depends on lichen (the same source as the host) and vbd-rs.
+                Exports a manifest — the lichen wrapper source and the instance
+                table — and one extern "C" entry per instance, taking the host's
+                module and node ids.
+      │  ---  vbd = link "…/libvbd_instances.so"  ---      (libloading)
+the toolchain   reads the manifest, compiles the wrapper source as a virtual
+                package whose $ops lower to External { library, instance }, and
+                resolves the entries.
 ```
 
 **Why dynamic and not static.** An rlib is an archive: linking it copies its
@@ -132,33 +129,61 @@ same size with and without the instance rlib, so an rlib buys *codegen* time and
 nothing else. A dynamic library is the artifact that buys *link* time and binary
 size — the downstream link is a reference, and the code is mapped once.
 
-**Why the split is forced, not chosen.** A dynamically loaded library cannot be
-generic over the host's `Program`, and it must not carry a second copy of
-lichen's runtime: a second `Registry` would freeze its own modules, and the
-module identities lichen's artifacts carry would stop agreeing. So what crosses
-the boundary is plain data, and the lichen value conversion stays in the plugin.
+**Why a `dylib` and not a `cdylib`.** The ruling crosses lichen values: an entry
+takes `*mut Module<LangProgram>` and node ids, so an array or a struct needs no
+marshalling and the library builds its results with lichen's own code. A `cdylib`
+over plain data would be the sound form and is what this trades away; the unsafe
+boundary it creates is the first price below.
 
-**How the plugin reaches it.** The library exports one `extern "C"` entry per
-instance (plus a descriptor naming the lichen kind each entry serves); the plugin
-resolves them with `libloading` — already in `Cargo.lock` at 0.8.9 — and its
-`run` dispatches through the resolved table.
+**What stays thin.** The compiler-side operator is one core `External` variant
+plus a runtime table; the wrapper source is compiled like any other embedded
+native package; the instantiated code inside the library is non-generic. Nothing
+about the library is compiled into the toolchain.
 
-The stock `lichen-compiler` and the LSP never load `vbd-instances`; a program
-that uses vbd's generics runs under the project's host. That is the same
-arrangement `lichen-std-native` already has, and it is deliberate: the shipped
-toolchain carries no project-specific instantiation set.
+**How the loader works.** `libloading` (already in `Cargo.lock` at 0.8.9)
+resolves the manifest entry and the per-instance entries; the manifest is the only
+thing the compiler reads before checking a program, so the library describes its
+own lichen surface.
 
-One question is still open inside this shape (§9): the **artifact kind** — a
-`cdylib` with the plain C ABI above, or a Rust `dylib` that can carry lichen
-types across the boundary but binds the library to the host's exact lichen build
-and compiler.
+The library is **loaded, never linked**: a program that names no `link` library
+never opens one, and the toolchain binary carries no project's instances.
+
+Three consequences the design must pay for, and they are not small:
+
+**The ABI is an unsafe boundary.** A `dylib` can carry lichen types — the entry
+points take `*mut Module<LangProgram>` and node ids — but rustc does not compare
+the two sides' layouts. *Same lichen source and same rustc* is the only thing
+that makes the pointers agree, and a mismatch is undefined behaviour, not a
+diagnostic. What can be enforced:
+
+- the manifest names a **build tag** (lichen revision, rustc version, the
+  `LangProgram` identity) and the loader refuses anything else;
+- every exported entry is `extern "C"` and must not unwind — a panic in the
+  library aborts, it never crosses the boundary;
+- the library holds no lichen global state (no `Registry` of its own): it reads
+  and writes only the module it is handed, so it cannot freeze a second world.
+
+The sound alternative — a `cdylib` over plain data — is what this design trades
+away for crossing lichen values; §9's P0-a is the measurement that decides
+whether the trade is viable on this toolchain.
+
+**The operator vocabulary is compile-time.** `P::Operator` is an enum composed at
+build time, so a library loaded at run time cannot add a variant to it. The
+`link` path needs one core operator that names a library instance (e.g.
+`LowOperator::External { library, instance }`) whose `run` dispatches through a
+runtime table the loader fills. That is the language-layer cost of `link`, and it
+is larger than the recorder's.
+
+**The toolchain is pinned.** The library must be built by the same rustc as the
+compiler that loads it, so a `link` directive is portable within one toolchain
+and a rebuild across toolchains.
 
 ## 5. The lichen surface, and the readings it must be confirmed with
 
 The surface the existing mechanisms express:
 
 ```lichen
--- vbd.lichen, the plugin's embedded source
+-- the wrapper source the library's manifest carries
 scalars = set(Float, Int)
 vbd_kind = t => t @in scalars
 sample = (t ! vbd_kind) => (x : t) => { r = $vbd_sample(t, x); r : t; r }
@@ -247,13 +272,16 @@ recover an instantiation the program used.
 
 The maintainer decided, in this session:
 
-1. **The instantiated code is dynamically loaded**, and the plugin side is
-   native-plugin-shaped and depends on lichen; neither enters the lichen
-   compiler. The artifact is therefore a dynamic library, not an rlib — the rlib
-   is only the static form downstream Rust crates may also want (§4).
-2. **The instantiation set is generated by a recorder**, not declared by hand
+1. **The instantiated code is dynamically loaded** — a Rust `dylib`, not an rlib.
+   An rlib copies its object code into every consumer (§2); a dylib shares one
+   mapping.
+2. **The library depends on lichen and shares the host's lichen** (the same lichen
+   source, the same rustc); its entries take the host's module and node ids.
+3. **A `link` directive names it** in the `---…---` block. The toolchain loads it
+   at run time — never links it — and reads the surface the library describes.
+4. **The instantiation set is generated by a recorder**, not declared by hand
    (§6).
-3. **Only lichen's own widths** are exposed: `Float = f32`, `Int = usize`. An
+5. **Only lichen's own widths** are exposed: `Float = f32`, `Int = usize`. An
    `f64`/`i32` instantiation is out of scope, and no wider scalar is added to
    lichen for it.
 
@@ -261,10 +289,13 @@ The maintainer decided, in this session:
 
 - **Scalar widths** — ruled: lichen's own only (§7.3). `Float => f32` is the only
   lossless mapping, so a function generic over `f64` is unreachable from lichen.
-- **The dynamic ABI is plain data.** Loading the library rules out generics,
-  function values, and lichen's own value type across the boundary: scalars cross
-  by value, arrays as pointer + length, and a struct as an opaque handle with
-  exported accessors. A `dylib` can lift this at the price §9 records.
+- **The dynamic ABI is unsafe and version-pinned.** A `dylib` carries lichen types
+  across the boundary; only the same lichen source and the same rustc make the two
+  sides' layouts agree, and a mismatch is undefined behaviour. The gate is the
+  manifest's build tag and the no-unwind rule (§4).
+- **A loaded library cannot extend `P::Operator`.** The vocabulary is a
+  compile-time enum, so `link` needs one core `External` operator plus a runtime
+  table (§4).
 - **Struct instantiations.** A struct type's nominal `TypeId` is a per-build
   counter (`program.rs`, `TypeValue::TypeId`), so it cannot key an instance table
   across runs; a struct instance must be **declared by name** in the mapping, and
@@ -284,33 +315,32 @@ The maintainer decided, in this session:
 
 ## 9. The phases, and what is not decided
 
-- **P0 — the surface probe, including the dynamic boundary.** A throwaway native
-  plugin with one hand-written instance table, a tiny hand-built dynamic library
-  behind it, and the four §5 readings measured. No lichen change. This is the
-  gate: if the refinement does not re-check per application, the closed-world
-  half of the design changes before any generator is written; if `libloading`
-  cannot give the plugin a stable table, the artifact kind changes.
+- **P0-a — the `dylib` boundary.** A hand-built `crate-type = ["dylib"]` crate
+  built by the same rustc, loaded with `libloading`: does an `extern "C"` entry
+  taking `*mut Module<LangProgram>` and node ids resolve, read the host's module,
+  and hand back a node id the host can use? Does a manifest string read back? This
+  is the measurement that says whether ruling 2 is viable on this toolchain.
+- **P0-b — the `External` operator.** One core variant plus a runtime table, and a
+  `$name` op that lowers to it and runs through `OperatorExt::run`.
+- **P0-c — the lichen surface.** The four §5 readings: the refinement's
+  per-application re-check, the decided type value, the dependent annotation, and
+  the result type. No lichen change until these three pass; if one fails, the
+  shape changes.
 - **P1 — the recorder.** The whole-program scan (§6) over a real vbd-shaped
-  wrapper: the used (entry, kind) set, emitted as a plain list.
+  wrapper: the used (entry, kind) set.
 - **P2 — the builder.** From the recorded set and the declared mapping, write the
-  dynamic library (one `extern "C"` entry per instance), build it with cargo, and
-  cache it by a content key — the same shape as the kernel disk cache
+  dylib (manifest + one entry per instance), build it with cargo, and cache it by
+  a content key — the same shape as the kernel disk cache
   ([kernel-disk-cache](kernel-disk-cache.md)).
-- **P3 — the host.** The project's host composes the plugin and names the library
-  to load; the stock toolchain stays unchanged.
+- **P3 — `link` in the language layer.** The block directive, the loader, the
+  manifest parser, the version gate, and the per-module registration of the
+  library's ops.
 
-Not decided yet, and needed before P2:
+Not decided yet:
 
-- **The artifact kind.** A `cdylib` with the plain C ABI (§4) is the robust
-  dynamic form — it loads into any process and cannot duplicate lichen's runtime,
-  at the cost of marshalling every value. A Rust `dylib` can carry lichen types
-  and functions across the boundary, but it binds the library to the host's exact
-  lichen build and compiler, and downstream Rust crates can still instantiate
-  generics from its metadata.
-- **Who names the library.** The project's host installs its path (the shape
-  above), or the language learns a `link` dependency kind in the `---…---` block
-  so the library describes its own surface and the stock toolchain can load it.
-  The second is a language feature with a loader and a manifest; the first needs
-  no lichen change.
+- **The manifest encoding** — text, JSON, or a binary section — and how the
+  wrapper source and the instance table share it.
 - **What the recorder's output artifact is**: a Rust source fragment, a JSON list,
   or a cache entry the builder reads.
+- **Whether the same source is also built as an rlib**, for Rust consumers that
+  want static linking instead of the dylib.
