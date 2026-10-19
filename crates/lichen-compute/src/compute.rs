@@ -1788,7 +1788,9 @@ where
                             .collect(),
                     };
                     let handle = module.alloc_array(&items, block);
-                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into())))
+                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                        handle.into(),
+                    )))
                 }
                 ComputeOperator::Mma => {
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
@@ -3538,7 +3540,9 @@ where
     Some(module.add_node(
         block,
         None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))),
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+            handle.into(),
+        ))),
     ))
 }
 
@@ -3584,7 +3588,9 @@ where
     Some(module.add_node(
         block,
         None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))),
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+            handle.into(),
+        ))),
     ))
 }
 
@@ -5031,7 +5037,9 @@ where
         })
         .collect();
     let handle = module.alloc_array(&items, block);
-    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into())))
+    Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+        handle.into(),
+    )))
 }
 
 /// Read a binary op/`Index` operand array `[a, b]` as two operand nodes.

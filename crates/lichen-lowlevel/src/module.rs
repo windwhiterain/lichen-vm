@@ -51,15 +51,15 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Register the attribute layout `indices` — the canonical attribute index each of an
-    /// array's attribute slots carries, in slot order — and answer its id.
+    /// Register the attribute layout `indices` — each slot's canonical index, in
+    /// slot order — and answer its id.
     ///
     /// # Invariant
+    ///
     /// `indices` is strictly increasing, because it is searched by binary comparison in
     /// [`Self::array_attribute`] and a permutation of one schema tail would read the wrong
-    /// slot. An identical layout returns the id already in flight, so a schema tail is
-    /// registered once however many values carry it; the empty layout is entry `0` and is
-    /// never re-allocated.
+    /// slot. An identical layout returns the id already in flight, so one schema tail is
+    /// registered once however many values carry it; the empty layout is entry `0`.
     pub fn register_attribute_layout(&mut self, indices: &[u32]) -> u32 {
         debug_assert!(
             indices.windows(2).all(|pair| pair[0] < pair[1]),
@@ -75,9 +75,10 @@ impl<P: Program> Module<P> {
         id
     }
 
-    /// The layout registered under `id`, or the empty layout for an id no layout holds.
+    /// The layout registered under `id`, or the empty layout for an id none holds.
     ///
     /// # Invariant
+    ///
     /// Total by construction: a value whose layout id was never registered reads as
     /// carrying no attribute, so every canonical attribute it is asked for falls to
     /// [`Self::array_attribute`]'s default arm rather than panicking on a stale id.
@@ -88,14 +89,14 @@ impl<P: Program> Module<P> {
             .unwrap_or_default()
     }
 
-    /// Install the module's **default attribute array** — the full-width slots an array's
+    /// Install the module's **default attribute array**: the full-width slots an array's
     /// layout does not cover.
     ///
     /// # Invariant
-    /// It is read positionally: canonical attribute `i` is at [`PAIR_ATTR_BASE`] + `i`,
-    /// so a default shorter than the canonical attribute count answers [`None`] for the
-    /// attributes past its end rather than panicking. See
-    /// `docs/notes/array-attribute-view.md`.
+    ///
+    /// It is read positionally — attribute `i` at [`PAIR_ATTR_BASE`] + `i` — so a default
+    /// shorter than the canonical attribute count answers [`None`] for the attributes past
+    /// its end rather than panicking. See `docs/notes/array-attribute-view.md`.
     pub fn set_default_attributes(&mut self, attributes: AnyHandle<[ArrayItem]>) {
         self.default_attributes = Some(attributes);
     }
@@ -105,17 +106,16 @@ impl<P: Program> Module<P> {
         self.default_attributes
     }
 
-    /// The node holding canonical attribute `canonical` of the array `value`, as the
-    /// **full-width view** reads it: the value's own slot when its layout carries that
-    /// attribute, else the module default's slot for it.
+    /// Canonical attribute `canonical` of the array `value`, as the **full-width view**
+    /// reads it.
     ///
     /// # Invariant
-    /// The layout's canonical indices are strictly increasing
-    /// ([`Self::register_attribute_layout`]), so the binary search finds the slot or proves
-    /// the layout omits it — the search is `O(log n)` in the layout's length and the
-    /// default's slot read is `O(1)`. [`None`] means one of four: `value` is not an array,
-    /// the attribute is out of the canonical order's range, no default is set for it, or
-    /// the slot the layout names lies past the array's own end.
+    ///
+    /// The value's own slot when its layout carries that attribute, the default's
+    /// slot otherwise. A layout's indices are strictly increasing
+    /// ([`Self::register_attribute_layout`]), so the binary search finds the slot or
+    /// proves the layout omits it: `O(log n)` in the layout's length, `O(1)` for the
+    /// default. [`None`] means a non-array, no default, or a slot past the array's end.
     pub fn array_attribute(&self, value: &LowValue, canonical: u32) -> Option<AnyNodeId> {
         let LowValue::Array(array) = value else {
             return None;
@@ -125,23 +125,22 @@ impl<P: Program> Module<P> {
             Ok(position) => position,
             Err(_) => return self.default_attribute(canonical),
         };
-        // SAFETY: `array` is a payload of a value the caller read from a live module, so
-        // its home arena is live for this read — the `ArrayValue` payload contract.
+        // SAFETY: a payload of a live module's value, under the contract
+        // `AnyHandle::items` states.
         let items = unsafe { array.items() };
-        items
-            .get(PAIR_ATTR_BASE + position)
-            .map(|item| item.node)
+        items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
     }
 
     /// The default attribute array's node for canonical attribute `canonical` — the hole
-    /// arm of [`Self::array_attribute`], and the whole of it where `value` carries no
-    /// layout for that attribute.
+    /// arm of [`Self::array_attribute`].
     fn default_attribute(&self, canonical: u32) -> Option<AnyNodeId> {
         let defaults = self.default_attributes?;
-        // SAFETY: the default is a payload of a live module, under the same arena-lifetime
-        // contract as `AnyHandle::items` states.
+        // SAFETY: as above — a payload of a live module, so its home arena is
+        // live for this read.
         let items = unsafe { defaults.items() };
-        items.get(PAIR_ATTR_BASE + canonical as usize).map(|item| item.node)
+        items
+            .get(PAIR_ATTR_BASE + canonical as usize)
+            .map(|item| item.node)
     }
 
     /// Set whether a type-side parameter check keeps its errors.

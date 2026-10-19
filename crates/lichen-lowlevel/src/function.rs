@@ -579,9 +579,7 @@ impl<P: Program> Module<P> {
                         ..item
                     })
                     .collect();
-                P::Value::from(LowValue::Array(
-                    self.alloc_array(&items, target).into(),
-                ))
+                P::Value::from(LowValue::Array(self.alloc_array(&items, target).into()))
             }
             Some(LowValue::Table(table)) => {
                 // The entry nodes clone like array items; the stored hash travels verbatim.

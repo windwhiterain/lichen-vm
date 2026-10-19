@@ -441,7 +441,10 @@ fn cyclic_pair(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
         ],
         block,
     );
-    m.write_node_value(node, Some(TestValue::LowValue(LowValue::Array(items.into()))));
+    m.write_node_value(
+        node,
+        Some(TestValue::LowValue(LowValue::Array(items.into()))),
+    );
     node
 }
 
@@ -511,7 +514,10 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
             ],
             block,
         );
-        m.write_node_value(r#return, Some(TestValue::LowValue(LowValue::Array(items.into()))));
+        m.write_node_value(
+            r#return,
+            Some(TestValue::LowValue(LowValue::Array(items.into()))),
+        );
     });
     let value = usize_node(&mut m, root, 7);
     let table = table_value(

@@ -194,7 +194,11 @@ impl<P: Program> Module<P> {
         });
         let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
         let array = self.alloc_array(&items, block);
-        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array.into()))))
+        self.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(array.into()))),
+        )
     }
 
     /// An array value node over `nodes`, in `block`.
@@ -204,6 +208,10 @@ impl<P: Program> Module<P> {
             .map(|&node| ArrayItem::new(Dyn(node)))
             .collect();
         let array = self.alloc_array(&items, block);
-        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array.into()))))
+        self.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(array.into()))),
+        )
     }
 }

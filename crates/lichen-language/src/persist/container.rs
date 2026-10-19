@@ -6,11 +6,11 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use lichen_lowlevel::codec::{read_relocated_handle, write_relocated_handle};
 use lichen_lowlevel::{
     ArrayItem, EvaluatedDeep, LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId,
     StaticFunctionRef, StaticModule, StaticNode, StaticOperation,
 };
-use lichen_lowlevel::codec::{read_relocated_handle, write_relocated_handle};
 
 use crate::program::{LangProgram, ProgramCodec};
 
@@ -147,8 +147,8 @@ where
             w.u64(node.index as u64);
         }
     }
-    // The attribute-layout registry, in id order: an array's layout id is a position in
-    // it, so a reordering would silently re-read every frozen array's attributes.
+    // The registry, in id order: a layout id indexes it, so a reordering
+    // would re-read every frozen array's attributes.
     w.u64(module.attribute_layouts.len() as u64);
     for layout in &module.attribute_layouts {
         w.u64(layout.len() as u64);
@@ -511,11 +511,7 @@ where
     let default_attributes = match r.u8()? {
         0 => None,
         1 => Some(read_relocated_handle::<ArrayItem, P>(
-            &mut r,
-            key,
-            &arena,
-            base,
-            modules,
+            &mut r, key, &arena, base, modules,
         )?),
         _ => return Err("bad default attribute array tag".into()),
     };

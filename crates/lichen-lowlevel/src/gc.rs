@@ -1,8 +1,8 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayValue, BlockId, EvalError, LowValue,
-    Module, NodeId, Program, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayValue, BlockId, EvalError,
+    LowValue, Module, NodeId, Program, ValueExt,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -178,8 +178,7 @@ impl<P: Program> Module<P> {
                     }
                 }
                 // The whole payload moves into the target arena, so a
-                // compacted array keeps its markers — and its layout, which
-                // travels with the value it describes.
+                // compacted array keeps its markers — and its layout.
                 if inside {
                     P::Value::from(LowValue::Array(ArrayValue::with_layout(
                         self.alloc_array(unsafe { array.items() }, target),
@@ -282,10 +281,12 @@ impl<P: Program> Module<P> {
         let relocated = match value.as_enum() {
             Some(LowValue::Array(array)) if matches!(*array, AnyHandle::Static(_)) => return,
             // SAFETY: `array` is a live node's payload, and `home` outlives the node.
-            Some(LowValue::Array(array)) => P::Value::from(LowValue::Array(ArrayValue::with_layout(
-                self.alloc_array(unsafe { array.items() }, home),
-                array.layout(),
-            ))),
+            Some(LowValue::Array(array)) => {
+                P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                    self.alloc_array(unsafe { array.items() }, home),
+                    array.layout(),
+                )))
+            }
             Some(LowValue::Table(AnyHandle::Static(_))) => return,
             // SAFETY: `table` is a live node's payload, and `home` outlives the node.
             Some(LowValue::Table(table)) => P::Value::from(LowValue::Table(

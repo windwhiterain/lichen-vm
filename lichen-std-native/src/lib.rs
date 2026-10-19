@@ -85,7 +85,9 @@ where
                 })
                 .collect();
             let handle = module.alloc_array(&items, block);
-            Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into())))
+            Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                handle.into(),
+            )))
         })()
     }
 }

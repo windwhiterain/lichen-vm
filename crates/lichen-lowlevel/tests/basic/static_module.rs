@@ -443,7 +443,8 @@ fn static_closure_value_applies_from_dynamic_context() {
     m.write_node_value(
         f_ret,
         Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&[item(f_param), item(g_value)], f_body).into(),
+            m.alloc_array(&[item(f_param), item(g_value)], f_body)
+                .into(),
         ))),
     );
     let (f_func_node, _) = wrap_function(&mut m, f_body, f_ret, f_param);

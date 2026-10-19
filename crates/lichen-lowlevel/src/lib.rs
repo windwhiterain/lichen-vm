@@ -193,13 +193,11 @@ impl ArrayItem {
 ///
 /// # Invariant
 ///
-/// The layout id is mandatory and never inferred: it names one entry of the owning
-/// module's registry (`Module::register_attribute_layout`), whose `i`-th element is the
-/// canonical attribute index the value's `PAIR_ATTR_BASE + i`-th slot carries. Id `0` is
-/// the empty layout — a plain value array that carries no attribute — and is what
-/// [`Self::new`] picks. `Deref` is what keeps every existing `unsafe { array.items() }`
-/// read compiling unchanged; the layout is read through [`Self::layout`], never through
-/// the payload. See `docs/notes/array-attribute-view.md`.
+/// The layout id is mandatory and never inferred: its `i`-th element names the canonical
+/// attribute in the value's `PAIR_ATTR_BASE + i`-th slot, and id `0` is the empty layout
+/// [`Self::new`] picks. `Deref` keeps every `unsafe { array.items() }` read as it was; the
+/// layout is read through [`Self::layout`], never through the payload.
+/// See `docs/notes/array-attribute-view.md`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArrayValue {
     items: AnyHandle<[ArrayItem]>,
@@ -241,17 +239,14 @@ impl std::ops::Deref for ArrayValue {
     }
 }
 
-/// The slot an array's attributes begin at: slot `0` is the value and slot `1` the
-/// type, so canonical attribute `i` sits at `PAIR_ATTR_BASE + i` in a **full-width**
-/// array — the module's default attribute array.
+/// The slot an array's attributes begin at: canonical attribute `i` at `PAIR_ATTR_BASE + i`.
 ///
 /// # Invariant
 ///
 /// This is the arithmetic the module's attribute-layout registry and
-/// [`Module::array_attribute`] both read, so a layout's `i`-th entry names the
-/// canonical attribute in the value's `PAIR_ATTR_BASE + i`-th slot and the default's
-/// `PAIR_ATTR_BASE + canonical`-th slot. It mirrors
-/// `lichen_highlevel::shape::PAIR_ATTR_BASE`; neither crate depends on the other.
+/// [`Module::array_attribute`] both read, so a layout's `i`-th entry names the value's
+/// `PAIR_ATTR_BASE + i`-th slot and the default's `PAIR_ATTR_BASE + canonical`-th slot. It
+/// mirrors `lichen_highlevel::shape::PAIR_ATTR_BASE`; neither crate depends on the other.
 pub const PAIR_ATTR_BASE: usize = 2;
 
 /// One entry of a structural table value: key node, value node, and the key's hash.
@@ -1118,19 +1113,19 @@ pub struct Module<P: Program> {
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,
-    /// The module's **attribute-layout registry**: one entry per distinct schema tail, each
-    /// listing, in slot order, the canonical attribute index its `i`-th attribute slot
-    /// carries. Entry `0` is the empty layout, present from construction.
+    /// The module's **attribute-layout registry**: one entry per schema tail.
     ///
     /// # Invariant
-    /// Entry `0` is always empty and every other entry's canonical indices are strictly
-    /// increasing, which is what makes [`Module::array_attribute`]'s search sound.
-    /// Ids are positions in this vector, so appending never renumbers an id already in
-    /// flight. See `docs/notes/array-attribute-view.md`.
+    ///
+    /// Entry `0` is the empty layout, present from construction, and every other entry's
+    /// canonical indices are strictly increasing — which is what makes
+    /// [`Module::array_attribute`]'s search sound. An id is a position here, so appending
+    /// never renumbers one already in flight. See `docs/notes/array-attribute-view.md`.
     pub(crate) attribute_layouts: Vec<Box<[u32]>>,
     /// The registry's O(1) de-duplication index: the layout as key, its id as value.
     ///
     /// # Invariant
+    ///
     /// Exactly the mirror of [`Self::attribute_layouts`] — one entry per registry entry,
     /// holding the same layout — so a re-registration of an identical layout returns the
     /// existing id and cannot allocate a second one for the same schema tail.
@@ -1139,10 +1134,10 @@ pub struct Module<P: Program> {
     /// layout does not cover.
     ///
     /// # Invariant
-    /// It is full width over the canonical attribute order, so canonical attribute `i`
-    /// reads at [`PAIR_ATTR_BASE`] + `i`; an unset default (`None`) is a module that has
-    /// declared none, and every hole then reads as absent. See
-    /// `docs/notes/array-attribute-view.md`.
+    ///
+    /// It is full width over the canonical attribute order, so attribute `i` reads at
+    /// [`PAIR_ATTR_BASE`] + `i`; `None` is a module that has declared none, and every hole
+    /// then reads as absent. See `docs/notes/array-attribute-view.md`.
     pub(crate) default_attributes: Option<AnyHandle<[ArrayItem]>>,
 }
 
@@ -1224,21 +1219,21 @@ pub struct StaticModule<P: Program> {
     pub functions: Vec<StaticFunction>,
     /// The flattened payload arena: array item slices and ext-value bytes, deduped by `(ptr, len)`.
     pub arena: Vec<u8>,
-    /// The frozen module's **attribute-layout registry**, copied verbatim from the source
-    /// module — see [`Module::attribute_layouts`].
+    /// The frozen module's **attribute-layout registry**, copied verbatim from the source.
     ///
     /// # Invariant
-    /// Entry `0` is the empty layout and the ids its arrays carry index this vector, so a
-    /// registry order that disagrees with the source's would silently re-read a frozen
-    /// array's attributes; the freeze copies rather than rebuilds, and the artifact codec
-    /// round-trips it in order.
+    ///
+    /// Entry `0` is the empty layout and an array's layout id indexes this vector, so a
+    /// registry order that disagreed with the source's would re-read every frozen array's
+    /// attributes; the freeze copies rather than rebuilds, and the codec round-trips it in
+    /// order. See [`Module::attribute_layouts`].
     pub attribute_layouts: Vec<Box<[u32]>>,
-    /// The frozen module's **default attribute array**, copied from the source — see
-    /// [`Module::default_attributes`].
+    /// The frozen module's **default attribute array**, copied from the source.
     ///
     /// # Invariant
-    /// It is a **static** handle when the source held one: the freeze's payload pass lays a
-    /// dynamic default out and re-keys it exactly as it does a node's array payload, so an
+    ///
+    /// It is a **static** handle when the source held one: the freeze's payload pass lays
+    /// a dynamic default out and re-keys it as it does a node's array payload, so an
     /// artifact's default names the artifact's own arena and never a released block's.
     pub default_attributes: Option<StaticHandle<[ArrayItem]>>,
     /// Whether the artifact was frozen `ReadOnly`; its values are not content-portable.

@@ -273,8 +273,9 @@ impl ValueCodec for LowValue {
             0 => LowValue::USize(r.u64()? as usize),
             8 => LowValue::Float(f32::from_bits(r.u32()?)),
             1 => {
-                let handle =
-                    read_relocated_handle::<ArrayItem, P>(r, self_key, self_arena, self_base, modules)?;
+                let handle = read_relocated_handle::<ArrayItem, P>(
+                    r, self_key, self_arena, self_base, modules,
+                )?;
                 LowValue::Array(ArrayValue::with_layout(AnyHandle::Static(handle), r.u32()?))
             }
             2 => {
