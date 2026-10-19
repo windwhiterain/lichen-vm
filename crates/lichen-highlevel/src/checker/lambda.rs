@@ -323,9 +323,14 @@ where
         // attribute was first read, so this check is skipped.
         if let Some((param_marker, param_slot)) = param_persp {
             if let Some(ext) = self.attribute_extension(&param_marker) {
-                let arg_missing = self.attr_or_missing(argument, &param_marker);
-                let loc2 = self.loc(e, 2);
-                ext.unify_slots(self, arg_missing, param_slot, loc2);
+                // `#_` states nothing (attributes.md); unifying would pin the template.
+                let declared = crate::attr::slot_value_node(&*self, param_slot);
+                self.module.evaluate_node_deep(declared, None);
+                if self.node_value(declared).is_some() {
+                    let arg_missing = self.attr_or_missing(argument, &param_marker);
+                    let loc2 = self.loc(e, 2);
+                    ext.unify_slots(self, arg_missing, param_slot, loc2);
+                }
             }
         } else if self.state[argument].attr.is_some() {
             let marker = self.schema_tail(argument)[0];

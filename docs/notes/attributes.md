@@ -132,6 +132,19 @@ table below is the acceptance suite — but **no part of the runtime reads it**.
 an unused asset, not a half-built one, and it is the static half of a GPU execution
 model: the certificate for which expressions are uniform across an aligned lane group.
 
+**And the certificate's sources are now stated, but not yet readable.** The compute
+sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
+declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
+the lattice's bottom: the value is uniform over exactly its own thread. The statement
+is checked in the package's own build and travels in its frozen return pair, but a
+**call site cannot read it yet**: a package's artifact carries no per-expression
+schema, so the frozen return pair's tail slot has no marker, and the type-side apply
+has no static arm either
+([operator-polymorphism](operator-polymorphism.md) §7.1 cost 4). Until that reader
+lands, an annotation over a lane value still reads the absent top and is accepted:
+`(compute.range k.n # 64)` checks. The statement is what the artifact should carry;
+the reader is the scheduled work.
+
 It is worth recording a conclusion that was reached the wrong way first, because the
 wrong version is the tempting one. The obvious claim is that a GPU backend *needs*
 this, because "the body must be index-free" — that is false. A compute shader indexes
@@ -189,6 +202,14 @@ The `perspective.rs` integration tests encode this table.
 | `f = x # 4 => x; f 5` | `4 \| 0` ✓ (a uniform value satisfies a `#4` requirement) |
 | `f = x # 2 => x; f (5 # 4)` | `2 \| 4` ✓ (real subtype relaxation) |
 | `f = x # 4 => x; f (5 # 2)` | `4 ∤ 2` ✗ |
+| `f = (x : Int # _) => x; f (5 # 8); f (5 # 2)` | ✓ — a wildcard states nothing, so no call pins the template |
+
+**A wildcard requirement states none.** The apply reads the *declared* slot as a value
+and skips the comparison when it is still undecided (a `#_`, or a declaration that
+depends on the parameter). Unifying an undecided declaration instead would bind the
+template's own cell to the first call's argument — the second call would then be
+checked against the first (`f (5 # 8)` then `f (5 # 2)` used to answer
+`expected 8, found 2`).
 
 ### Annotation over an existing attribute (requirements & providers)
 

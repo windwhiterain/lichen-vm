@@ -222,3 +222,10 @@ fn a_call_of_an_unannotated_return_carries_none() {
     // `g = x => x` states no return perspective; the call states none either.
     assert!(ok("g = x => x\n(g 3) # 4"));
 }
+
+#[test]
+fn a_wildcard_parameter_states_no_requirement() {
+    // `#_` declares nothing, so no call pins the template: both orders accept.
+    assert!(ok("f = (x : Int # _) => x\nf (5 # 8)\nf (5 # 2)"));
+    assert!(ok("f = (x : Int # _) => x\nf (5 # 2)\nf (5 # 8)"));
+}
