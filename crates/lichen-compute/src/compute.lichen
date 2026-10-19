@@ -22,7 +22,7 @@ write = (x : (Write _)) => ($write(x.to, x.at, x.value) # warp)
 write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # warp)
 collect = (b : (Buf _)) => $collect(b)
 buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
-Mma = struct{.s string, .a (Buf Int), .b (Buf Int), .c (Buf Int)}
-mma = (x : Mma # warp) => ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # 0)
+Mma = T => struct{.s string, .a (Buf T) # warp, .b (Buf T) # warp, .c (Buf T) # warp}
+mma = (x : (Mma Int)) => ($mma(x.s, x.a, x.b, x.c) : (Buf Int) # 0)
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)

@@ -144,9 +144,12 @@ merge.
   buffer reads. A write **certifies its result** `# warp` — the pending write is a
   description of a warp-uniform segment — so chaining `write` keeps the target's
   uniformity and a read of a write's result still reaches the op's own named refusal.
-  One measured gap: a **direct** package struct type's field slots freeze undecided, so
-  `Mma` keeps its requirement on the parameter (`(x : Mma # warp)`, the frozen
-  `parameter_requirement` slot) rather than on its three fields.
+  `Mma` states the same requirement on its three fields (`Mma = T => struct{.s string,
+  .a (Buf T) # warp, …}`), and the vocabulary's types are all type functions for that
+  reason. Measured on the way there: a **direct** package struct type's field slots are
+  rebuilt by the import with fresh cells, so their attribute positions freeze undecided —
+  a type function's body does not. Pinning down where the import drops the value is an
+  open question; the type-function spelling makes the requirement checkable today.
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is

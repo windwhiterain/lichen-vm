@@ -66,7 +66,7 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
         c.len()
     ));
     source.push_str(&format!(
-        "product = (compute.mma (compute.Mma(.s \"{backend}\", .a a, .b b, .c c)))\n"
+        "product = (compute.mma (compute.Mma Int)(.s \"{backend}\", .a a, .b b, .c c))\n"
     ));
     source.push_str(&format!(
         "compute.collect product : array{{Int, {}}}\n",

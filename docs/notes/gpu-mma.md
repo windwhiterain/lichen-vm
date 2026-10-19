@@ -91,13 +91,13 @@ creation. On top of it:
 
    The backend is a required field, as `parallel`'s backend argument is: a program says
    where its product runs. The **perspective** reading is the paper's register-side one,
-   applied to what a host buffer is: the three tiles are the warp-uniform descriptors (a
-   lane-varying operand is refused with `expected 32, found 1`), and the result is
-   certified `# 0` — a host buffer is uniform over every lane. The check reads the
-   *argument struct's* perspective as the meet of its fields (`Checker::provided_slot`),
-   the same reading an annotation's provider takes; for a package wrapper the requirement
-   travels in the frozen function's `parameter_requirement` slot rather than the parameter
-   pair's tail cell, because a body may bind that cell through its own annotation.
+   applied to what a host buffer is: the three tiles are warp-uniform descriptors — each
+   field states `# warp` — so a lane-varying operand is refused with `expected 32, found
+   1`, and the result is certified `# 0` — a host buffer is uniform over every lane. The
+   check reads the argument's provided perspective (`Checker::provided_slot`) against the
+   declared field's attribute, which the type value carries in its field slot
+   (`Checker::unify_value_field_attributes`); `Mma` is a type function so its fields'
+   requirements travel in the frozen type value, as `Read`/`Write`'s do.
 2. **The op.** `ComputeOperator::Mma` reads the three buffers, checks that their
    elements are the shape's (`16×32`, `32×16`, `16×16`) and inside the component ranges
    (`s8` for the operands, `s32` for the accumulator), and answers a `Buf` of the
