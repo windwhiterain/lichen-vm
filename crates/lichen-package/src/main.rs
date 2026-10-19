@@ -156,13 +156,131 @@ fn each_source(target: &Path) -> Vec<(PathBuf, String)> {
     }
 }
 
-/// The union of the `depend` directives across all sources under `target`.
-fn collect_depends(target: &Path) -> Vec<Depend> {
+/// The import paths a source's `---…---` block binds.
+fn imports_of(source: &str) -> Vec<String> {
+    let (interior, _) = split_block(source);
+    lichen_preprocess::block_directives(interior.unwrap_or_default())
+        .into_iter()
+        .filter_map(|located| match located.directive {
+            lichen_preprocess::Directive::Import { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The entry package of a staged directory, as the compiler resolves it.
+fn entry_package(dir: &Path, alias: &str) -> Option<PathBuf> {
+    for candidate in [dir.join("_.lichen"), dir.join(format!("{alias}.lichen"))] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "lichen"))
+        .collect();
+    files.sort();
+    match files.len() {
+        1 => files.into_iter().next(),
+        _ => None,
+    }
+}
+
+/// Every source reachable from `target` by `import`.
+///
+/// # Invariant
+/// An import resolves against the file's directory, then a staged dependency's.
+fn reachable_sources(target: &Path, staged: &[Depend]) -> Vec<(PathBuf, String)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<(PathBuf, String)> = each_source(target).into();
     let mut out = Vec::new();
-    for (_, source) in each_source(target) {
-        out.extend(depends_of(&source));
+    while let Some((path, source)) = queue.pop_front() {
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        for import in imports_of(&source) {
+            let relative = base.join(&import);
+            let mut candidates = vec![relative.clone()];
+            let mut components = Path::new(&import).components();
+            if let Some(std::path::Component::Normal(alias)) = components.next()
+                && let Some(dep) = staged
+                    .iter()
+                    .find(|dep| dep.alias() == alias.to_string_lossy())
+                && let Ok(dir) = dep.vendored_dir()
+            {
+                let rest = components.as_path();
+                candidates.push(if rest.as_os_str().is_empty() {
+                    entry_package(&dir, &dep.alias()).unwrap_or(dir)
+                } else {
+                    dir.join(rest)
+                });
+            }
+            for candidate in candidates {
+                if candidate.is_dir() {
+                    let mut entries: Vec<PathBuf> = std::fs::read_dir(&candidate)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| path.extension().is_some_and(|ext| ext == "lichen"))
+                        .collect();
+                    entries.sort();
+                    for entry in entries {
+                        if let Ok(text) = std::fs::read_to_string(&entry) {
+                            queue.push_back((entry, text));
+                        }
+                    }
+                } else if candidate.extension().is_some_and(|ext| ext == "lichen")
+                    && let Ok(text) = std::fs::read_to_string(&candidate)
+                {
+                    queue.push_back((candidate, text));
+                }
+            }
+        }
+        out.push((path, source));
     }
     out
+}
+
+/// The reachable `depend`/`plug` bindings, deduplicated by [`Depend::identity`].
+fn collect_depends(target: &Path, staged: &[Depend]) -> Vec<Depend> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (_, source) in reachable_sources(target, staged) {
+        for dep in depends_of(&source) {
+            if seen.insert(dep.identity()) {
+                out.push(dep);
+            }
+        }
+    }
+    out
+}
+
+/// Collect and fetch the reachable dependency set as it grows.
+fn fetch_reachable(target: &Path) -> Result<Vec<Depend>, String> {
+    let mut staged: Vec<Depend> = Vec::new();
+    for _ in 0..8 {
+        let depends = collect_depends(target, &staged);
+        let fresh: Vec<Depend> = depends
+            .iter()
+            .filter(|dep| {
+                !staged
+                    .iter()
+                    .any(|known| known.identity() == dep.identity())
+            })
+            .cloned()
+            .collect();
+        if fresh.is_empty() {
+            return Ok(depends);
+        }
+        fetch_depends(&fresh)?;
+        staged.extend(fresh);
+    }
+    Err("the dependency closure did not settle after 8 rounds".to_string())
 }
 
 /// Fetch each dependency into the source cache, printing `alias -> dir`; a
@@ -185,16 +303,15 @@ fn cmd_fetch(target: &Path) -> ExitCode {
         eprintln!("cannot fetch: {} does not exist", target.display());
         return ExitCode::FAILURE;
     }
-    let depends = collect_depends(target);
-    if depends.is_empty() {
-        println!(
-            "nothing to fetch (no `depend` directives in {})",
-            target.display()
-        );
-        return ExitCode::SUCCESS;
-    }
-    match fetch_depends(&depends) {
-        Ok(()) => ExitCode::SUCCESS,
+    match fetch_reachable(target) {
+        Ok(depends) if depends.is_empty() => {
+            println!(
+                "nothing to fetch (no `depend` directives reachable from {})",
+                target.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
             ExitCode::FAILURE
@@ -225,11 +342,13 @@ fn delegate(target: &Path, sub: &str, core_repo: &str) -> ExitCode {
         eprintln!("cannot {sub}: {} does not exist", target.display());
         return ExitCode::FAILURE;
     }
-    let depends = collect_depends(target);
-    if let Err(e) = fetch_depends(&depends) {
-        eprintln!("{e}");
-        return ExitCode::FAILURE;
-    }
+    let depends = match fetch_reachable(target) {
+        Ok(depends) => depends,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let bin = match select_compiler(&depends, core_repo) {
         Ok(bin) => bin,
         Err(e) => {
@@ -394,16 +513,14 @@ fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let plugins: Vec<Depend> = collect_depends(dir)
-        .into_iter()
-        .filter(|dep| dep.plugin)
-        .collect();
-    // Fetch each plugin so its resolved version can key the LSP cache; no plugins
-    // falls through to the shipping server.
-    if let Err(e) = fetch_depends(&plugins) {
-        eprintln!("{e}");
-        return ExitCode::FAILURE;
-    }
+    // The graph's plugins key the LSP cache; none ships the stock server.
+    let plugins: Vec<Depend> = match fetch_reachable(dir) {
+        Ok(depends) => depends.into_iter().filter(|dep| dep.plugin).collect(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     if plugins.is_empty() {
         return resolve_and_print(toolchain::Tool::LanguageServer, repo);
     }
@@ -450,17 +567,16 @@ fn cmd_rebuild_plugin(target: Option<PathBuf>, repo: &str) -> ExitCode {
         Err(code) => return code,
     };
     let target = target.unwrap_or_else(|| project.dir.clone());
-    let plugins: Vec<Depend> = collect_depends(&target)
-        .into_iter()
-        .filter(|dep| dep.plugin)
-        .collect();
+    // Fetch the reachable graph first: its resolved plugin versions key the cache.
+    let plugins: Vec<Depend> = match fetch_reachable(&target) {
+        Ok(depends) => depends.into_iter().filter(|dep| dep.plugin).collect(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     if plugins.is_empty() {
         println!("no native-plugin dependencies; rebuilding over the shipping plugin set");
-    }
-    // Fetch the plugins first: their resolved versions key the compiler cache.
-    if let Err(e) = fetch_depends(&plugins) {
-        eprintln!("{e}");
-        return ExitCode::FAILURE;
     }
     let leaves = plugin::Leaves::shipping();
     match compiler_cache::ensure(repo, &plugins, &leaves) {

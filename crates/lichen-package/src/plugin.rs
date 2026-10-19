@@ -238,6 +238,9 @@ name = {package_name}
 version = "0.1.0"
 edition = "2024"
 
+# A generated compiler stands alone: its cache slot may sit under a workspace.
+[workspace]
+
 [dependencies]
 {core_language}
 {core_lowlevel}
@@ -417,6 +420,20 @@ pub type Program = LangProgram;
     ))
 }
 
+/// The plugin-set literal a generated `main` installs: one identity per plugin,
+/// as a Rust string literal.
+fn plugin_set_lines(plugins: &[Depend]) -> String {
+    let mut out = String::new();
+    for dep in plugins {
+        out.push_str(&format!(
+            "        {:?}.to_string(),
+",
+            dep.plugin_key()
+        ));
+    }
+    out
+}
+
 /// The native-package tuples a generated compiler or server registers, one per
 /// plugin, at `<alias>.lichen`.
 ///
@@ -464,6 +481,11 @@ fn write_compiler_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Re
 {compose}
 
 fn main() -> std::process::ExitCode {{
+    // The plugin set this compiler was composed over: a `plug` outside it is
+    // refused (docs/notes/package-graph.md §3).
+    let installed = lichen_language::plugins::install(vec![
+{plugin_set}    ]);
+    assert!(installed.is_ok(), "the plugin set is installed once");
     // Scope the compiled-artifact cache to this plugin-set slot, so a compiler
     // for a different plugin set never collides with (or reuses) this
     // vocabulary's artifacts for the same file ID.
@@ -481,6 +503,7 @@ fn main() -> std::process::ExitCode {{
         compose = compose_source(plugins, leaves)?,
         key = key,
         native = native_package_lines(plugins)?,
+        plugin_set = plugin_set_lines(plugins),
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
@@ -502,6 +525,10 @@ fn write_server_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Resu
 {compose}
 
 fn main() {{
+    // The plugin set this server was composed over (docs/notes/package-graph.md §3).
+    let installed = lichen_language::plugins::install(vec![
+{plugin_set}    ]);
+    assert!(installed.is_ok(), "the plugin set is installed once");
     // Scope the compiled-artifact cache to this plugin-set slot, consistent with
     // the compiler (`write_compiler_main_rs`), so a server over a different
     // plugin set never collides with (or reuses) this vocabulary's artifacts for
@@ -519,6 +546,7 @@ fn main() {{
         compose = compose_source(plugins, leaves)?,
         key = key,
         native = native_package_lines(plugins)?,
+        plugin_set = plugin_set_lines(plugins),
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }

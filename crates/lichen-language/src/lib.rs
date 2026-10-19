@@ -23,6 +23,7 @@ pub mod key;
 pub mod link;
 pub mod package;
 pub mod persist;
+pub mod plugins;
 pub mod preprocess;
 pub mod program;
 pub mod render;

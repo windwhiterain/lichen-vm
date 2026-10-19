@@ -149,6 +149,46 @@ impl Depend {
         self.name.clone()
     }
 
+    /// The canonical identity of a dependency: alias, source, ref and flags.
+    ///
+    /// # Invariant
+    /// One identity names one checkout, so a collector dedupes on it.
+    pub fn identity(&self) -> String {
+        let mut out = format!("{}#{}", self.alias(), self.url);
+        for (key, value) in [
+            ("rev", &self.rev),
+            ("branch", &self.branch),
+            ("tag", &self.tag),
+            ("package", &self.package),
+            ("sub", &self.sub),
+        ] {
+            if let Some(value) = value {
+                out.push_str(&format!("#{key}={value}"));
+            }
+        }
+        if self.plugin {
+            out.push_str("#plugin");
+        }
+        out
+    }
+
+    /// The plugin identity a compiler declares: the alias is omitted.
+    pub fn plugin_key(&self) -> String {
+        let mut out = self.url.clone();
+        for (key, value) in [
+            ("rev", &self.rev),
+            ("branch", &self.branch),
+            ("tag", &self.tag),
+            ("package", &self.package),
+            ("sub", &self.sub),
+        ] {
+            if let Some(value) = value {
+                out.push_str(&format!("#{key}={value}"));
+            }
+        }
+        out
+    }
+
     /// The git clone root in the source cache, `sources_root()/<alias>`: where the
     /// package manager fetches a dependency.
     pub fn sources_dir(&self) -> PathBuf {

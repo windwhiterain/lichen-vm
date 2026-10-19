@@ -40,6 +40,18 @@ where
 {
     let (mut pre, diags) = lichen_preprocess::preprocess::<StaticNodeId, _>(raw, base, store);
     let mut out: Vec<Diag<P>> = diags.into_iter().map(Diag::from_preprocess).collect();
+    // A `plug` needs a compiler composed over it (package-graph.md §3).
+    for dep in &pre.depends {
+        if dep.plugin && !crate::plugins::composed_over(dep) {
+            out.push(Diag::unattributed(
+                crate::diag::Stage::Preprocess,
+                format!(
+                    "this file plugs '{}'; rebuild the compiler with `lichen rebuild-plugin` to include it",
+                    dep.alias()
+                ),
+            ));
+        }
+    }
     // The prelude goes in first, so a program's own name wins: it is shadowable.
 
     // The built-in module is exempt: `core` cannot be its own prelude.

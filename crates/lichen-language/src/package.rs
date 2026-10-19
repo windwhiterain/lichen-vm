@@ -870,6 +870,13 @@ where
     ) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
 
+        // A package stages its own `depend`/`plug` before its block resolves
+        // (docs/notes/package-graph.md §2).
+        let mut staged = lichen_preprocess::stage_depends::<StaticNodeId, _>(self, &source);
+        if !staged.is_empty() {
+            return Err(staged.drain(..).map(Diag::from_preprocess).collect());
+        }
+
         // Resolve the package's own imports through this store: each
         // dependency loads (and freezes) first, recursively.
         let (preprocessed, mut diags) = preprocess(&source, Some(canonical), self);
