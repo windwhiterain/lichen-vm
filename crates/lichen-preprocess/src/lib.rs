@@ -102,6 +102,17 @@ pub struct ResolvedImport<E> {
     pub direct: Vec<(String, E)>,
 }
 
+/// One `name = link "path"` directive: a dynamic library bound to an alias.
+#[derive(Clone, Debug)]
+pub struct Link {
+    /// The alias the directive binds; the manifest supplies the op names.
+    pub name: String,
+    /// The library path, as written (resolved against the block owner).
+    pub path: String,
+    /// The directive's position, for a load failure.
+    pub span: Span,
+}
+
 /// A git dependency declared by a `name = depend "url"` directive.
 ///
 /// # Invariant
@@ -207,6 +218,8 @@ pub struct Preprocessed<'a, E> {
     pub metadata: Vec<(String, String)>,
     /// The `depend "url"` directives from the block (git dependencies).
     pub depends: Vec<Depend>,
+    /// The `link "path"` directives from the block, in source order.
+    pub links: Vec<Link>,
 }
 
 /// Preprocess: cut out the leading block, resolve its imports through `resolver`,
@@ -230,6 +243,7 @@ where
                 imports: Vec::new(),
                 metadata: Vec::new(),
                 depends: Vec::new(),
+                links: Vec::new(),
             },
             diags,
         );
@@ -242,6 +256,7 @@ where
     let mut imports = Vec::new();
     let mut metadata = Vec::new();
     let mut depends = Vec::new();
+    let mut links = Vec::new();
 
     let lexed = lex::tokenize(interior);
     for err in &lexed.errors {
@@ -276,6 +291,7 @@ where
                             }
                         }
                         Directive::Metadata { name, value } => metadata.push((name, value)),
+                        Directive::Link { name, path } => links.push(Link { name, path, span }),
                         // Both `depend` and `plug` normalize through `depend_of`,
                         // the one place a `Depend` is built, so no field is dropped.
                         other => {
@@ -302,6 +318,7 @@ where
             imports,
             metadata,
             depends,
+            links,
         },
         diags,
     )

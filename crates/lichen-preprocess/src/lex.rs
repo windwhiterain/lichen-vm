@@ -30,6 +30,10 @@ pub enum TokenKind {
     /// fetched from `url`, bound to `name`.
     #[token("plug")]
     KwPlug,
+    /// The `link` keyword: `name = link "path"` — a library whose manifest
+    /// supplies the wrapper and whose entries the ops.
+    #[token("link")]
+    KwLink,
     /// A string literal (quotes stripped); no escapes, may be multiline.
     ///
     /// # Invariant
@@ -55,6 +59,7 @@ impl TokenKind {
             TokenKind::KwImport => "'import'".to_string(),
             TokenKind::KwDepend => "'depend'".to_string(),
             TokenKind::KwPlug => "'plug'".to_string(),
+            TokenKind::KwLink => "'link'".to_string(),
             TokenKind::String(_) => "a string".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
         }

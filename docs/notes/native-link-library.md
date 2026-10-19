@@ -1,10 +1,10 @@
 # A native link library: a Rust generic behind a lichen generic
 
 > Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c, the end-to-end
-> proof and the loader are measured.**
+> proof, the loader and the `link` directive are measured.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
-> §11 the loader and the operand shape it settles.
+> §11 the loader and the operand shape it settles, §12 the directive.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -366,14 +366,15 @@ The maintainer decided, in this session:
   dylib (manifest + one entry per instance), build it with cargo, and cache it by
   a content key — the same shape as the kernel disk cache
   ([kernel-disk-cache](kernel-disk-cache.md)).
-- **P3 — the loader: done, without the block directive.** `lichen_language::link`
+- **P3 — the loader and the directive: done** (§11, §12). `lichen_language::link`
   loads a `dylib`, parses its manifest (version, `build`, the family table, and
   the lichen source after a `source` line), installs every family entry in the
   process-wide table, hands the compiler one `External`-emitting op per family,
   and splices the source in front of the program so the wrapper compiles in the
   program's own module. §11 is the measurement and the operand-shape finding.
-- **P3 — the block directive: next.** `vbd = link "path"` in the preprocessor,
-  the loader wired to it, and a position map for the spliced prefix.
+- **P3 — positions and the CLI/LSP paths: next.** The splice shifts a program's
+  diagnostics by the wrapper prefix, so a position map comes first; then the
+  CLI and the LSP load what their blocks link.
 
 Decided, by the P3 implementation:
 
@@ -468,3 +469,41 @@ The two-operand form (type value plus argument) is the shape §10's engine defec
 blocks: re-pointing a value array's items per application is the same missing
 remap. Until it lands, the family entry takes one operand, and a generic whose
 dispatch needs the type value must be called with the type inside the argument.
+
+## 12. The `link` directive
+
+A program now binds a library in its own block:
+
+```lichen
+--- vbd = link "../target/release/gen.dll" ---
+sample Float 1.5
+```
+
+The pipeline, measured end to end:
+
+- **preprocess** lexes `link` as a keyword, parses `name = link "path"` into
+  `Directive::Link`, and carries `Preprocessed.links` (name, path, directive
+  span) beside the imports and depends.
+- **the store** opens the library on first use (`PackageStore::link`, keyed by
+  canonical path) and keeps it for its own lifetime — the entries are plain
+  pointers into it — installing them under an id the program's ops name.
+- **the build tag** is the gate: `LinkedLibrary::load` refuses a manifest whose
+  `build` is not this compiler's (`0.1.0+dev` today: the crate version plus the
+  build revision, `LICHEN_BUILD_REV`, when a build stamps one). Measured: a
+  library stamped `bogus` is refused with
+  `the library was built for "bogus"; this compiler is "0.1.0+dev"`.
+- **the run** splices every linked library's source in front of the program,
+  compiles the spliced text with the link ops, and runs it: `sample Float 1.5`
+  → `2.5: Float`, `sample Int 3` → `4: Int`, `sample Float 2.5` → `3.5: Float`,
+  `sample string "a"` → refused by the wrapper's refinement. Identical on five
+  consecutive processes.
+
+The known cost of the splice is positions: the program's diagnostics are computed
+against the spliced text, so a diagnostic inside the program names the offset the
+wrapper's prefix adds. A position map — the prefix's line count subtracted before
+rendering — is the next step, and it is the only thing between this directive and
+the CLI/LSP paths.
+
+The generator is still the proof's host program: it writes the Rust source from a
+declared `[(kind, Rust type)]` set and the same declaration's wrapper. The
+recorder (§6) is what replaces the declared set.

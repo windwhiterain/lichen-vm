@@ -17,6 +17,7 @@ name = depend "url" [rev = "…"] [branch = "…"] [tag = "…"]
                     [package = "…"] [sub = "…"]
 name = plug "url" [rev = "…"] [branch = "…"] [tag = "…"]
                   [package = "…"] [sub = "…"]
+name = link "path"           -- a dynamic library the loader opens
 ```
 
 An `import` is loaded when the file compiles. A `depend` is a git
@@ -25,6 +26,12 @@ the import path can reach it (below). A `plug` declares a **native plugin**
 — a Rust crate that extends the compiler — and it is fetched and composed
 by the package manager the same way (Chapter 19). The language compiler
 itself never fetches anything; it parses and surfaces the directives.
+
+A `link` names a **dynamic library** the loader opens when the file compiles:
+a Rust `dylib` whose manifest carries both the lichen source of its
+operators and the entries they run. Nothing is fetched and nothing is
+rebuilt — the library is opened per run, and its build tag must match the
+compiler ([a native link library](https://github.com/windwhiterain/lichen-vm/blob/dev/docs/notes/native-link-library.md)).
 
 ## Importing a module
 

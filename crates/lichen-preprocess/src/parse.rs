@@ -14,6 +14,9 @@ use super::lex::{Token, TokenKind};
 pub enum Directive {
     /// `name = import "path"` -- an import binding.
     Import { name: String, path: String },
+    /// `name = link "path"` -- a library bound to `name`: its manifest
+    /// supplies the wrapper and its entries the operators.
+    Link { name: String, path: String },
     /// `name = "value"` -- a string metadata entry.
     Metadata { name: String, value: String },
     /// `name = depend "url" [options]` -- a git dependency bound to `name`,
@@ -109,6 +112,24 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<LocatedDirective>, Vec<ParseFailure
                 i += 1;
                 out.push(LocatedDirective {
                     directive: Directive::Import { name, path },
+                    offset: stmt_start,
+                });
+            }
+            Some(TokenKind::KwLink) => {
+                i += 1;
+                let path = match tokens.get(i).map(|t| &t.kind) {
+                    Some(TokenKind::String(p)) => p.clone(),
+                    k => {
+                        return Err(vec![err_at(
+                            tokens,
+                            i,
+                            format!("expected a path after link, found {}", found(k)),
+                        )]);
+                    }
+                };
+                i += 1;
+                out.push(LocatedDirective {
+                    directive: Directive::Link { name, path },
                     offset: stmt_start,
                 });
             }

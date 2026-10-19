@@ -5,14 +5,14 @@
 //! The output line is formed in one place, so [`evaluate`] and [`evaluate_raw`]
 //! cannot drift; diagnostics are returned unrendered.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::LangProgramShape;
 use crate::compile;
 use crate::diag::Diag;
 use crate::lang_attr_ext;
 use crate::package::PackageStore;
-use crate::preprocess::preprocess;
+use crate::preprocess::{PreprocessDiag, preprocess};
 use crate::program::{GcdOp, LangProgram};
 pub use crate::render::print_type;
 pub use crate::render::print_value;
@@ -180,7 +180,7 @@ pub fn evaluate_raw<P>(
 where
     P: LangProgramShape,
     P::Value: ValueType + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_lowlevel::LowOperator> + 'static,
 {
     evaluate_raw_reporting(source, base, store, PassReport::Silent).map(|run| run.output)
 }
@@ -199,23 +199,71 @@ pub fn evaluate_raw_reporting<P>(
 where
     P: LangProgramShape,
     P::Value: ValueType + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_lowlevel::LowOperator> + 'static,
 {
     let (preprocessed, diags) = preprocess(source, base, store);
     if !diags.is_empty() {
         return Err(diags);
     }
-    let line_starts = crate::lex::line_starts(source);
+    // A linked library's wrapper is source: the spliced text compiles, so the
+    // program's positions shift by the prefix.
+    let spliced;
+    let (code, code_base, line_starts) = if preprocessed.links.is_empty() {
+        (
+            preprocessed.code,
+            preprocessed.code_base,
+            crate::lex::line_starts(source),
+        )
+    } else {
+        for link in &preprocessed.links {
+            let path = resolve_link_path(base, &link.path);
+            if let Err(message) = store.link(&path) {
+                return Err(vec![Diag::from_preprocess(PreprocessDiag::new(
+                    link.span, message,
+                ))]);
+            }
+        }
+        let mut text = store.linked_source();
+        text.push_str(preprocessed.code);
+        spliced = text;
+        (spliced.as_str(), 0, crate::lex::line_starts(&spliced))
+    };
+    let ops = if preprocessed.links.is_empty() {
+        lichen_highlevel::no_native_ops()
+    } else {
+        store.linked_ops()
+    };
     let report = crate::compile_with_imports_at::<P>(
-        preprocessed.code,
+        code,
         &preprocessed.imports,
         Some(store.registry()),
-        preprocessed.code_base,
+        code_base,
         &line_starts,
-        lichen_highlevel::no_native_ops(),
+        ops,
     );
     if !report.ok() {
         return Err(report.diagnostics);
     }
     render_build(report.build.unwrap(), pass_report)
+}
+
+/// Resolve a `link "path"` against the source that names it, as an import
+/// path resolves.
+fn resolve_link_path(base: Option<&Path>, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let base_dir = base
+        .map(|base| {
+            if base.is_dir() {
+                base.to_path_buf()
+            } else {
+                base.parent()
+                    .map(|parent| parent.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    base_dir.join(path)
 }

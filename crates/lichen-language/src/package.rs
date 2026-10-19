@@ -279,6 +279,9 @@ pub struct PackageStore<P: ProgramCodecOf> {
     pub compiled: usize,
     /// Packages loaded from the device cache without recompiling — tests.
     pub loaded_from_cache: usize,
+    /// The libraries this store linked: the path, the entry id, and the value
+    /// that keeps the library loaded.
+    linked: Vec<(PathBuf, u32, crate::link::LinkedLibrary)>,
 }
 
 // The minimal impl: construction, cache-dir plumbing, and the vendored registry.
@@ -298,6 +301,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             _codec: PhantomData,
             compiled: 0,
             loaded_from_cache: 0,
+            linked: Vec::new(),
         }
     }
 
@@ -362,6 +366,54 @@ impl<P: ProgramCodecOf> PackageStore<P> {
     /// The shared registry, for the importer's checker.
     pub fn registry(&self) -> Arc<RwLock<Registry<P>>> {
         self.registry.clone()
+    }
+
+    /// Open `path`, install its entries, and answer their id: one load per
+    /// canonical path.
+    ///
+    /// # Invariant
+    /// The store holds the loaded library for its own lifetime: the entries are
+    /// plain pointers into it ([`crate::link::LinkedLibrary::install`]).
+    pub fn link(&mut self, path: &Path) -> Result<u32, String> {
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve {}: {error}", path.display()))?;
+        if let Some((_, id, _)) = self.linked.iter().find(|(known, _, _)| *known == canonical) {
+            return Ok(*id);
+        }
+        // SAFETY: the manifest names the library's build, and the loader refuses
+        // a tag this compiler does not recognize.
+        let library = unsafe { crate::link::LinkedLibrary::load(&canonical) }?;
+        let id = self.linked.len() as u32;
+        library.install(id)?;
+        self.linked.push((canonical, id, library));
+        Ok(id)
+    }
+
+    /// The lichen source every linked library contributes, in load order.
+    pub fn linked_source(&self) -> String {
+        let mut source = String::new();
+        for (_, _, library) in &self.linked {
+            source.push_str(library.source());
+            if !library.source().ends_with('\n') {
+                source.push('\n');
+            }
+        }
+        source
+    }
+
+    /// The ops every linked library supplies, in load order.
+    pub fn linked_ops(&self) -> NativeOps<P>
+    where
+        P: lichen_highlevel::program::HighProgram,
+        P::Value: ValueType,
+        P::Operator: From<lichen_lowlevel::LowOperator>,
+    {
+        let mut ops = Vec::new();
+        for (_, id, library) in &self.linked {
+            ops.extend(library.ops::<P>(*id));
+        }
+        Box::leak(ops.into_boxed_slice())
     }
 
     /// Allocate the device key for a file ID: the existing one, or a fresh one.

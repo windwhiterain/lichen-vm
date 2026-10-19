@@ -102,10 +102,11 @@ A file may open with one header:
   name = import "path"
   name = depend "url" [rev = "…"] [branch = "…"] [tag = "…"] [package = "…"] [sub = "…"] [plugin]
   name = plug "url" [rev = "…"] [branch = "…"] [tag = "…"] [package = "…"] [sub = "…"]
+  name = link "path"
 ---
 ```
 
-Metadata entries are strings; directives are imports and dependencies
+Metadata entries are strings; directives are imports, dependencies, and link
 (Chapter 15). The block is removed before lexing, so prose before it is
 ignored and prose inside it is the only prose a file can carry.
 

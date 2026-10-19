@@ -279,6 +279,11 @@ fn replace_output_comment(source: &str, output: &str) -> String {
                     out.push_str(&format!("{name} = import \"{path}\""));
                     out.push('\n');
                 }
+                Directive::Link { name, path } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("{name} = link \"{path}\""));
+                    out.push('\n');
+                }
                 Directive::Metadata { name, value: _ } if name == "output" => {
                     out.push_str("  ");
                     out.push_str(&format!("output = \"{output}\""));

@@ -10,12 +10,28 @@
 use std::path::Path;
 
 use lichen_highlevel::ir::{ExprId, Loc};
-use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
+use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram};
 use lichen_lowlevel::{ExternalEntry, LowOperator};
 
 /// The manifest version this loader reads.
 const MANIFEST_VERSION: &str = "lichen-link 1";
+
+/// The revision the compiler was built from, when the build stamped one.
+const BUILD_REV: Option<&str> = option_env!("LICHEN_BUILD_REV");
+
+/// The tag a generated library carries, and the tag this compiler requires.
+///
+/// # Invariant
+/// A library's entries use this build's `Module` and value layouts, so a
+/// library stamped with any other tag is refused at load
+/// (docs/notes/native-link-library.md §4).
+pub fn build_tag() -> String {
+    match BUILD_REV {
+        Some(rev) => format!("{}+{rev}", env!("CARGO_PKG_VERSION")),
+        None => format!("{}+dev", env!("CARGO_PKG_VERSION")),
+    }
+}
 
 /// One family entry a library serves: the lichen op name, the instance the
 /// compiler records, and the exported symbol.
@@ -141,10 +157,15 @@ impl LinkedLibrary {
                 .map_err(|_| "the manifest is not UTF-8".to_string())?
                 .to_string()
         };
-        Ok(Self {
-            manifest: Manifest::parse(&text)?,
-            library,
-        })
+        let manifest = Manifest::parse(&text)?;
+        let expected = build_tag();
+        if manifest.build() != expected {
+            return Err(format!(
+                "the library was built for {:?}; this compiler is {expected:?}",
+                manifest.build()
+            ));
+        }
+        Ok(Self { manifest, library })
     }
 
     /// The lichen source the library contributes.
@@ -176,16 +197,15 @@ impl LinkedLibrary {
     /// The library's native-op registry, for a compiler building a program.
     ///
     /// # Invariant
-    /// One op per family, keyed by the manifest's name; the registry is leaked
-    /// because [`NativeOps`] is a `'static` slice.
-    pub fn ops<P>(&self, library: u32) -> NativeOps<P>
+    /// One op per family, keyed by the manifest's name: the names and the op
+    /// boxes are leaked, and the caller joins the families into a registry.
+    pub fn ops<P>(&self, library: u32) -> Vec<(&'static str, &'static dyn NativeOp<P>)>
     where
         P: HighProgram,
         P::Value: lichen_highlevel::program::ValueType,
         P::Operator: From<LowOperator>,
     {
-        let ops: Vec<(&'static str, &'static dyn NativeOp<P>)> = self
-            .manifest
+        self.manifest
             .families()
             .iter()
             .map(|family| {
@@ -196,8 +216,7 @@ impl LinkedLibrary {
                 }));
                 (name, op)
             })
-            .collect();
-        Box::leak(ops.into_boxed_slice())
+            .collect()
     }
 }
 

@@ -437,6 +437,14 @@ Separator-separated:
   import, so it takes the same options as a `depend` minus the `plugin` flag
   (which is what a `plug` implies).
 
+- `name = link "path"` declares a **linked library** bound to `name`: a dynamic
+  library (a Rust `dylib`) whose manifest carries the lichen source that names
+  its operators and the entries those operators run.  The loader opens it when
+  the file compiles, refuses a build tag other than the compiler's own, installs
+  the entries, and compiles the manifest's source in the program's module.
+  Nothing is fetched and nothing is rebuilt
+  (`docs/notes/native-link-library.md`).
+
 A string is `"…"` with no escape characters and may span newlines; its content
 is any character except `"`.  The delimiters are `---`, which is free because
 **the language has no comments at all** — prose lives in this block — and
