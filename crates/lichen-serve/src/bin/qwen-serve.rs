@@ -231,11 +231,13 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         7,
     );
     let prompt = chat_prompt(&request.messages);
+    let encoded = shared.tokenizer.encode(&prompt);
+    let ids = match encoded {
+        Ok(ids) if !ids.is_empty() => ids,
+        Ok(_) => return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing"),
+        Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
+    };
     if request.stream {
-        let ids = shared.tokenizer.encode(&prompt);
-        if ids.is_empty() {
-            return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing");
-        }
         let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
         };
@@ -249,25 +251,20 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         );
         return Sse::new(body).into_response();
     }
-    match shared.tokenizer.encode(&prompt) {
-        ids if ids.is_empty() => refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing"),
-        ids => {
-            let answered = generate(&shared, ids.clone(), limit, sampling);
-            let text = shared.tokenizer.decode(&answered);
-            Json(json!({
-                "id": "chatcmpl-lichen",
-                "object": "chat.completion",
-                "model": MODEL,
-                "choices": [{
-                    "index": 0,
-                    "message": { "role": "assistant", "content": text },
-                    "finish_reason": "length",
-                }],
-                "usage": usage(ids.len(), answered.len()),
-            }))
-            .into_response()
-        }
-    }
+    let answered = generate(&shared, ids.clone(), limit, sampling);
+    let text = shared.tokenizer.decode(&answered);
+    Json(json!({
+        "id": "chatcmpl-lichen",
+        "object": "chat.completion",
+        "model": MODEL,
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": text },
+            "finish_reason": "length",
+        }],
+        "usage": usage(ids.len(), answered.len()),
+    }))
+    .into_response()
 }
 
 async fn complete(
@@ -280,10 +277,12 @@ async fn complete(
         request.top_k.unwrap_or(0),
         7,
     );
-    let ids = shared.tokenizer.encode(&request.prompt);
-    if ids.is_empty() {
-        return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing");
-    }
+    let encoded = shared.tokenizer.encode(&request.prompt);
+    let ids = match encoded {
+        Ok(ids) if !ids.is_empty() => ids,
+        Ok(_) => return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing"),
+        Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
+    };
     if request.stream {
         let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");

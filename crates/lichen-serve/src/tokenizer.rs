@@ -29,12 +29,19 @@ impl std::fmt::Display for TokenizerRefusal {
 fn byte_symbols() -> ([char; 256], HashMap<char, u8>) {
     let mut forward = ['\0'; 256];
     let mut inverse = HashMap::new();
+    // A printable byte is its own character; the rest are numbered in order from 256, which is all
+    // this vocabulary holds.
+    let mut next = 256;
     for byte in 0u16..256 {
         let symbol = match byte {
             33..=126 | 161..=172 | 174..=255 => {
                 char::from_u32(u32::from(byte)).unwrap_or('\u{fffd}')
             }
-            _ => char::from_u32(256 + u32::from(byte)).unwrap_or('\u{fffd}'),
+            _ => {
+                let symbol = char::from_u32(next).unwrap_or('\u{fffd}');
+                next += 1;
+                symbol
+            }
         };
         forward[usize::from(byte)] = symbol;
         inverse.insert(symbol, byte as u8);
@@ -112,7 +119,10 @@ impl Tokenizer {
             })
             .unwrap_or_default();
         added.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
-        let split = fancy_regex::Regex::new(SPLIT)
+        // A backtracking budget: a run of letters makes the last alternatives try every split.
+        let split = fancy_regex::RegexBuilder::new(SPLIT)
+            .backtrack_limit(8 * 1024 * 1024)
+            .build()
             .map_err(|error| TokenizerRefusal::Weights(format!("the split: {error}")))?;
         let (forward, inverse) = byte_symbols();
         Ok(Self {
@@ -131,7 +141,7 @@ impl Tokenizer {
     /// The text is normalised and then split exactly as the checkpoint's pre-tokenizer states, because the
     /// merges were learned against those pieces: a split that disagreed would merge across a boundary the
     /// vocabulary never saw.
-    pub fn encode(&self, text: &str) -> Vec<usize> {
+    pub fn encode(&self, text: &str) -> Result<Vec<usize>, TokenizerRefusal> {
         let normalised: String = text.nfc().collect();
         let mut ids = Vec::new();
         let mut rest = normalised.as_str();
@@ -159,8 +169,17 @@ impl Tokenizer {
             cursor += content.len();
         }
         let ordinary = &rest[cursor..];
-        for piece in self.split.find_iter(ordinary).flatten() {
-            let bytes = piece.as_str().as_bytes();
+        // A piece the split refuses is refused here; dropping it is how a script once vanished silently.
+        let pieces = self.split.find_iter(ordinary);
+        let mut spans = Vec::new();
+        for found in pieces {
+            let piece = found.map_err(|error| {
+                TokenizerRefusal::Weights(format!("the split refused a piece: {error}"))
+            })?;
+            spans.push(piece.as_str().to_string());
+        }
+        for piece in spans.iter().map(String::as_str) {
+            let bytes = piece.as_bytes();
             let mut symbols: Vec<String> = bytes
                 .iter()
                 .map(|byte| self.forward[usize::from(*byte)].to_string())
@@ -182,12 +201,15 @@ impl Tokenizer {
                 symbols.splice(at..at + 2, [merged]);
             }
             for symbol in symbols {
-                if let Some(id) = self.vocabulary.get(&symbol) {
-                    ids.push(*id);
-                }
+                let Some(id) = self.vocabulary.get(&symbol) else {
+                    return Err(TokenizerRefusal::Weights(format!(
+                        "the vocabulary holds no token for {symbol:?}, which the merges produced"
+                    )));
+                };
+                ids.push(*id);
             }
         }
-        ids
+        Ok(ids)
     }
 
     /// The text `ids` spells, with an id the vocabulary does not hold left out.

@@ -28,9 +28,12 @@ fn ascii_text_tokenizes_to_the_checkpoints_ids() {
     let Some(tokenizer) = tokenizer() else {
         return;
     };
-    assert_eq!(tokenizer.encode("Hello world"), vec![9707, 1879]);
     assert_eq!(
-        tokenizer.encode("def f(x): return x + 1"),
+        tokenizer.encode("Hello world").expect("encodes"),
+        vec![9707, 1879]
+    );
+    assert_eq!(
+        tokenizer.encode("def f(x): return x + 1").expect("encodes"),
         vec![750, 282, 2075, 1648, 470, 856, 488, 220, 16]
     );
 }
@@ -45,7 +48,7 @@ fn a_special_token_is_one_id() {
     let Some(tokenizer) = tokenizer() else {
         return;
     };
-    let ids = tokenizer.encode("<|im_start|>user");
+    let ids = tokenizer.encode("<|im_start|>user").expect("encodes");
     assert_eq!(ids.first().copied(), Some(151644), "im_start is one id");
     assert_eq!(ids.len(), 2, "and the word after it is the second");
 }
@@ -55,8 +58,6 @@ fn a_special_token_is_one_id() {
 /// # Invariant
 /// A round trip is the tokenizer's own consistency and needs no reference: bytes go to symbols and symbols
 /// back to bytes, and a script the merges handle badly still has to survive the round trip unchanged.
-// Ignored: the split's `Err` is dropped, so a piece fancy-regex refuses is skipped rather than reported.
-#[ignore = "the split's backtracking limit on CJK is dropped, and the piece with it"]
 #[test]
 fn text_round_trips() {
     let Some(tokenizer) = tokenizer() else {
@@ -68,7 +69,7 @@ fn text_round_trips() {
         "naïve café",
         "def f(x):\n    return x",
     ] {
-        let ids = tokenizer.encode(text);
+        let ids = tokenizer.encode(text).expect("encodes");
         assert_eq!(tokenizer.decode(&ids), text, "{text} round trips");
     }
 }
