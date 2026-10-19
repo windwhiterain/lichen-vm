@@ -76,6 +76,16 @@ alone is `[value, type, doc]`, so "slot 3" is the slot Doc takes in a pair that 
 carries a perspective. Readers go through the tail position, never through a hard
 number.
 
+**A pair is also a type value.** When an expression *is* a type — a type parameter, a
+struct constructor's argument — its `[value, type]` pair is the type the `[shape, kind]`
+encoding reads, so widening every pair to the canonical attribute width would make a
+type `[shape, kind, attrs…]` and break type-level functions. That is why an expression
+pair stays dense while a compound's *element slot* is full width (a slot is never a
+type value: `docs/notes/compound-element-slots.md`). The canonical positions still
+travel: a function records its requirement's and its certificate's marker index, and the
+artifact persists them (`StaticFunction::parameter_marker`/`return_marker`), so a frozen
+call reads the attribute from the position exactly as a source call does.
+
 ## The extension point (`AttrExt`)
 
 The checker is attribute-agnostic: it only knows the *shape* — "an attribute combines
