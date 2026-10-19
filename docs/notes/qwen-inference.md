@@ -255,6 +255,23 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## The service
+
+`qwen-serve -- <port>` answers the OpenAI surface: `GET /v1/models`, `POST /v1/chat/completions` and
+`POST /v1/completions`, each with or without `stream`. A chat request is templated the way the checkpoint was
+tuned — `<|im_start|>role` then the content then `<|im_end|>` — encoded by the checkpoint's own tokenizer, and
+answered with `temperature` mapped to the sampler's and `max_tokens` to the token count.
+
+Two things decide the shape. **One worker owns the model**, because a generation is host-blocking calls on one
+session and a second thread would share the device and its pool with it: requests queue, and a client's
+position in the queue is its latency. And **a prompt fills the cache before any token is chosen** — a model
+started from the prompt's last token alone answers as if the request were one word, which read as
+`"
+: 10"` until the prefill landed and as `"Hello! How can I assist"` after it.
+
+What the surface does not have yet: a Chinese prompt, because the pre-tokenizer's split hits a backtracking
+limit the encoder drops, and true batching, because the batched head disagrees with the single one at two rows.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
