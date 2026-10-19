@@ -255,7 +255,23 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
-## What a step spends around its stages
+## What the hand-off probe could not settle
+
+A chain of four projections, once through the host and once passing residents on: **0.004 s** against
+**0.026 s**. Both are wrong in opposite directions and neither answers the question. The host chain's fetch
+does not wait, so its four milliseconds are the submissions and not the copies; the device chain places five
+buffers and releases them every repeat, which the model never does, and pays for that instead. That is the
+third probe this note has written about the 0.250 s a step spends around its stages, and the honest reading
+after all three is:
+
+- the **ratios inside one run** are the only figures this machine can be trusted for — its card is shared
+  with every other session on it — and the one that survived is the 35% a step spends around its stages;
+- reproducing that 35% from outside the model needs the model's own composition, not a synthetic chain;
+- and the direction that removes both the stages' dispatches and most of their hand-offs is the one the work
+  now takes: a layer as one kernel, which needs the barrier the [staging table](shared-memory-and-barriers.md)
+  leaves one row short of.
+
+
 
 The stage calls are timed now, so a step can be split without reading a machine's clock from outside: inside
 one step of one request, **0.458 s of 0.708 s** is inside `Prepared::step` and **0.250 s** is around it —
