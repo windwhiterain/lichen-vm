@@ -393,6 +393,14 @@ about **0.4 ms a dispatch**, at 84.9 GB/s of reads when the rows are many, a qua
 is not where the tokens go: a step's 860 ms holds some **340 dispatches**, and at this floor they account for
 about 136 ms. The rest is a per-stage question the next measurement has to ask, stage by stage.
 
+Where the weights live is worth **2.23x**, measured on one step of one request with the same program and the
+same shapes: **1.283 s** with the layers held in host memory and handed over as host-visible buffers, and
+**0.576 s** with them resident. That is the cheapest part of the answer so far, and it is also the reason
+the numbers in this note disagreed with each other for several rounds: the serving binary places its layers,
+so its step is 0.86 s over eight sequences, while the tests hold theirs, so their step is over a second for
+one. A deployment that cannot keep every layer resident pays this ratio rather than failing, which is what a
+smaller card would see.
+
 Reading a result back is not it: the same probe fetching each answer adds **0.041 ms** to a dispatch of
 0.4 ms, and at 4096 rows 0.060 ms. So the round trip a stage makes is cheap, and what is left is neither the
 fold, nor the layout, nor the read-back. The next probe therefore belongs **inside** the model rather than
