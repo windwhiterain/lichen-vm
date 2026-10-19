@@ -316,10 +316,18 @@ still per-lane, and the [staging table](shared-memory-and-barriers.md#9-the-stag
 replaces `Folding::per_lane`'s schedule, while a program that writes `fold (k.dim, …)` folds the whole
 extent in every lane and cannot be tiled into something it does not already answer.
 
-So the staging is complete where this note needs it, and the next step is a **spike**: one small body that
-writes a slice, keeps it in a workgroup, reads it back after a barrier, and runs — because a table saying a
-capability landed is a claim about a table, and the tree's own note records a case where a read with no data
-path compiled and answered `0`.
+So the staging is complete where this note needs it, and it was then **run rather than read**: the spike is
+not a new program, it is `crates/lichen-compute/tests/lichen_compute/plan_staging.rs`, which drives a
+declared plan on a device, and the run answers
+
+    lichen_compute::plan_staging::a_declared_plan_stages_the_reduction_and_answers_the_closed_form ... ok
+    test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out
+
+That is the capability this note needed a promise for: a slice written, kept in a workgroup, read back after
+a barrier, and answered as the **closed form** rather than as the silent `0` the tree's own note records for
+a read with no data path. The next step is therefore a real one rather than a feasibility question — a
+projection written as a staged kernel, its lanes cooperating on one output row instead of walking the row
+each on its own, measured against the projection this service ships today.
 
 ## What a burst is answered with
 
