@@ -110,7 +110,7 @@ impl<P: Program> Module<P> {
         if self.depth_exhausted(node) {
             return false;
         }
-        let Some((parameter, codomain)) =
+        let Some((parameter, codomain, remap)) =
             self.materialize_static_signature_with_classes(function, block)
         else {
             return false;
@@ -132,6 +132,8 @@ impl<P: Program> Module<P> {
             if failed {
                 return false;
             }
+            // The asserts re-check on this call's copies (apply-type-side-check §6).
+            self.register_static_type_asserts(function, block, node, remap);
         }
         let Some(cell) = cell else {
             return true;
@@ -139,6 +141,41 @@ impl<P: Program> Module<P> {
         self.evaluate_node(Dyn(codomain), Some(block));
         self.unify(cell, codomain);
         true
+    }
+
+    /// The frozen asserts, cloned through the signature copies' remap.
+    #[stacksafe]
+    fn register_static_type_asserts(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+        node: NodeId,
+        remap: HashMap<LocalNodeId, NodeId>,
+    ) {
+        let module = self.static_module(function.module);
+        if module.functions[function.index.0].asserts.is_empty() {
+            return;
+        }
+        let mut ctx = StaticApplyCtx {
+            target: block,
+            module,
+            remap,
+            applied: function.index,
+            branch_top: None,
+            tag: self.nodes[node].function,
+            origin: self.nodes[node].origin.unwrap_or(node),
+        };
+        for index in 0..ctx.module.functions[function.index.0].asserts.len() {
+            let condition = ctx.module.functions[function.index.0].asserts[index];
+            let baked = !ctx.module.nodes[condition.index].undecided();
+            let instantiated = self.static_node_apply(condition, &mut ctx);
+            if !baked {
+                self.asserts.push(PendingAssert {
+                    condition: instantiated,
+                    template: static_ref(&ctx.module, condition),
+                });
+            }
+        }
     }
 
     /// The frozen return pair's attribute tail, copied into `block` as dynamic nodes.
@@ -213,7 +250,7 @@ impl<P: Program> Module<P> {
         &mut self,
         function: StaticFunctionRef,
         block: BlockId,
-    ) -> Option<(NodeId, NodeId)> {
+    ) -> Option<(NodeId, NodeId, HashMap<LocalNodeId, NodeId>)> {
         let module = self.static_module(function.module);
         let (parameter, return_type) = {
             let entry = module.functions.get(function.index.0)?;
@@ -231,7 +268,7 @@ impl<P: Program> Module<P> {
                 self.unify(first, clone);
             });
         }
-        Some((parameter, codomain))
+        Some((parameter, codomain, remap))
     }
 
     /// One node of the frozen signature, copied; an array's items are copied with it.

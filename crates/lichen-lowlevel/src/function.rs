@@ -313,8 +313,8 @@ impl<P: Program> Module<P> {
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
-        // The type side registers nothing: the value side reports each assert.
-        for index in 0..assert_count * usize::from(check == ParameterCheck::Value) {
+        // A check that keeps its errors registers them too: `Check` reports.
+        for index in 0..assert_count * usize::from(check != ParameterCheck::Skip) {
             let condition = self.functions[function].asserts[index];
             let instantiated = self.node_apply(condition, &mut ctx);
             if instantiated != condition {

@@ -55,6 +55,15 @@ impl<P: Program> Module<P> {
                 continue;
             };
             if !matches!(value.as_enum(), Some(LowValue::USize(1))) {
+                // One failure per body condition: the definition pass and the type side
+                // both instantiate the same template for one call.
+                if self
+                    .assert_errors
+                    .iter()
+                    .any(|error| error.template == entry.template)
+                {
+                    continue;
+                }
                 self.assert_errors.push(AssertError {
                     condition,
                     template: entry.template,

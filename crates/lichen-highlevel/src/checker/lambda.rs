@@ -417,14 +417,10 @@ where
                         apply_expr: e,
                     },
                 );
-                let type_slot_argument = if report {
-                    type_argument_pair
-                } else {
-                    value_argument_pair
-                };
+                // The argument's value rides along: a refinement assert reads it.
                 let applied = self.module.apply_function_type(
                     function_ty,
-                    type_slot_argument,
+                    value_argument_pair,
                     self.current_block,
                     type_apply,
                     c,
