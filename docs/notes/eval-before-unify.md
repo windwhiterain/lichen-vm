@@ -722,6 +722,10 @@ value apply runs — the parameter check compares the argument against a **fresh
 domain, and the result cell binds to a **fresh** codomain — and skips only the
 body evaluation.
 
+The type side also runs **at check** now: the apply's type-slot application
+takes a type-only argument, and a `Check` build keeps its parameter-check
+errors — see [apply-type-side-check](apply-type-side-check.md).
+
 A lambda is a value, and a value nobody applied had a body nobody checked:
 
 ```lichen
