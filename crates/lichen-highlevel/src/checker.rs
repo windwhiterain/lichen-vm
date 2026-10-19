@@ -184,8 +184,14 @@ where
     diary: Vec<DiaryEntry>,
     /// The monotonic counter behind [`DiaryEntry::seq`].
     check_seq: usize,
-    /// The arrow nodes built by [`Checker::check_lam`]; the type printer renders
-    /// them as `param → body`.
+    /// Arrow nodes the type printer reads as `in -> out`.
+    ///
+    /// # Invariant
+    ///
+    /// Empty by construction: a written arrow lowers to a function, so `Ctx::arrow`
+    /// has no call site and no node is registered here (see
+    /// docs/notes/function-type-merge.md). The printer's bare `[in, out]` arrow arm
+    /// therefore never fires, and no reading depends on this being non-empty.
     arrows: HashSet<NodeId>,
     /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,

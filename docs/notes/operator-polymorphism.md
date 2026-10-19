@@ -513,6 +513,21 @@ about, or still open.
    defect this surfaced is fixed: a universe read out of a frozen module fell back
    to `raw[Int, Type]` where `tuple{Int, Int}` was meant. The open class behind the
    mark is [type-of-in-std](type-of-in-std.md)'s defect.
+
+   **Re-measured, and the mark cannot be collapsed.** `add = x => y => x + y`
+   prints `raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` in `Mode::Check` and
+   `Mode::Evaluate` alike, and every arrow in it is already read: a throwaway probe
+   over 19 lambda shapes (run on `dev@9d59dd01` and not kept) renders every lambda
+   `D -> C`, so no function type reaches the mark. The `?a`/`?b` pair is the
+   placeholder's two **distinct** classes — measured as equality representatives
+   `178` and `179` — so one name would claim a unification the checker never made.
+   It is also *structurally the element-slot shape*, so a rule that collapsed it
+   would collapse `.native raw[?a, ?b]` in the same run: measured, that rule turns
+   `a_kernel_value_and_type_render_by_name`,
+   `a_tuple_domain_kernel_type_renders_as_a_function` and
+   `every_example_runs_and_prints_what_it_declares` red (`242 passed; 3 failed`).
+   No printer rule can tell the two apart, because there is nothing to tell them
+   apart by.
 3. **A routed statement's concrete value is not in the snapshot** —
    `Doc::statement_values` reports `None` for `y = x + 4` because the builtin
    operator folded it *eagerly* at check time while a call stays lazy (the
