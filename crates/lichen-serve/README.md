@@ -72,6 +72,23 @@ The first check after starting it is the one the guide gives above — `/v1/mode
 the second is `/metrics`: `lichen_requests_admitted` against `lichen_requests_finished` tells whether the
 queue is draining, and `lichen_last_step_nanoseconds` tells what a step currently costs.
 
+### What a healthy one looks like
+
+Six requests, each with the answer it gave on the machine this was written on. The first two say the model
+is answering words; the third says its stream ends; the fourth says a marker was never spelled out:
+
+| request | what it must say |
+|---|---|
+| `{"messages":[{"role":"user","content":"Hello"}],"max_tokens":12,"temperature":0}` | `Hello! How can I assist you today? 😊` |
+| `{"prompt":"The capital of France is","max_tokens":6,"temperature":0}` | ` Paris. The capital of the` |
+| the same chat request with `"stream":true` | four `data:` chunks, then one whose `finish_reason` is `length`, then `data: [DONE]` |
+| `{"messages":[{"role":"user","content":"你好，请用一句话介绍你自己。"}],"max_tokens":16}` | Chinese, not a script of single bytes |
+| `{"messages":[…],"logprobs":true,"top_logprobs":2}` | each token once with three `top_logprobs` entries |
+| a two-turn conversation ending in `What is my name?` | the name the first turn gave |
+
+The last row is the one that caught two bugs at once: a template whose markers are encoded as characters
+reads as a different prompt, and a model left thinking answers with its reasons instead of its reply.
+
 ## What it does behind a request
 
 A queue in front of one worker, which owns the model. The worker groups up to eight requests into one batch
