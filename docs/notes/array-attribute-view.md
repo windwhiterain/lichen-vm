@@ -38,29 +38,44 @@ The underlying items stay as they are, so a type value remains a two-item
 `[shape, kind]` array while its *attribute view* is full width. That is what
 removes the dual-use conflict that defeated the wide-pair attempt.
 
-## Proposed encoding — awaiting confirmation
+## The encoding (the superior's, second round)
 
-1. **Payload.** `LowValue::Array(AnyHandle<[ArrayItem]>)` becomes
-   `LowValue::Array { items: AnyHandle<[ArrayItem]>, attributes: Option<AnyHandle<[ArrayItem]>> }`,
-   where `attributes` is the full-width attribute array (one slot per canonical
-   position, `slot_width::<P>()` entries). 241 `LowValue::Array` sites across the
-   workspace are mechanical to update. The pointer travels with the value, so
-   clone, freeze and the codec carry it without a side table.
-2. **Default.** `Module::default_attributes: Option<AnyHandle<[ArrayItem]>>`, set
-   once by the highlevel to a full-width array of *wildcard* slots. A reading of
-   position `p` on an array whose `attributes` is `None`, or whose entry is the
-   wildcard, returns the default entry for `p`.
-   Open question 1: is the default's content the wildcard ("no claim") or
-   something else?
-3. **Read.** `Module::array_attribute(value, position) -> Option<AnyNodeId>`
-   (dynamic and static sides); the highlevel's attribute readers
-   (`pair_attr_slot`, `element_attr_slots`, the shape readers in
-   `crates/lichen-highlevel/src/shape.rs`) go through it.
-4. **Unify.** The pair unify recurses into the two arrays' attribute views
-   position-wise, the wildcard/default skipped — the "recursion into attributes"
-   this design exists for.
-5. **Codec and freeze.** The artifact persists each array's attribute view and
-   the module default; `ARTIFACT_FORMAT_VERSION` is bumped again.
+The sparse table is **not a lichen object**: it is a set of **index arrays
+predefined at lowering time**. Each lowlevel array **chooses one** of them, and
+lowlevel unification **wires the attribute positions according to that choice**.
+The choice is **mandatory, not optional** — every array states which attribute
+layout it carries.
+
+Concretely:
+
+1. **The table.** A module-level registry of index arrays (the layouts), filled by
+   the highlevel at lowering: `Vec<Box<[u32]>>`, one entry per distinct schema
+   tail. Entry `0` is the empty layout (no attributes — a plain value array, and
+   what every order-0 construct picks). An entry lists, in slot order, the
+   canonical attribute index each attribute slot of the value carries.
+2. **The array.** `LowValue::Array` gains a layout id:
+   `LowValue::Array { items: AnyHandle<[ArrayItem]>, layout: u32 }`. The pointer
+   is a *small integer*, not a heap array per value, so the storage stays O(1)
+   and the table is shared. Constructors: `LowValue::array(items)` picks layout
+   `0`; a builder that carries attributes passes the registered id.
+3. **The default.** A module-global **default attribute array**: the full-width
+   slots an array's layout does not cover. Every canonical attribute the layout
+   omits is read from the default, so the highlevel can treat every value as
+   full-width.
+4. **Unify.** Lowlevel unification of two arrays wires the attributes **by
+   canonical index**: attribute `i` of one array meets attribute `i` of the other
+   (each found through its own layout), and a side whose layout omits `i` meets
+   the default's slot for `i`. That is the recursion into attributes the current
+   design lacks; the plain value and type positions keep unifying as they do.
+5. **The highlevel.** The checker's schema tails pick the layout: a pair with
+   tail `[Perspective]` registers (or reuses) the layout `[0]`, and its attribute
+   readers resolve a canonical attribute index to the slot the layout gives.
+   `type_of`-style reading (`x # p` binding to the parameter's attribute cell) and
+   the per-call flow then follow from the lowlevel wiring, not from checker-side
+   reference tables.
+6. **Persistence.** The artifact carries the layout registry and each array's
+   layout id (`ARTIFACT_FORMAT_VERSION` bumps); freeze and the static module copy
+   both.
 
 ## Stages
 
@@ -78,16 +93,13 @@ removes the dual-use conflict that defeated the wide-pair attempt.
 
 ## Open questions
 
-- **1. The default array's content**: wildcard slots, or undecided cells?
-  Wildcards say "no claim" and keep the unify skipping; cells would make every
-  hole a unification variable shared across arrays, which couples unrelated
-  pairs.
-- **2. Where the highlevel attaches the view**: when the checker builds a pair
-  with a non-empty tail (only then), or always? Always costs an allocation per
-  pair; only-with-a-tail keeps the default path free.
-- **3. The checking model for a flowed attribute**: once a caller's attribute
-  value reaches the callee's cell at runtime, a static `# n` requirement on the
-  *result* can no longer be decided at check time. The options are the runtime
-  assert (the existing `assert` worklist) or keeping the check static only where
+- **1. The default attribute array's content**: the wildcard slots ("no claim",
+  and the unify skips them) or undecided cells? A wildcard keeps a hole from
+  coupling two unrelated values; a cell would make every hole a shared variable.
+  The author proposes wildcards.
+- **2. The checking model for a flowed attribute**: once a caller's attribute
+  value reaches a callee's cell at run time, a static `# n` requirement on the
+  *result* can no longer be decided at check time. The options are a runtime
+  assert (the existing assert worklist) or keeping the check static only where
   the value is decided. This decides how much static refusal the perspective
   keeps.
