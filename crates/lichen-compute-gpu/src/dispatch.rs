@@ -1840,7 +1840,7 @@ impl GpuContext {
         buffer.padded = count;
         buffer.class = class;
         self.accounting
-            .restated(buffer.tag, before, DeviceBuffer::bytes(count, class));
+            .released(buffer.tag, DeviceBuffer::bytes(count, class) as i64 - before as i64);
         Ok(())
     }
 

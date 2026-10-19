@@ -3,11 +3,11 @@
 //! # Invariant
 //! Every counter is an atomic, so reading the totals from inside `allocate` is safe: `allocate` runs
 //! under the resident lock on paths that release, and a lock taken there deadlocks against itself.
-//! Each byte is counted once at allocation and leaves exactly once at `free_memory`.
+//! A byte is counted once at `vkAllocateMemory` and leaves exactly once at `vkFreeMemory`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Why a device-local buffer was allocated, which is what a total is read against.
+/// What a device-local buffer is for right now, which is what a total is read against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tag {
     /// A dispatch's declared output, which is what a resident id is issued for.
@@ -47,15 +47,13 @@ impl Tag {
 /// One tag's byte counts, at one instant.
 #[derive(Clone, Copy, Debug)]
 pub struct TagBytes {
-    /// The purpose the bytes were allocated for.
+    /// The purpose the row counts.
     pub tag: Tag,
-    /// Allocated and not yet freed, wherever they currently sit.
-    pub alive: u64,
     /// Issued as a resident id and not yet released.
     pub resident: u64,
     /// Sitting in the recycling pool, waiting for a run of the same shape.
     pub pooled: u64,
-    /// Every byte this tag has ever been allocated, freed ones included.
+    /// Every byte this tag has ever allocated, freed ones included.
     pub allocated: u64,
     /// Every byte this tag has had freed.
     pub freed: u64,
@@ -66,6 +64,8 @@ pub struct TagBytes {
 pub struct DeviceReport {
     /// One row per [`Tag`].
     pub rows: Vec<TagBytes>,
+    /// Device-local bytes the driver is holding, wherever they are right now.
+    pub alive: u64,
     /// Host-visible staging currently mapped, which is not a device-local byte.
     pub staging: u64,
     /// The most device-local bytes alive at one instant, which is what a card has to hold.
@@ -75,11 +75,6 @@ pub struct DeviceReport {
 }
 
 impl DeviceReport {
-    /// Device-local bytes alive right now.
-    pub fn alive(&self) -> u64 {
-        self.rows.iter().map(|row| row.alive).sum()
-    }
-
     /// Device-local bytes issued as residents and not yet released.
     pub fn resident(&self) -> u64 {
         self.rows.iter().map(|row| row.resident).sum()
@@ -96,10 +91,9 @@ impl DeviceReport {
         let mut out = String::new();
         for row in &self.rows {
             out.push_str(&format!(
-                "  {:<22} alive {:>9.1} MiB  resident {:>9.1} MiB  pooled {:>8.1} MiB  \
-                 allocated {:>9.1} MiB  freed {:>9.1} MiB\n",
+                "  {:<22} resident {:>9.1} MiB  pooled {:>8.1} MiB  allocated {:>9.1} MiB  \
+                 freed {:>9.1} MiB\n",
                 row.tag.name(),
-                mib(row.alive),
                 mib(row.resident),
                 mib(row.pooled),
                 mib(row.allocated),
@@ -107,9 +101,9 @@ impl DeviceReport {
             ));
         }
         out.push_str(&format!(
-            "  {:<22} {:>9.1} MiB   (peak alive {:.1} MiB, {:.1} pipelines retained)\n",
+            "  {:<22} {:>9.1} MiB   (peak {:.1} MiB, {:.0} pipelines retained)\n",
             "device-local total",
-            mib(self.alive()),
+            mib(self.alive),
             mib(self.peak_alive),
             self.pipelines
         ));
@@ -130,22 +124,23 @@ fn bump(counter: &AtomicU64, by: i64) {
     }
 }
 
-/// The counters, one row per tag.
+/// The counters.
 ///
 /// # Invariant
-/// `alive = allocated - freed` exactly, whatever the bytes are doing now: a byte the driver holds is
-/// a byte the card must have, whether it is resident, pooled or in flight. `resident` and `pooled`
-/// are two places those bytes are, and `alive - resident - pooled` is what a submission holds.
+/// `alive` is one number, not four: a recycled buffer keeps its allocation and is re-tagged for
+/// what it is about to be used for, so a byte has no single tag for life and splitting the total
+/// per tag would double-count it. The rows therefore count **where** those bytes are, and a byte
+/// is in exactly one place — a resident, the pool, or a submission still holding it.
 #[derive(Default)]
 pub struct Accounting {
     rows: [Row; 4],
+    alive: AtomicU64,
     staging: AtomicU64,
     peak_alive: AtomicU64,
 }
 
 #[derive(Default)]
 struct Row {
-    alive: AtomicU64,
     resident: AtomicU64,
     pooled: AtomicU64,
     allocated: AtomicU64,
@@ -162,27 +157,24 @@ impl Accounting {
         &self.rows[tag.index()]
     }
 
-    fn live(&self) -> u64 {
-        self.rows.iter().map(|row| row.alive.load(Ordering::Relaxed)).sum()
-    }
-
-    /// The device's bytes have grown by `bytes` for `tag`.
+    /// `vkAllocateMemory` handed the driver `bytes` for `tag`.
     pub fn allocated(&self, tag: Tag, bytes: u64) {
-        let row = self.row(tag);
-        bump(&row.alive, bytes as i64);
-        bump(&row.allocated, bytes as i64);
-        let alive = self.live();
+        bump(&self.row(tag).allocated, bytes as i64);
+        let alive = self.alive.fetch_add(bytes, Ordering::Relaxed) + bytes;
         self.peak_alive.fetch_max(alive, Ordering::Relaxed);
     }
 
-    /// A buffer of `tag` is dead and its bytes are the driver's again.
+    /// `vkFreeMemory` took `bytes` for `tag` back from the driver.
     pub fn freed(&self, tag: Tag, bytes: u64) {
-        let row = self.row(tag);
-        bump(&row.alive, -(bytes as i64));
-        bump(&row.freed, bytes as i64);
+        bump(&self.row(tag).freed, bytes as i64);
+        self.alive.fetch_sub(bytes, Ordering::Relaxed);
     }
 
-    /// A buffer of `tag` left the pool, to be used as whatever this run needs it for.
+    /// A pooled buffer left the pool, to serve as whatever this run needs it for.
+    ///
+    /// # Invariant
+    /// Nothing leaves `alive`: the driver still holds these bytes and only their **purpose**
+    /// changes, so the row they sat in loses them and the total does not move.
     pub fn unpooled(&self, tag: Tag, bytes: u64) {
         bump(&self.row(tag).pooled, -(bytes as i64));
     }
@@ -202,11 +194,6 @@ impl Accounting {
         bump(&self.row(tag).resident, bytes);
     }
 
-    /// A buffer of `tag` changed its byte size under a resident id.
-    pub fn restated(&self, tag: Tag, from: u64, to: u64) {
-        self.released(tag, to as i64 - from as i64);
-    }
-
     /// The staging mapping grew or shrank by `bytes`.
     pub fn staging(&self, bytes: i64) {
         bump(&self.staging, bytes);
@@ -220,7 +207,6 @@ impl Accounting {
                 let row = self.row(*tag);
                 TagBytes {
                     tag: *tag,
-                    alive: row.alive.load(Ordering::Relaxed),
                     resident: row.resident.load(Ordering::Relaxed),
                     pooled: row.pooled.load(Ordering::Relaxed),
                     allocated: row.allocated.load(Ordering::Relaxed),
@@ -230,6 +216,7 @@ impl Accounting {
             .collect();
         DeviceReport {
             rows,
+            alive: self.alive.load(Ordering::Relaxed),
             staging: self.staging.load(Ordering::Relaxed),
             peak_alive: self.peak_alive.load(Ordering::Relaxed),
             pipelines: 0,
