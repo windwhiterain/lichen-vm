@@ -66,9 +66,13 @@ impl<P: Program> Module<P> {
         self.externals.insert((library, instance), entry);
     }
 
-    /// The entry installed for `(library, instance)`, if any.
+    /// The entry for `(library, instance)`: this module's table, then the
+    /// process-wide one (`install_process_external`).
     pub fn external(&self, library: u32, instance: u32) -> Option<ExternalEntry> {
-        self.externals.get(&(library, instance)).copied()
+        self.externals
+            .get(&(library, instance))
+            .copied()
+            .or_else(|| process_external(library, instance))
     }
 
     /// Compile `source` into a static artifact and register it under `key` — see

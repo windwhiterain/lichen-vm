@@ -277,6 +277,36 @@ pub type ExternalEntry = unsafe extern "C" fn(
     out: *mut std::ffi::c_void,
 );
 
+/// The process-wide entries of loaded libraries, keyed by `(library, instance)`.
+///
+/// # Invariant
+/// A loaded library is process-wide, so its entries are installed here before a
+/// build runs: a program's definition pass evaluates while no module is in the
+/// caller's hands yet. A module's own table overrides this one.
+static PROCESS_EXTERNALS: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<(u32, u32), ExternalEntry>>,
+> = std::sync::OnceLock::new();
+
+/// Install an entry for every module in this process — the loader's path; see
+/// [`PROCESS_EXTERNALS`].
+pub fn install_process_external(library: u32, instance: u32, entry: ExternalEntry) {
+    PROCESS_EXTERNALS
+        .get_or_init(Default::default)
+        .lock()
+        .expect("the process entry table is not poisoned")
+        .insert((library, instance), entry);
+}
+
+/// The process-wide entry installed for `(library, instance)`, if any.
+pub fn process_external(library: u32, instance: u32) -> Option<ExternalEntry> {
+    PROCESS_EXTERNALS
+        .get()?
+        .lock()
+        .expect("the process entry table is not poisoned")
+        .get(&(library, instance))
+        .copied()
+}
+
 /// What a program-specific value may look at while declaring the nodes it keeps alive.
 ///
 /// # Invariant
