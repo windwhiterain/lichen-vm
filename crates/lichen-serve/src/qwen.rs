@@ -123,6 +123,8 @@ struct Request {
     sampling: crate::Sampling,
     /// Its draw, which moves only when its own token is chosen.
     state: u64,
+    /// How many of its rivals a client asked to see beside each token.
+    rivals: usize,
 }
 
 /// Several requests advanced together, each at its own position.
@@ -156,6 +158,7 @@ impl<'model, 'session> Batched<'model, 'session> {
         prompt: &[usize],
         limit: usize,
         sampling: crate::Sampling,
+        rivals: usize,
     ) -> Result<usize, QwenRefusal> {
         if prompt.is_empty() {
             return Err(QwenRefusal::Weights("a request with no prompt".into()));
@@ -176,6 +179,7 @@ impl<'model, 'session> Batched<'model, 'session> {
             pending: None,
             sampling,
             state: sampling.seed ^ (id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            rivals,
         });
         Ok(id)
     }
@@ -191,7 +195,7 @@ impl<'model, 'session> Batched<'model, 'session> {
     /// A filling row feeds its next prompt token and an answering row the token it chose last, so one layer
     /// pass carries both and a long prompt fills beside the requests already answering. A row answers only
     /// once its whole prompt is in the cache, and its state is the one at its own position.
-    pub fn step(&mut self) -> Result<Vec<(usize, usize)>, QwenRefusal> {
+    pub fn step(&mut self) -> Result<Vec<(usize, crate::sampling::Chosen)>, QwenRefusal> {
         let live = self.live.len();
         if live == 0 {
             return Ok(Vec::new());
@@ -249,13 +253,18 @@ impl<'model, 'session> Batched<'model, 'session> {
             let row = &logits[at * VOCABULARY..(at + 1) * VOCABULARY];
             let sampling = self.live[sequence].sampling;
             let mut state = self.live[sequence].state;
-            let token =
-                crate::sampling::choose(row, &sampling, &mut || crate::sampling::next(&mut state));
+            let rivals = self.live[sequence].rivals;
+            let chosen = crate::sampling::choose_with(
+                row,
+                &sampling,
+                &mut || crate::sampling::next(&mut state),
+                rivals,
+            );
             let request = &mut self.live[sequence];
             request.state = state;
-            request.answer.push(token);
-            request.pending = Some(token);
-            answered.push((request.id, token));
+            request.answer.push(chosen.token);
+            request.pending = Some(chosen.token);
+            answered.push((request.id, chosen));
         }
         Ok(answered)
     }

@@ -46,6 +46,8 @@ struct Job {
     answer: Answer,
     /// The strings the request stops at when the answer spells one of them.
     stop: Vec<String>,
+    /// How many of each token's rivals the answer should carry, or zero for none.
+    rivals: usize,
 }
 
 /// What a request may name as a stop, which OpenAI spells as one string or a list of them.
@@ -71,7 +73,7 @@ impl StopStrings {
 /// How a job hands its tokens back.
 enum Answer {
     /// All of them at the end, which is what a client reading a body waits for.
-    Whole(tokio::sync::oneshot::Sender<(Vec<usize>, &'static str)>),
+    Whole(tokio::sync::oneshot::Sender<(Vec<usize>, &'static str, Vec<lichen_serve::Chosen>)>),
     /// One at a time as they are chosen, which is what a streaming client reads.
     Stream(tokio::sync::mpsc::UnboundedSender<Result<usize, &'static str>>),
 }
@@ -283,13 +285,16 @@ fn worker(
     let mut stopped: std::collections::HashMap<usize, &'static str> =
         std::collections::HashMap::new();
     let mut stops: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    // What each request's tokens were, in order, so an answer can carry how likely they were.
+    let mut picks: std::collections::HashMap<usize, Vec<lichen_serve::Chosen>> =
+        std::collections::HashMap::new();
     let mut closed = false;
     loop {
         // Everything waiting joins the batch, up to the number a step should hold.
         while batched.live() < SEQUENCES && !closed {
             match jobs.try_recv() {
                 Ok(job) => {
-                    let admitted = batched.admit(&job.prompt, job.limit, job.sampling);
+                    let admitted = batched.admit(&job.prompt, job.limit, job.sampling, job.rivals);
                     match admitted {
                         Ok(id) => {
                             metrics.admitted.fetch_add(1, Ordering::Relaxed);
@@ -312,7 +317,8 @@ fn worker(
             }
             match jobs.recv() {
                 Ok(job) => {
-                    if let Ok(id) = batched.admit(&job.prompt, job.limit, job.sampling) {
+                    if let Ok(id) = batched.admit(&job.prompt, job.limit, job.sampling, job.rivals)
+                    {
                         metrics.admitted.fetch_add(1, Ordering::Relaxed);
                         stops.insert(id, job.stop);
                         waiting.insert(id, job.answer);
@@ -335,7 +341,9 @@ fn worker(
             .tokens
             .fetch_add(answered.len() as u64, Ordering::Relaxed);
         metrics.live.store(batched.live() as u64, Ordering::Relaxed);
-        for (id, token) in answered {
+        for (id, chosen) in answered {
+            let token = chosen.token;
+            picks.entry(id).or_default().push(chosen);
             if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
                 let _ = tokens.send(Ok(token));
             }
@@ -369,7 +377,7 @@ fn worker(
             let reason = stopped.remove(&id).unwrap_or("length");
             match waiting.remove(&id) {
                 Some(Answer::Whole(reply)) => {
-                    let _ = reply.send((said, reason));
+                    let _ = reply.send((said, reason, picks.remove(&id).unwrap_or_default()));
                 }
                 Some(Answer::Stream(tokens)) => {
                     let _ = tokens.send(Err(reason));
@@ -377,6 +385,7 @@ fn worker(
                 None => {}
             }
             stops.remove(&id);
+            picks.remove(&id);
             batched.retire(id);
             metrics.finished.fetch_add(1, Ordering::Relaxed);
         }
@@ -407,6 +416,12 @@ struct ChatRequest {
     /// How many answers a request wants, each chosen on its own.
     #[serde(default)]
     n: Option<usize>,
+    /// Whether the answer should carry how likely each of its tokens was.
+    #[serde(default)]
+    logprobs: Option<bool>,
+    /// How many of each token's rivals that answer should show.
+    #[serde(default)]
+    top_logprobs: Option<usize>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -430,6 +445,12 @@ struct CompletionRequest {
     /// How many answers a request wants, each chosen on its own.
     #[serde(default)]
     n: Option<usize>,
+    /// Whether the answer should carry how likely each of its tokens was.
+    #[serde(default)]
+    logprobs: Option<bool>,
+    /// How many of each token's rivals that answer should show.
+    #[serde(default)]
+    top_logprobs: Option<usize>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -487,7 +508,8 @@ async fn generate(
     sampling: Sampling,
     stop: Vec<String>,
     wanted: usize,
-) -> Result<Vec<(Vec<usize>, &'static str)>, ()> {
+    rivals: usize,
+) -> Result<Vec<(Vec<usize>, &'static str, Vec<lichen_serve::Chosen>)>, ()> {
     let started = std::time::Instant::now();
     // Several answers are the same prompt sent as several rows, answered in the same steps.
     let mut replies = Vec::with_capacity(wanted.max(1));
@@ -504,6 +526,7 @@ async fn generate(
                 sampling,
                 answer: Answer::Whole(reply),
                 stop: stop.clone(),
+                rivals,
             })
             .is_err()
         {
@@ -542,6 +565,7 @@ fn stream(
             sampling,
             answer: Answer::Stream(tokens),
             stop,
+            rivals: 0,
         })
         .map_err(|_| ())?;
     Ok(UnboundedReceiverStream::new(answer))
@@ -556,6 +580,54 @@ fn finished_chunk(reason: &'static str) -> String {
         "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }],
     })
     .to_string()
+}
+
+/// The tokens of an answer with how likely each was, or nothing when no rivals were asked for.
+///
+/// # Invariant
+/// A token is one entry even when its text is several characters: the entry names the token's own spelling,
+/// which is what a client reading log probabilities measures against.
+fn logprob_content(tokenizer: &Tokenizer, picks: &[lichen_serve::Chosen]) -> Option<Vec<Value>> {
+    let first = picks.first()?;
+    if first.top.is_empty() {
+        return None;
+    }
+    Some(
+        picks
+            .iter()
+            .map(|chosen| {
+                let rivals: Vec<Value> = chosen
+                    .top
+                    .iter()
+                    .map(|(index, logprob)| {
+                        json!({
+                            "token": tokenizer.decode(std::slice::from_ref(index)),
+                            "logprob": logprob,
+                            "bytes": Value::Null,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "token": tokenizer.decode(std::slice::from_ref(&chosen.token)),
+                    "logprob": chosen.logprob,
+                    "bytes": Value::Null,
+                    "top_logprobs": rivals,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// How many rivals an answer shows, or zero when a request did not ask.
+///
+/// # Invariant
+/// A request that forgot `top_logprobs` still sees the tokens it got; the rivals are what a count adds.
+fn wanted_rivals(asked: &Option<bool>, rivals: &Option<usize>) -> usize {
+    if asked.unwrap_or(false) {
+        rivals.unwrap_or(0).min(20) + 1
+    } else {
+        0
+    }
 }
 
 /// The text `ids` spell, cut where the turn's own marker begins.
@@ -626,6 +698,12 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
                 "`n` above one is not offered with `stream`",
             );
         }
+        if request.logprobs.unwrap_or(false) {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "`logprobs` is not offered with `stream`",
+            );
+        }
         let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
         let Ok(tokens) = stream(&shared, ids, limit, sampling, stops) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
@@ -646,25 +724,39 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
     }
     let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
     let wanted = request.n.unwrap_or(1).clamp(1, CANDIDATES);
-    let Ok(answers) = generate(&shared, ids.clone(), limit, sampling, stops.clone(), wanted).await
+    let rivals = wanted_rivals(&request.logprobs, &request.top_logprobs);
+    let Ok(answers) = generate(
+        &shared,
+        ids.clone(),
+        limit,
+        sampling,
+        stops.clone(),
+        wanted,
+        rivals,
+    )
+    .await
     else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
     let choices: Vec<Value> = answers
         .iter()
         .enumerate()
-        .map(|(index, (answered, reason))| {
-            json!({
+        .map(|(index, (answered, reason, picks))| {
+            let mut choice = json!({
                 "index": index,
                 "message": {
                     "role": "assistant",
                     "content": answered_text(&shared.tokenizer, answered, &stops),
                 },
                 "finish_reason": reason,
-            })
+            });
+            if let Some(content) = logprob_content(&shared.tokenizer, picks) {
+                choice["logprobs"] = json!({ "content": content });
+            }
+            choice
         })
         .collect();
-    let answered: usize = answers.iter().map(|(said, _)| said.len()).sum();
+    let answered: usize = answers.iter().map(|(said, _, _)| said.len()).sum();
     Json(json!({
         "id": "chatcmpl-lichen",
         "object": "chat.completion",
@@ -697,6 +789,12 @@ async fn complete(
             return refuse(
                 StatusCode::BAD_REQUEST,
                 "`n` above one is not offered with `stream`",
+            );
+        }
+        if request.logprobs.unwrap_or(false) {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "`logprobs` is not offered with `stream`",
             );
         }
         let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
@@ -733,22 +831,36 @@ async fn complete(
     }
     let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
     let wanted = request.n.unwrap_or(1).clamp(1, CANDIDATES);
-    let Ok(answers) = generate(&shared, ids.clone(), limit, sampling, stops.clone(), wanted).await
+    let rivals = wanted_rivals(&request.logprobs, &request.top_logprobs);
+    let Ok(answers) = generate(
+        &shared,
+        ids.clone(),
+        limit,
+        sampling,
+        stops.clone(),
+        wanted,
+        rivals,
+    )
+    .await
     else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
     let choices: Vec<Value> = answers
         .iter()
         .enumerate()
-        .map(|(index, (answered, reason))| {
-            json!({
+        .map(|(index, (answered, reason, picks))| {
+            let mut choice = json!({
                 "index": index,
                 "text": answered_text(&shared.tokenizer, answered, &stops),
                 "finish_reason": reason,
-            })
+            });
+            if let Some(content) = logprob_content(&shared.tokenizer, picks) {
+                choice["logprobs"] = json!({ "content": content });
+            }
+            choice
         })
         .collect();
-    let counted: usize = answers.iter().map(|(said, _)| said.len()).sum();
+    let counted: usize = answers.iter().map(|(said, _, _)| said.len()).sum();
     Json(json!({
         "id": "cmpl-lichen",
         "object": "text_completion",

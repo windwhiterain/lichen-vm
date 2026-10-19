@@ -43,9 +43,11 @@ curl -s http://127.0.0.1:8099/metrics
 ```
 
 `/v1/completions` takes a `prompt` instead of `messages`. A request may state `temperature`, `top_k`,
-`top_p`, `max_tokens`, `n`, `stream` and `stop` — one string, or an array of them; every other field is
-accepted and ignored. `n` asks for several answers, each drawn on its own, up to four; it is not offered
-with `stream`. An answer's `finish_reason` is `length` when it reached `max_tokens` and `stop` when it met its
+`top_p`, `max_tokens`, `n`, `logprobs`, `top_logprobs`, `stream` and `stop` — one string, or an array of
+them; every other field is accepted and ignored. `n` asks for several answers, each drawn on its own, up to
+four; `logprobs` with `top_logprobs` adds each token's log probability and the nearest rivals' beside it.
+Neither is offered with `stream`, and a request that sets one there is refused rather than answered without
+them. An answer's `finish_reason` is `length` when it reached `max_tokens` and `stop` when it met its
 `stop`, the checkpoint's own turn marker, or one of the strings the request named. A streamed answer ends
 with a chunk carrying that `finish_reason` and then `data: [DONE]`.
 
@@ -72,7 +74,7 @@ wait; a hundredth is refused with a `503` and an error object rather than droppe
 ## What it has not got
 
 - No prefix caching, so a repeated conversation prefix is prefilled again every request.
-- No `logprobs`.
+- No `logprobs` on a streamed answer, and no `bytes` on a log-probability entry.
 - A `stop` string that spans two tokens is cut from the answer's text, but a streaming client may have
   received the tokens that spell it before the cut is decided.
 - No keep-alive or HTTP/2 configuration: axum's defaults.

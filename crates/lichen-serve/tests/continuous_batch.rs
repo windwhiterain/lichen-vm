@@ -28,7 +28,7 @@ fn a_batch_of_two_lengths_answers_what_each_answers_alone() {
         .iter()
         .map(|prompt| {
             batched
-                .admit(prompt, TOKENS, Sampling::greedy())
+                .admit(prompt, TOKENS, Sampling::greedy(), 0)
                 .unwrap_or_else(|refusal| panic!("a request is admitted: {refusal}"))
         })
         .collect();
