@@ -1,12 +1,13 @@
 # A native link library: a Rust generic behind a lichen generic
 
-> Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c, the end-to-end
-> proof, the loader, the `link` directive, the recorder and the position map
-> are measured.**
+> Status: **proposed — ruled; measured: P0-a, P0-b, P0-c, the end-to-end proof, the
+> loader, the `link` directive, the recorder, the builder, the position map and
+> the program gate.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
 > §11 the loader and the operand shape it settles, §12 the directive, §13 the
-> recorder, §14 the manifest writer and the position map.
+> recorder, §14 the manifest writer and the position map, §15 the builder and the
+> program gate.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -365,10 +366,10 @@ The maintainer decided, in this session:
 - **P1 — the recorder: done** (§13). `link::record_uses` scans a built module
   for the applied instantiations: `(library, instance, kind)`, sorted and
   deduplicated, read off each `External` clone's parameter type slot.
-- **P2 — the builder.** From the recorded set and the declared mapping, write the
-  dylib (manifest + one entry per instance), build it with cargo, and cache it by
-  a content key — the same shape as the kernel disk cache
-  ([kernel-disk-cache](kernel-disk-cache.md)).
+- **P2 — the builder: the generator's half is done** (§15). `link::LibrarySource`
+  writes the crate source: the author's items, one entry per family, the match
+  skeleton, and the manifest. A content-keyed build cache is still open — cargo
+  is the cache a build tool already has.
 - **P3 — the loader and the directive: done** (§11, §12). `lichen_language::link`
   loads a `dylib`, parses its manifest (version, `build`, the family table, and
   the lichen source after a `source` line), installs every family entry in the
@@ -571,3 +572,40 @@ Measured:
 - a two-line program whose second line is `sample Float "a"` reports
   `Some((3, 14))` — `expected Float, found string` — which is line 3 of the file
   (the second code line), not the fifth line of the spliced text.
+
+## 15. The builder, in the tree; and the program the library is for
+
+`link::LibrarySource` is the generator's half, now part of the language crate:
+
+- the library author supplies `items` (their traits, impls and generic code,
+  inserted verbatim), `wrapper` (the lichen source the manifest carries), and one
+  `Entry` per family with its `Arm`s — the kind, the Rust pattern over the
+  operand's low value, and the expression it answers with;
+- `render::<P>(build)` writes the entry ABI, the match skeleton, the value
+  conversion, the manifest (through [`Manifest::render`]) and the program alias.
+
+The recorder and the builder meet at the author's table: `Vec<Used>` says *which*
+kinds a program instantiated, the table says *with what*. A generated crate is
+thin: the boilerplate is lichen's, the mapping is the author's.
+
+**The program gate.** `std::any::type_name::<P>()` is written into the manifest's
+`program` line and into the generated `type Value`, and
+`PackageStore::<P>::link` refuses a library generated for another program.
+Measured against the compute program:
+
+- a library generated for `lichen_compute::language::LangProgram` runs under
+  `lichen-compiler run programs/compute.lichen` and prints `2.5: Float` (exit 0);
+- the same library with its manifest's program line edited to `some::Other` is
+  refused at load:
+
+```text
+error: the library was built for program "some::Other"; this one is "lichen_compute::language::LangProgram"
+  --> 1:5
+   |
+ 1 | --- vbd = link "../target/release/gen.dll" ---
+   |     ^
+```
+
+The entries read the module through `P`'s layouts, so this is the gate that keeps
+one program's library out of another's compiler — the build tag guards the lichen
+version, this guards the vocabulary.

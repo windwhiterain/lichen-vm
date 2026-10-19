@@ -46,6 +46,7 @@ pub struct Family {
 /// The manifest a `link`ed library exports, parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
+    program: String,
     build: String,
     families: Vec<Family>,
     source: String,
@@ -69,6 +70,7 @@ impl Manifest {
                 version.trim_end()
             ));
         }
+        let mut program = String::new();
         let mut build = String::new();
         let mut families = Vec::new();
         let rest_start;
@@ -81,7 +83,9 @@ impl Manifest {
                 rest_start = text.len() - lines.clone().map(str::len).sum::<usize>();
                 break;
             }
-            if let Some(value) = trimmed.strip_prefix("build ") {
+            if let Some(value) = trimmed.strip_prefix("program ") {
+                program = value.to_string();
+            } else if let Some(value) = trimmed.strip_prefix("build ") {
                 build = value.to_string();
             } else if let Some(value) = trimmed.strip_prefix("family ") {
                 let mut parts = value.split(' ');
@@ -104,7 +108,11 @@ impl Manifest {
                 return Err(format!("an unknown manifest line: {trimmed:?}"));
             }
         }
+        if program.is_empty() {
+            return Err("the manifest names no program".into());
+        }
         Ok(Self {
+            program,
             build,
             families,
             source: text[rest_start..].to_string(),
@@ -113,8 +121,14 @@ impl Manifest {
 
     /// A manifest from its parts: what a generator writes and [`Self::parse`]
     /// reads back.
-    pub fn new(build: impl Into<String>, families: Vec<Family>, source: impl Into<String>) -> Self {
+    pub fn new(
+        program: impl Into<String>,
+        build: impl Into<String>,
+        families: Vec<Family>,
+        source: impl Into<String>,
+    ) -> Self {
         Self {
+            program: program.into(),
             build: build.into(),
             families,
             source: source.into(),
@@ -129,6 +143,9 @@ impl Manifest {
     pub fn render(&self) -> String {
         let mut text = String::with_capacity(self.source.len() + 64);
         text.push_str(MANIFEST_VERSION);
+        text.push('\n');
+        text.push_str("program ");
+        text.push_str(&self.program);
         text.push('\n');
         text.push_str("build ");
         text.push_str(&self.build);
@@ -145,6 +162,11 @@ impl Manifest {
         text.push_str("source\n");
         text.push_str(&self.source);
         text
+    }
+
+    /// The program vocabulary the library was generated for.
+    pub fn program(&self) -> &str {
+        &self.program
     }
 
     /// The build tag the library was built with.
@@ -406,5 +428,101 @@ fn dynamic_node(node: AnyNodeId) -> Option<lichen_lowlevel::NodeId> {
     match node {
         AnyNodeId::Dynamic(node) => Some(node),
         AnyNodeId::Static(_) => None,
+    }
+}
+
+/// One arm of a family entry: its kind, pattern, and answer.
+pub struct Arm {
+    /// The kind's spelling, as [`record_uses`] and a manifest write it.
+    pub kind: String,
+    /// A pattern over `AsEnum::<LowValue>::as_enum(operand)`; the arm's bindings
+    /// are free for [`Self::result`].
+    pub pattern: String,
+    /// The expression the arm answers with, before conversion to the value type.
+    pub result: String,
+}
+
+/// One family: the lichen op name, the exported entry symbol, and its arms.
+pub struct Entry {
+    pub name: String,
+    pub symbol: String,
+    pub arms: Vec<Arm>,
+}
+
+/// The `lib.rs` a generator writes for a library.
+///
+/// # Invariant
+/// The generator owns the boilerplate (the entry ABI, the manifest, the
+/// dispatch skeleton) and the library author owns the mapping — every arm's
+/// pattern and result is the author's Rust, inserted verbatim. This is the
+/// build-tool half of the recorder: `Vec<Used>` says *which* kinds to
+/// instantiate, the author's table says *with what*.
+pub struct LibrarySource {
+    /// The author's Rust, inserted verbatim: traits, impls, the generic code.
+    pub items: String,
+    /// The lichen wrapper the manifest carries, spliced by the loader.
+    pub wrapper: String,
+    pub entries: Vec<Entry>,
+}
+
+impl LibrarySource {
+    /// The crate source, generated for the program vocabulary `P`.
+    ///
+    /// # Invariant
+    /// One program, one spelling: `std::any::type_name::<P>()` is written into the
+    /// manifest **and** into the generated `type Value`, so a library cannot be
+    /// generated for one vocabulary and loaded by another.
+    pub fn render<P: lichen_lowlevel::Program>(&self, build: &str) -> String {
+        let program = std::any::type_name::<P>();
+        let families: Vec<Family> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| Family {
+                name: entry.name.clone(),
+                instance: index as u32,
+                symbol: entry.symbol.clone(),
+            })
+            .collect();
+        let manifest = Manifest::new(program, build, families, &self.wrapper).render();
+        let mut text = String::new();
+        text.push_str("//! Generated by lichen: one entry per family.\n\n");
+        text.push_str("use lichen_lowlevel::{LowValue, Program};\n");
+        text.push_str("use lichen_utils::extend::AsEnum;\n");
+        text.push_str("use std::ffi::c_void;\n\n");
+        text.push_str(&format!("type Value = <{program} as Program>::Value;\n\n"));
+        text.push_str(&self.items);
+        text.push_str("\nconst MANIFEST: &str = ");
+        text.push_str(&format!("{manifest:?}"));
+        text.push_str(";\n\n");
+        text.push_str("#[unsafe(no_mangle)]\n");
+        text.push_str("pub unsafe extern \"C\" fn lichen_link_manifest(out: *mut *const u8, len: *mut usize) {\n");
+        text.push_str("    unsafe { *out = MANIFEST.as_ptr(); *len = MANIFEST.len() };\n");
+        text.push_str("}\n");
+        for entry in &self.entries {
+            text.push_str(&format!(
+                "\n#[unsafe(no_mangle)]\n\
+                 pub unsafe extern \"C\" fn {symbol}(\n\
+                 \x20   _module: *mut c_void,\n\
+                 \x20   operand: *const c_void,\n\
+                 \x20   out: *mut c_void,\n\
+                 ) {{\n\
+                 \x20   let operand = unsafe {{ &*(operand as *const Value) }};\n\
+                 \x20   let result: Value = match AsEnum::<LowValue>::as_enum(operand) {{\n",
+                symbol = entry.symbol
+            ));
+            for arm in &entry.arms {
+                text.push_str(&format!(
+                    "        {pattern} => {result}.into(),\n",
+                    pattern = arm.pattern,
+                    result = arm.result
+                ));
+            }
+            text.push_str("        _ => LowValue::Error.into(),\n");
+            text.push_str("    };\n");
+            text.push_str("    unsafe { (out as *mut Value).write(result) };\n");
+            text.push_str("}\n");
+        }
+        text
     }
 }

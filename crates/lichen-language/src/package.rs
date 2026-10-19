@@ -384,6 +384,13 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         // SAFETY: the manifest names the library's build, and the loader refuses
         // a tag this compiler does not recognize.
         let library = unsafe { crate::link::LinkedLibrary::load(&canonical) }?;
+        let program = std::any::type_name::<P>();
+        if library.manifest().program() != program {
+            return Err(format!(
+                "the library was built for program {:?}; this one is {program:?}",
+                library.manifest().program()
+            ));
+        }
         let id = self.linked.len() as u32;
         library.install(id)?;
         self.linked.push((canonical, id, library));
