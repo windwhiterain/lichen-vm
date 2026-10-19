@@ -416,6 +416,21 @@ impl<'session> Qwen<'session> {
         self.generate_with(start, count, |_| {})
     }
 
+    /// Generate under a request's sampling, handing each token over as it is chosen.
+    ///
+    /// # Invariant
+    /// A greedy request and a sampled one take the same path, so a temperature of zero cannot answer
+    /// differently from the largest logit: the difference is the draw, which greedy never consults.
+    pub fn generate_sampled<F: FnMut(usize)>(
+        &self,
+        start: usize,
+        count: usize,
+        sampling: crate::Sampling,
+        on_token: F,
+    ) -> Result<Generated, QwenRefusal> {
+        self.generate_under(start, count, sampling, on_token)
+    }
+
     /// Generate, handing each token to `on_token` as it is chosen.
     ///
     /// # Invariant
@@ -426,8 +441,20 @@ impl<'session> Qwen<'session> {
         &self,
         start: usize,
         count: usize,
+        on_token: F,
+    ) -> Result<Generated, QwenRefusal> {
+        self.generate_under(start, count, crate::Sampling::greedy(), on_token)
+    }
+
+    /// The loop both entries share.
+    fn generate_under<F: FnMut(usize)>(
+        &self,
+        start: usize,
+        count: usize,
+        sampling: crate::Sampling,
         mut on_token: F,
     ) -> Result<Generated, QwenRefusal> {
+        let mut draw = crate::sampling::randomness(sampling.seed);
         let mut caches: Vec<Cache> = (0..LAYERS).map(|_| Cache::default()).collect();
         let mut tokens = vec![start];
         let mut per_token = Vec::new();
@@ -460,7 +487,7 @@ impl<'session> Qwen<'session> {
                 VOCABULARY as i64,
                 HIDDEN as i64,
             )?;
-            token = argmax(&logits);
+            token = crate::sampling::choose(&logits, &sampling, &mut draw);
             tokens.push(token);
             per_token.push(started.elapsed());
             on_token(token);
@@ -702,15 +729,4 @@ impl<'session> Qwen<'session> {
             .map(|(left, right)| left + right)
             .collect())
     }
-}
-
-/// The largest logit, which is the token a greedy sampler hands back.
-fn argmax(values: &[f32]) -> usize {
-    let mut best = 0;
-    for (index, value) in values.iter().enumerate() {
-        if *value > values[best] {
-            best = index;
-        }
-    }
-    best
 }
