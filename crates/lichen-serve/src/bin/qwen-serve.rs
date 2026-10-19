@@ -31,6 +31,9 @@ const SEQUENCES: usize = 8;
 /// How many requests may wait for a place in a batch before the service refuses more.
 const QUEUE: usize = 64;
 
+/// The most answers one request may ask for, which the batch holds in its own rows.
+const CANDIDATES: usize = 4;
+
 /// One request the worker is asked for.
 struct Job {
     /// The prompt's ids, already templated and encoded.
@@ -401,6 +404,9 @@ struct ChatRequest {
     /// The nucleus a request asks for.
     #[serde(default)]
     top_p: Option<f32>,
+    /// How many answers a request wants, each chosen on its own.
+    #[serde(default)]
+    n: Option<usize>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -421,6 +427,9 @@ struct CompletionRequest {
     /// The nucleus a request asks for.
     #[serde(default)]
     top_p: Option<f32>,
+    /// How many answers a request wants, each chosen on its own.
+    #[serde(default)]
+    n: Option<usize>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -477,26 +486,38 @@ async fn generate(
     limit: usize,
     sampling: Sampling,
     stop: Vec<String>,
-) -> Result<(Vec<usize>, &'static str), ()> {
+    wanted: usize,
+) -> Result<Vec<(Vec<usize>, &'static str)>, ()> {
     let started = std::time::Instant::now();
-    let (reply, answer) = tokio::sync::oneshot::channel();
-    if shared
-        .jobs
-        .try_send(Job {
-            prompt,
-            limit,
-            sampling,
-            answer: Answer::Whole(reply),
-            stop,
-        })
-        .is_err()
-    {
-        shared.metrics.refused.fetch_add(1, Ordering::Relaxed);
-        return Err(());
+    // Several answers are the same prompt sent as several rows, answered in the same steps.
+    let mut replies = Vec::with_capacity(wanted.max(1));
+    for candidate in 0..wanted.max(1) {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        // Each candidate draws from its own stream, or every answer of one request would be the same.
+        let seed = sampling.seed.wrapping_add(candidate as u64);
+        let sampling = Sampling { seed, ..sampling };
+        if shared
+            .jobs
+            .try_send(Job {
+                prompt: prompt.clone(),
+                limit,
+                sampling,
+                answer: Answer::Whole(reply),
+                stop: stop.clone(),
+            })
+            .is_err()
+        {
+            shared.metrics.refused.fetch_add(1, Ordering::Relaxed);
+            return Err(());
+        }
+        replies.push(answer);
     }
-    let answered = answer.await.map_err(|_| ())?;
+    let mut answers = Vec::with_capacity(replies.len());
+    for answer in replies {
+        answers.push(answer.await.map_err(|_| ())?);
+    }
     shared.metrics.timed(started.elapsed().as_nanos() as u64);
-    Ok(answered)
+    Ok(answers)
 }
 
 /// Ask the worker for `limit` tokens and hand them on as they arrive.
@@ -599,6 +620,12 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
     };
     if request.stream {
+        if request.n.unwrap_or(1) > 1 {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "`n` above one is not offered with `stream`",
+            );
+        }
         let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
         let Ok(tokens) = stream(&shared, ids, limit, sampling, stops) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
@@ -618,22 +645,32 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         return Sse::new(body).into_response();
     }
     let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
-    let Ok((answered, reason)) =
-        generate(&shared, ids.clone(), limit, sampling, stops.clone()).await
+    let wanted = request.n.unwrap_or(1).clamp(1, CANDIDATES);
+    let Ok(answers) = generate(&shared, ids.clone(), limit, sampling, stops.clone(), wanted).await
     else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = answered_text(&shared.tokenizer, &answered, &stops);
+    let choices: Vec<Value> = answers
+        .iter()
+        .enumerate()
+        .map(|(index, (answered, reason))| {
+            json!({
+                "index": index,
+                "message": {
+                    "role": "assistant",
+                    "content": answered_text(&shared.tokenizer, answered, &stops),
+                },
+                "finish_reason": reason,
+            })
+        })
+        .collect();
+    let answered: usize = answers.iter().map(|(said, _)| said.len()).sum();
     Json(json!({
         "id": "chatcmpl-lichen",
         "object": "chat.completion",
         "model": MODEL,
-        "choices": [{
-            "index": 0,
-            "message": { "role": "assistant", "content": text },
-            "finish_reason": reason,
-        }],
-        "usage": usage(ids.len(), answered.len()),
+        "choices": choices,
+        "usage": usage(ids.len(), answered),
     }))
     .into_response()
 }
@@ -656,6 +693,12 @@ async fn complete(
         Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
     };
     if request.stream {
+        if request.n.unwrap_or(1) > 1 {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "`n` above one is not offered with `stream`",
+            );
+        }
         let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
         let Ok(tokens) = stream(&shared, ids, limit, sampling, stops) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
@@ -689,18 +732,29 @@ async fn complete(
         return Sse::new(body).into_response();
     }
     let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
-    let Ok((answered, reason)) =
-        generate(&shared, ids.clone(), limit, sampling, stops.clone()).await
+    let wanted = request.n.unwrap_or(1).clamp(1, CANDIDATES);
+    let Ok(answers) = generate(&shared, ids.clone(), limit, sampling, stops.clone(), wanted).await
     else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = answered_text(&shared.tokenizer, &answered, &stops);
+    let choices: Vec<Value> = answers
+        .iter()
+        .enumerate()
+        .map(|(index, (answered, reason))| {
+            json!({
+                "index": index,
+                "text": answered_text(&shared.tokenizer, answered, &stops),
+                "finish_reason": reason,
+            })
+        })
+        .collect();
+    let counted: usize = answers.iter().map(|(said, _)| said.len()).sum();
     Json(json!({
         "id": "cmpl-lichen",
         "object": "text_completion",
         "model": MODEL,
-        "choices": [{ "index": 0, "text": text, "finish_reason": reason }],
-        "usage": usage(ids.len(), answered.len()),
+        "choices": choices,
+        "usage": usage(ids.len(), counted),
     }))
     .into_response()
 }
