@@ -572,6 +572,15 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
+                // `# x.field` names a slot whose perspective travels: a reference,
+                // so nothing unifies against it here.
+                if let ExprKind::NamedField { container, name } = self.ir[pe].kind
+                    && self.current_parameters.last() == Some(&container)
+                {
+                    self.attr_refs.insert(e, (*marker, container, name));
+                    slots.push(self.fresh_cell());
+                    continue;
+                }
                 // The slot is the annotation value's `[value, type]` term pair, the
                 // one shape every attribute shares.
                 let slot = self.state[pe]

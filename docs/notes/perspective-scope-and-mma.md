@@ -162,6 +162,14 @@ merge.
   certificate (a function's return pair carrying the provided slot when the body states
   no annotation) — without it a wrapper's return can only be a fixed certificate, because
   the body cannot see which caller's values it will run on.
+- **A read's perspective is its operands', a write's is its input's.** `compute.read`'s
+  result is `divisor(from, at)` — a warp-uniform buffer read at a uniform index stays
+  warp-uniform, a lane-varying index makes the result lane-varying — evaluated per call
+  site (`# @any` on the return, the argument's provided slot). `compute.write` returns a
+  new buffer whose perspective is the **input buffer's** (the segment is the same
+  storage; the written index and value are content, not segment shape) — the return
+  names the `.to` field, whose provided slot the call site takes. Both are
+  whole-program level statements; nothing is specialised to the compute layer.
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is

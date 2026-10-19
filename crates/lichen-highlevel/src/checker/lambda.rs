@@ -7,8 +7,9 @@ use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue
 
 use crate::attr::{AttrSet, slot_value_node};
 use crate::diagnostic::DiagKind;
-use crate::ir::ExprId;
+use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
+use lichen_utils::extend::AsEnum;
 
 use super::{ApplyEdge, Binding, Checker};
 
@@ -39,6 +40,7 @@ where
         let function = self.module.begin_function(return_block, parent);
         self.function_of.insert(e, function);
         self.function_stack.push((function, Some(e)));
+        self.current_parameters.push(parameter);
         // The `@loop` mark crosses into the graph here, where the shell exists and
         // the body does not (loop-conversion.md §8.6).
         if looping {
@@ -152,7 +154,9 @@ where
         self.module.functions[function].parameter_marker = parameter_marker;
         // The return's certificate and its attribute's canonical position, recorded
         // for a call site (attributes.md).
-        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
+        if (self.state[r#return].attr.is_some() || self.attr_refs.contains_key(&r#return))
+            && self.merged_tails.contains_key(&r#return)
+        {
             let tail = self.schema_tail(r#return).to_vec();
             let marker = tail
                 .iter()
@@ -165,6 +169,17 @@ where
             if let Some(marker) = marker {
                 self.module.functions[function].return_marker = Some(marker.order_index() as u32);
                 self.module.functions[function].return_certificate = self.state[r#return].attr;
+                // A reference names the argument field the result follows: the
+                // field's position is what a frozen artifact can persist.
+                if let Some((_, container, name)) = self.attr_refs.get(&r#return).copied()
+                    && container == parameter
+                    && let Some(parameter_type) = self.state[parameter].ty
+                {
+                    let position =
+                        self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
+                    self.module.functions[function].return_field =
+                        position.map(|position| position as u32);
+                }
             }
         }
         self.scopes.pop();
@@ -192,6 +207,7 @@ where
         // to it now reads the function type.
         self.module.unify(ty_cell, pair);
         self.function_stack.pop();
+        self.current_parameters.pop();
         self.state[e].term = Some(pair);
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(pair);
@@ -279,6 +295,49 @@ where
         (pair, func_node)
     }
 
+    /// The argument's field at `position` of its struct type's order, following
+    /// the written names when they reorder.
+    fn argument_field(&mut self, argument: ExprId, position: usize) -> Option<ExprId> {
+        let (mut value, mut names_start, mut names_end) = (argument, 0usize, 0usize);
+        loop {
+            match self.ir[value].kind {
+                ExprKind::Instantiate {
+                    value: inner,
+                    names,
+                    ..
+                }
+                | ExprKind::Record {
+                    value: inner,
+                    names,
+                } => {
+                    names_start = names.start as usize;
+                    names_end = names.end as usize;
+                    value = inner;
+                }
+                ExprKind::Apply {
+                    argument: inner, ..
+                } => value = inner,
+                ExprKind::Tuple(_) => break,
+                _ => return None,
+            }
+        }
+        let arguments = self.range_children(value);
+        let names = self.ir.struct_names[names_start..names_end].to_vec();
+        let written = if names.iter().any(|name| name.is_some()) {
+            let ty = self.state[argument].ty?;
+            let table = crate::shape::struct_names_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(ty),
+            )?;
+            let field = self.module.name_table_name(table, position)?;
+            names.iter().position(|name| *name == Some(field))
+        } else {
+            Some(position)
+        };
+        written.and_then(|index| arguments.get(index)).copied()
+    }
+
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         self.check_expr(argument);
@@ -306,6 +365,17 @@ where
                 .0
                 .and_then(|index| P::Attr::ORDER.get(index as usize))
                 .copied(),
+            None => None,
+        };
+        let return_marker = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid]
+                .return_marker
+                .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .static_function_markers(sref)
+                .1
+                .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
             None => None,
         };
         // The positional unify compares slot to slot; attribute equality is
@@ -457,18 +527,48 @@ where
                 }),
             None => None,
         };
+        // A return naming an argument field follows it per call: the output
+        // buffer's perspective is the input buffer's.
+        let return_field = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].return_field,
+            Some(AnyFunctionId::Static(sref)) => self.module.static_function_return_field(sref),
+            None => None,
+        };
+        if let (Some(position), Some(marker)) = (return_field, return_marker)
+            && let Some(field) = self.argument_field(argument, position as usize)
+            && let Some(ext) = self.attribute_extension(&marker)
+        {
+            let provided = self.provided_slot(field, &marker, ext);
+            self.state[e].attr = Some(provided);
+            self.merged_tails.insert(e, vec![marker]);
+        }
         if let Some((slot, index)) = certificate
             && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
+            && let Some(ext) = self.attribute_extension(&marker)
         {
             let value = slot_value_node(&*self, slot);
-            if self.module.node_operation(value).is_none()
-                && let Some(decided) = self.node_value(value)
-            {
-                let fresh_value = self.value_node(decided);
-                let fresh = self.pair_of(fresh_value, self.int_type);
-                self.state[e].attr = Some(fresh);
-                self.merged_tails.insert(e, vec![marker]);
-                self.node_edges.insert(fresh, self.loc(e, 2));
+            let decided = self
+                .module
+                .node_operation(value)
+                .is_none()
+                .then(|| self.node_value(value))
+                .flatten()
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
+            match decided {
+                // A hole (`# any`): the result follows the argument, per call.
+                None | Some(LowValue::Any) => {
+                    let provided = self.provided_slot(argument, &marker, ext);
+                    self.state[e].attr = Some(provided);
+                    self.merged_tails.insert(e, vec![marker]);
+                }
+                // A stated certificate is copied: the call carries its own decided slot.
+                Some(decided) => {
+                    let fresh_value = self.value_node(P::Value::from(decided));
+                    let fresh = self.pair_of(fresh_value, self.int_type);
+                    self.state[e].attr = Some(fresh);
+                    self.merged_tails.insert(e, vec![marker]);
+                    self.node_edges.insert(fresh, self.loc(e, 2));
+                }
             }
         }
         node

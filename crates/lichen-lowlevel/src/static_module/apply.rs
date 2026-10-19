@@ -435,13 +435,23 @@ impl<P: Program> Module<P> {
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
-        let (r#return, parameter, parameter_marker, return_marker, return_type, asserts, scope) = {
+        let (
+            r#return,
+            parameter,
+            parameter_marker,
+            return_marker,
+            return_field,
+            return_type,
+            asserts,
+            scope,
+        ) = {
             let f = &ctx.module.functions[sref.index.0];
             (
                 f.r#return,
                 f.parameter,
                 f.parameter_marker,
                 f.return_marker,
+                f.return_field,
                 f.return_type,
                 f.asserts.clone(),
                 f.nodes.clone(),
@@ -456,6 +466,7 @@ impl<P: Program> Module<P> {
             parameter_requirement: None,
             parameter_marker,
             return_marker,
+            return_field,
             // A re-homed closure never answers a checker's read: the certificate
             // stays in the artifact.
             return_certificate: None,

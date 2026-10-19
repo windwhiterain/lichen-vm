@@ -56,3 +56,74 @@ fn a_lane_varying_buffer_is_refused() {
         "{messages:?}"
     );
 }
+
+/// The program: one read, its buffer and index spelled by the source.
+const READ: &str = "---
+  order = \"30\"
+  compute = import \"compute.lichen\"
+---
+b = ((compute.buffer ([1, 2, 3] : array{Int, 3})) # BUFFER)
+r = compute.read ((compute.Read _)(.from b, .at INDEX))
+(r # DEMAND)
+";
+
+/// The program: one write, its buffer, index and value spelled by the source.
+const WRITE: &str = "---
+  order = \"30\"
+  compute = import \"compute.lichen\"
+---
+b = ((compute.buffer ([1, 2, 3] : array{Int, 3})) # BUFFER)
+w = compute.write ((compute.Write _)(.to b, .at INDEX, .value (0 # 1)))
+(w # DEMAND)
+";
+
+/// `program` with its three spellings replaced.
+fn spelled(program: &str, buffer: &str, index: &str, demand: &str) -> String {
+    program
+        .replace("BUFFER", buffer)
+        .replace("INDEX", index)
+        .replace("DEMAND", demand)
+}
+
+#[test]
+fn a_read_takes_its_perspective_from_the_buffer_and_the_index() {
+    // `divisor(from, at)`: a uniform index keeps the buffer's perspective, a
+    // lane-varying one does not.
+    assert!(compile(&spelled(READ, "compute.warp", "0", "compute.warp")).ok());
+    let report = compile(&spelled(READ, "compute.warp", "(0 # 1)", "compute.warp"));
+    assert!(
+        !report.ok(),
+        "a lane-varying index must not stay warp-uniform"
+    );
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 32, found 1")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn a_write_returns_the_input_buffer_perspective() {
+    // The output buffer is the input's segment, so its perspective is the
+    // input's whatever the written index and value are.
+    assert!(compile(&spelled(WRITE, "0", "(0 # 1)", "0")).ok());
+    let report = compile(&spelled(WRITE, "compute.warp", "(0 # 1)", "0"));
+    assert!(!report.ok(), "a warp segment is not zero-uniform");
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 0, found 32")),
+        "{messages:?}"
+    );
+}

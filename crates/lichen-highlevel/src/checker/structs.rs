@@ -363,7 +363,11 @@ where
     /// checker's canonical universe node); the fold over the table's entries is
     /// [`shape::name_table_index`], shared with the lowering's reader so the two
     /// cannot decode an entry differently.
-    fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
+    pub(super) fn named_field_index_any(
+        &mut self,
+        ty: AnyNodeId,
+        name: &'static str,
+    ) -> Option<usize> {
         let table = shape::struct_names_any(&mut self.module, self.type_expr, ty)?;
         shape::name_table_index(&self.module, table, name)
     }

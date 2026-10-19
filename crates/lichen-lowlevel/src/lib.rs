@@ -766,6 +766,9 @@ pub struct Function {
     pub parameter_marker: Option<u32>,
     /// The canonical position of the return certificate's attribute marker.
     pub return_marker: Option<u32>,
+    /// The argument field a call's result follows, by position: set when the
+    /// return names a parameter field.
+    pub return_field: Option<u32>,
     /// The return's certificate, as its source stated it: the annotation's
     /// `[value, type]` term a call site copies.
     ///
@@ -807,6 +810,8 @@ pub struct StaticFunction {
     pub parameter_marker: Option<u32>,
     /// The static mirror of [`Function::return_marker`].
     pub return_marker: Option<u32>,
+    /// The static mirror of [`Function::return_field`].
+    pub return_field: Option<u32>,
     /// The static mirror of [`Function::return_certificate`].
     pub return_certificate: Option<LocalNodeId>,
     pub r#return: LocalNodeId,

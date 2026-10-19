@@ -86,6 +86,16 @@ travel: a function records its requirement's and its certificate's marker index,
 artifact persists them (`StaticFunction::parameter_marker`/`return_marker`), so a frozen
 call reads the attribute from the position exactly as a source call does.
 
+**Two attribute values are references, not perspectives.** `# @any` on a return states
+that the result follows the **argument**: at each call the call's attribute is the
+argument's provided slot, so `divisor(from, at)` is evaluated per call site rather than
+frozen into a certificate (`compute.read`). `# x.field` on a return names an **argument
+field**: the call takes that field's provided slot, so `compute.write`'s output buffer
+carries the input buffer's perspective whatever the written index and value are. The
+field is recorded as its position in the parameter's struct (`Function::return_field`,
+persisted in the artifact, format 14) and the call site maps it through the
+constructor's written names, so a reordered field list still selects the named field.
+
 ## The extension point (`AttrExt`)
 
 The checker is attribute-agnostic: it only knows the *shape* — "an attribute combines

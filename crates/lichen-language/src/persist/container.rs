@@ -115,6 +115,8 @@ where
                 w.u64(requirement.index as u64);
             }
         }
+        // The return's argument field, `u8::MAX` meaning none.
+        w.u8(u8::try_from(function.return_field.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
         // The canonical attribute positions, `u8::MAX` meaning none.
         w.u8(u8::try_from(function.parameter_marker.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
         w.u8(u8::try_from(function.return_marker.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
@@ -426,6 +428,7 @@ where
             _ => return Err("bad function requirement tag".into()),
         };
         let tag = |byte: u8| (byte != u8::MAX).then_some(u32::from(byte));
+        let return_field = tag(r.u8()?);
         let parameter_marker = tag(r.u8()?);
         let return_marker = tag(r.u8()?);
         let return_certificate = match r.u8()? {
@@ -464,6 +467,7 @@ where
             parameter_requirement,
             parameter_marker,
             return_marker,
+            return_field,
             return_certificate,
             r#return,
             return_type,

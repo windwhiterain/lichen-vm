@@ -85,6 +85,15 @@ impl<P: Program> Module<P> {
             .unwrap_or((None, None))
     }
 
+    /// The frozen function's return field: the argument position a call's result
+    /// follows.
+    pub fn static_function_return_field(&self, function: StaticFunctionRef) -> Option<u32> {
+        self.static_module(function.module)
+            .functions
+            .get(function.index.0)
+            .and_then(|function| function.return_field)
+    }
+
     /// Read a static node's solved value verbatim, or [`None`] for a residual
     /// with no cached answer.
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {

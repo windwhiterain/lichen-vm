@@ -160,6 +160,7 @@ impl<P: Program> StaticModule<P> {
                     .map(|requirement| node_map[&requirement]),
                 parameter_marker: function.parameter_marker,
                 return_marker: function.return_marker,
+                return_field: function.return_field,
                 return_certificate: function
                     .return_certificate
                     .map(|certificate| node_map[&certificate]),

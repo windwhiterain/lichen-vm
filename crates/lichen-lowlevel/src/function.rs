@@ -617,6 +617,7 @@ impl<P: Program> Module<P> {
                     parameter_requirement,
                     parameter_marker,
                     return_marker,
+                    return_field,
                     return_certificate,
                     return_type,
                     static_origin,
@@ -630,6 +631,7 @@ impl<P: Program> Module<P> {
                         function.parameter_requirement,
                         function.parameter_marker,
                         function.return_marker,
+                        function.return_field,
                         function.return_certificate,
                         function.return_type,
                         function.static_origin,
@@ -645,6 +647,7 @@ impl<P: Program> Module<P> {
                     parameter_requirement,
                     parameter_marker,
                     return_marker,
+                    return_field,
                     return_certificate,
                     return_type: NodeId::default(),
                     // A clone of a materialized static closure is still that

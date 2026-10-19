@@ -355,6 +355,20 @@ impl<P: Program> Module<P> {
                 _ => None,
             })
     }
+    /// The name a name table gives the field at `index`, or [`None`].
+    pub fn name_table_name(&self, table: AnyHandle<[TableItem]>, index: usize) -> Option<&str>
+    where
+        P::Value: AsEnum<LowValue>,
+    {
+        // SAFETY: `table` is the payload of the value read from a live node of `self`.
+        unsafe { table.items() }
+            .iter()
+            .find_map(|entry| match self.name_table_entry(entry) {
+                Some((name, at)) if at == index => Some(name),
+                _ => None,
+            })
+    }
+
     /// Write the node's run stamp: its operator has had its one attempt.
     pub(crate) fn stamp_node_ran(&mut self, node: NodeId) {
         self.nodes[node].runned = 1;
@@ -497,6 +511,7 @@ impl<P: Program> Module<P> {
             parameter_requirement: None,
             parameter_marker: None,
             return_marker: None,
+            return_field: None,
             return_certificate: None,
             return_type: NodeId::default(),
             static_origin: None,
