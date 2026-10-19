@@ -261,3 +261,20 @@ fn a_lane_group_requirement_takes_only_a_group_uniform_value() {
         "expected 32, found 6"
     );
 }
+
+#[test]
+fn a_warp_level_register_shape_keeps_the_fragment_perspective() {
+    // The register shape: tile warp-uniform, fragment lane-varying, result finest.
+    let program = "wmma = (tile : Int # 32) => (fragment : Int) => tile + fragment\n";
+    assert!(ok(&format!("{program}wmma 7 9")));
+    assert_eq!(
+        message(&format!("{program}wmma (0 # 1) 9")),
+        "expected 32, found 1"
+    );
+    // No requirement form exists for the fragment: a uniform value is accepted.
+    assert!(ok(&format!("{program}wmma 7 (0 # 64)")));
+    assert_eq!(
+        message(&format!("{program}mma = wmma 7 (0 # 1)\nmma # 32")),
+        "expected 32, found 1"
+    );
+}

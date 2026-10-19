@@ -51,28 +51,36 @@ result, one element per lane — which is why the author's reading (§6) holds: 
 consumes a perspective only as a performance factor; MMA consumes it because the lane
 layout *is* the semantics.
 
-## 3. The paper's requirement is not this lattice
+## 3. The reference's model, and what lichen covers
 
-The reference document types `wmma` with `requires(thread[32])`: the operation involves a
-32-lane group, and the *fragments* are lane-varying inside it. `Perspective` says a value
-is uniform across an aligned group. The two statements are different axes:
+The reference document types an expression as `expr: type(DP) @ UP` over a *scope* form
+`level(n)` (`grid`, `block`, `thread`, with `warp(n) ≔ thread(32n)`), and it lists four
+CUDA contracts: uniform parameter, disjoint mutation, synchronization, and convergence (a
+cooperative function such as `wmma` needs a contiguous run of threads). The pieces:
 
-| statement | reads | example |
+| piece | reads | lichen today |
 |---|---|---|
-| value uniformity | the value's lanes are identical | `# 32` on a tile base |
-| scope requirement | which lanes participate in one operation | `requires(thread[32])` on `wmma` |
+| `UP`, uniform perspective | the value is identical within the group | **this** `Perspective` — divisibility; the paper's `divisor` is lichen's `gcd`, and `lower` (a coarser value serves a finer requirement) is `declared \| provider` |
+| `DP`, disjoint perspective | two thread groups' mutable regions do not overlap | absent — `Buf` carries no disjointness; the ladder's silent scatter is the cost |
+| scope and `@requires` | the launch aligns `grid`/`block`/`thread`; `lower` moves a value to an aligned group | implicit: the kernel is dispatched with a fixed lane width (64, with a 32-lane subgroup), so `thread[32]` exists for every body |
+| convergence | a cooperative operation needs the contiguous group | the dispatch supplies it, as the author ruled (§6) |
 
-A warp-level MMA operand needs the second. Encoding it as `# 32` on the operands would
-be wrong — a fragment is lane-varying — which is why [attributes](attributes.md)
-§"A lane-group requirement" calls the landed check the *uniform-load* shape.
+So the *register* side the author named — "寄存器的 perspective" — is the `UP` column, and
+the value lattice is exactly that: the paper's `int @ thread[32]` is lichen's `# 32`, and
+the `lower` relation is the acceptance table's `declared | provider`. `DP` is a *memory*
+axis carried by the type (the reference encodes it in `view`, `ptr`, `shared`), not a
+value annotation; it is the check that would catch the ladder's silent write, and it is a
+separate item.
 
-**Where the scope requirement actually lives.** It is not a program annotation. A kernel
-is dispatched with a fixed lane width (this backend: 64-lane workgroups, a 32-lane
-subgroup), so the 32-lane group exists by construction for every body — the paper's
-`requires(thread[32])` is satisfied by the dispatch, not by the config. What the program
-side can and does state is the *register* side: a value the whole group must agree on
-(the tile base, a uniform load) is `# 32`; a fragment's own lane layout stays the value
-lattice's business. That is the author's ruling in §6.
+**MMA's checks, then.** The tile descriptor must agree across the group — `# 32` on the
+`UP` axis, landed; a fragment's lane layout is the value's own perspective — the default,
+with no requirement form (see the test in
+[perspective.rs](../../crates/lichen-language/tests/language/perspective.rs): a warp-level
+operation keeps the fragment's finer width, and the result claim is what a checker
+refuses); and the convergence is the dispatch's. Encoding the convergence as `# 32` on
+the operands would be wrong — a fragment is lane-varying — which is why
+[attributes](attributes.md) §"A lane-group requirement" calls the landed check the
+*uniform-load* shape.
 
 ## 4. The kernel-config annotation, measured
 
