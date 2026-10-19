@@ -757,6 +757,22 @@ pub struct Function {
     /// pair's tail cell: a body may bind that cell through its own annotation, and a
     /// requirement a body can overwrite is not one.
     pub parameter_requirement: Option<NodeId>,
+    /// The canonical position of the parameter requirement's attribute marker.
+    ///
+    /// # Invariant
+    /// The *position*, not the marker itself: it is the schema fact a frozen artifact
+    /// would otherwise lose, so the checker reads the requirement's attribute from the
+    /// position rather than guessing it from the slot's value.
+    pub parameter_marker: Option<u32>,
+    /// The canonical position of the return certificate's attribute marker.
+    pub return_marker: Option<u32>,
+    /// The return's certificate, as its source stated it: the annotation's
+    /// `[value, type]` term a call site copies.
+    ///
+    /// # Invariant
+    /// A slot, not the attribute's value: the call site rebuilds a decided copy of its
+    /// own, so no caller binds a callee's slot (`docs/notes/attributes.md`).
+    pub return_certificate: Option<NodeId>,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
     /// The static function this closure was materialized from; `None` for a source closure.
@@ -787,6 +803,12 @@ pub struct StaticFunction {
     pub parameter: LocalNodeId,
     /// The static mirror of [`Function::parameter_requirement`].
     pub parameter_requirement: Option<LocalNodeId>,
+    /// The static mirror of [`Function::parameter_marker`].
+    pub parameter_marker: Option<u32>,
+    /// The static mirror of [`Function::return_marker`].
+    pub return_marker: Option<u32>,
+    /// The static mirror of [`Function::return_certificate`].
+    pub return_certificate: Option<LocalNodeId>,
     pub r#return: LocalNodeId,
     /// The static mirror of [`Function::return_type`].
     pub return_type: LocalNodeId,

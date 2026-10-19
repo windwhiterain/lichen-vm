@@ -178,16 +178,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The frozen return pair's attribute tail, copied into `block` as dynamic nodes.
-    #[stacksafe]
-    pub fn materialize_static_return_tail(
-        &mut self,
-        function: StaticFunctionRef,
-        block: BlockId,
-    ) -> Vec<NodeId> {
-        self.materialize_static_pair_tail(function, block)
-    }
-
     /// The frozen parameter's requirement, copied into `block`.
     #[stacksafe]
     pub fn materialize_static_parameter_requirement(
@@ -204,45 +194,17 @@ impl<P: Program> Module<P> {
         Some(self.clone_static_signature_node(&module, requirement, block, &mut remap))
     }
 
-    /// The frozen return pair's attribute tail, copied into `block`.
-    ///
-    /// # Invariant
-    /// The copies are the dynamic reach the reader needs: which attribute owns a slot is
-    /// not in the artifact, so a checker identifies it through the extensions.
+    /// The frozen return's certificate, copied into `block`.
     #[stacksafe]
-    fn materialize_static_pair_tail(
+    pub fn materialize_static_return_certificate(
         &mut self,
         function: StaticFunctionRef,
         block: BlockId,
-    ) -> Vec<NodeId> {
+    ) -> Option<NodeId> {
         let module = self.static_module(function.module);
-        let Some(entry) = module.functions.get(function.index.0) else {
-            return Vec::new();
-        };
-        let pair = entry.r#return;
-        let Some(value) = module.read(pair) else {
-            return Vec::new();
-        };
-        let Some(LowValue::Array(array)) = value.as_enum() else {
-            return Vec::new();
-        };
-        // SAFETY: the payload lives in the module's arena, pinned by the `Arc`.
-        let items: Vec<AnyNodeId> = unsafe { array.items() }
-            .iter()
-            .skip(2)
-            .map(|item| item.node)
-            .collect();
+        let certificate = module.functions.get(function.index.0)?.return_certificate?;
         let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        items
-            .into_iter()
-            .filter_map(|node| match node {
-                AnyNodeId::Static(sref) if sref.module == module.key => {
-                    Some(self.clone_static_signature_node(&module, sref.index, block, &mut remap))
-                }
-                AnyNodeId::Dynamic(node) => Some(node),
-                AnyNodeId::Static(_) => None,
-            })
-            .collect()
+        Some(self.clone_static_signature_node(&module, certificate, block, &mut remap))
     }
 
     /// The frozen signature copied into `block`, its frozen classes preserved.
@@ -473,11 +435,13 @@ impl<P: Program> Module<P> {
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
-        let (r#return, parameter, return_type, asserts, scope) = {
+        let (r#return, parameter, parameter_marker, return_marker, return_type, asserts, scope) = {
             let f = &ctx.module.functions[sref.index.0];
             (
                 f.r#return,
                 f.parameter,
+                f.parameter_marker,
+                f.return_marker,
                 f.return_type,
                 f.asserts.clone(),
                 f.nodes.clone(),
@@ -490,6 +454,11 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             parameter_requirement: None,
+            parameter_marker,
+            return_marker,
+            // A re-homed closure never answers a checker's read: the certificate
+            // stays in the artifact.
+            return_certificate: None,
             return_type: NodeId::default(),
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.

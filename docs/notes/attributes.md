@@ -136,11 +136,13 @@ model: the certificate for which expressions are uniform across an aligned lane 
 sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
 the lattice's bottom: the value is uniform over exactly its own thread. A frozen
-callee's return pair carries that tail, and the checker reads it the way
-`attr::pair_label` reads a name — the artifact has no per-expression schema, so each
-slot's owner is the attribute that recognises its content — then copies it onto the
-call (`Checker::check_app`, `Module::materialize_static_return_tail`). So a false claim
-is refused: `(compute.range k.n # 64)` answers `expected 64, found 1`.
+callee's parameter requirement and return certificate ride the artifact with the
+**canonical position of their attribute** (`StaticFunction::parameter_marker` and
+`return_marker`), recorded where the source build read its schema; a call site resolves
+the marker from that position instead of recognising the slot's content, then copies
+the decided slot onto the call (`Checker::check_app`,
+`Module::materialize_static_return_certificate`). So a false claim is refused:
+`(compute.range k.n # 64)` answers `expected 64, found 1`.
 
 Two readings changed with it, and both are the same statement — **a type is not a
 uniformity requirement**:

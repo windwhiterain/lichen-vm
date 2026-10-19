@@ -72,6 +72,19 @@ impl<P: Program> Module<P> {
             .clone()
     }
 
+    /// The frozen function's canonical attribute positions: the parameter
+    /// requirement's and the return certificate's.
+    pub fn static_function_markers(
+        &self,
+        function: StaticFunctionRef,
+    ) -> (Option<u32>, Option<u32>) {
+        self.static_module(function.module)
+            .functions
+            .get(function.index.0)
+            .map(|function| (function.parameter_marker, function.return_marker))
+            .unwrap_or((None, None))
+    }
+
     /// Read a static node's solved value verbatim, or [`None`] for a residual
     /// with no cached answer.
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {

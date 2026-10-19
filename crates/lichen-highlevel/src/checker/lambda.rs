@@ -3,11 +3,9 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId, StaticFunctionRef,
-};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
 
-use crate::attr::{AttrExt, AttrSet, slot_value_node};
+use crate::attr::{AttrSet, slot_value_node};
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
 use crate::program::{HighProgram, TypeOperator, ValueType};
@@ -123,6 +121,7 @@ where
         // Invariant: the attribute cell stays undecided — a bound declared
         // value would be baked by the deep pass.
         let mut parameter_requirement = None;
+        let mut parameter_marker = None;
         if let Some(parameter_attribute) = parameter_attribute {
             // The attribute is compiled in body scope, like the type, so `n` may
             // reference the parameter itself.
@@ -141,19 +140,19 @@ where
                 self.no_attr_ext_guard(self.loc(e, 2));
             }
             parameter_requirement = Some(declared);
-            self.function_param_attr.insert(e, (marker, declared));
+            parameter_marker = Some(marker.order_index() as u32);
             // The body sees the parameter's **declared** slot: the check is for
             // every caller the requirement admits.
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
-        // The requirement rides its own slot, so a body's annotation of the parameter
-        // cannot overwrite what the template states.
+        // The requirement's own slot, and the canonical position of its marker:
+        // a body's annotation cannot overwrite either.
         self.module.functions[function].parameter_requirement = parameter_requirement;
-        // The return's certificate, recorded for a call site (attributes.md).
-        if let Some(slot) = self.state[r#return].attr
-            && self.merged_tails.contains_key(&r#return)
-        {
+        self.module.functions[function].parameter_marker = parameter_marker;
+        // The return's certificate and its attribute's canonical position, recorded
+        // for a call site (attributes.md).
+        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
             let tail = self.schema_tail(r#return).to_vec();
             let marker = tail
                 .iter()
@@ -164,7 +163,8 @@ where
                 })
                 .copied();
             if let Some(marker) = marker {
-                self.function_return_attr.insert(e, (marker, slot, tail));
+                self.module.functions[function].return_marker = Some(marker.order_index() as u32);
+                self.module.functions[function].return_certificate = self.state[r#return].attr;
             }
         }
         self.scopes.pop();
@@ -279,36 +279,6 @@ where
         (pair, func_node)
     }
 
-    /// A frozen callee's parameter requirement: the artifact's parameter tail.
-    ///
-    /// # Invariant
-    /// A copied slot whose value is undecided is a wildcard and states nothing; a slot
-    /// the extensions do not recognise is not a constraint this build checks.
-    fn check_static_parameter(&mut self, function: StaticFunctionRef, argument: ExprId, e: ExprId) {
-        let Some(slot) = self
-            .module
-            .materialize_static_parameter_requirement(function, self.current_block)
-        else {
-            return;
-        };
-        let Some((marker, _ext)) = self.static_tail_owner(slot) else {
-            return;
-        };
-        let declared = slot_value_node(&*self, slot);
-        self.module.evaluate_node_deep(declared, None);
-        self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
-    }
-
-    /// The attribute that owns a copied frozen tail slot, with its behaviour.
-    fn static_tail_owner(&mut self, slot: NodeId) -> Option<(P::Attr, &'static dyn AttrExt<P>)> {
-        let registry = self.attr_ext.as_deref()?;
-        P::Attr::ORDER.iter().copied().find_map(|marker| {
-            let ext = self.attribute_extension(&marker)?;
-            (!ext.is_label() && ext.render(&self.module, slot, registry).is_some())
-                .then_some((marker, ext))
-        })
-    }
-
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         self.check_expr(argument);
@@ -318,17 +288,36 @@ where
         // The argument operand matches the parameter's arity: value@0, type@1,
         // and attribute@2 for an attributed parameter.
 
+        // The callee's canonical attribute positions, source or frozen: the
+        // position is the marker.
+        let function_ty = self.state[function].ty.unwrap();
+        let callee = self.module.function_type_function(function_ty);
+        let parameter_marker = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self
+                .module
+                .functions
+                .get(fid)
+                .and_then(|function| function.parameter_marker)
+                .and_then(|index| P::Attr::ORDER.get(index as usize))
+                .copied(),
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .static_function_markers(sref)
+                .0
+                .and_then(|index| P::Attr::ORDER.get(index as usize))
+                .copied(),
+            None => None,
+        };
         // The positional unify compares slot to slot; attribute equality is
         // checked below, the clone resetting its own cells.
-        let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
         // A runtime failure naming the argument resolves to the argument's use.
         self.node_edges
             .insert(argument_value, self.loc(argument, 0));
         let argument_type = self.state[argument].ty.unwrap();
-        let argument_attr = param_persp
+        let argument_attr = parameter_marker
             .as_ref()
-            .map(|(marker, _)| self.attr_or_missing(argument, marker));
+            .map(|marker| self.attr_or_missing(argument, marker));
         let value_argument_pair = match argument_attr {
             Some(attr) => {
                 self.array_node(self.current_block, &[argument_value, argument_type, attr])
@@ -345,12 +334,8 @@ where
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return pair.
         let c = self.fresh_cell();
-        // The callee's **type** rides with the apply: `f : f`, so an apply
-        // whose value is not concrete applies the type. §7.
-        let function_ty = self.state[function].ty.unwrap();
-        // A frozen callee's requirements live in the artifact, not in this build's
-        // tables (attributes.md).
-        let static_callee = match self.module.function_type_function(function_ty) {
+        // The callee's **type** rides with the apply: `f : f` (apply §7).
+        let static_callee = match callee {
             Some(AnyFunctionId::Static(sref)) => Some(sref),
             _ => None,
         };
@@ -362,18 +347,20 @@ where
             let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
-        // The apply's attribute equality: the declared parameter attribute (or
-        // its `missing`) against the argument's.
-
-        // A build with no extension already failed the guard where the
-        // attribute was first read, so this check is skipped.
-        if let Some((param_marker, param_slot)) = param_persp {
+        // The apply's attribute equality: the callee's requirement slot, source or
+        // frozen, against the argument's provided slot.
+        let requirement = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].parameter_requirement,
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .materialize_static_parameter_requirement(sref, self.current_block),
+            None => None,
+        };
+        if let (Some(declared), Some(marker)) = (requirement, parameter_marker) {
             // `#_` states nothing (attributes.md); unifying would pin the template.
-            let declared = crate::attr::slot_value_node(&*self, param_slot);
+            let declared = crate::attr::slot_value_node(&*self, declared);
             self.module.evaluate_node_deep(declared, None);
-            self.unify_declared_value(argument, &param_marker, declared, self.loc(e, 2));
-        } else if let Some(sref) = static_callee {
-            self.check_static_parameter(sref, argument, e);
+            self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
         }
         // Both slots' applications carry the four elements the apply arm reads.
         let value_operands = self.array_node(
@@ -451,8 +438,28 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
-        // **The callee's return certificate is the call's** (attributes.md).
-        if let Some((_marker, slot, tail)) = self.function_return_attr.get(&function).cloned() {
+        // **The callee's return certificate is the call's** (attributes.md), at the
+        // recorded position, decided once here.
+        let certificate = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid]
+                .return_marker
+                .and_then(|index| Some((self.module.functions[fid].return_certificate?, index))),
+            Some(AnyFunctionId::Static(sref)) => self
+                .module
+                .static_function_markers(sref)
+                .1
+                .and_then(|index| {
+                    Some((
+                        self.module
+                            .materialize_static_return_certificate(sref, self.current_block)?,
+                        index,
+                    ))
+                }),
+            None => None,
+        };
+        if let Some((slot, index)) = certificate
+            && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
+        {
             let value = slot_value_node(&*self, slot);
             if self.module.node_operation(value).is_none()
                 && let Some(decided) = self.node_value(value)
@@ -460,21 +467,8 @@ where
                 let fresh_value = self.value_node(decided);
                 let fresh = self.pair_of(fresh_value, self.int_type);
                 self.state[e].attr = Some(fresh);
-                self.merged_tails.insert(e, tail);
+                self.merged_tails.insert(e, vec![marker]);
                 self.node_edges.insert(fresh, self.loc(e, 2));
-            }
-        }
-        // A frozen callee's return certificate is the call's too (attributes.md).
-        if let Some(sref) = static_callee {
-            let tails = self
-                .module
-                .materialize_static_return_tail(sref, self.current_block);
-            for slot in tails {
-                if let Some((marker, _ext)) = self.static_tail_owner(slot) {
-                    self.state[e].attr = Some(slot);
-                    self.merged_tails.insert(e, vec![marker]);
-                    self.node_edges.insert(slot, self.loc(e, 2));
-                }
             }
         }
         node

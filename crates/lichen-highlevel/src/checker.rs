@@ -159,18 +159,6 @@ where
     /// The per-expression checker state — one entry per IR expression, see
     /// [`ExprState`].  Indexed by [`ExprId`].
     state: Vec<ExprState>,
-    /// The parameter-attribute slot of each function whose parameter is
-    /// annotated `x # n`.
-    function_param_attr: HashMap<ExprId, (P::Attr, NodeId)>,
-    /// The return-attribute slot of each function whose returned value is
-    /// annotated, with the merged tail that names it.
-    ///
-    /// # Invariant
-    /// The slot is the callee's and is read, never bound, by a caller: a call
-    /// site copies the *decided* value into a slot of its own. An undecided
-    /// return slot is not recorded, so the call carries no attribute and the
-    /// value's perspective is unknown (`docs/notes/attributes.md`).
-    function_return_attr: HashMap<ExprId, (P::Attr, NodeId, Vec<P::Attr>)>,
     /// The checker's own per-annotation merged attribute tails.
     ///
     /// # Invariant
@@ -557,8 +545,6 @@ where
             function_of: HashMap::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
-            function_param_attr: HashMap::new(),
-            function_return_attr: HashMap::new(),
             merged_tails: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,

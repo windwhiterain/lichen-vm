@@ -331,7 +331,7 @@ impl<P: Program> Module<P> {
     pub fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
-        if !(2..=3).contains(&items.len()) {
+        if items.len() < 2 {
             return None;
         }
         match items[0].node {
@@ -377,7 +377,7 @@ impl<P: Program> Module<P> {
     pub fn pair_type_item(&self, node: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
-        if !(2..=3).contains(&items.len()) {
+        if items.len() < 2 {
             return None;
         }
         Some(items[1].node)

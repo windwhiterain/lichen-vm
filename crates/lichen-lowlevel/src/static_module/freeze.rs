@@ -158,6 +158,11 @@ impl<P: Program> StaticModule<P> {
                 parameter_requirement: function
                     .parameter_requirement
                     .map(|requirement| node_map[&requirement]),
+                parameter_marker: function.parameter_marker,
+                return_marker: function.return_marker,
+                return_certificate: function
+                    .return_certificate
+                    .map(|certificate| node_map[&certificate]),
                 r#return: node_map[&function.r#return],
                 // A hand-built function may leave `return_type` unset; fall back to the
                 // return node, always mapped.
