@@ -255,6 +255,16 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## The floor, and the six times between it and a step
+
+One dispatch with a row, so that nothing but the dispatch itself is being measured: **0.329 ms**, and the
+same **0.33 ms** at 4096 rows. `Prepared::step` under `Policy::Batch` records every node into one submission
+and waits once, so a stage is one submission and a step's 281 stages are 281 of them — which puts the floor
+at **93 ms** for a step, against the **576 ms** a step actually takes with the layers resident. The six times
+between them are not in a kernel: the projection reaches 85 GB/s when its reads are many, and the floor
+does not move when they are few. They are in what the model does around each stage, and that is the one
+thing this file has not yet measured from inside.
+
 ## The dispatch count, and what fusing it would take
 
 A step makes **281 dispatches** — a layer is ten: three norm, four projection, two rope, one attention — and

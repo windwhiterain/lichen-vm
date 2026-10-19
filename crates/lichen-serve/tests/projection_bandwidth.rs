@@ -10,7 +10,7 @@ use lichen_serve::{MATVEC_ROW_STEP, Session};
 const DIM: usize = 2048;
 
 /// The rows to time, from one workgroup's worth to enough to fill a device.
-const ROWS: [usize; 4] = [64, 256, 1024, 4096];
+const ROWS: [usize; 5] = [1, 64, 256, 1024, 4096];
 
 /// Whether a result is kept, which decides whether the run that produced it releases it.
 ///
