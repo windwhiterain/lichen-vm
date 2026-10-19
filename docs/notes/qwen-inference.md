@@ -255,6 +255,19 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## What a burst is answered with
+
+A request waits on a `oneshot` rather than a blocking receive, so a waiting handler yields its runtime thread
+instead of holding it: with a blocking wait, sixteen waiters filled the pool and the rest of a burst was
+dropped at the listener, forty-four of a hundred connections in the measurement that found it. With the
+asynchronous wait the same hundred connections were answered **64 with 200 and 36 with 503**, and none were
+dropped — the queue holds sixty-four, the worker takes eight into a batch, and what is left over is refused
+with an explicit error rather than an empty answer. Before that, a full queue answered 200 with empty text,
+which a client cannot tell from a model that said nothing.
+
+A slow stream does not hold the batch either: each stream's channel is unbounded and its lifetime is the
+tokens a request may produce, so a client that reads slowly costs its own buffer and not the worker.
+
 ## The service
 
 `qwen-serve -- <port>` answers the OpenAI surface: `GET /v1/models`, `POST /v1/chat/completions` and
