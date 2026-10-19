@@ -14,12 +14,12 @@ plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => (($range(x): Int) # 1)
 row = cfg => (($row(cfg): Int) # 1)
 col = cfg => (($col(cfg): Int) # 1)
-Read = T => struct{.from (Buf T), .at Int}
-Write = T => struct{.to (Buf T), .at Int, .value T}
-WriteAtomic = T => struct{.to (Buf T), .at Int, .value T}
+Read = T => struct{.from (Buf T) # warp, .at Int}
+Write = T => struct{.to (Buf T) # warp, .at Int, .value T}
+WriteAtomic = T => struct{.to (Buf T) # warp, .at Int, .value T}
 read = (x : (Read _)) => ($read(x.from, x.at) # 1)
-write = (x : (Write _)) => $write(x.to, x.at, x.value)
-write_atomic = (x : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
+write = (x : (Write _)) => ($write(x.to, x.at, x.value) # warp)
+write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # warp)
 collect = (b : (Buf _)) => $collect(b)
 buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
 Mma = struct{.s string, .a (Buf Int), .b (Buf Int), .c (Buf Int)}

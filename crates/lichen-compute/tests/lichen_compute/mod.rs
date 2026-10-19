@@ -37,6 +37,7 @@ mod nested_config;
 mod nested_role;
 mod pack_placement;
 mod pass_chain;
+mod perspective_requirements;
 mod plan_staging;
 mod readme;
 mod recompute_reads;

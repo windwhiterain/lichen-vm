@@ -129,6 +129,24 @@ merge.
   dispatch's; the config annotation is not on the MMA path. The register-side check the
   value lattice already states is the uniform-operand requirement (`# compute.warp`), and
   the lane-varying fragment is the default.
+- **Disjointness is uniformity on the buffer.** Because the language has no mutation,
+  a buffer's *disjoint* perspective is expressed by the *uniform* one: a segment of
+  shared storage allocated per warp is written `buffer # warp`, and its reads and writes
+  carry the warp-uniform requirement — the segment's base is what the warp agrees on, and
+  every lane addresses it through its own index and value. The requirement is stated
+  where the buffer is named: `Read.from (Buf T) # warp`, `Write.to (Buf T) # warp`,
+  `WriteAtomic.to (Buf T) # warp`. A compound element's slot is `[value, type, attrs…]`
+  with the wildcard for an unspelled attribute, so a type function's field requirement
+  travels in its frozen type value, and the instantiate check reads it when the type the
+  call names is a value rather than a written struct
+  (`Checker::unify_value_field_attributes`; the argument's provided slot is the meet of
+  its components). A lane-varying buffer is refused (`expected 32, found 1`), a plain
+  buffer reads. A write **certifies its result** `# warp` — the pending write is a
+  description of a warp-uniform segment — so chaining `write` keeps the target's
+  uniformity and a read of a write's result still reaches the op's own named refusal.
+  One measured gap: a **direct** package struct type's field slots freeze undecided, so
+  `Mma` keeps its requirement on the parameter (`(x : Mma # warp)`, the frozen
+  `parameter_requirement` slot) rather than on its three fields.
 - **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
   struct argument — not four curried lambdas — with the three tiles required warp-uniform
   (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is

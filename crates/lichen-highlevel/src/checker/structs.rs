@@ -5,6 +5,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
+use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
@@ -648,10 +649,14 @@ where
     /// bare literal in hand-built IR — answers no children, so the walk skips
     /// it.
     fn unify_instantiate_elements(&mut self, type_expr: ExprId, value: ExprId) {
-        let (Some(fields), Some(arguments)) = (
-            self.written_struct_fields(type_expr),
-            self.compound_children(value),
-        ) else {
+        let Some(arguments) = self.compound_children(value) else {
+            return;
+        };
+        // An unwritten type — frozen or applied — states its fields as slots, so
+        // their attribute positions are what it requires.
+        let Some(fields) = self.written_struct_fields(type_expr) else {
+            let positions: Vec<Option<usize>> = (0..arguments.len()).map(Some).collect();
+            self.unify_value_field_attributes(type_expr, &positions, &arguments);
             return;
         };
         let mut seen = ElementWalk::default();
@@ -675,10 +680,14 @@ where
         value: ExprId,
         assign: &[Option<usize>],
     ) {
-        let (Some(fields), Some(arguments)) = (
-            self.written_struct_fields(type_expr),
-            self.compound_children(value),
-        ) else {
+        let Some(arguments) = self.compound_children(value) else {
+            return;
+        };
+        // The same value-level reading the positional path takes, through the
+        // reorder's own map.
+        let written = self.written_struct_fields(type_expr);
+        let Some(fields) = written else {
+            self.unify_value_field_attributes(type_expr, assign, &arguments);
             return;
         };
         let mut seen = ElementWalk::default();
@@ -688,6 +697,79 @@ where
             };
             self.check_element_pair_attributes(field, *argument, &mut seen);
             self.check_element_pair_values(field, *argument, &mut seen);
+        }
+    }
+
+    /// The declared type's field attributes, for an instantiation whose type is a
+    /// value rather than a written struct.
+    ///
+    /// # Invariant
+    /// A field slot is `[value, type, attrs…]` and an unspelled attribute is the
+    /// wildcard: every other position is a requirement, and the argument's provided
+    /// perspective must satisfy it (`# warp | # 0` holds, `# warp | # 1` does not).
+    /// `positions` maps a field to the argument the call supplied for it: the call's
+    /// order positionally, the reorder's map for a named call.
+    fn unify_value_field_attributes(
+        &mut self,
+        type_expr: ExprId,
+        positions: &[Option<usize>],
+        arguments: &[ExprId],
+    ) {
+        let Some(type_pair) = self.state[type_expr].term else {
+            return;
+        };
+        let Some(pair_items) = (unsafe { self.module.array_items(type_pair) }) else {
+            return;
+        };
+        let Some(shape) = pair_items.first().map(|item| item.node) else {
+            return;
+        };
+        let shape = self.module.as_dynamic(shape, self.current_block);
+        let Some(field_items) = (unsafe { self.module.array_items(shape) }) else {
+            return;
+        };
+        for (field, position) in field_items.iter().zip(positions) {
+            let Some(argument) = position.and_then(|index| arguments.get(index)).copied() else {
+                continue;
+            };
+            let slot = self.module.as_dynamic(field.node, self.current_block);
+            // SAFETY: the slot is a value of a live node of this module.
+            let Some(slots) = (unsafe { self.module.array_items(slot) }) else {
+                continue;
+            };
+            for (order, marker) in P::Attr::ORDER.iter().enumerate() {
+                let Some(item) = slots.get(shape::attr_slot(order)) else {
+                    continue;
+                };
+                let declared = self.module.as_dynamic(item.node, self.current_block);
+                self.module.evaluate_node_deep(declared, None);
+                let value = self
+                    .node_value(declared)
+                    .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
+                if value == Some(LowValue::Any) {
+                    continue;
+                }
+                // The requirement is the slot's **value**: its `[value, type]` pair's
+                // first element may itself be a frozen reference.
+                let Some(LowValue::Array(items)) = value else {
+                    continue;
+                };
+                // SAFETY: the array is a value of a live node of this module.
+                let Some(element) = (unsafe { items.items() }).first().map(|item| item.node) else {
+                    continue;
+                };
+                let declared = self.module.as_dynamic(element, self.current_block);
+                self.module.evaluate_node_deep(declared, None);
+                if self.node_value(declared).is_none() {
+                    continue;
+                }
+                let Some(ext) = self.attribute_extension(marker) else {
+                    continue;
+                };
+                let found = self.provided_slot(argument, marker, ext);
+                let loc = self.loc(argument, shape::PAIR_ATTR_BASE);
+                ext.unify_slots(self, found, declared, loc);
+            }
         }
     }
 
