@@ -44,7 +44,7 @@ fn gcd_run(values: &[usize]) -> usize {
         })
         .collect();
     let array = module.alloc_array(&items, block);
-    let operand = LangValue::from(LowValue::Array(array));
+    let operand = LangValue::from(LowValue::Array(array.into()));
     let out = LangOperator::GcdOp(GcdOp::Gcd)
         .run(operand, block, &mut module)
         .expect("the gcd extension decides for concrete operands");

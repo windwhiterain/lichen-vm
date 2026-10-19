@@ -833,7 +833,7 @@ where
         self.module.write_node_value(
             universe,
             Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, root),
+                self.module.alloc_array(&items, root).into(),
             ))),
         );
         self.type_expr = universe;
@@ -992,7 +992,7 @@ where
             block,
             None,
             Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, block),
+                self.module.alloc_array(&items, block).into(),
             ))),
         )
     }
@@ -1012,7 +1012,7 @@ where
             block,
             None,
             Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, block),
+                self.module.alloc_array(&items, block).into(),
             ))),
         )
     }

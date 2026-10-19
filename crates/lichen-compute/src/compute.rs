@@ -1541,7 +1541,7 @@ where
                                     .collect();
                                 let handle = module.alloc_array(&items, block);
                                 return Some(<P::Value as From<LowValue>>::from(LowValue::Array(
-                                    handle,
+                                    handle.into(),
                                 )));
                             }
                             // A single output is a bare `Buffer`; its payload lands in
@@ -1591,7 +1591,7 @@ where
                                     .collect();
                                 let handle = module.alloc_array(&items, block);
                                 return Some(<P::Value as From<LowValue>>::from(LowValue::Array(
-                                    handle,
+                                    handle.into(),
                                 )));
                             }
                             Some(value(results[0]))
@@ -1788,7 +1788,7 @@ where
                             .collect(),
                     };
                     let handle = module.alloc_array(&items, block);
-                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
+                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into())))
                 }
                 ComputeOperator::Mma => {
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
@@ -3538,7 +3538,7 @@ where
     Some(module.add_node(
         block,
         None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle))),
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))),
     ))
 }
 
@@ -3584,7 +3584,7 @@ where
     Some(module.add_node(
         block,
         None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle))),
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))),
     ))
 }
 
@@ -5031,7 +5031,7 @@ where
         })
         .collect();
     let handle = module.alloc_array(&items, block);
-    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
+    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle.into())))
 }
 
 /// Read a binary op/`Index` operand array `[a, b]` as two operand nodes.
@@ -5661,7 +5661,7 @@ where
     P::Value: From<LowValue>,
 {
     let handle = module.alloc_array(items, block);
-    let value = <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+    let value = <P::Value as From<LowValue>>::from(LowValue::Array(handle.into()));
     module.add_node(block, None, Some(value))
 }
 
@@ -6030,7 +6030,7 @@ where
             })
             .collect();
         let handle = module.alloc_array(&items, block);
-        <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+        <P::Value as From<LowValue>>::from(LowValue::Array(handle.into()))
     };
     Some(value)
 }

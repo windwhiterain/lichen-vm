@@ -38,7 +38,7 @@ fn array_node(m: &mut Module<ProgramImpl>, block: BlockId, ids: &[NodeId]) -> No
         block,
         None,
         Some(HighProgramValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, block),
+            m.alloc_array(&items, block).into(),
         ))),
     )
 }

@@ -657,6 +657,18 @@ impl<T: ?Sized> StaticHandle<T> {
     }
 }
 
+impl StaticHandle<[ArrayItem]> {
+    /// The payload as the **fat** pointer the relocated-handle codec writes.
+    ///
+    /// # Invariant
+    /// The length is the payload's own, as the freeze laid it out and the codec
+    /// resolved a stored offset, so a writer records the element count the
+    /// artifact must restore — not a count taken from a live slice.
+    pub fn items_ptr(&self) -> *const [ArrayItem] {
+        self.offset
+    }
+}
+
 impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.0, other.0)

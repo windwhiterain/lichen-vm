@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lichen_lowlevel::{
-    EvaluatedDeep, LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId,
+    ArrayItem, EvaluatedDeep, LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId,
     StaticFunctionRef, StaticModule, StaticNode, StaticOperation,
 };
+use lichen_lowlevel::codec::{read_relocated_handle, write_relocated_handle};
 
 use crate::program::{LangProgram, ProgramCodec};
 
@@ -144,6 +145,23 @@ where
         w.u64(function.nodes.len() as u64);
         for &node in &function.nodes {
             w.u64(node.index as u64);
+        }
+    }
+    // The attribute-layout registry, in id order: an array's layout id is a position in
+    // it, so a reordering would silently re-read every frozen array's attributes.
+    w.u64(module.attribute_layouts.len() as u64);
+    for layout in &module.attribute_layouts {
+        w.u64(layout.len() as u64);
+        for &canonical in layout {
+            w.u32(canonical);
+        }
+    }
+    // The module's default attribute array, when it declares one.
+    match &module.default_attributes {
+        None => w.u8(0),
+        Some(handle) => {
+            w.u8(1);
+            write_relocated_handle(&mut w, modules, handle.module, handle.items_ptr());
         }
     }
     let body = w.finish()?;
@@ -479,6 +497,28 @@ where
             open_captures: false,
         });
     }
+
+    let layout_count = r.u64()? as usize;
+    let mut attribute_layouts = reserve(&r, layout_count, "attribute layouts")?;
+    for _ in 0..layout_count {
+        let entry_len = r.u64()? as usize;
+        let mut entry = reserve(&r, entry_len, "attribute layout indices")?;
+        for _ in 0..entry_len {
+            entry.push(r.u32()?);
+        }
+        attribute_layouts.push(entry.into());
+    }
+    let default_attributes = match r.u8()? {
+        0 => None,
+        1 => Some(read_relocated_handle::<ArrayItem, P>(
+            &mut r,
+            key,
+            &arena,
+            base,
+            modules,
+        )?),
+        _ => return Err("bad default attribute array tag".into()),
+    };
     if !r.done() {
         return Err("trailing bytes after the artifact".into());
     }
@@ -487,6 +527,8 @@ where
         nodes,
         functions,
         arena,
+        attribute_layouts,
+        default_attributes,
         // No mode on the wire yet: a loaded artifact is content-portable.
         read_only: false,
         // A loaded artifact owns no out-of-arena resource: a resource handle

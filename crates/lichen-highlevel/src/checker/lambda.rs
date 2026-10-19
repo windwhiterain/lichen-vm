@@ -90,7 +90,7 @@ where
         self.module.write_node_value(
             pair,
             Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block),
+                self.module.alloc_array(&items, return_block).into(),
             ))),
         );
         self.state[e].term = Some(pair);
@@ -286,7 +286,7 @@ where
         self.module.write_node_value(
             pair,
             Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block),
+                self.module.alloc_array(&items, return_block).into(),
             ))),
         );
         self.module.unify(ty_cell, pair);

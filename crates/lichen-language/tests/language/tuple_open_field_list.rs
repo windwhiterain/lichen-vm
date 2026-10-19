@@ -28,7 +28,7 @@ impl Seed {
         self.module.add_node(
             self.block,
             None,
-            Some(LangValue::from(LowValue::Array(handle))),
+            Some(LangValue::from(LowValue::Array(handle.into()))),
         )
     }
 

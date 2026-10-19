@@ -682,7 +682,7 @@ mod sort_op_tests {
             })
             .collect();
         let array = module.alloc_array(&items, block);
-        let operand = LangValue::from(LowValue::Array(array));
+        let operand = LangValue::from(LowValue::Array(array.into()));
         let out = LangOperator::SortOp(SortOp::Sort)
             .run(operand, block, &mut module)
             .expect("the sort extension decides for a concrete array operand");

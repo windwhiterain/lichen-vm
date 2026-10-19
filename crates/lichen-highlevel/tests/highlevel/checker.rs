@@ -1272,7 +1272,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let tagless = b.module.add_node(
         block,
         None,
-        Some(HighProgramValue::from(LowValue::Array(tagless_items))),
+        Some(HighProgramValue::from(LowValue::Array(tagless_items.into()))),
     );
     assert!(
         !lichen_highlevel::shape::is_struct_marker_any(&b.module, AnyNodeId::Dynamic(tagless)),
@@ -1288,7 +1288,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let tagless_kind = b.module.add_node(
         block,
         None,
-        Some(HighProgramValue::from(LowValue::Array(tagless_kind_items))),
+        Some(HighProgramValue::from(LowValue::Array(tagless_kind_items.into()))),
     );
     let tagless_term_items = b.module.alloc_array(
         &[
@@ -1300,7 +1300,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let tagless_term = b.module.add_node(
         block,
         None,
-        Some(HighProgramValue::from(LowValue::Array(tagless_term_items))),
+        Some(HighProgramValue::from(LowValue::Array(tagless_term_items.into()))),
     );
     assert!(
         !lichen_highlevel::shape::is_struct_type_any(
