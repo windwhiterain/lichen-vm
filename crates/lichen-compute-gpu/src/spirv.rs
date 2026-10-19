@@ -353,7 +353,11 @@ pub enum SpirvRefusal {
     /// this refusal — it is stored as a 16-bit integer and widened to `Float` on the way in.
     UnsupportedClass { class: ScalarClass },
     /// A value and a buffer index of different classes met in one operation.
-    MixedClasses { at: usize },
+    MixedClasses {
+        at: usize,
+        seen: ScalarClass,
+        wanted: ScalarClass,
+    },
     /// A block parameter's own reads ask it to be two classes at once.
     ///
     /// # Invariant
@@ -504,9 +508,9 @@ impl fmt::Display for SpirvRefusal {
                  SPIR-V's 16-bit float is an IEEE half, not a brain float, so there is nothing to \
                  declare a {class:?} value as and no arithmetic that rounds in its own width."
             ),
-            SpirvRefusal::MixedClasses { at } => write!(
+            SpirvRefusal::MixedClasses { at, seen, wanted } => write!(
                 f,
-                "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
+                "instruction {at} mixed an integer and a float in one operation: a {seen:?} where a {wanted:?} is wanted. `Int` and `Float` \
                  do not convert in either direction, so nothing here can make the two operands \
                  meet: this is a malformed fragment rather than an unsupported shape."
             ),
@@ -3415,7 +3419,11 @@ impl Emitter<'_> {
         if let Some(Kind::Scalar(seen)) = resolved(arg.kind)
             && seen != class
         {
-            return Err(SpirvRefusal::MixedClasses { at });
+            return Err(SpirvRefusal::MixedClasses {
+                at,
+                seen,
+                wanted: class,
+            });
         }
         Ok(Kind::Scalar(class))
     }
@@ -4136,7 +4144,11 @@ fn as_class(
 ) -> Result<Slot, SpirvRefusal> {
     match slot.kind {
         Kind::Scalar(seen) if seen == class => Ok(slot),
-        Kind::Scalar(_) => Err(SpirvRefusal::MixedClasses { at }),
+        Kind::Scalar(seen) => Err(SpirvRefusal::MixedClasses {
+            at,
+            seen,
+            wanted: class,
+        }),
         Kind::Literal(value) => Ok(scalar(literals.get(class, value, ids, next), class)),
         Kind::Condition => {
             let result = *next;

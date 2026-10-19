@@ -255,6 +255,24 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## What the refusal's own words settled
+
+The refusal now names the two classes it was asked to reconcile, which took three attempts to spell and
+answered the question at once:
+
+    instruction 0 mixed an integer and a float in one operation:
+    a Float where a BFloat16 is wanted
+
+So a value of class `Float` is read where a `BFloat16` is needed. The tiling builds its body from the
+expression a program wrote, and that expression's class is `Float`; the narrow pack then states
+`BFloat16` for the same body. Two passes, one body, two classes — which is a conflict between them and not
+a line to fix, and it is where this line of work stops by the rule this note set two rounds ago.
+
+What the line leaves behind, all of it in the tree: the identity's class fixed (`bb791a5b`), the slice
+operand table corrected (`fe752bb9`), and the refusal able to name what it was reconciling. What it does
+not leave is a tiled projection, and the service is unaffected either way — it prepares projections whose
+extents are runtime arguments, which no pack tiles.
+
 ## The defect is a float-class one, and the existing tests say so by omission
 
 `crates/lichen-compute-gpu/tests/compute_gpu/fused_landing_on_device.rs` passes all five of its cases —
