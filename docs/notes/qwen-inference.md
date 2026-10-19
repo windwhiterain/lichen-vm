@@ -353,6 +353,18 @@ quantile came back the same number. A ladder has to reach past the slowest reque
 now runs from a microsecond to about seventy minutes in 128 rungs, and a quantile is the first rung whose
 cumulative count reaches it.
 
+## A soak, and what it says is not leaking
+
+Two hundred requests of two tokens at concurrency eight, sampled after every fifty: **admitted 200, finished
+200**, nothing live at the end, and the card's used memory **4752 → 4752 MiB** across all four batches. The
+service holds no per-request state once an answer is delivered — the resident table, the batch's retirement
+and the tokens' probabilities all give their memory back, which is what the earlier leak
+([`graph::run`'s orphans](qwen-inference.md)) made worth measuring rather than assuming.
+
+The distribution over those two hundred: **p50 2.49 s, p95 7.05 s, p99 28.22 s**. The tail is a handful of
+requests from the first batch, before the driver's caches warm; the histogram cannot say which, and the
+number to compare against is the same service under a steady load rather than after a cold start.
+
 ## What was decided, and what was not
 
 The user's verdict on prefix caching, recorded because it rules out the next big optimisation for now:
