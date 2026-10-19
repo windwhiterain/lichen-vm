@@ -81,6 +81,19 @@ fn split_layer(bytes: &[u8], width: Width) -> Vec<std::sync::Arc<[u8]>> {
         .map(|(index, (offset, length))| {
             let start = offset * width.bytes();
             let end = (offset + length) * width.bytes();
+            std::sync::Arc::from(&bytes[start..end])
+        })
+        .collect()
+}
+
+/// One layer's bytes as one shared slice a tensor, every projection turned the way the held path reads it.
+fn held_layer(bytes: &[u8], width: Width) -> Vec<std::sync::Arc<[u8]>> {
+    SHAPES
+        .iter()
+        .enumerate()
+        .map(|(index, (offset, length))| {
+            let start = offset * width.bytes();
+            let end = (offset + length) * width.bytes();
             match COLUMN_MAJOR[index] {
                 Some((rows, columns)) => {
                     std::sync::Arc::from(by_column(&bytes[start..end], rows, columns, width))
@@ -134,8 +147,11 @@ fn by_column(bytes: &[u8], rows: usize, columns: usize, width: Width) -> Vec<u8>
 /// # Invariant
 /// The narrow path stores a layer's projections by column, so this path turns them too: two paths that
 /// disagree about a layout disagree about the answer.
-fn wide_layer(name: &str) -> Result<Vec<f32>, QwenRefusal> {
+fn wide_layer(name: &str, held: bool) -> Result<Vec<f32>, QwenRefusal> {
     let values = flat(name)?;
+    if !held {
+        return Ok(values);
+    }
     let mut turned = values.clone();
     for (index, (offset, length)) in SHAPES.iter().enumerate() {
         if let Some((rows, columns)) = COLUMN_MAJOR[index] {
@@ -424,6 +440,10 @@ fn flat(name: &str) -> Result<Vec<f32>, QwenRefusal> {
 struct Steps<'session> {
     norm: crate::Prepared<'session>,
     projection: crate::Prepared<'session>,
+    /// The projection for a layer read from the file, whose weight is still stored by row.
+    streamed: crate::Prepared<'session>,
+    /// Whether the layers are held, which is what decides which of the two reads them.
+    held: std::cell::Cell<bool>,
     /// The head's projection, which reads a weight stored by row.
     head: crate::Prepared<'session>,
     rotation: crate::Prepared<'session>,
@@ -442,9 +462,14 @@ impl<'session> Steps<'session> {
                 Width::Wide => prepared(MATVEC_BATCH_STEP)?,
                 Width::Narrowed => crate::narrowed_projection(session)?,
             },
+            streamed: match width {
+                Width::Wide => prepared(crate::model::MATVEC_ROW_STEP)?,
+                Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
+            },
+            held: std::cell::Cell::new(false),
             head: match width {
-                Width::Wide => prepared(crate::model::MATVEC_STEP)?,
-                Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_STEP)?,
+                Width::Wide => prepared(crate::model::MATVEC_ROW_STEP)?,
+                Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
             },
             rotation: prepared(ROPE_STEP)?,
             attention: prepared(ATTEND_CACHE_STEP)?,
@@ -508,8 +533,12 @@ impl<'session> Steps<'session> {
         width: i64,
         per: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
-        let stepped = self
-            .projection
+        let projection = if self.held.get() {
+            &self.projection
+        } else {
+            &self.streamed
+        };
+        let stepped = projection
             .step(vec![
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
@@ -538,6 +567,7 @@ impl<'session> Steps<'session> {
             .step(vec![
                 RunArgument::Count(rows(count, VOCABULARY as i64)),
                 RunArgument::Count(HIDDEN as i64),
+                RunArgument::Count(VOCABULARY as i64),
                 self.payload(values),
                 weight,
             ])
@@ -938,9 +968,10 @@ impl<'session> Qwen<'session> {
     /// a layer: the bytes are the width's own and nothing converts them on the way in or out, and copying
     /// them once here is what keeps a token from copying them every time.
     pub fn hold_in_memory(&mut self) -> Result<(), QwenRefusal> {
+        self.steps.held.set(true);
         for layer in 0..LAYERS {
             let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
-            self.held.push(split_layer(&bytes, self.width));
+            self.held.push(held_layer(&bytes, self.width));
         }
         Ok(())
     }
@@ -955,7 +986,10 @@ impl<'session> Qwen<'session> {
         for layer in 0..layers.min(LAYERS) {
             let read: Vec<std::sync::Arc<[u8]>>;
             let tensors = match self.width {
-                Width::Wide => Tensors::Wide(wide_layer(&format!("layer{layer:02}"))?),
+                Width::Wide => Tensors::Wide(wide_layer(
+                    &format!("layer{layer:02}"),
+                    !self.held.is_empty(),
+                )?),
                 Width::Narrowed => {
                     let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
                     read = split_layer(&bytes, self.width);

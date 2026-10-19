@@ -520,6 +520,42 @@ step = (s : GArg) => {
 built = compute.graph step
 built
 "#;
+/// One step's projection over a batch, reading a weight stored by row.
+///
+/// # Invariant
+/// The head is the only weight stored by row, and it must still score every sequence's own row: this
+/// is the batched program with the row-major address, so several sequences read each one's words.
+pub const MATVEC_ROW_STEP: &str = r#"
+--- compute = import "compute.lichen" ---
+In     = struct{.x (compute.Buf Float), .w (compute.Buf Float)}
+Rows   = struct{.y (compute.Buf Float)}
+CopIn  = struct{.d (compute.Buf Float)}
+MatvecPar = struct{.n Int, .dim Int, .per Int, .in In, .out Rows}
+MatvecArg = struct{.n Int, .dim Int, .per Int, .I In}
+matvec_raw = (k : MatvecPar) => {
+  row = compute.range k.n
+  sequence = row / k.per
+  weight_row = row - (sequence * k.per)
+@loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at ((weight_row * k.dim) + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at ((sequence * k.dim) + (s(0) - 1)))) : Float))) ~ "combine" ~ "element"))
+  compute.write ((compute.Write _)(.to k.out.y, .at row, .value (fold (k.dim, 0.0 ~ "identity"))))
+}
+matvec = compute.parallel (matvec_raw ~ "claim:Reduction(combine,identity)") "gpu" Rows
+CopPar = struct{.n Int, .in CopIn, .out CopIn}
+CopArg = struct{.n Int, .I CopIn}
+copy_raw = (k : CopPar) => {
+  i = compute.range k.n
+  value = (compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float)
+  compute.write ((compute.Write _)(.to k.out.d, .at i, .value value))
+}
+copy = compute.parallel copy_raw "gpu" CopIn
+GArg = struct{.n Int, .dim Int, .per Int, .in In}
+step = (s : GArg) => {
+  a = (compute.plrun matvec ((MatvecArg)(.n s.n, .dim s.dim, .per s.per, .I In(.x s.in.x, .w s.in.w))) : Rows)
+  compute.plrun copy ((CopArg)(.n s.n, .I CopIn(.d a.y)))
+}
+built = compute.graph step
+built
+"#;
 
 /// One row of a projection: `y[j] = sum over i of x[i] · w[j][i]`, at the model's own width.
 ///
