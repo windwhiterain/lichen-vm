@@ -1,8 +1,8 @@
 # A native link library: a Rust generic behind a lichen generic
 
-> Status: **proposed — ruled by the maintainer; the phases are not started.**
-> §2 is measured; §4 is ruled (a Rust `dylib` loaded through a `link` directive);
-> §5's lichen surface is designed from existing mechanisms and is not measured.
+> Status: **proposed — ruled by the maintainer; P0-a and P0-c are measured.**
+> §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
+> through a `link` directive); P0-b is the next step.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -178,7 +178,7 @@ is larger than the recorder's.
 compiler that loads it, so a `link` directive is portable within one toolchain
 and a rebuild across toolchains.
 
-## 5. The lichen surface, and the readings it must be confirmed with
+## 5. The lichen surface, measured
 
 The surface the existing mechanisms express:
 
@@ -189,46 +189,64 @@ vbd_kind = t => t @in scalars
 sample = (t ! vbd_kind) => (x : t) => { r = $vbd_sample(t, x); r : t; r }
 ```
 
-Expected readings — **none of them measured yet**, and the first work item is a
-probe that measures exactly these:
+**Measured (P0-c)** with `crates/lichen-language/tests/language/link_probe.rs` — a
+probe over a host composed exactly like `std_native.rs`, whose native op prints
+what it sees and hands the argument back. The readings are the run's **rendered
+type** (the value column is not a reading: the probe's op hands a node back
+instead of emitting an operation, so the value is undecided — see the fourth
+finding).
 
-| program | expected |
+| program | reading |
 |---|---|
-| `sample Float 1.5` | `1.5 : Float` — the result's type is the type argument |
-| `sample Float 3` | refused by `x : t`: `expected Float, found Int` |
-| `sample string "a"` | refused by the refinement: `string` is not in `set(Float, Int)` |
-| `(sample Float 1.5, sample Float 3.5)` | both instantiate independently: the apply clones per call |
-| `sample` alone | a dependent function: `t` is a value of type `Type`, and both the second parameter and the result take their type from that value |
+| `p.sample Float 1.5` | `type: Float` — the result's type is the type argument |
+| `p.sample Float 3` | refused: `expected Float, found Int` — the argument follows the type argument |
+| `p.sample string "a"` | refused: `the refinement's predicate did not answer 1` — the closed world |
+| `(p.sample Float 1.5, p.sample Int 3)` | `type: tuple{Float, Int}` — two instantiations coexist |
+| `p.sample` alone | `type: ?a -> raw[?b, ?a] -> raw[?b, ?a]` — a dependent signature with open cells |
+| the op's `build` | the type argument's node value is `None` |
+
+Four findings, and they are the design's load-bearing readings:
+
+1. **The refinement rides the parameter and re-checks per application.** The
+   third row is refused while the first passes on the same wrapper: the closed
+   world §6 is built on is a measured property, not a hope. The `type_of`
+   monomorphism that could have pinned the first call does not apply here — the
+   refinement is registered on the enclosing function and its clone re-checks.
+2. **The result type is the type argument.** `r : t` gives the wrapper the
+   dependent signature, and a wrong argument is refused where it is written.
+3. **Two instantiations coexist in one program** — the apply clones per call, so
+   a program using `Float` and `Int` gets both, independently.
+4. **The native op cannot see the instantiation.** Built once per wrapper
+   template, `build` reads `None` for the type argument. The dispatch is therefore
+   necessarily at **run time**, from the operand the clone carries — which is what
+   §4's table assumes and what fixes the shape of the op below.
 
 The native op is the ordinary multi-operand shape:
 
 ```rust
 // build: hand both raw values over as one operand, state no type
 let operands = ctx.array_node(&[args[0].value, args[1].value]);
-NativeApply { value: ctx.op_node(VbdOp::Sample, Some(operands)), decided: false }
+NativeApply { value: ctx.op_node(External { library, instance }, Some(operands)), decided: false }
 
 // run: element 0 is the type value, element 1 the argument; select, convert, call
 ```
+
+**The op must emit an operation, not hand a node back.** The probe returns the
+argument's own value node as its `NativeApply.value`. The apply's clone does not
+own that node, so the runtime read is undecided — and a tuple of two calls at one
+type showed the value drifting between `(none, 2.5)` and `(none, none)` across
+runs. An operator node over the operand is part of the body, is cloned with it,
+and `run` computes the value — which is why the real op emits `External` rather
+than a value.
 
 `run` matches the type value it reads against the instance table and calls the
 matching non-generic entry. The wrapper still states the types it knows
 (`r : t`) — the same division of labour as `sort` (`compiler-plugin.md:117–133`).
 
-Two things could make the probe fail, and both are known:
-
-- **The refinement on a type-valued parameter.** §3.4 of
-  [operator-polymorphism](operator-polymorphism.md) measures a class refinement
-  that rides a parameter and re-checks per application, which is the mechanism
-  this wrapper needs. The nearest measured counterexample to "a body cell tied to
-  the parameter is re-instantiated" is the `type_of` monomorphism
-  ([type-of-in-std](type-of-in-std.md), open): a *read* built from an annotation
-  is not among the nodes the clone remaps, so the first call pins. Whether the
-  refinement's assert is on the right side of that line is exactly what the probe
-  must read.
-- **A decided type value at run time.** `run` reads the operand; for `sample
-  Float` the argument is a decided type constant. For a *computed* type argument
-  (`sample (Box Int) …`) the operand is an unevaluated node, and the op must
-  either evaluate it or refuse the spelling.
+One question the probe did not answer, and the design must: a *computed* type
+argument (`sample (Box Int) …`) reaches `run` as an unevaluated node; the op must
+either evaluate it or the manifest must refuse the spelling. `sample Float` is
+the supported form.
 
 ## 6. The set is derived; the mapping is declared
 
@@ -315,17 +333,19 @@ The maintainer decided, in this session:
 
 ## 9. The phases, and what is not decided
 
-- **P0-a — the `dylib` boundary.** A hand-built `crate-type = ["dylib"]` crate
-  built by the same rustc, loaded with `libloading`: does an `extern "C"` entry
-  taking `*mut Module<LangProgram>` and node ids resolve, read the host's module,
-  and hand back a node id the host can use? Does a manifest string read back? This
-  is the measurement that says whether ruling 2 is viable on this toolchain.
-- **P0-b — the `External` operator.** One core variant plus a runtime table, and a
-  `$name` op that lowers to it and runs through `OperatorExt::run`.
-- **P0-c — the lichen surface.** The four §5 readings: the refinement's
-  per-application re-check, the decided type value, the dependent annotation, and
-  the result type. No lichen change until these three pass; if one fails, the
-  shape changes.
+- **P0-a — the `dylib` boundary: measured, it works.** A scratch probe
+  (`target/link-probe`, not in the tree) built a `crate-type = ["dylib"]` crate
+  against lichen and loaded it from a host built from the same source by the same
+  rustc: the `#[unsafe(no_mangle)] extern "C"` entries resolved through
+  `libloading`, took `*mut Module<LangProgram>` and `*const NodeId`, read a host
+  node (`41`), read an f32 payload by bits (`0x3fc00000`), added a block and a
+  node to the host's module, and the host read the new node back (`USize(99)`); a
+  manifest string round-tripped. The dylib also produced an import library, so a
+  Rust consumer can link it dynamically. This is the reading that says ruling 2 is
+  viable on this toolchain.
+- **P0-b — the `External` operator: next.** One core variant plus a runtime table,
+  and a `$name` op that lowers to it and runs through `OperatorExt::run`.
+- **P0-c — the lichen surface: measured, it works** (§5).
 - **P1 — the recorder.** The whole-program scan (§6) over a real vbd-shaped
   wrapper: the used (entry, kind) set.
 - **P2 — the builder.** From the recorded set and the declared mapping, write the
