@@ -1,7 +1,8 @@
 # The array attribute view: sparse storage, full-width reading
 
-Status: **proposed** — the design is the superior's, the encoding below is the
-author's proposal and awaits confirmation. Nothing is implemented.
+Status: **stage 1 landed** (`df24812c`, `dev`): the storage, the registry, the
+default and the persistence. Stages 2–3 (the reader reroute and the unify wiring)
+are not started; stage 3 is where the isomorphism is measured.
 
 ## The problem, in the superior's words
 
@@ -29,9 +30,10 @@ session:
 
 ## The design
 
-**Every lowlevel array may carry a pointer to a full-width attribute array.**
-A module-global *default attribute array* supplies the holes of the sparse
-storage. The highlevel then reads every pair and every element slot as a
+**Every lowlevel array carries a mandatory attribute-layout id** naming one entry
+of a lowering-time index-array registry; the entry maps the array's slots to
+canonical attribute indices. A module-global *default attribute array* supplies
+the holes. The highlevel then reads every pair and every element slot as a
 full-width attribute array: positions it does not carry read the default.
 
 The underlying items stay as they are, so a type value remains a two-item
@@ -53,11 +55,15 @@ Concretely:
    tail. Entry `0` is the empty layout (no attributes — a plain value array, and
    what every order-0 construct picks). An entry lists, in slot order, the
    canonical attribute index each attribute slot of the value carries.
-2. **The array.** `LowValue::Array` gains a layout id:
-   `LowValue::Array { items: AnyHandle<[ArrayItem]>, layout: u32 }`. The pointer
-   is a *small integer*, not a heap array per value, so the storage stays O(1)
-   and the table is shared. Constructors: `LowValue::array(items)` picks layout
-   `0`; a builder that carries attributes passes the registered id.
+2. **The array.** `LowValue::Array(ArrayValue)` — a payload handle plus a
+   mandatory `layout: u32` (`ArrayValue::new` = layout `0`, `with_layout` = a
+   registered id; `Deref<Target = AnyHandle<[ArrayItem]>>` keeps every
+   `unsafe { array.items() }` read unchanged). The id is a *small integer*, not a
+   heap array per value, so the storage stays O(1) and the table is shared.
+   `Module::register_attribute_layout` de-duplicates by equality (O(1)) and
+   requires strictly increasing canonical indices; `Module::array_attribute`
+   binary-searches them, so a schema tail reaches the registry in **canonical
+   order**, never merely slot order.
 3. **The default.** A module-global **default attribute array**: the full-width
    slots an array's layout does not cover. Every canonical attribute the layout
    omits is read from the default, so the highlevel can treat every value as
@@ -83,13 +89,17 @@ Concretely:
    mechanical 241-site update; no behaviour change (all suites green).
 2. `lichen-highlevel`: the attribute readers rerouted through the accessor, still
    with the dense tails; no behaviour change.
-3. The checker builds the full-width attribute view (`slot_width` slots per
-   pair), and the runtime pair unify descends into it. Behaviour change: a
-   caller's attributes flow into the callee's cells, so
+3. The lowlevel array unify (`crates/lichen-lowlevel/src/equality.rs`, the two
+   `LowValue::Array` arms) wires attributes by canonical index through each
+   array's layout, a side that omits an index meeting the default. Behaviour
+   change: a caller's attributes flow into the callee's cells, so
    `perspective_of = x => {p = _; x # p; p}` (`type_of`'s shape) starts to work.
-4. The codec/freeze/static-module persistence (format bump) and the compute
-   vocabulary's `perspective_of` spelling replacing the call-site references
-   (`# @any`/`# x.to`), which are then deleted.
+4. The artifact carries the registry and the default — **landed with stage 1**
+   (`ARTIFACT_FORMAT_VERSION` 15; `StaticModule` copies both, and the default's
+   items count as roots, so a freeze cannot produce an artifact whose default
+   names a node it lacks). What remains: the compute vocabulary's
+   `perspective_of` spelling replacing the call-site references (`# @any`/
+   `# x.to`), which are then deleted.
 
 ## The superior's verdicts (recorded)
 
@@ -104,6 +114,16 @@ Concretely:
   (`type_of`'s shape and `perspective_of`'s must both work; the existing
   requirement tests must keep refusing what they refuse).
 
+## Measured with stage 1
+
+- `lichen-lowlevel` 164 passed / 0 failed (1 ignored), `lichen-highlevel` 136 / 0,
+  `lichen-language --test language` 275 / 0, and the artifact subset 16 / 0; the
+  compute perspective filter 4 / 0. Comments and format gates clean.
+- `cargo test -p lichen-lowlevel` did **not compile on the base** `dev`: eight
+  `Function { … }` literals in `crates/lichen-lowlevel/tests/basic/{assert,gc_safety,recursion,main}.rs`
+  named none of the five function-attribute fields. Stage 1 repaired them
+  (`None`); that repair is independent of the attribute view.
+
 ## Open questions
 
-Nothing blocks stage 1. Stage 3 is where the verdict above is measured.
+Stage 3 is where the verdict above is measured.
