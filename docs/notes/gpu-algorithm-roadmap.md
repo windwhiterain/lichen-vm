@@ -339,6 +339,21 @@ to a power of two. Rounding silently would be the worst of the three: a body
 proved uniform over 6 lanes is not automatically uniform over 4, and the program
 would not know which answer it got. This is §7's first open question.
 
+**What the lattice already checks, and what it does not.** A lane-group requirement is
+buildable today: `warp = 32; f = (acc : Int # warp) => acc` accepts a value uniform over
+32-groups (`7`, `# 64`) and refuses a lane-varying one (`# 1` → `expected 32, found 1`) or
+an incomparable width (`# 6` → `expected 32, found 6`, the divisibility finding above
+made executable — [attributes](attributes.md) §"A lane-group requirement"). That is the
+**uniform-load/broadcast** shape. The paper's `requires(thread[32])` on `wmma` is a
+*scope* requirement — the 32 lanes participate in one operation while a fragment's data
+is lane-varying — and the value lattice cannot express it. The concrete symptom: a
+perspective on a kernel config parameter, `(k : ParA # 4)`, still fails the build in a
+**runtime** unify (`expected raw[?a, raw[?b, ?c]] -> raw[?d, ?e], found struct{…} -> ?j`)
+rather than the attribute check, because the kernel-type unify is what sees it. A
+meaningful config annotation needs the scope perspective, which is the same lane-group
+question as [shared-memory-and-barriers](shared-memory-and-barriers.md) and is the
+prerequisite for a real MMA item.
+
 **And the part C does not cover.** A lane group that cannot talk to itself buys
 throughput, not capability. Tiled matrix multiply, a scan and a sub-group
 reduction all need **shared memory and a barrier** — lanes seeing each other's

@@ -158,6 +158,27 @@ now reconciles only the markers the **type expression carries**. And a call's te
 its apply node rather than a pair, so its propagated slot lives in the state and is
 read by `value_attr_for` when an annotation preserves it.
 
+### A lane-group requirement (the uniform-load shape)
+
+A value the whole lane group must agree on — a uniform load, a tile base, a config field
+a warp reads together — is a requirement the lattice already spells: `# 32` accepts a
+provider uniform over 32-groups (`32 | 0`, `32 | 64`) and refuses a lane-varying one
+(`32 ∤ 1`) or an incomparable width (`32 ∤ 6`). Measured:
+
+| program | result |
+|---|---|
+| `warp = 32; f = (acc : Int # warp) => acc; f 7` | ✓ — a uniform value satisfies the group |
+| `f (x # 64)` | ✓ — uniform over 64-groups implies uniform over 32 |
+| `f (0 # 1)` | ✗ — `expected 32, found 1` |
+| `f (0 # 6)` | ✗ — `expected 32, found 6` (divisibility, not order) |
+
+**This is not the paper's `requires(thread[32])`.** The reference document types `wmma`
+with a *scope* requirement — the 32 lanes participate in one operation — while a
+fragment's data is lane-varying inside the group. `Perspective` states value
+uniformity, so the check above is the uniform-load/broadcast shape; a warp-level MMA
+operand needs the scope perspective this codebase does not have yet
+([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2, §7).
+
 It is worth recording a conclusion that was reached the wrong way first, because the
 wrong version is the tempting one. The obvious claim is that a GPU backend *needs*
 this, because "the body must be index-free" — that is false. A compute shader indexes

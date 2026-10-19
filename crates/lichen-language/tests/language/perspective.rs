@@ -243,3 +243,21 @@ fn a_returned_perspective_survives_a_type_annotation() {
         "expected 4, found 2"
     );
 }
+
+#[test]
+fn a_lane_group_requirement_takes_only_a_group_uniform_value() {
+    // A value the whole 32-lane group must agree on — a uniform load, a tile base.
+    assert!(ok("warp = 32\nf = (acc : Int # warp) => acc\nf 7"));
+    assert!(ok(
+        "warp = 32\nf = (acc : Int # warp) => acc\nx = 7\nf (x # 64)"
+    ));
+    assert_eq!(
+        message("warp = 32\nf = (acc : Int # warp) => acc\nf (0 # 1)"),
+        "expected 32, found 1"
+    );
+    // The lattice is divisibility: 32 and 6 are incomparable.
+    assert_eq!(
+        message("warp = 32\nf = (acc : Int # warp) => acc\nf (0 # 6)"),
+        "expected 32, found 6"
+    );
+}
