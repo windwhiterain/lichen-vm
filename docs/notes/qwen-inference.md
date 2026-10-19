@@ -243,16 +243,17 @@ missing 2513 MiB was one orphaned copy of every tensor, and the driver refused a
 request was twice the model.
 
 `graph::run` now hands back every buffer the run produced that the caller did not bring in and that the
-graph does not return. Twenty layers plus the head fall to **2514 MiB resident**, and the 629 MiB the pool
-holds is the pool, bounded at `RECYCLED_PER_SIZE` buffers per size and class. What a `place` compiles is not
-part of it: the pipeline cache is keyed on content digests, so 309 prepares of the same source leave
-**one** pipeline.
+graph does not return. Twenty layers plus the head fall to **2514 MiB resident** and 3773 MiB of
+device-local bytes in all, the other 1259 MiB of which is the pool, bounded at `RECYCLED_PER_SIZE` buffers
+per size and class. What a `place` compiles is not part of it: the pipeline cache is keyed on content
+digests, so 309 prepares of the same source leave **one** pipeline.
 
 All twenty-eight layers plus the head now place on the 6 GB card: **3282 MiB** of weights resident, 1259 MiB
 pooled, **4541 MiB** of device-local bytes in all against 5994 MiB of heap, and `nvidia-smi` peaks at
-4750 MiB where it used to exhaust the card at twenty layers. `LICHEN_RESIDENT_LAYERS=28 LICHEN_ONLY_PLACED=1
-cargo test --release -p lichen-serve --test resident_token` passes, still naming `[9707, 25, 358]`, at
-2.8 s and 3.0 s a token.
+4771 MiB where it used to exhaust the card at twenty layers. `LICHEN_RESIDENT_LAYERS=28 LICHEN_ONLY_PLACED=1
+cargo test --release -p lichen-serve --test resident_token` passes, still naming `[9707, 25, 358]`; the
+tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
+model — another session was on the card throughout.
 
 ## Running it
 
