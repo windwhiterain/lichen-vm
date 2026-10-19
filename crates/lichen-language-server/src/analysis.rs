@@ -2719,10 +2719,10 @@ mod tests {
         assert!(
             files.iter().any(|file| {
                 file.path.file_name().is_some_and(|n| n == "core.lichen")
-                    && file
-                        .diagnostics
-                        .iter()
-                        .any(|d| d.message.contains("assertion failed"))
+                    && file.diagnostics.iter().any(|d| {
+                        d.message
+                            .contains("the refinement's predicate did not answer 1")
+                    })
             }),
             "expected the built-in's failure on the built-in's file, got {files:?}"
         );
