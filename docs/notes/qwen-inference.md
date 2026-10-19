@@ -266,9 +266,18 @@ exactly what the tiling pass refuses, printed by `Prepared::report`:
 
 So the fold was never spread across the workgroup, and the reading that held the fold responsible for the
 per-row price was wrong for a reason the pass states better than any probe: a fold whose extent arrives at
-run time cannot be cut into tiles at prepare time. The fix is small and it is not the mega kernel: prepare
-the projection **per shape** with the extents written as literals, which is five programs — q, k and v, o,
-gate and up, and down — instead of one, and the pass then has a whole number of tiles to build.
+run time cannot be cut into tiles at prepare time.
+
+A second reading corrected the first. A projection whose **launch extent** is a literal, with its fold left
+dynamic, prepares — and the launch-extent refusal is gone — but the pack is then refused for a second reason:
+
+    node 0: pack "narrow" was refused: the reduction's combine is in BFloat16 and its identity in Float,
+            and a fold's identity is the value its combine is applied to
+
+which is the last link and a small one: the program states its identity as a `Float` literal while the pack
+narrows the combine to `BFloat16`, so the two do not agree and the plan is refused before any tiling is
+considered. Both conditions have to hold — a launch extent a tile can divide, and an identity of the class
+the fold combines in — and neither alone is what this note first wrote down.
 
 ## What the hand-off probe could not settle
 
