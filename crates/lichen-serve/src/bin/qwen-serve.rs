@@ -1,6 +1,7 @@
 //! An OpenAI-compatible face over the model: a `/v1` surface, one worker, one generation at a time.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
 use axum::Json;
@@ -47,11 +48,95 @@ enum Answer {
     Stream(tokio::sync::mpsc::UnboundedSender<Option<usize>>),
 }
 
+/// What the service has done, which is what `/metrics` reports.
+///
+/// # Invariant
+/// Every counter moves on the side that owns it: the HTTP side counts a refusal it answered, and the worker
+/// counts everything the batch did, so a number is never written by two threads at once.
+#[derive(Default)]
+struct Metrics {
+    /// Requests taken onto the queue.
+    admitted: AtomicU64,
+    /// Requests refused because the queue was full.
+    refused: AtomicU64,
+    /// Requests answered to their end.
+    finished: AtomicU64,
+    /// Tokens answered.
+    tokens: AtomicU64,
+    /// Batch steps taken.
+    steps: AtomicU64,
+    /// Requests live in the batch now.
+    live: AtomicU64,
+    /// Time spent inside batch steps, in nanoseconds.
+    step_nanos: AtomicU64,
+}
+
+impl Metrics {
+    /// One line of the exposition format.
+    fn line(&self, name: &str, kind: &str, help: &str, value: u64) -> String {
+        format!(
+            "# HELP {name} {help}
+# TYPE {name} {kind}
+{name} {value}
+"
+        )
+    }
+
+    /// Every counter, in the exposition format a scraper reads.
+    fn render(&self) -> String {
+        let mut text = String::new();
+        text += &self.line(
+            "lichen_requests_admitted",
+            "counter",
+            "requests taken onto the queue",
+            self.admitted.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_requests_refused",
+            "counter",
+            "requests refused because the queue was full",
+            self.refused.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_requests_finished",
+            "counter",
+            "requests answered to their end",
+            self.finished.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_tokens_answered",
+            "counter",
+            "tokens answered",
+            self.tokens.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_batch_steps",
+            "counter",
+            "batch steps taken",
+            self.steps.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_batch_live",
+            "gauge",
+            "requests live in the batch",
+            self.live.load(Ordering::Relaxed),
+        );
+        text += &self.line(
+            "lichen_step_nanoseconds",
+            "counter",
+            "time spent inside batch steps",
+            self.step_nanos.load(Ordering::Relaxed),
+        );
+        text
+    }
+}
+
 /// What the HTTP side shares: the queue in front of the one worker.
 #[derive(Clone)]
 struct Shared {
     jobs: mpsc::SyncSender<Job>,
     tokenizer: Arc<Tokenizer>,
+    metrics: Arc<Metrics>,
 }
 
 /// The worker: one model, opened once, answering until the queue closes.
@@ -60,7 +145,7 @@ struct Shared {
 /// A generation is the worker's alone and never returns to the HTTP side, because the model's dispatches
 /// are host-blocking calls on one session: a second thread would share the device and the pool with it, and
 /// the queue is what turns that into one prompt after another rather than two at once.
-fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
+fn worker(session: &Session, jobs: mpsc::Receiver<Job>, metrics: Arc<Metrics>) {
     let Ok(mut model) = Qwen::open_with(session, Width::Narrowed) else {
         return;
     };
@@ -78,6 +163,7 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
                     let admitted = batched.admit(&job.prompt, job.limit, job.sampling);
                     match admitted {
                         Ok(id) => {
+                            metrics.admitted.fetch_add(1, Ordering::Relaxed);
                             waiting.insert(id, job.answer);
                         }
                         Err(_) => drop(job.answer),
@@ -97,6 +183,7 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
             match jobs.recv() {
                 Ok(job) => {
                     if let Ok(id) = batched.admit(&job.prompt, job.limit, job.sampling) {
+                        metrics.admitted.fetch_add(1, Ordering::Relaxed);
                         waiting.insert(id, job.answer);
                     }
                 }
@@ -104,10 +191,19 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
             }
             continue;
         }
+        let started = std::time::Instant::now();
         let answered = match batched.step() {
             Ok(answered) => answered,
             Err(_) => break,
         };
+        metrics.steps.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .step_nanos
+            .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        metrics
+            .tokens
+            .fetch_add(answered.len() as u64, Ordering::Relaxed);
+        metrics.live.store(batched.live() as u64, Ordering::Relaxed);
         for (id, token) in answered {
             if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
                 let _ = tokens.send(Some(token));
@@ -133,7 +229,9 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
                 None => {}
             }
             batched.retire(id);
+            metrics.finished.fetch_add(1, Ordering::Relaxed);
         }
+        metrics.live.store(batched.live() as u64, Ordering::Relaxed);
     }
 }
 
@@ -232,6 +330,7 @@ async fn generate(
         })
         .is_err()
     {
+        shared.metrics.refused.fetch_add(1, Ordering::Relaxed);
         return Err(());
     }
     answer.await.map_err(|_| ())
@@ -283,6 +382,10 @@ fn chat_chunk(token: &usize, tokenizer: &Tokenizer) -> String {
         "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": null }],
     })
     .to_string()
+}
+
+async fn metrics(State(shared): State<Shared>) -> String {
+    shared.metrics.render()
 }
 
 async fn models() -> Json<Value> {
@@ -415,6 +518,9 @@ fn main() {
         .unwrap_or(8080);
     let (jobs, queue) = mpsc::sync_channel(QUEUE);
     let (ready, started) = mpsc::channel();
+    // The name the handler answers to is the route's, so the counters are the one thing named apart.
+    let counters = Arc::new(Metrics::default());
+    let counted = Arc::clone(&counters);
     std::thread::spawn(move || {
         let session = match Session::open() {
             Ok(session) => session,
@@ -429,7 +535,7 @@ fn main() {
             .unwrap_or_else(|_| std::path::PathBuf::from(".model"));
         eprintln!("the model is loaded; the queue is open");
         let _ = ready.send(true);
-        worker(&session, queue);
+        worker(&session, queue, counted);
     });
     if !started.recv().unwrap_or(false) {
         std::process::exit(1);
@@ -444,7 +550,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let shared = Shared { jobs, tokenizer };
+    let shared = Shared {
+        jobs,
+        tokenizer,
+        metrics: Arc::clone(&counters),
+    };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -454,6 +564,7 @@ fn main() {
     };
     runtime.block_on(async move {
         let app = Router::new()
+            .route("/metrics", get(metrics))
             .route("/v1/models", get(models))
             .route("/v1/chat/completions", post(chat))
             .route("/v1/completions", post(complete))
