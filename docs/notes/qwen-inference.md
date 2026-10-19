@@ -303,8 +303,10 @@ which needs the stages to see each other's writes, which needs a barrier, which 
 [shared-memory-and-barriers](shared-memory-and-barriers.md) calls the largest single item in its axis and
 whose staging table is the map of how far it has got.
 
-That table, read rather than assumed: step 1 (the revert of the zero-width `State` token) is the one
-**outstanding** row; steps 2, 3 and 4 landed (the lane-group width, the slice vocabulary with the barrier as
+That table, read rather than assumed — and then checked against the tree, which is the part that matters,
+because the table's own step 1 is **stale**: it still lists the revert of the zero-width `State` token as
+outstanding, and `ScalarClass` in the tree has three variants, `Int`, `Float` and `BFloat16`, with no `State`
+among them. So every step of that staging has landed: steps 2, 3 and 4 (the lane-group width, the slice vocabulary with the barrier as
 data, the barrier scan); step 5's GPU half landed on its own (a `Workgroup` variable per slot, an
 `OpControlBarrier`, no change to the binding layout); step 7's placement landed at `77fafaf`; and step 8 --
 a `Reduction` tiled across the workgroup rather than folded per lane -- landed at `d3f984f`. So the
@@ -314,9 +316,10 @@ still per-lane, and the [staging table](shared-memory-and-barriers.md#9-the-stag
 replaces `Folding::per_lane`'s schedule, while a program that writes `fold (k.dim, …)` folds the whole
 extent in every lane and cannot be tiled into something it does not already answer.
 
-So the first step toward the mega kernel is not a barrier: it is a projection **written in the form the
-tiling recognizes**, and the measurement that says whether that form is faster before the rest of a layer is
-rewritten into it.
+So the staging is complete where this note needs it, and the next step is a **spike**: one small body that
+writes a slice, keeps it in a workgroup, reads it back after a barrier, and runs — because a table saying a
+capability landed is a claim about a table, and the tree's own note records a case where a read with no data
+path compiled and answered `0`.
 
 ## What a burst is answered with
 
