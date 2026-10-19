@@ -90,8 +90,8 @@ its own pass then decides every expression's type slot. Measured on the merge ti
 Int) => x; f "s"` reports `expected Int, found string` once in both modes, the caret on the
 argument, and the computed-type programs (`array{Int, 2 + 3}`) read the same in both.
 `BufferSession::set_mode` exposes the choice; a `Check` session loads and writes no cells.
-`incremental-evaluation.md` Q9 records why the LSP has not switched yet (hover's contract for
-an undecided value).
+`editor-check-mode.md` records the editor's use of the mode: it analyses in `Check` and
+evaluates nothing.
 
 ## 6. A `Check` build evaluates the asserts it can decide
 

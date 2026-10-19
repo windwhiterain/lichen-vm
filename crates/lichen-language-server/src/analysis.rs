@@ -347,7 +347,7 @@ where
         None,
         Vec::new(),
         "",
-        Mode::Evaluate,
+        Mode::Check,
     );
     let span_index = report.span_index.take().map(Arc::new);
     let build = report.build.take().map(Arc::new);
@@ -2778,14 +2778,15 @@ mod tests {
             })
             .expect("hover on `x` def");
         assert!(msg.contains("3 : Int"), "hover msg = {msg}");
-        // On the use of `y` in the final expression `x + y`: value 7 : Int.
+        // On the use of `y` in the final expression `x + y`: its type only — the editor
+        // evaluates nothing outside check mode.
         let (msg, _) = d
             .hover_at(Position {
                 line: 2,
                 character: 4,
             })
             .expect("hover on `y` use");
-        assert!(msg.contains("7 : Int"), "hover msg = {msg}");
+        assert!(msg.contains("`Int`"), "hover msg = {msg}");
     }
 
     #[test]
@@ -3064,7 +3065,7 @@ mod tests {
                     line: 6,
                     character: 6,
                 },
-                "Int => Int : Int -> Int",
+                "Int -> Int",
             ),
             // `.inc_twice` field access on `geo`
             (
@@ -3072,7 +3073,7 @@ mod tests {
                     line: 6,
                     character: 33,
                 },
-                "Int => Int : Int -> Int",
+                "Int -> Int",
             ),
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
@@ -3099,12 +3100,11 @@ mod tests {
             !msg.contains("unresolved") && !msg.contains("field of imported module"),
             "field access hover msg = {msg}"
         );
-        // A function value prints its own signature before the type, so the type
-        // half is what follows the **last** separator.
+        // The editor evaluates nothing, so the field renders its type alone.
         let rendered = msg
-            .rsplit_once(" : ")
-            .map(|(_, ty)| ty)
-            .unwrap_or_else(|| panic!("the field renders as a value : type; got {msg}"));
+            .rsplit_once(" — `")
+            .map(|(_, ty)| ty.trim_end_matches('`'))
+            .unwrap_or_else(|| panic!("the field renders its type; got {msg}"));
         let sides: Vec<&str> = rendered
             .split("->")
             .map(|side| side.trim().trim_end_matches('`').trim())

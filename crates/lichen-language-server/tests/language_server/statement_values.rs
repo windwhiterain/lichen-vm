@@ -92,21 +92,22 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
-    for sv in vals {
+    // Check decides `k_double`'s cells; `k_outer`'s `.O` stays open (`raw none`).
+    for (sv, (value, ty)) in vals.iter().zip([
+        (
+            "(raw none, Int, Int)",
+            "struct{.native raw[?a, ?b], .I Type, .O Type}",
+        ),
+        (
+            "(raw none, Int, raw none)",
+            "struct{.native raw[?a, ?b], .I Type, .O raw[?c, ?d]}",
+        ),
+    ]) {
         // The two field values are type constants, so their own types name them.
-        assert_eq!(
-            sv.value.as_deref(),
-            Some("(raw Kernel, Int, Int)"),
-            "value = {:?}",
-            sv.value
-        );
+        assert_eq!(sv.value.as_deref(), Some(value), "value = {:?}", sv.value);
         // The type is read where it is decided: the input and output fields hold
         // types, so their own type is the universe.
-        assert_eq!(
-            sv.ty, "struct{.native raw[?a, ?b], .I Type, .O Type}",
-            "type = {:?}",
-            sv.ty
-        );
+        assert_eq!(sv.ty, ty, "type = {:?}", sv.ty);
     }
 
     // The hover on the `k_double` binding renders the snapshot's `value : type`.
@@ -118,7 +119,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(raw Kernel, Int, Int) : \
+        "`k_double` — `(raw none, Int, Int) : \
          struct{.native raw[?a, ?b], .I Type, .O Type}`"
     );
 }
@@ -210,18 +211,14 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         })
         .expect("hover on `launch`");
     let cells = type_variables(&hover);
-    // The kernel struct's cells join the wrapper's, and each codomain repeats by name.
+    // The type alone: each codomain repeats its domain's cells by name.
     assert_eq!(
         cells.len(),
-        24,
-        "launch names the kernel struct's cells in both halves: {hover}"
+        12,
+        "launch names the kernel struct's cells in its type: {hover}"
     );
     let mut distinct = cells.clone();
     distinct.sort();
     distinct.dedup();
-    assert_eq!(
-        distinct.len(),
-        16,
-        "the two halves name their own cells: {hover}"
-    );
+    assert_eq!(distinct.len(), 8, "the type names its own cells: {hover}");
 }

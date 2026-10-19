@@ -475,8 +475,10 @@ entry point, and that nothing further should be built.
   (every expression's type slot is decided; no value slot is entered). `BufferSession::set_mode`
   carries the choice, a `Check` session neither loads nor writes cell artifacts, and
   `apply-type-side-check.md` records the type side that makes the check mode report type
-  conflicts. The LSP still analyses in `Evaluate` until hover's contract for an undecided value
-  is ruled on; the wall-clock comparison of the two modes is then a probe over that switch.
+  conflicts. The editor now analyses in `Check` and **evaluates nothing**: a hover renders
+  `value : type` only when check decided the value (a literal, a type constant), and the
+  statement-values snapshot stays index-time. `editor-check-mode.md` records the readings and
+  the one rendering dependency that remains.
 
 ## 8. Where the changes would land
 
