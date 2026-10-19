@@ -5,6 +5,7 @@ edition.workspace = true
 description = "A session that owns a compute backend and reports what one run asked the device for."
 
 [dependencies]
+axum = "0.8"
 fancy-regex = "0.14"
 lichen-compute.workspace = true
 lichen-compute-gpu.workspace = true
@@ -12,5 +13,7 @@ lichen-graph-ir.workspace = true
 lichen-kernel-ir.workspace = true
 lichen-language.workspace = true
 lichen-utils.workspace = true
+serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync"] }
 unicode-normalization = "0.1"

@@ -431,6 +431,74 @@ impl<'session> Qwen<'session> {
         self.generate_under(start, count, sampling, on_token)
     }
 
+    /// Generate from a whole prompt, which is what a request hands over.
+    ///
+    /// # Invariant
+    /// The prompt fills the cache before any token is chosen: every prompt token runs through the layers at
+    /// its own position without sampling, and the last one's state is what the first answer comes from. A
+    /// model started from the prompt's last token alone would answer as if the request were one word.
+    pub fn generate_from<F: FnMut(usize)>(
+        &self,
+        prompt: &[usize],
+        limit: usize,
+        sampling: crate::Sampling,
+        mut on_token: F,
+    ) -> Result<Generated, QwenRefusal> {
+        let mut caches: Vec<Cache> = (0..LAYERS).map(|_| Cache::default()).collect();
+        let mut tokens: Vec<usize> = prompt.to_vec();
+        let mut hidden = Vec::new();
+        for (position, token) in prompt.iter().enumerate() {
+            hidden = self.embed_row(*token);
+            for layer in 0..LAYERS {
+                hidden = self.layer(layer, hidden, &mut caches[layer], position as i64)?;
+            }
+        }
+        let mut draw = crate::sampling::randomness(sampling.seed);
+        let mut per_token = Vec::new();
+        let start = prompt.len() as i64;
+        let mut position = start;
+        for step in 0..limit {
+            let started = std::time::Instant::now();
+            let normalised = self.steps.normalised(
+                self.session,
+                &hidden,
+                self.steps.payload(&self.final_norm),
+                1,
+                HIDDEN as i64,
+            )?;
+            let logits = self.steps.projected(
+                self.session,
+                &normalised,
+                self.head_weight(),
+                VOCABULARY as i64,
+                HIDDEN as i64,
+            )?;
+            let chosen = crate::sampling::choose(&logits, &sampling, &mut draw);
+            tokens.push(chosen);
+            per_token.push(started.elapsed());
+            on_token(chosen);
+            if step + 1 == limit {
+                break;
+            }
+            hidden = self.embed_row(chosen);
+            for layer in 0..LAYERS {
+                hidden = self.layer(layer, hidden, &mut caches[layer], position)?;
+            }
+            position += 1;
+        }
+        Ok(Generated { tokens, per_token })
+    }
+
+    /// The row a token starts from, read out of whichever copy the model holds.
+    fn embed_row(&self, token: usize) -> Vec<f32> {
+        match &self.embedding_bytes {
+            None => self.embedding[token * HIDDEN_SIZE..(token + 1) * HIDDEN_SIZE].to_vec(),
+            Some(bytes) => {
+                halves_to_floats(&bytes[token * HIDDEN_SIZE * 2..(token + 1) * HIDDEN_SIZE * 2])
+            }
+        }
+    }
+
     /// Generate, handing each token to `on_token` as it is chosen.
     ///
     /// # Invariant
@@ -462,12 +530,7 @@ impl<'session> Qwen<'session> {
         for position in 0..count {
             let started = Instant::now();
             // The row the token starts from, read out of whichever copy the model holds.
-            let row = match &self.embedding_bytes {
-                None => self.embedding[token * HIDDEN_SIZE..(token + 1) * HIDDEN_SIZE].to_vec(),
-                Some(bytes) => {
-                    halves_to_floats(&bytes[token * HIDDEN_SIZE * 2..(token + 1) * HIDDEN_SIZE * 2])
-                }
-            };
+            let row = self.embed_row(token);
             let mut hidden = row;
             for layer in 0..LAYERS {
                 hidden = self.layer(layer, hidden, &mut caches[layer], position as i64)?;
