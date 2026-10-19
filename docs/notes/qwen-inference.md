@@ -339,6 +339,19 @@ step, with a sampler per request rather than one per batch. Two requests sent to
 `The capital of France is`, four tokens each — were answered in **4 s** rather than the sum of their separate
 runs, the second of them ending `Paris`.
 
+## What was decided, and what was not
+
+The user's verdict on prefix caching, recorded because it rules out the next big optimisation for now:
+**not yet** — "先不做缓存，去做别的". The design was presented as three shapes (whole-prompt exact, block
+level, or the chat template's fixed head) with the recommendation of landing exact-plus-LRU first and
+measuring a hit rate before paying for block matching, and the answer was to spend the time elsewhere. So a
+repeated conversation prefix is prefilled again on every request, and that is a decision rather than an
+oversight.
+
+What came instead: a request may keep a nucleus of its candidates (`top_p`), and `/metrics` carries a
+histogram of a request's wall time — buckets that count what a scraper reads cumulatively, a `_count` and a
+`_sum` beside them, which is the shape a duration needs before any optimisation can be argued about.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
