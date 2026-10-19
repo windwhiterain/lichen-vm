@@ -763,12 +763,8 @@ where
                 if self.node_value(declared).is_none() {
                     continue;
                 }
-                let Some(ext) = self.attribute_extension(marker) else {
-                    continue;
-                };
-                let found = self.provided_slot(argument, marker, ext);
                 let loc = self.loc(argument, shape::PAIR_ATTR_BASE);
-                ext.unify_slots(self, found, declared, loc);
+                self.unify_declared_value(argument, marker, declared, loc);
             }
         }
     }

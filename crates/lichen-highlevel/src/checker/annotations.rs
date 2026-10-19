@@ -235,6 +235,32 @@ where
         ext.combine(self, &attrs)
     }
 
+    /// The provided slot against a declared value: one attribute requirement,
+    /// through the extension's relaxation.
+    ///
+    /// # Invariant
+    /// An undecided declared value states nothing (`#_`) and is skipped, so no call
+    /// pins a template's cell; the relaxation is the extension's own (a perspective's
+    /// `declared | provided`).
+    pub(super) fn unify_declared_value(
+        &mut self,
+        argument: ExprId,
+        marker: &P::Attr,
+        declared: NodeId,
+        loc: Loc,
+    ) where
+        P::Attr: PartialEq,
+    {
+        let Some(ext) = self.attribute_extension(marker) else {
+            return;
+        };
+        if self.node_value(declared).is_none() {
+            return;
+        }
+        let found = self.provided_slot(argument, marker, ext);
+        ext.unify_slots(self, found, declared, loc);
+    }
+
     /// The attribute's *missing* slot node, shared when the attribute opted
     /// in, else built fresh by the extension.
     ///

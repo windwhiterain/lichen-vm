@@ -291,17 +291,12 @@ where
         else {
             return;
         };
-        let Some((marker, ext)) = self.static_tail_owner(slot) else {
+        let Some((marker, _ext)) = self.static_tail_owner(slot) else {
             return;
         };
         let declared = slot_value_node(&*self, slot);
         self.module.evaluate_node_deep(declared, None);
-        if self.node_value(declared).is_none() {
-            return;
-        }
-        let found = self.provided_slot(argument, &marker, ext);
-        let loc = self.loc(e, 2);
-        ext.unify_slots(self, found, slot, loc);
+        self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
     }
 
     /// The attribute that owns a copied frozen tail slot, with its behaviour.
@@ -373,16 +368,10 @@ where
         // A build with no extension already failed the guard where the
         // attribute was first read, so this check is skipped.
         if let Some((param_marker, param_slot)) = param_persp {
-            if let Some(ext) = self.attribute_extension(&param_marker) {
-                // `#_` states nothing (attributes.md); unifying would pin the template.
-                let declared = crate::attr::slot_value_node(&*self, param_slot);
-                self.module.evaluate_node_deep(declared, None);
-                if self.node_value(declared).is_some() {
-                    let found = self.provided_slot(argument, &param_marker, ext);
-                    let loc2 = self.loc(e, 2);
-                    ext.unify_slots(self, found, param_slot, loc2);
-                }
-            }
+            // `#_` states nothing (attributes.md); unifying would pin the template.
+            let declared = crate::attr::slot_value_node(&*self, param_slot);
+            self.module.evaluate_node_deep(declared, None);
+            self.unify_declared_value(argument, &param_marker, declared, self.loc(e, 2));
         } else if let Some(sref) = static_callee {
             self.check_static_parameter(sref, argument, e);
         }
