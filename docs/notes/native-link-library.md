@@ -1,13 +1,13 @@
 # A native link library: a Rust generic behind a lichen generic
 
 > Status: **proposed — ruled; measured: P0-a, P0-b, P0-c, the end-to-end proof, the
-> loader, the `link` directive, the recorder, the builder, the position map and
-> the program gate.**
+> loader, the `link` directive, the recorder, the builder, the position map, the
+> program gate, and both check paths (CLI and editor).**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
 > §11 the loader and the operand shape it settles, §12 the directive, §13 the
 > recorder, §14 the manifest writer and the position map, §15 the builder and the
-> program gate.
+> program gate, §16 the editor's check path.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -379,18 +379,20 @@ The maintainer decided, in this session:
 - **P3 — positions: done** (§14). `SpliceMap` maps a spliced diagnostic back to
   the file: a program position by the prefix count, a wrapper position to its
   `link` directive.
-- **P3 — the LSP path: next.** The CLI already runs through `evaluate_raw_reporting`,
-  so a `link` in its block works there; the language server still compiles
-  without the linked sources.
+- **P3 — the LSP path: done** (§16). The language server binds each linked
+  library as a package with direct bindings, so the program is checked in its
+  own coordinates; the CLI already ran through `evaluate_raw_reporting`.
 
 Decided, by the P3 implementation:
 
-- **The manifest encoding is text**: `lichen-link 1`, a `build` line,
-  `family <name> <instance> <symbol>` lines, a `source` line, and the lichen
-  source verbatim after it.
-- **The wrapper is spliced as source, not frozen as a package**: only the
-  spliced form instantiates per application deterministically (§10, §11).
-
+- **The manifest encoding is text**: `lichen-link 1`, a `program` line, a
+  `build` line, `bind <name>` lines, `family <name> <instance> <symbol>` lines, a
+  `source` line, and the lichen source verbatim after it.
+- **Evaluation splices source; the check binds a package**: only the spliced form
+  instantiates per application deterministically (§10, §11), so a host that
+  evaluates splices (`crate::run`); a check never evaluates the wrapper, so the
+  editor binds it as a package with `direct` names (§16) and keeps the program's
+  coordinates.
 Not decided yet:
 
 - **What the recorder's output artifact is**: a Rust source fragment, a JSON list,
@@ -609,3 +611,39 @@ error: the library was built for program "some::Other"; this one is "lichen_comp
 The entries read the module through `P`'s layouts, so this is the gate that keeps
 one program's library out of another's compiler — the build tag guards the lichen
 version, this guards the vocabulary.
+
+## 16. Check mode: the editor loads the library
+
+The language server checks a linked program **without evaluating the wrapper**,
+so it binds the library as a package instead of splicing source:
+
+- `PackageStore::link_imports` loads each `link` directive's library and
+  registers its wrapper with the library's ops (`register_linked`); it answers
+  the imports a check compiles against;
+- the manifest's `bind` lines name the wrapper's top-level bindings in source
+  order, and the store zips them with the build's statements — a length mismatch
+  is refused, never paired wrongly;
+- the handle's `direct` entries bind those names beside the import, so the
+  program calls `sample` unqualified, exactly as the spliced wrapper would be.
+
+Both editor paths — `analysis::analyze` (one-shot) and `server::analyze` (the
+incremental session) — apply it before the frontend runs, so the program keeps
+its own coordinates: no prefix, no position map.
+
+Measured through the real server binary (a scratch LSP client):
+
+- a linked program publishes **no diagnostics**, and hover on `sample` resolves
+  to the wrapper's binding;
+- `sample Float "a"` publishes `expected Float, found string` at the program's
+  own line 1 (0-based), characters 13–14.
+
+Two findings from wiring it:
+
+- **`HighPackageMeta::direct` is load-bearing.** The first store's handle carries
+  the direct entries, but a later store over the same registry rebuilds the
+  handle from the meta ("a key names one artifact"); without recording `direct`
+  there, the second document reports `unresolved name 'sample'` — measured, then
+  fixed by writing `direct` into the meta.
+- **Hover names the wrapper's virtual source** ("defined at line 2 of
+  `__link0.lichen`"), not the directive. Pointing the direct bindings at the
+  `link` directive's span is the refinement; the check itself is right.

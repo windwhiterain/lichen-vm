@@ -325,8 +325,21 @@ where
 
     // Cut the leading `---…---` block off the input; `base` resolves imports.
     let mut diagnostics = preprocess::stage_depends::<P>(store, &source);
-    let (pre, preprocess_diagnostics) = preprocess::preprocess(&source, base, store);
+    let (mut pre, preprocess_diagnostics) = preprocess::preprocess(&source, base, store);
     diagnostics.extend(preprocess_diagnostics);
+
+    // A `link`ed library is a package: its bindings are direct, so calls are
+    // unqualified.
+    if !pre.links.is_empty() {
+        match store.link_imports(&pre.links, base) {
+            Ok(imports) => pre.imports.extend(imports),
+            Err((span, message)) => {
+                diagnostics.push(Diag::from_preprocess(preprocess::PreprocessDiag::new(
+                    span, message,
+                )));
+            }
+        }
+    }
 
     // The frontend artifacts, in absolute file coordinates.
     let lexed = lex::lex_with(pre.code, &line_starts, pre.code_base);

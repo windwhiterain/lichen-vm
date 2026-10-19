@@ -16,8 +16,7 @@ pub use lichen_preprocess::{
     Depend, Directive, LocatedDirective, PreprocessDiag, block_depends, block_directives,
     block_metadata, depend_of, split_block,
 };
-pub use lichen_preprocess::{ImportResolver, ResolvedPackage};
-
+pub use lichen_preprocess::{ImportResolver, Link, ResolvedPackage};
 /// The language crate pins the export handle to its static node id.
 pub type ResolvedImport = lichen_preprocess::ResolvedImport<StaticNodeId>;
 /// The language crate pins the preprocessor's output to its static node id.

@@ -279,9 +279,21 @@ where
         let mut store = self.store();
         let base = uri.to_file_path().ok();
         let mut diagnostics = preprocess::stage_depends::<P>(&mut store, text);
-        let (pre, preprocess_diagnostics) =
+        let (mut pre, preprocess_diagnostics) =
             preprocess::preprocess(text, base.as_deref(), &mut store);
         diagnostics.extend(preprocess_diagnostics);
+        // A `link`ed library is a package: its bindings are direct, so calls are
+        // unqualified.
+        if !pre.links.is_empty() {
+            match store.link_imports(&pre.links, base.as_deref()) {
+                Ok(imports) => pre.imports.extend(imports),
+                Err((span, message)) => {
+                    diagnostics.push(lichen_language::diag::Diag::from_preprocess(
+                        preprocess::PreprocessDiag::new(span, message),
+                    ));
+                }
+            }
+        }
         let line_starts = lex::line_starts(text);
 
         let registry = Arc::clone(&self.registry);

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::Build;
-use lichen_highlevel::native::NativeOps;
+use lichen_highlevel::native::{NativeOp, NativeOps};
 use lichen_highlevel::program::{HighPackageMeta, PackageSource, TypeOperator, ValueType};
 use lichen_lowlevel::{
     AnyNodeId, LocalNodeId, ModuleKey, NodeId, Registry, StaticModule, StaticNodeId,
@@ -415,6 +415,14 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             .iter()
             .find(|(_, known, _)| *known == id)
             .map(|(_, _, library)| library.source())
+    }
+
+    /// The loaded library `id` names.
+    pub fn linked_library(&self, id: u32) -> Option<&crate::link::LinkedLibrary> {
+        self.linked
+            .iter()
+            .find(|(_, known, _)| *known == id)
+            .map(|(_, _, library)| library)
     }
 
     /// The ops every linked library supplies, in load order.
@@ -1069,6 +1077,35 @@ where
         source: &str,
         native_ops: NativeOps<P>,
     ) -> Result<PackageHandle, String> {
+        self.register_embedded(virtual_path, source, native_ops, &[])
+    }
+
+    /// Register a linked library's wrapper and answer the names it binds.
+    ///
+    /// # Invariant
+    ///
+    /// The names are the manifest's `bind` lines, in source order; a length
+    /// mismatch against the build's statements is refused, never paired wrongly.
+    /// The handle's `direct` entries name the frozen refs a host binds beside the
+    /// import, so a program calls the wrapper unqualified, exactly as a spliced
+    /// wrapper would be called.
+    pub fn register_linked(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<P>,
+        bindings: &[String],
+    ) -> Result<PackageHandle, String> {
+        self.register_embedded(virtual_path, source, native_ops, bindings)
+    }
+
+    fn register_embedded(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<P>,
+        bindings: &[String],
+    ) -> Result<PackageHandle, String> {
         // Reuse an already-registered module, so one registry holds it once.
         if let Some(handle) = self.registered_builtin(virtual_path) {
             return Ok(handle);
@@ -1092,6 +1129,31 @@ where
         }
         let build = report.build.unwrap();
 
+        // The wrapper's bindings, in source order, read before the module moves.
+        let terms: Vec<(String, NodeId)> = if bindings.is_empty() {
+            Vec::new()
+        } else {
+            if bindings.len() != build.ir.stmt_roots.len() {
+                return Err(format!(
+                    "the wrapper binds {} names but the build has {} statements",
+                    bindings.len(),
+                    build.ir.stmt_roots.len()
+                ));
+            }
+            bindings
+                .iter()
+                .zip(build.ir.stmt_roots.iter())
+                .map(|(name, root)| {
+                    let term = build
+                        .state
+                        .get(root.0 as usize)
+                        .and_then(|state| state.term)
+                        .ok_or_else(|| format!("the wrapper binding `{name}` has no pair"))?;
+                    Ok((name.clone(), term))
+                })
+                .collect::<Result<_, String>>()?
+        };
+
         // The nodes' positions, read before the module moves into the freeze.
         let located = located_nodes(&build, report.span_index.as_ref());
         let spellings = rendered_assert_spellings(&build);
@@ -1112,6 +1174,23 @@ where
             module: freeze.key,
             index: freeze.node_map[&build.root_term],
         };
+        let direct: Vec<(String, StaticNodeId)> = terms
+            .into_iter()
+            .map(|(name, term)| {
+                let index = freeze
+                    .node_map
+                    .get(&term)
+                    .copied()
+                    .ok_or_else(|| format!("the wrapper binding `{name}` was not frozen"))?;
+                Ok((
+                    name,
+                    StaticNodeId {
+                        module: freeze.key,
+                        index,
+                    },
+                ))
+            })
+            .collect::<Result<_, String>>()?;
         let package_source = self.builtin_source(
             virtual_path,
             source,
@@ -1127,8 +1206,8 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    direct: direct.clone(),
                     source: Some(package_source),
-                    ..Default::default()
                 },
             );
         // File it under its file name, so `import "name"` resolves to it.
@@ -1140,11 +1219,63 @@ where
             path: PathBuf::from(virtual_path),
             key: freeze.key,
             export,
-            direct: Vec::new(),
+            direct,
         };
         self.native.insert(name, handle.clone());
         self.compiled += 1;
         Ok(handle)
+    }
+}
+
+/// The check-mode seam: a `link`ed wrapper as an importable package.
+impl<P> PackageStore<P>
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_lowlevel::LowOperator> + 'static,
+{
+    /// A `link`ed wrapper as the imports a check compiles against.
+    ///
+    /// # Invariant
+    /// Bindings are direct, so a call is unqualified.
+    pub fn link_imports(
+        &mut self,
+        links: &[crate::preprocess::Link],
+        base: Option<&std::path::Path>,
+    ) -> Result<Vec<crate::preprocess::ResolvedImport>, (crate::Span, String)> {
+        let mut imports = Vec::new();
+        let mut seen: Vec<u32> = Vec::new();
+        for link in links {
+            let path = crate::link::resolve_path(base, &link.path);
+            let id = self.link(&path).map_err(|message| (link.span, message))?;
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let (source, bindings, ops) = {
+                let library = self
+                    .linked_library(id)
+                    .ok_or_else(|| (link.span, "the library is not loaded".to_string()))?;
+                (
+                    library.source().to_string(),
+                    library.bindings().to_vec(),
+                    library.ops::<P>(id),
+                )
+            };
+            let ops: &'static [(&'static str, &'static dyn NativeOp<P>)] =
+                Box::leak(ops.into_boxed_slice());
+            let handle = self
+                .register_linked(&format!("__link{id}.lichen"), &source, ops, &bindings)
+                .map_err(|message| (link.span, message))?;
+            imports.push(crate::preprocess::ResolvedImport {
+                name: format!("__link{id}"),
+                span: link.span,
+                export: handle.export,
+                path: handle.path,
+                direct: handle.direct,
+            });
+        }
+        Ok(imports)
     }
 }
 /// The import-resolution seam the preprocessor consumes.

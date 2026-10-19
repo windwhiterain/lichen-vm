@@ -5,7 +5,7 @@
 //! The output line is formed in one place, so [`evaluate`] and [`evaluate_raw`]
 //! cannot drift; diagnostics are returned unrendered.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::LangProgramShape;
 use crate::compile;
@@ -221,7 +221,7 @@ where
         let mut regions: Vec<(u32, u32, crate::lex::Span)> = Vec::new();
         let mut loaded: Vec<u32> = Vec::new();
         for link in &preprocessed.links {
-            let path = resolve_link_path(base, &link.path);
+            let path = crate::link::resolve_path(base, &link.path);
             let id = match store.link(&path) {
                 Ok(id) => id,
                 Err(message) => {
@@ -274,27 +274,6 @@ where
         return Err(report.diagnostics);
     }
     render_build(report.build.unwrap(), pass_report)
-}
-
-/// Resolve a `link "path"` against the source that names it, as an import
-/// path resolves.
-fn resolve_link_path(base: Option<&Path>, path: &str) -> PathBuf {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-    let base_dir = base
-        .map(|base| {
-            if base.is_dir() {
-                base.to_path_buf()
-            } else {
-                base.parent()
-                    .map(|parent| parent.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("."))
-            }
-        })
-        .unwrap_or_else(|| PathBuf::from("."));
-    base_dir.join(path)
 }
 
 /// How a spliced compile maps back to the source the user wrote.
