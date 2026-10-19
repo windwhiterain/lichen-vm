@@ -496,10 +496,18 @@ The pipeline, measured end to end:
   canonical path) and keeps it for its own lifetime — the entries are plain
   pointers into it — installing them under an id the program's ops name.
 - **the build tag** is the gate: `LinkedLibrary::load` refuses a manifest whose
-  `build` is not this compiler's (`0.1.0+dev` today: the crate version plus the
-  build revision, `LICHEN_BUILD_REV`, when a build stamps one). Measured: a
-  library stamped `bogus` is refused with
-  `the library was built for "bogus"; this compiler is "0.1.0+dev"`.
+  `build` is not this compiler's. The tag is the crate version plus
+  `LICHEN_BUILD_REV`: a release build stamps it externally, and
+  `crates/lichen-language/build.rs` stamps a local build from
+  `git describe --always --dirty`, so it names the tree that compiled the
+  library. Measured: a library stamped `bogus` is refused with
+  `the library was built for "bogus"; this compiler is "0.1.0+<rev>"`, and a
+  library built from another checkout (`0.1.0+dev` against the compiler's
+  `0.1.0+dda790434409`) is refused the same way. The gate exists because the
+  entries use this build's `Module` and value layouts: loading a library built
+  from a different tree corrupts memory — measured once as an
+  `invalid SlotMap key` panic and a segfault on the same program that runs
+  cleanly after the rebuild.
 - **the run** splices every linked library's source in front of the program,
   compiles the spliced text with the link ops, and runs it: `sample Float 1.5`
   → `2.5: Float`, `sample Int 3` → `4: Int`, `sample Float 2.5` → `3.5: Float`,
