@@ -413,9 +413,15 @@ where
         match fid {
             AnyFunctionId::Dynamic(function) => {
                 let function = &self.module.functions[function];
-                let param_ty = self.pair_type_slot(function.parameter)?;
-                let return_ty = self.pair_type_slot(function.r#return)?;
-                Some((self.node(param_ty), self.node(return_ty)))
+                let param_ty = self.pair_type_any(function.parameter)?;
+                // The stored cell is the codomain without forcing the return pair; a
+                // hand-built function may leave it unset.
+                let return_ty = if self.module.nodes.contains_key(function.return_type) {
+                    AnyNodeId::Dynamic(function.return_type)
+                } else {
+                    self.pair_type_any(function.r#return)?
+                };
+                Some((self.any_node(param_ty), self.any_node(return_ty)))
             }
             AnyFunctionId::Static(sref) => {
                 let (param_ty, return_ty) = self.module.static_function_signature(sref)?;
@@ -425,15 +431,16 @@ where
     }
 
     /// Element 1 (the type slot) of a `[value, type, attrs…]` pair; `None` for a
-    /// short pair or a static slot.
-    fn pair_type_slot(&self, pair: NodeId) -> Option<NodeId> {
+    /// short pair.
+    ///
+    /// # Invariant
+    /// A static slot stays a static ref: a frozen type (`Int` from the prelude) is
+    /// what a `Check` build's pair often holds, and `any_node` renders it.
+    fn pair_type_any(&self, pair: NodeId) -> Option<AnyNodeId> {
         // SAFETY: `pair` is a live node of the module being rendered; this
         // printer releases no block.
         let items = unsafe { self.module.array_items(pair) }?;
-        match items.get(1)?.node {
-            AnyNodeId::Dynamic(n) => Some(n),
-            AnyNodeId::Static(_) => None,
-        }
+        items.get(1).map(|item| item.node)
     }
 
     /// Render any node — dynamic or static — as a type.
