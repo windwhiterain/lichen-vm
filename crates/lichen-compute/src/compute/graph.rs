@@ -679,10 +679,9 @@ pub fn run(
 ///
 /// # Invariant
 /// **A value nothing returns and the caller did not bring in is a temporary**, and a temporary's
-/// device memory is nobody's but the run's: keeping it would make what a run costs the device a
-/// function of how many intermediates it happened to have rather than of what it returned. An id
-/// in `kept` is the caller's under a name the table also uses, so it is left alone, and each id
-/// is released once however many table entries carry it.
+/// device memory is the run's alone: keeping it would make what a run costs the device a function
+/// of how many intermediates it had rather than of what it returned. An id in `kept` is the
+/// caller's, and each id is released once however many entries carry it.
 fn given_back(backend: &dyn ParallelBackend, table: &[Value<'_>], kept: &[ResidentId]) {
     let mut released: Vec<ResidentId> = Vec::new();
     for value in table {

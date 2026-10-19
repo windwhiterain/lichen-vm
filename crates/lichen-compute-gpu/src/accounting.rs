@@ -109,7 +109,8 @@ impl DeviceReport {
         ));
         out.push_str(&format!(
             "  {:<22} {:>9.1} MiB   (host-visible, not device-local)\n",
-            "staging", mib(self.staging)
+            "staging",
+            mib(self.staging)
         ));
         out
     }

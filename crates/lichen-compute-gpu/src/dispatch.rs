@@ -1674,9 +1674,14 @@ impl GpuContext {
     /// # Invariant
     /// Its contents are undefined until something writes them, and every consumer writes all of
     /// it. The class is part of what a buffer is — its byte size and the width a fetch reads it
-    /// back at — so the pool is keyed on both. The tag is what the allocation is counted under,
-    /// and a buffer taken from the pool is counted under the tag it is about to be used as.
-    fn allocate(&self, padded: usize, class: ScalarClass, tag: Tag) -> Result<DeviceBuffer, RunError> {
+    /// back at — so the pool is keyed on both. The tag is what the buffer is for now, and a buffer
+    /// taken from the pool is re-tagged: the bytes do not move, so the device total does not either.
+    fn allocate(
+        &self,
+        padded: usize,
+        class: ScalarClass,
+        tag: Tag,
+    ) -> Result<DeviceBuffer, RunError> {
         if let Some(buffer) = self
             .recycled
             .lock()
@@ -1839,8 +1844,10 @@ impl GpuContext {
         }
         buffer.padded = count;
         buffer.class = class;
-        self.accounting
-            .released(buffer.tag, DeviceBuffer::bytes(count, class) as i64 - before as i64);
+        self.accounting.released(
+            buffer.tag,
+            DeviceBuffer::bytes(count, class) as i64 - before as i64,
+        );
         Ok(())
     }
 
@@ -1853,8 +1860,10 @@ impl GpuContext {
         let Some(buffer) = self.resident.lock().unwrap().remove(&id) else {
             return;
         };
-        self.accounting
-            .released(buffer.tag, -(DeviceBuffer::bytes(buffer.padded, buffer.class) as i64));
+        self.accounting.released(
+            buffer.tag,
+            -(DeviceBuffer::bytes(buffer.padded, buffer.class) as i64),
+        );
         self.recycle(buffer);
     }
 

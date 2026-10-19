@@ -210,14 +210,13 @@ What is left per layer is the upload of the weights it reads and the dispatches 
 
 The card is **6 GB**, measured with `nvidia-smi`; the 4 GB this work believed for several rounds came from
 WMI's `AdapterRAM`, a 32-bit field that saturates at 4 GiB on every larger card. What a card can actually
-hold is not its size either: on this one, twenty layers (1.9 GB) and the head (0.6 GB) are placed and
-twenty-four are refused by the driver, so the usable budget is around 2.5 GB and not 6.
+hold is not its size either — see [Where the card's memory went](#where-the-cards-memory-went) below.
 
 The upload stopped being a token's cost the day a host could **place** bytes rather than copy them through a
 program: `Session::place(bytes, class)` copies four bytes at a time — a copy does not care what the bytes
 mean — and then restates the resident's extent and class, on the backend and on the handle the caller
-holds. Twelve layers placed took a warm token from 1.18 s to **0.98 s**, and sixteen fit the local card;
-twenty-eight need the 8 GB card this is meant to deploy to.
+holds. Twelve layers placed took a warm token from 1.18 s to **0.98 s**, and all twenty-eight fit the local
+card once the runs stopped keeping what they did not return.
 
 The restatement is the whole trick and it has two halves. A pack states a class for a node it matches, and
 matching needs a **claim**, which a plain copy does not have — that is why a narrowed upload was not
@@ -225,6 +224,35 @@ expressible before. It did not need to be: the class of a placed buffer is not t
 it is the caller's to state after the copy. Both records must move together, because a fetch reads the
 handle's count and the dispatcher reads the backend's, and one restated without the other is a buffer read
 four bytes an element by whoever asked the wrong one.
+
+### Where the card's memory went
+
+The card is 5994 MiB of device-local heap (heap 0 of `vkGetPhysicalDeviceMemoryProperties`; heap 1 is
+8002 MiB of host-visible memory and is where staging lives). For a long time the weights were measured as
+needing far more of it than they do: twenty layers plus the head is 2.51 GB of tensors, and the process
+drew **5929 MiB** — the whole card — for them.
+
+Counting every device-local byte by the tag that allocated it (`crates/lichen-compute-gpu/src/accounting.rs`,
+off atomics, so a report can be taken while a submission is being recorded) put the difference where it
+belonged. `Session::place` runs the two-dispatch `UPLOAD` program, and **every dispatch's output is issued
+as a resident id**; only the last one is the answer the caller keeps. The first dispatch's output is the
+same size as the tensor it is copying, and nothing ever released it: `graph::run` returned the graph's own
+returns and dropped the rest of the value table on the floor. So each `place` kept **two** tensors where it
+needed one, and 20 layers plus the head showed 5027 MiB resident where 2514 MiB of weights were placed — the
+missing 2513 MiB was one orphaned copy of every tensor, and the driver refused at 24 layers because the
+request was twice the model.
+
+`graph::run` now hands back every buffer the run produced that the caller did not bring in and that the
+graph does not return. Twenty layers plus the head fall to **2514 MiB resident**, and the 629 MiB the pool
+holds is the pool, bounded at `RECYCLED_PER_SIZE` buffers per size and class. What a `place` compiles is not
+part of it: the pipeline cache is keyed on content digests, so 309 prepares of the same source leave
+**one** pipeline.
+
+All twenty-eight layers plus the head now place on the 6 GB card: **3282 MiB** of weights resident, 1259 MiB
+pooled, **4541 MiB** of device-local bytes in all against 5994 MiB of heap, and `nvidia-smi` peaks at
+4750 MiB where it used to exhaust the card at twenty layers. `LICHEN_RESIDENT_LAYERS=28 LICHEN_ONLY_PLACED=1
+cargo test --release -p lichen-serve --test resident_token` passes, still naming `[9707, 25, 358]`, at
+2.8 s and 3.0 s a token.
 
 ## Running it
 
