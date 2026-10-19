@@ -77,12 +77,77 @@ enum Tensors<'a> {
 fn split_layer(bytes: &[u8], width: Width) -> Vec<std::sync::Arc<[u8]>> {
     SHAPES
         .iter()
-        .map(|(offset, length)| {
+        .enumerate()
+        .map(|(index, (offset, length))| {
             let start = offset * width.bytes();
             let end = (offset + length) * width.bytes();
-            std::sync::Arc::from(&bytes[start..end])
+            match COLUMN_MAJOR[index] {
+                Some((rows, columns)) => {
+                    std::sync::Arc::from(by_column(&bytes[start..end], rows, columns, width))
+                }
+                None => std::sync::Arc::from(&bytes[start..end]),
+            }
         })
         .collect()
+}
+
+/// Every layer tensor a projection reads, and the shape it is stored in.
+///
+/// # Invariant
+/// A projection reads its weight a row an output, so a lane's neighbours read addresses a whole row apart.
+/// These are stored by column instead, paid for at load: the head is the one projection read by row, because
+/// `embed_row` reads it a row at a time and 593 MB is not worth paying twice.
+const COLUMN_MAJOR: [Option<(usize, usize)>; TENSORS] = [
+    None,
+    Some((2048, 2048)),
+    Some((1024, 2048)),
+    Some((1024, 2048)),
+    None,
+    None,
+    Some((2048, 2048)),
+    None,
+    Some((6144, 2048)),
+    Some((6144, 2048)),
+    Some((2048, 6144)),
+];
+
+/// `bytes`, a `rows` by `columns` matrix, read by column instead of by row.
+///
+/// # Invariant
+/// An element keeps its width and its bytes, and the result is `columns` rows of `rows`, so a read at
+/// `column * rows + row` names what `row * columns + column` named before.
+fn by_column(bytes: &[u8], rows: usize, columns: usize, width: Width) -> Vec<u8> {
+    let element = width.bytes();
+    let mut turned = vec![0u8; bytes.len()];
+    for row in 0..rows {
+        for column in 0..columns {
+            let from = (row * columns + column) * element;
+            let to = (column * rows + row) * element;
+            turned[to..to + element].copy_from_slice(&bytes[from..from + element]);
+        }
+    }
+    turned
+}
+
+/// A layer's f32 tensors, every one a projection reads turned the way the kernel reads it.
+///
+/// # Invariant
+/// The narrow path stores a layer's projections by column, so this path turns them too: two paths that
+/// disagree about a layout disagree about the answer.
+fn wide_layer(name: &str) -> Result<Vec<f32>, QwenRefusal> {
+    let values = flat(name)?;
+    let mut turned = values.clone();
+    for (index, (offset, length)) in SHAPES.iter().enumerate() {
+        if let Some((rows, columns)) = COLUMN_MAJOR[index] {
+            assert_eq!(rows * columns, *length);
+            for row in 0..rows {
+                for column in 0..columns {
+                    turned[offset + column * rows + row] = values[offset + row * columns + column];
+                }
+            }
+        }
+    }
+    Ok(turned)
 }
 
 /// The numbers a run of halves holds, widened the way the device widens them.
@@ -240,13 +305,11 @@ impl<'model, 'session> Batched<'model, 'session> {
             answering.len() as i64,
             HIDDEN as i64,
         )?;
-        let logits = self.model.steps.projected(
+        let logits = self.model.steps.head(
             self.model.session,
             &normalised,
             self.model.head_weight(),
-            rows(answering.len() as i64, VOCABULARY as i64),
-            HIDDEN as i64,
-            VOCABULARY as i64,
+            answering.len() as i64,
         )?;
         let mut answered = Vec::with_capacity(answering.len());
         for (at, sequence) in answering.iter().copied().enumerate() {
@@ -361,6 +424,8 @@ fn flat(name: &str) -> Result<Vec<f32>, QwenRefusal> {
 struct Steps<'session> {
     norm: crate::Prepared<'session>,
     projection: crate::Prepared<'session>,
+    /// The head's projection, which reads a weight stored by row.
+    head: crate::Prepared<'session>,
     rotation: crate::Prepared<'session>,
     attention: crate::Prepared<'session>,
     product: crate::Prepared<'session>,
@@ -376,6 +441,10 @@ impl<'session> Steps<'session> {
             projection: match width {
                 Width::Wide => prepared(MATVEC_BATCH_STEP)?,
                 Width::Narrowed => crate::narrowed_projection(session)?,
+            },
+            head: match width {
+                Width::Wide => prepared(crate::model::MATVEC_STEP)?,
+                Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_STEP)?,
             },
             rotation: prepared(ROPE_STEP)?,
             attention: prepared(ATTEND_CACHE_STEP)?,
@@ -445,6 +514,30 @@ impl<'session> Steps<'session> {
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
                 RunArgument::Count(per),
+                self.payload(values),
+                weight,
+            ])
+            .map_err(QwenRefusal::Step)?;
+        answered(session, &stepped)
+    }
+
+    /// The head's projection over `count` rows of values, read from a weight stored by row.
+    ///
+    /// # Invariant
+    /// The layers are stored by column and this weight is not, so it runs the row-major program: the same
+    /// program would read a different matrix of it.
+    fn head(
+        &self,
+        session: &Session,
+        values: &[f32],
+        weight: RunArgument,
+        count: i64,
+    ) -> Result<Vec<f32>, QwenRefusal> {
+        let stepped = self
+            .head
+            .step(vec![
+                RunArgument::Count(rows(count, VOCABULARY as i64)),
+                RunArgument::Count(HIDDEN as i64),
                 self.payload(values),
                 weight,
             ])
@@ -685,14 +778,9 @@ impl<'session> Qwen<'session> {
                 1,
                 HIDDEN as i64,
             )?;
-            let logits = self.steps.projected(
-                self.session,
-                &normalised,
-                self.head_weight(),
-                VOCABULARY as i64,
-                HIDDEN as i64,
-                VOCABULARY as i64,
-            )?;
+            let logits = self
+                .steps
+                .head(self.session, &normalised, self.head_weight(), 1)?;
             let chosen = crate::sampling::choose(&logits, &sampling, &mut draw);
             tokens.push(chosen);
             per_token.push(started.elapsed());
@@ -763,14 +851,7 @@ impl<'session> Qwen<'session> {
                 1,
                 HIDDEN as i64,
             )?;
-            let logits = self.steps.projected(
-                self.session,
-                &normalised,
-                head,
-                VOCABULARY as i64,
-                HIDDEN as i64,
-                VOCABULARY as i64,
-            )?;
+            let logits = self.steps.head(self.session, &normalised, head, 1)?;
             token = crate::sampling::choose(&logits, &sampling, &mut draw);
             tokens.push(token);
             per_token.push(started.elapsed());
@@ -815,13 +896,11 @@ impl<'session> Qwen<'session> {
                 sequences as i64,
                 HIDDEN as i64,
             )?;
-            let logits = self.steps.projected(
+            let logits = self.steps.head(
                 self.session,
                 &normalised,
                 self.head_weight(),
-                rows(sequences as i64, VOCABULARY as i64),
-                HIDDEN as i64,
-                VOCABULARY as i64,
+                sequences as i64,
             )?;
             let mut next: Vec<f32> = Vec::with_capacity(sequences * HIDDEN_SIZE);
             for (sequence, chosen) in tokens.iter_mut().enumerate() {
@@ -876,7 +955,7 @@ impl<'session> Qwen<'session> {
         for layer in 0..layers.min(LAYERS) {
             let read: Vec<std::sync::Arc<[u8]>>;
             let tensors = match self.width {
-                Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
+                Width::Wide => Tensors::Wide(wide_layer(&format!("layer{layer:02}"))?),
                 Width::Narrowed => {
                     let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
                     read = split_layer(&bytes, self.width);
