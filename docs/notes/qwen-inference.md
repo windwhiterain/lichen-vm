@@ -581,6 +581,24 @@ column and read by the column-major program, a layer **read from the file** is s
 the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a
 time. A single global address change cannot be right for both, and that is why the first two tries failed.
 
+## The chat surface was fed the letters of its own template
+
+A follow-up question answered nothing at all, and the isolation was small: one user turn answered, two turns
+answered nothing, a system turn answered nothing — so the prompt's shape was fine and its **content** was
+not. The markers were the content. `Tokenizer::encode` matched its added tokens only at the **start** of a
+text, so `<|im_start|>user
+Hello<|im_end|>
+` encoded as the characters that spell the markers rather than as
+`151644` and `151645`: the model was reading the literal word `<|im_end|>` where a turn had ended. A marker
+alone encoded correctly, which is why a test that only encoded a marker passed.
+
+Two changes: `encode` now takes an added token wherever it starts, and the template closes the assistant
+opening with the empty think block the checkpoint's own template states for a plain answer — the earlier
+opening left the model thinking, so its reasoning arrived as the reply. After both, two turns answer
+`'Hello! I'm glad to meet you, Ada. You asked, "What…'` and one turn answers `'Hello! How can I assist you
+today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
+alone.
+
 ## A regression the measurements did not catch, and the test that now does
 
 The layout change — a held layer stored by column and read by the column-major program — was verified by

@@ -144,31 +144,41 @@ impl Tokenizer {
     pub fn encode(&self, text: &str) -> Result<Vec<usize>, TokenizerRefusal> {
         let normalised: String = text.nfc().collect();
         let mut ids = Vec::new();
+        let mut ordinary = String::new();
         let mut rest = normalised.as_str();
+        // A marker is matched wherever it starts, not only at the text's beginning.
         while !rest.is_empty() {
-            let matched = self
+            match self
                 .added
                 .iter()
-                .find(|(content, _)| rest.starts_with(content.as_str()));
-            let Some((content, id)) = matched else {
-                break;
-            };
-            ids.push(*id);
-            rest = &rest[content.len()..];
+                .find(|(content, _)| rest.starts_with(content.as_str()))
+            {
+                Some((content, id)) => {
+                    if !ordinary.is_empty() {
+                        self.encode_ordinary(&ordinary, &mut ids)?;
+                        ordinary.clear();
+                    }
+                    ids.push(*id);
+                    rest = &rest[content.len()..];
+                }
+                None => {
+                    let first = rest.chars().next().expect("a character");
+                    ordinary.push(first);
+                    rest = &rest[first.len_utf8()..];
+                }
+            }
         }
-        let mut cursor = 0;
-        while cursor < rest.len() {
-            let matched = self
-                .added
-                .iter()
-                .find(|(content, _)| rest[cursor..].starts_with(content.as_str()));
-            let Some((content, id)) = matched else {
-                break;
-            };
-            ids.push(*id);
-            cursor += content.len();
+        if !ordinary.is_empty() {
+            self.encode_ordinary(&ordinary, &mut ids)?;
         }
-        let ordinary = &rest[cursor..];
+        Ok(ids)
+    }
+
+    fn encode_ordinary(
+        &self,
+        ordinary: &str,
+        ids: &mut Vec<usize>,
+    ) -> Result<(), TokenizerRefusal> {
         // A piece the split refuses is refused here; dropping it is how a script once vanished silently.
         let pieces = self.split.find_iter(ordinary);
         let mut spans = Vec::new();
@@ -209,7 +219,7 @@ impl Tokenizer {
                 ids.push(*id);
             }
         }
-        Ok(ids)
+        Ok(())
     }
 
     /// The text `ids` spells, with an id the vocabulary does not hold left out.

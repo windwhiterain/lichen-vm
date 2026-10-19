@@ -481,7 +481,8 @@ fn chat_prompt(messages: &[Message]) -> String {
         prompt.push_str(&message.content);
         prompt.push_str("<|im_end|>\n");
     }
-    prompt.push_str("<|im_start|>assistant\n");
+    // A closed think block is the checkpoint's template for a plain answer.
+    prompt.push_str("<|im_start|>assistant\n<think>\n\n</think>\n\n");
     prompt
 }
 
