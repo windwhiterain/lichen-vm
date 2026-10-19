@@ -599,6 +599,21 @@ opening left the model thinking, so its reasoning arrived as the reply. After bo
 today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
 alone.
 
+## The refused request, finally seen
+
+The queue's refusal was claimed long before it was witnessed: a hundred connections arriving at once had
+been dropped at the listener rather than refused by the service, and the `refused` counter stayed at zero
+through every measurement after that. Two waves settle it. Seventy-two requests of thirty tokens make the
+batch and its sixty-four waiting places full, and a second wave of twenty arrives while they run:
+
+    lichen_requests_refused 8
+    lichen_requests_admitted 84
+    lichen_requests_finished 84
+
+Eight were answered **503**, and the eighty-four that were admitted all finished — so the queue refuses what
+it cannot hold rather than dropping it, and nothing it took on was lost. The status codes of the first wave
+carry the five in a row that are the refusals, between requests that queued and waited.
+
 ## A regression the measurements did not catch, and the test that now does
 
 The layout change — a held layer stored by column and read by the column-major program — was verified by
