@@ -337,6 +337,9 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
             collect_referenced_keys::<P>(value, &mut keys);
         }
     }
+    // The default is module state the artifact files: its home module is a
+    // dependency, as one a node's value names is.
+    collect_array_referenced_keys(module.default_attributes, &mut keys);
     keys
 }
 
@@ -353,6 +356,30 @@ pub(crate) fn referenced_keys_of<P: Program>(
         }
     }
     keys
+}
+
+/// One array payload's contribution to a reference walk: its home module and
+/// every module its items name.
+fn collect_array_referenced_keys(
+    array: Option<AnyHandle<[ArrayItem]>>,
+    keys: &mut HashSet<ModuleKey>,
+) {
+    let Some(array) = array else {
+        return;
+    };
+    match array {
+        AnyHandle::Static(handle) => {
+            keys.insert(handle.module);
+        }
+        AnyHandle::Dynamic(_) => {}
+    }
+    // SAFETY: the payload's home storage is live — a dependency's shared
+    // arena, or a block arena of the borrowed module.
+    for item in unsafe { array.items() } {
+        if let AnyNodeId::Static(sref) = item.node {
+            keys.insert(sref.module);
+        }
+    }
 }
 
 /// One value's contribution to [`referenced_keys`]: the single site of this match.
@@ -531,16 +558,7 @@ impl<P: Program> StaticModule<P> {
             let Some(value) = node.value else { continue };
             match value.as_enum() {
                 Some(LowValue::Array(array)) => {
-                    if let AnyHandle::Static(handle) = *array {
-                        keys.insert(handle.module);
-                    }
-                    // SAFETY: a dependency's shared arena, kept alive by the registry
-                    // while this artifact is filed.
-                    for item in unsafe { array.items() } {
-                        if let AnyNodeId::Static(sref) = item.node {
-                            keys.insert(sref.module);
-                        }
-                    }
+                    collect_array_referenced_keys(Some(*array), &mut keys)
                 }
                 Some(LowValue::Table(AnyHandle::Static(handle))) => {
                     keys.insert(handle.module);
@@ -565,6 +583,8 @@ impl<P: Program> StaticModule<P> {
                 _ => {}
             }
         }
+        // As in the dynamic walk: the default is module state the artifact files.
+        collect_array_referenced_keys(self.default_attributes.map(AnyHandle::Static), &mut keys);
         keys
     }
 }
