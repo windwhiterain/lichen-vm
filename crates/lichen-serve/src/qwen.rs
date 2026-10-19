@@ -101,6 +101,153 @@ fn rows(count: i64, width: i64) -> i64 {
     count * width
 }
 
+/// One request inside a batch: where it stands and what it has answered.
+struct Request {
+    /// What the caller knows it by, which a retirement does not change.
+    id: usize,
+    /// The state its next token is read from.
+    hidden: Vec<f32>,
+    /// The position that state is at.
+    position: i64,
+    /// The tokens it has answered with.
+    answer: Vec<usize>,
+    /// How many it may answer with.
+    limit: usize,
+}
+
+/// Several requests advanced together, each at its own position.
+///
+/// # Invariant
+/// The caches are held layer by layer across the live requests, so a layer is one contiguous run and one
+/// step is one dispatch a layer. A request's position travels with its row, which is what lets a batch hold
+/// requests of different lengths; retiring one moves the last live request into its place and keeps its id,
+/// so a caller that held one holds the same request.
+pub struct Batched<'model, 'session> {
+    model: &'model Qwen<'session>,
+    caches: Vec<Vec<Cache>>,
+    live: Vec<Request>,
+    sampling: crate::Sampling,
+    next: usize,
+}
+
+impl<'model, 'session> Batched<'model, 'session> {
+    /// A batch over `model`, empty, whose tokens are chosen under `sampling`.
+    pub fn new(model: &'model Qwen<'session>, sampling: crate::Sampling) -> Self {
+        Self {
+            model,
+            caches: (0..LAYERS).map(|_| Vec::new()).collect(),
+            live: Vec::new(),
+            sampling,
+            next: 0,
+        }
+    }
+
+    /// Fill `prompt`'s cache and hold it for at most `limit` answers, answering its identifier.
+    pub fn admit(&mut self, prompt: &[usize], limit: usize) -> Result<usize, QwenRefusal> {
+        let (caches, hidden, position) = self.model.filled(prompt)?;
+        for (layer, cache) in caches.into_iter().enumerate() {
+            self.caches[layer].push(cache);
+        }
+        let id = self.next;
+        self.next += 1;
+        self.live.push(Request {
+            id,
+            hidden,
+            position,
+            answer: Vec::new(),
+            limit,
+        });
+        Ok(id)
+    }
+
+    /// How many requests are live.
+    pub fn live(&self) -> usize {
+        self.live.len()
+    }
+
+    /// One token for every live request, in the order they were admitted.
+    ///
+    /// # Invariant
+    /// A request's state is the one at its `position`, so its token is chosen before the layer step that
+    /// moves it: choosing after the step answers one position past the state. The step is shared, which is
+    /// what a batch is for, and it runs at each request's own position.
+    pub fn step(&mut self) -> Result<Vec<(usize, usize)>, QwenRefusal> {
+        let count = self.live.len();
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let hidden: Vec<f32> = self
+            .live
+            .iter()
+            .flat_map(|request| request.hidden.iter().copied())
+            .collect();
+        let normalised = self.model.steps.normalised(
+            self.model.session,
+            &hidden,
+            self.model.steps.payload(&self.model.final_norm),
+            count as i64,
+            HIDDEN as i64,
+        )?;
+        let logits = self.model.steps.projected(
+            self.model.session,
+            &normalised,
+            self.model.head_weight(),
+            rows(count as i64, VOCABULARY as i64),
+            HIDDEN as i64,
+            VOCABULARY as i64,
+        )?;
+        let mut draw = crate::sampling::randomness(self.sampling.seed);
+        let mut answered = Vec::with_capacity(count);
+        let mut moved: Vec<f32> = Vec::with_capacity(count * HIDDEN_SIZE);
+        for sequence in 0..count {
+            let row = &logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY];
+            let token = crate::sampling::choose(row, &self.sampling, &mut draw);
+            self.live[sequence].answer.push(token);
+            moved.extend(self.model.embed_row(token));
+            answered.push((self.live[sequence].id, token));
+        }
+        let positions: Vec<i64> = self.live.iter().map(|request| request.position).collect();
+        let mut state = moved;
+        for layer in 0..LAYERS {
+            state = self
+                .model
+                .layer_batch(layer, &state, &mut self.caches[layer], &positions)?;
+        }
+        for (sequence, request) in self.live.iter_mut().enumerate() {
+            request.hidden = state[sequence * HIDDEN_SIZE..(sequence + 1) * HIDDEN_SIZE].to_vec();
+            request.position += 1;
+        }
+        Ok(answered)
+    }
+
+    /// What request `id` has answered so far.
+    pub fn answer(&self, id: usize) -> Option<&[usize]> {
+        self.live
+            .iter()
+            .find(|request| request.id == id)
+            .map(|request| request.answer.as_slice())
+    }
+
+    /// Whether request `id` has answered as many tokens as it may, which it is not live to do.
+    pub fn done(&self, id: usize) -> bool {
+        match self.live.iter().find(|request| request.id == id) {
+            Some(request) => request.answer.len() >= request.limit,
+            None => true,
+        }
+    }
+
+    /// Let request `id` go, moving the last live one into its place.
+    pub fn retire(&mut self, id: usize) {
+        let Some(at) = self.live.iter().position(|request| request.id == id) else {
+            return;
+        };
+        for caches in self.caches.iter_mut() {
+            caches.swap_remove(at);
+        }
+        self.live.swap_remove(at);
+    }
+}
+
 /// The cache a layer keeps: one key and one value per position seen.
 #[derive(Default)]
 struct Cache {

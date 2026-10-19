@@ -29,7 +29,7 @@ pub use model::{
 mod upload;
 
 pub use narrowed::{narrowed, narrowed_projection};
-pub use qwen::{Generated, Qwen, QwenRefusal, Width};
+pub use qwen::{Batched, Generated, Qwen, QwenRefusal, Width};
 pub use sampling::{Sampling, choose, randomness};
 pub use service::{Served, Service};
 pub use tokenizer::{Tokenizer, TokenizerRefusal};
