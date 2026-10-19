@@ -1,10 +1,11 @@
 # A native link library: a Rust generic behind a lichen generic
 
 > Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c, the end-to-end
-> proof, the loader and the `link` directive are measured.**
+> proof, the loader, the `link` directive and the recorder are measured.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
-> §11 the loader and the operand shape it settles, §12 the directive.
+> §11 the loader and the operand shape it settles, §12 the directive, §13 the
+> recorder.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -360,8 +361,9 @@ The maintainer decided, in this session:
   wrapper's refinement. The same run is **order-dependent**, and that is §10's
   finding.
 - **P0-c — the lichen surface: measured, it works** (§5).
-- **P1 — the recorder.** The whole-program scan (§6) over a real vbd-shaped
-  wrapper: the used (entry, kind) set.
+- **P1 — the recorder: done** (§13). `link::record_uses` scans a built module
+  for the applied instantiations: `(library, instance, kind)`, sorted and
+  deduplicated, read off each `External` clone's parameter type slot.
 - **P2 — the builder.** From the recorded set and the declared mapping, write the
   dylib (manifest + one entry per instance), build it with cargo, and cache it by
   a content key — the same shape as the kernel disk cache
@@ -507,3 +509,39 @@ the CLI/LSP paths.
 The generator is still the proof's host program: it writes the Rust source from a
 declared `[(kind, Rust type)]` set and the same declaration's wrapper. The
 recorder (§6) is what replaces the declared set.
+
+## 13. The recorder
+
+`lichen_language::link::record_uses(&mut Module<P>) -> Vec<Used>` is the
+whole-program scan §6 called for: one `Used { library, instance, kind }` per
+**applied** instantiation, sorted and deduplicated.
+
+The seam is the applied clone, not the source:
+
+- every `External` node names its family (`library`, `instance`);
+- the node's owner function is the clone of the wrapper's inner lambda, and its
+  parameter is the `x` pair;
+- the parameter's type slot holds the applied type expression, whose first item
+  is the kind marker; `TypeValue::name()` spells it ("float", "int", …).
+
+A clone whose parameter was never applied states no kind and is skipped, so the
+set is the union over the program's applications.
+
+Measured on the proof:
+
+- the probe `sample Float 2.5` records
+  `[Used { library: 0, instance: 0, kind: "float" }]`;
+- a library regenerated from that set — one arm, and the wrapper's refinement
+  narrowed to `set(Float)` — answers the probe `3.5: Float`, identically on
+  consecutive processes;
+- the same generated library **refuses** `(sample Float 1.5, sample Int 3)` at
+  check time: `the refinement's predicate did not answer 1 — the value does not
+  satisfy the refined type`.
+
+The last reading is the closed world working as designed: the recorder's set
+becomes the wrapper's own `set(…)`, so a kind the program did not record is a
+**check-time refusal**, never a runtime miss in the library's match.
+
+The generator that turns `Vec<Used>` into Rust source is still the proof's host
+program (it writes the arms and the manifest); it is a build tool, not a
+compiler function, and the recorder is the part the compiler owns.

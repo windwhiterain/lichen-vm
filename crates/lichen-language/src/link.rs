@@ -11,8 +11,9 @@ use std::path::Path;
 
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
-use lichen_highlevel::program::{Ctx, HighProgram};
-use lichen_lowlevel::{ExternalEntry, LowOperator};
+use lichen_highlevel::program::{Ctx, HighProgram, TypeValue, ValueType};
+use lichen_lowlevel::{AnyNodeId, ExternalEntry, LowOperator};
+use lichen_utils::extend::AsEnum;
 
 /// The manifest version this loader reads.
 const MANIFEST_VERSION: &str = "lichen-link 1";
@@ -288,4 +289,86 @@ pub fn splice(links: &[&LinkedLibrary], code: &str) -> String {
     }
     spliced.push_str(code);
     spliced
+}
+
+/// One instantiation a built program used: a linked family at one kind.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Used {
+    /// The library the family belongs to.
+    pub library: u32,
+    /// The family's instance.
+    pub instance: u32,
+    /// The kind's spelling ([`TypeValue::name`]).
+    pub kind: String,
+}
+
+/// The instantiations a built program used, deduplicated and sorted.
+///
+/// # Invariant
+/// The kind is read off the applied clone's parameter: the wrapper's
+/// `(t ! …) => …` leaves the clone's type slot holding the applied type
+/// expression, whose first item is the kind marker. A clone whose parameter was
+/// never applied states no kind and is skipped; the set is the union over the
+/// program's applications, so it is what a generator must instantiate.
+pub fn record_uses<P>(module: &mut lichen_lowlevel::Module<P>) -> Vec<Used>
+where
+    P: lichen_lowlevel::Program,
+    P::Value: ValueType + AsEnum<TypeValue>,
+{
+    let mut probes = Vec::new();
+    for (node, _) in &module.nodes {
+        let Some(operation) = module.node_operation(node) else {
+            continue;
+        };
+        let Some(LowOperator::External { library, instance }) =
+            AsEnum::<LowOperator>::as_enum(&operation.operator)
+        else {
+            continue;
+        };
+        let parameter = module
+            .node_function(node)
+            .and_then(|function| module.functions.get(function))
+            .map(|function| function.parameter);
+        probes.push((library, instance, parameter));
+    }
+    let mut used = Vec::new();
+    for (library, instance, parameter) in probes {
+        let mut cursor = parameter
+            .and_then(|parameter| module.pair_type_item(parameter))
+            .and_then(dynamic_node);
+        for _ in 0..2 {
+            let Some(node) = cursor else {
+                break;
+            };
+            let value = module.evaluate_node(AnyNodeId::Dynamic(node), None);
+            if let Some(name) = value
+                .as_ref()
+                .and_then(AsEnum::<TypeValue>::as_enum)
+                .map(|value| value.name())
+            {
+                used.push(Used {
+                    library,
+                    instance,
+                    kind: name.to_string(),
+                });
+                break;
+            }
+            // SAFETY: `node` is a live node of `module`, read and not released.
+            cursor = unsafe { module.array_items(node) }
+                .and_then(|items| items.first())
+                .and_then(|item| dynamic_node(item.node));
+        }
+    }
+    used.sort();
+    used.dedup();
+    used
+}
+
+/// The dynamic node a reference names; a frozen ref names nothing this module
+/// evaluates.
+fn dynamic_node(node: AnyNodeId) -> Option<lichen_lowlevel::NodeId> {
+    match node {
+        AnyNodeId::Dynamic(node) => Some(node),
+        AnyNodeId::Static(_) => None,
+    }
 }

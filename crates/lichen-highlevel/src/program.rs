@@ -756,6 +756,23 @@ macro_rules! define_type_value_codec {
 }
 for_each_kind_marker!(define_type_value_codec);
 
+// The kind's spelling: one place reads the registry's own display names.
+macro_rules! define_type_value_name {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        impl TypeValue {
+            /// The kind's spelling, as the type printer and a linked library's
+            /// manifest both write it.
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $(TypeValue::$variant => $display,)*
+                    TypeValue::TypeId(_) => "TypeId",
+                }
+            }
+        }
+    };
+}
+for_each_kind_marker!(define_type_value_name);
+
 // The one list of the type-level operators: the codec's two sides and
 // [`TypeOperator::ALL`] are generated from it.
 
