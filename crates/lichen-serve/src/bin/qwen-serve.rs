@@ -98,6 +98,8 @@ struct Metrics {
     live: AtomicU64,
     /// Time spent inside batch steps, in nanoseconds.
     step_nanos: AtomicU64,
+    /// The time the last step took, in nanoseconds.
+    last_step_nanos: AtomicU64,
     /// Requests whose wall time has been counted.
     timed: AtomicU64,
     /// The sum of their wall times, in nanoseconds.
@@ -138,6 +140,7 @@ impl Default for Metrics {
             steps: AtomicU64::new(0),
             live: AtomicU64::new(0),
             step_nanos: AtomicU64::new(0),
+            last_step_nanos: AtomicU64::new(0),
             timed: AtomicU64::new(0),
             request_nanos: AtomicU64::new(0),
             buckets: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -244,6 +247,12 @@ impl Metrics {
         );
         text += &self.render_durations();
         text += &self.line(
+            "lichen_last_step_nanoseconds",
+            "gauge",
+            "the time the last batch step took",
+            self.last_step_nanos.load(Ordering::Relaxed),
+        );
+        text += &self.line(
             "lichen_step_nanoseconds",
             "counter",
             "time spent inside batch steps",
@@ -334,9 +343,9 @@ fn worker(
             Err(_) => break,
         };
         metrics.steps.fetch_add(1, Ordering::Relaxed);
-        metrics
-            .step_nanos
-            .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let took = started.elapsed().as_nanos() as u64;
+        metrics.step_nanos.fetch_add(took, Ordering::Relaxed);
+        metrics.last_step_nanos.store(took, Ordering::Relaxed);
         metrics
             .tokens
             .fetch_add(answered.len() as u64, Ordering::Relaxed);

@@ -51,6 +51,27 @@ them. An answer's `finish_reason` is `length` when it reached `max_tokens` and `
 `stop`, the checkpoint's own turn marker, or one of the strings the request named. A streamed answer ends
 with a chunk carrying that `finish_reason` and then `data: [DONE]`.
 
+## Deploying it on another machine
+
+The card this was built on is a laptop's 6144 MiB, with 28 layers resident at **4540 MiB**: an 8 GB card
+leaves room to spare, and 6 GB is enough. What to check on the target, in order:
+
+1. `nvidia-smi --query-gpu=memory.used,memory.total --format=csv` — the model needs the free memory, not the
+   total, so check what is **free** before starting it beside anything else.
+2. The half-width files, not the f32 dumps: `.model/` holds the ones `qwen-serve` reads and
+   `.model/dump_bf16.py` writes them.
+3. Its own tokenizer: `LICHEN_MODEL_DIR` must point at a directory holding `tokenizer.json` **and** the
+   tensors; they do not have to come from the same download.
+
+If the layers do not all fit, the service still runs: the ones that do not are held in host memory and read
+across the bus, which was measured at **2.23x** the time of a resident step rather than as a failure. So a
+card too small to hold 28 layers degrades the way a smaller batch would, and
+`lichen_last_step_nanoseconds` on `/metrics` is the reading that says which of the two it is doing.
+
+The first check after starting it is the one the guide gives above — `/v1/models` and one completion — and
+the second is `/metrics`: `lichen_requests_admitted` against `lichen_requests_finished` tells whether the
+queue is draining, and `lichen_last_step_nanoseconds` tells what a step currently costs.
+
 ## What it does behind a request
 
 A queue in front of one worker, which owns the model. The worker groups up to eight requests into one batch
