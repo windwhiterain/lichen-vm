@@ -469,6 +469,10 @@ impl LibrarySource {
     /// One program, one spelling: `std::any::type_name::<P>()` is written into the
     /// manifest **and** into the generated `type Value`, so a library cannot be
     /// generated for one vocabulary and loaded by another.
+    ///
+    /// Every entry is `#[rustfmt::skip]`: the body is the author's verbatim text,
+    /// so reformatting it would make a later render differ from this one and
+    /// `cargo fmt --check` would fail on a file nobody wrote by hand.
     pub fn render<P: lichen_lowlevel::Program>(&self, build: &str) -> String {
         let program = std::any::type_name::<P>();
         let families: Vec<Family> = self
@@ -522,11 +526,15 @@ impl LibrarySource {
         text.push_str(";\n\n");
         text.push_str("#[unsafe(no_mangle)]\n");
         text.push_str("pub unsafe extern \"C\" fn lichen_link_manifest(out: *mut *const u8, len: *mut usize) {\n");
-        text.push_str("    unsafe { *out = MANIFEST.as_ptr(); *len = MANIFEST.len() };\n");
+        text.push_str("    unsafe {\n");
+        text.push_str("        *out = MANIFEST.as_ptr();\n");
+        text.push_str("        *len = MANIFEST.len()\n");
+        text.push_str("    };\n");
         text.push_str("}\n");
         for entry in &self.entries {
             text.push_str(&format!(
-                "\n#[unsafe(no_mangle)]\n\
+                "\n#[rustfmt::skip]\n\
+                 #[unsafe(no_mangle)]\n\
                  pub unsafe extern \"C\" fn {symbol}(\n\
                  \x20   module: *mut c_void,\n\
                  \x20   operand: *const c_void,\n\
