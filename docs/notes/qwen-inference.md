@@ -616,6 +616,21 @@ the service is the **rate of steps**, not how many rows a step holds — which i
 measurement found from the other side, where eight sequences cost 1.5 times what one did. Eight therefore
 stays: it halves the caches, and it buys nothing to widen.
 
+## What a prompt costs before it says anything
+
+Three prompts of one token each, timed from the request to the reply. The first is also the first request
+after the model loaded, so it carries the driver's compilation:
+
+| prompt | wall clock | per token | marginal, from the pair |
+|---|---|---|---|
+| 137 tokens | 116.1 s | 0.85 s | — |
+| 494 tokens | 153.0 s | 0.31 s | **0.104 s a token** |
+
+The marginal number is the one that matters: about **a tenth of a second per prompt token**, on top of a
+start-up cost near a hundred seconds that the first request pays once. So a two-thousand-token conversation
+history is **200 s of prefill** before the first word of the answer, every time it is sent — and that is the
+case prefix caching exists for, measured rather than argued.
+
 ## How many clients the service is worth
 
 Fifty requests of four tokens at each of three concurrencies, measured by the same bucket subtraction:
