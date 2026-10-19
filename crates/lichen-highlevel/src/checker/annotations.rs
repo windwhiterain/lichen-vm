@@ -684,21 +684,27 @@ where
                 slots.push(node);
             }
         }
-        // Each attribute slot is attributed at its own tail index, which
-        // `ExprState::attr` cannot say; see `crate::lowering`.
-        for (index, &node) in slots.iter().enumerate() {
+        // The pair is **full width**: settled slots canonically, wildcards elsewhere
+        // (`docs/notes/array-attribute-view.md`).
+        let any = self.any();
+        let mut width: Vec<NodeId> = vec![any; P::Attr::ORDER.len()];
+        for (slot, marker) in slots.iter().zip(tail.iter()) {
+            width[marker.order_index()] = *slot;
+        }
+        // Attributed at its canonical position, which `ExprState::attr` cannot say;
+        // see `crate::lowering`.
+        for (index, &node) in width.iter().enumerate() {
             self.node_edges
                 .insert(node, self.loc(e, shape::attr_slot(index)));
         }
         // The constraint slot is what the apply-time check reads; a label is
         // metadata only.
         self.state[e].attr = constraint_slot;
-        let mut pair = Vec::with_capacity(slots.len() + 2);
+        let mut pair = Vec::with_capacity(shape::slot_width::<P>());
         pair.push(value_node);
         pair.push(type_pair);
-        pair.extend(slots);
-        // The pair's layout: slot `i` carries the canonical attribute `tail[i]` names.
-        let layout = self.layout_for_tail(&tail);
+        pair.extend(width);
+        let layout = self.full_width_layout();
         let pair = self.array_node_with_layout(self.current_block, &pair, layout);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);

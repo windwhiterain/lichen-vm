@@ -1,10 +1,11 @@
 # The array attribute view: sparse storage, full-width reading
 
-Status: **complete** — stages 1–4 landed (`df24812c`, `58ca01c2`, and this round's
-commit): the storage and registry, the checker's layout-carrying builders and readers,
-the default array, the unify wiring by canonical index, and the `type_of`-shaped
-`perspective_of` spelling that replaced the call-site references. The measured results
-are at the end of this note.
+Status: **complete** — stages 1–5 landed (`df24812c`, `58ca01c2`, this round's stage-4
+commit, and the full-width generation): the storage and registry, the checker's
+layout-carrying builders and readers, the default array, the unify wiring by canonical
+index, the `type_of`-shaped `perspective_of` spelling that replaced the call-site
+references, and the annotated pair generated full width. The measured results are at the
+end of this note.
 
 ## The problem, in the superior's words
 
@@ -171,6 +172,23 @@ Measured on the four probes and the suites: a `# warp` buffer read at a uniform 
 answers `?a # 32`, at a lane-varying index it is refused (`expected 32, found 1`); a write
 from a `# 0` buffer answers `?a # 0` and from a `# warp` buffer it is refused
 (`expected 0, found 32`). The artifact format stays 16 — no persisted shape changed.
+
+## Stage 5: the annotated pair is generated full width
+
+An annotation's pair carries **every** canonical attribute slot — the settled ones at
+their canonical positions and the wildcard elsewhere — with the full-width layout
+(`Checker::check_ann`). One shape now describes every pair that carries attributes, so no
+reader has to know a tail's dense order; the renderer's `value_label` and
+`render_attributes` resolve through `Module::array_attribute` instead of a dense index,
+which is what made a doc label vanish when the pair went wide.
+
+The width stops at the pairs that carry attributes. `Checker::pair_of` is used for both a
+**value pair** (`[value, type]`) and a **type value** (`[shape, kind]`), and the type
+readers still take the two-slot form, so making every pair wide is a separate change to
+the type-value encoding rather than an attribute change.
+
+Measured: language 275, highlevel 136, lowlevel 164 (1 ignored), compute 252 plus the
+pre-existing `pack_placement` failure; the four perspective probes answer as before.
 
 ## Open questions
 

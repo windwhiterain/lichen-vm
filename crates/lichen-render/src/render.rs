@@ -72,25 +72,15 @@ where
     if tail.is_empty() {
         return None;
     }
-    let values = module
-        .node_value(AnyNodeId::Dynamic(pair))
-        .and_then(|v| v.as_enum())
-        .and_then(|v| match v {
-            // SAFETY: `a` is a value read from a live node of the module being
-            // rendered; this printer releases no block.
-            LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
-            _ => None,
-        })?;
-    for (i, marker) in tail.iter().enumerate() {
-        let slot = values
-            .get(shape::attr_slot(i))
-            .and_then(|item| match item.node {
-                AnyNodeId::Dynamic(n) => Some(n),
-                AnyNodeId::Static(_) => None,
-            });
-        if let Some(slot) = slot
-            && let Some(label) = attr_ext(marker).label(module, slot)
-        {
+    let value = module.node_value(AnyNodeId::Dynamic(pair))?;
+    let value = value.as_enum()?;
+    for marker in tail {
+        let Some(AnyNodeId::Dynamic(slot)) =
+            module.array_attribute(&value, marker.order_index() as u32)
+        else {
+            continue;
+        };
+        if let Some(label) = attr_ext(marker).label(module, slot) {
             // A labelled value reads as `?name`: the name is the attribute's.
             return Some(format!("?{label}"));
         }
@@ -118,29 +108,20 @@ where
     if tail.is_empty() {
         return String::new();
     }
-    let values = module
-        .node_value(AnyNodeId::Dynamic(pair))
-        .and_then(|v| v.as_enum())
-        .and_then(|v| match v {
-            // SAFETY: `a` is a value read from a live node of the module being
-            // rendered; this printer releases no block.
-            LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
-            _ => None,
-        });
-    let Some(values) = values else {
+    let Some(value) = module.node_value(AnyNodeId::Dynamic(pair)) else {
+        return String::new();
+    };
+    let Some(value) = value.as_enum() else {
         return String::new();
     };
     let mut parts = Vec::new();
-    for (i, marker) in tail.iter().enumerate() {
-        let slot = values
-            .get(shape::attr_slot(i))
-            .and_then(|item| match item.node {
-                AnyNodeId::Dynamic(n) => Some(n),
-                AnyNodeId::Static(_) => None,
-            });
-        if let Some(slot) = slot
-            && let Some(spelling) = attr_ext(marker).render(module, slot, attr_ext)
-        {
+    for marker in tail {
+        let Some(AnyNodeId::Dynamic(slot)) =
+            module.array_attribute(&value, marker.order_index() as u32)
+        else {
+            continue;
+        };
+        if let Some(spelling) = attr_ext(marker).render(module, slot, attr_ext) {
             parts.push(spelling);
         }
     }
