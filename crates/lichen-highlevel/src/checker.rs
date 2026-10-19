@@ -151,9 +151,8 @@ where
     /// The enclosing lambdas' parameters, innermost last: an attribute naming
     /// one of their fields is a **reference**.
     current_parameters: Vec<ExprId>,
-    /// Each annotation whose attribute value is a field reference: the marker, the
-    /// container expression and the field's name.
-    attr_refs: HashMap<ExprId, (P::Attr, ExprId, &'static str)>,
+    /// Each annotation whose attribute value follows a part of the parameter.
+    attr_refs: HashMap<ExprId, (P::Attr, Option<&'static str>)>,
     /// The `@gc` expressions this build compiled.
     ///
     /// # Invariant

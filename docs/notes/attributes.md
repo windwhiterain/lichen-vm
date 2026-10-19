@@ -86,15 +86,20 @@ travel: a function records its requirement's and its certificate's marker index,
 artifact persists them (`StaticFunction::parameter_marker`/`return_marker`), so a frozen
 call reads the attribute from the position exactly as a source call does.
 
-**Two attribute values are references, not perspectives.** `# @any` on a return states
-that the result follows the **argument**: at each call the call's attribute is the
-argument's provided slot, so `divisor(from, at)` is evaluated per call site rather than
-frozen into a certificate (`compute.read`). `# x.field` on a return names an **argument
-field**: the call takes that field's provided slot, so `compute.write`'s output buffer
-carries the input buffer's perspective whatever the written index and value are. The
-field is recorded as its position in the parameter's struct (`Function::return_field`,
-persisted in the artifact, format 14) and the call site maps it through the
-constructor's written names, so a reordered field list still selects the named field.
+**A return attribute computed from the argument follows it.** The vocabulary writes
+`perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and a return
+spells `# (perspective_of x)` or `# (perspective_of x.to)`. The checker recognizes the
+**shape**, never the callee's name: a call whose argument is the enclosing parameter (or
+one of its fields) is a **reference** (`Checker::attribute_reference`). A reference to a
+field records its position in the parameter's struct (`Function::return_field`, persisted
+in the artifact) and the call site maps it through the constructor's written names, so a
+reordered field list still selects the named field; a reference to the whole parameter
+leaves the certificate a hole, and the call site takes the argument's **provided** slot.
+So `compute.read`'s result is `divisor(from, at)` evaluated per call site, and
+`compute.write`'s output buffer carries the input buffer's perspective whatever the
+written index and value are. The reference slot is a fresh cell, and the annotation's
+computed value is not validated against the body's provider — the body cannot know the
+caller's value, so the check belongs to the call site (`docs/notes/array-attribute-view.md`).
 
 ## The extension point (`AttrExt`)
 

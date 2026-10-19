@@ -171,10 +171,9 @@ where
             if let Some(marker) = marker {
                 self.module.functions[function].return_marker = Some(marker.order_index() as u32);
                 self.module.functions[function].return_certificate = self.state[r#return].attr;
-                // A reference names the argument field the result follows: the
-                // field's position is what a frozen artifact can persist.
-                if let Some((_, container, name)) = self.attr_refs.get(&r#return).copied()
-                    && container == parameter
+                // A reference to a field names the position a call site resolves; a
+                // reference to the whole parameter leaves it empty.
+                if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
                     && let Some(parameter_type) = self.state[parameter].ty
                 {
                     let position =
@@ -550,15 +549,17 @@ where
             Some(AnyFunctionId::Static(sref)) => self.module.static_function_return_field(sref),
             None => None,
         };
-        if let (Some(position), Some(marker)) = (return_field, return_marker)
-            && let Some(field) = self.argument_field(argument, position as usize)
-            && let Some(ext) = self.attribute_extension(&marker)
-        {
-            let provided = self.provided_slot(field, &marker, ext);
-            self.state[e].attr = Some(provided);
-            self.merged_tails.insert(e, vec![marker]);
-        }
-        if let Some((slot, index)) = certificate
+        if let (Some(position), Some(marker)) = (return_field, return_marker) {
+            // A return naming an argument field follows that field per call: the
+            // output buffer's perspective is the input buffer's.
+            if let Some(field) = self.argument_field(argument, position as usize)
+                && let Some(ext) = self.attribute_extension(&marker)
+            {
+                let provided = self.provided_slot(field, &marker, ext);
+                self.state[e].attr = Some(provided);
+                self.merged_tails.insert(e, vec![marker]);
+            }
+        } else if let Some((slot, index)) = certificate
             && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
             && let Some(ext) = self.attribute_extension(&marker)
         {
@@ -571,8 +572,8 @@ where
                 .flatten()
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
             match decided {
-                // A hole (`# any`): the result follows the argument, per call.
-                None | Some(LowValue::Any) => {
+                // A hole: the result follows the argument, per call.
+                None => {
                     let provided = self.provided_slot(argument, &marker, ext);
                     self.state[e].attr = Some(provided);
                     self.merged_tails.insert(e, vec![marker]);

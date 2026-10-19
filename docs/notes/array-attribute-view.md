@@ -1,10 +1,10 @@
 # The array attribute view: sparse storage, full-width reading
 
-Status: **stages 1–3 landed** (`df24812c`, `58ca01c2`): the storage and registry, the
-checker's layout-carrying builders and readers, the default array, and the unify wiring
-by canonical index. Stage 4 (the `perspective_of` spelling, and the deletion of the
-call-site reference tables it replaces) is **not** landed — its blocker is measured at
-the end of this note.
+Status: **complete** — stages 1–4 landed (`df24812c`, `58ca01c2`, and this round's
+commit): the storage and registry, the checker's layout-carrying builders and readers,
+the default array, the unify wiring by canonical index, and the `type_of`-shaped
+`perspective_of` spelling that replaced the call-site references. The measured results
+are at the end of this note.
 
 ## The problem, in the superior's words
 
@@ -136,27 +136,44 @@ Concretely:
 - The accessor had to learn the static side: a loaded artifact's layout ids index the
   *frozen* module's registry, not the live one's.
 
-## Stage 4's measured blocker
+## Stage 4: the explicit spelling
 
-The `type_of`-shaped `perspective_of` —
+The `type_of`-shaped function is the spelling:
 
 ```lichen
 perspective_of = x => {p = _; x # p; p}
+read  = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
+write = (x : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
 ```
 
-— cannot yet replace the call-site references. Minimal reproduction, bare language:
+Two fixes made it work, neither a name match:
 
-```lichen
-po = x => {p = _; x # p; p}
-f = x => ((0 # 2) # (po x))     // error: expected raw[?a, ?b], found 2
-```
+- **An annotation's computed value is not validated in the body.** A call's answer is not
+  decidable where the body is checked, so the provider unify is skipped for a computed
+  attribute value; the check belongs to the call site the certificate reaches.
+- **A call's declared slot is its class's representative.** An apply node holds no value
+  of its own — the merge wrote the `[value, type]` pair onto the class's representative —
+  so `Checker::annotation_value_slot` forces the walk and names the representative. Before
+  that, an annotation whose value was a call compared the call's answer array against the
+  number (`expected raw[?a, ?b], found 2`).
 
-An annotation whose attribute value is a **call** takes the call's term — the apply
-node — as its declared slot, and the deep pass makes that class hold a two-element
-array, so the attribute unify compares an array against the number. `x # p` on an
-unannotated parameter already works (`f = x => {p = _; x # p; p}` answers `?a` and binds
-nothing), so the defect is the annotation-of-a-call path, not the binding.
+The reference is then recognized by **shape** (`Checker::attribute_reference`): a call
+whose argument is the enclosing parameter is a reference to the whole argument, and one
+whose argument is a named field of it is a reference to that field. The slot is a fresh
+cell and the call site resolves it — the whole-parameter case through the certificate
+hole's fallback (the argument's provided slot), the field case through
+`Function::return_field`.
+
+`# @any` reverted to the wildcard's plain meaning (a stated wildcard certificate is
+copied like any decided one); the `@any`-on-a-return overload is gone.
+
+Measured on the four probes and the suites: a `# warp` buffer read at a uniform index
+answers `?a # 32`, at a lane-varying index it is refused (`expected 32, found 1`); a write
+from a `# 0` buffer answers `?a # 0` and from a `# warp` buffer it is refused
+(`expected 0, found 32`). The artifact format stays 16 — no persisted shape changed.
 
 ## Open questions
 
-Stage 4 is where the `type_of`-shaped spelling and the verdict above are measured.
+Nothing blocks the design. The runtime attribute *flow* — a caller's provided slot
+reaching a callee's attribute cell through the pair unify — is wired and exercised only
+where a certificate is a hole; no user-facing program reads a flowed cell yet.

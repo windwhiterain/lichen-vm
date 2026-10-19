@@ -191,6 +191,50 @@ where
             .flatten()
     }
 
+    /// The field of the enclosing parameter an attribute value follows, or [`None`]
+    /// for a value that names no part of it.
+    ///
+    /// # Invariant
+    /// Recognised by **shape** — a call whose argument is the parameter or one of its
+    /// fields — never by the callee's name, so any `xxx_of` vocabulary function that
+    /// takes the parameter qualifies. `None` inside the returned option is the whole
+    /// parameter; `Some(name)` is that field.
+    fn attribute_reference(&self, pe: ExprId) -> Option<Option<&'static str>> {
+        let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
+            return None;
+        };
+        let Some(parameter) = self.current_parameters.last().copied() else {
+            return None;
+        };
+        if argument == parameter {
+            return Some(None);
+        }
+        match self.ir[argument].kind {
+            ExprKind::NamedField { container, name } if container == parameter => Some(Some(name)),
+            _ => None,
+        }
+    }
+
+    /// The node that holds the `[value, type]` pair an attribute value answers with.
+    ///
+    /// # Invariant
+    /// A call's node holds no value of its own — its class does — so the walk is forced
+    /// and the class's **representative** is the slot, because that is the node the
+    /// merge wrote the pair onto. Every other expression's own term already is its pair.
+    fn annotation_value_slot(&mut self, pe: ExprId) -> NodeId {
+        let term = self.state[pe]
+            .term
+            .expect("an annotation value expr is compiled");
+        if self.node_value(term).is_some() {
+            return term;
+        }
+        if self.module.node_operation(term).is_some() {
+            self.module.evaluate_node_deep(term, None);
+            return self.module.equality_representative(term);
+        }
+        term
+    }
+
     /// An expression's attribute slot for `marker` — its own slot, else the
     /// attribute's *missing* slot.
     ///
@@ -569,20 +613,19 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
-                // `# x.field` names a slot whose perspective travels: a reference,
-                // so nothing unifies against it here.
-                if let ExprKind::NamedField { container, name } = self.ir[pe].kind
-                    && self.current_parameters.last() == Some(&container)
-                {
-                    self.attr_refs.insert(e, (*marker, container, name));
-                    slots.push(self.fresh_cell());
+                // A value computed from a part of the enclosing parameter is a
+                // **reference**: the call site resolves it.
+                if let Some(field) = self.attribute_reference(pe) {
+                    self.attr_refs.insert(e, (*marker, field));
+                    // The reference's slot is a hole: the call site resolves it.
+                    let cell = self.fresh_cell();
+                    constraint_slot = Some(cell);
+                    slots.push(cell);
                     continue;
                 }
                 // The slot is the annotation value's `[value, type]` term pair, the
                 // one shape every attribute shares.
-                let slot = self.state[pe]
-                    .term
-                    .expect("an annotation value expr is compiled");
+                let slot = self.annotation_value_slot(pe);
                 if ext.is_label() {
                     // A label is metadata: it carries no apply-time slot, and its
                     // slot is the annotation value's pair like any other's.
@@ -607,7 +650,15 @@ where
                             Some(ext.combine(self, &child_attrs))
                         }
                     };
-                    if let Some(p) = provider {
+                    // A computed value is not decidable here; its check belongs to
+                    // the call site its certificate reaches.
+                    let computed = matches!(
+                        self.ir[pe].kind,
+                        ExprKind::Apply { .. } | ExprKind::NativeCall { .. }
+                    );
+                    if let Some(p) = provider
+                        && !computed
+                    {
                         let loc2 = self.loc(e, 2);
                         ext.unify_slots(self, p, slot, loc2);
                     }

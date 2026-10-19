@@ -1,4 +1,5 @@
 let type_of = x => {t = _; x: t; t}
+let perspective_of = x => {p = _; x # p; p}
 warp = 32
 KT = _x => struct{.I _, .O _}
 K = _x => struct{.native _, .I _, .O _}
@@ -17,9 +18,9 @@ col = cfg => (($col(cfg): Int) # 1)
 Read = T => struct{.from (Buf T) # warp, .at Int}
 Write = T => struct{.to (Buf T) # warp, .at Int, .value T}
 WriteAtomic = T => struct{.to (Buf T) # warp, .at Int, .value T}
-read = (x : (Read _)) => ($read(x.from, x.at) # @any)
-write = (x : (Write _)) => ($write(x.to, x.at, x.value) # x.to)
-write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # x.to)
+read = (x : (Read _)) => ($read(x.from, x.at) # (perspective_of x))
+write = (x : (Write _)) => ($write(x.to, x.at, x.value) # (perspective_of x.to))
+write_atomic = (x : (WriteAtomic _)) => ($write_atomic(x.to, x.at, x.value) # (perspective_of x.to))
 collect = (b : (Buf _)) => $collect(b)
 buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
 Mma = T => struct{.s string, .a (Buf T) # warp, .b (Buf T) # warp, .c (Buf T) # warp}
