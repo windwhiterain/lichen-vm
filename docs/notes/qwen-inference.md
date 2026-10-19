@@ -255,6 +255,16 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## The defect is a float-class one, and the existing tests say so by omission
+
+`crates/lichen-compute-gpu/tests/compute_gpu/fused_landing_on_device.rs` passes all five of its cases —
+including `a_landed_tiled_artifact_is_the_body_that_runs` — so a tiled artifact does land and run on this
+device. Every one of those bodies computes in `Int`. The projection this note is chasing computes in
+`BFloat16`, and its tiled body is the first of its kind: refused at instruction 0 for mixing the two
+classes. So the defect is not "tiled kernels do not emit"; it is "a tiled **float** fold emits an `Int`
+where the fold's own class is needed", and the tests say so by never having written one — which is the same
+shape as the plan check this note already recorded, one layer down.
+
 ## What the first execution of a tiled projection found
 
 Feeding the rewritten graph took four tries; the fourth is the one that is not an argument-order error:
