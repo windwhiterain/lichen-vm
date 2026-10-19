@@ -268,15 +268,21 @@ where
         self.node_edges
             .insert(argument_value, self.loc(argument, 0));
         let argument_type = self.state[argument].ty.unwrap();
-        let argument_pair = match &param_persp {
-            Some((marker, _)) => {
-                let argument_persp = self.attr_or_missing(argument, marker);
-                self.array_node(
-                    self.current_block,
-                    &[argument_value, argument_type, argument_persp],
-                )
+        let argument_attr = param_persp
+            .as_ref()
+            .map(|(marker, _)| self.attr_or_missing(argument, marker));
+        let value_argument_pair = match argument_attr {
+            Some(attr) => {
+                self.array_node(self.current_block, &[argument_value, argument_type, attr])
             }
             None => self.array_node(self.current_block, &[argument_value, argument_type]),
+        };
+        // The type side's argument: the same slots with an undecided value, so
+        // its check never evaluates the argument's value.
+        let type_value = self.fresh_cell();
+        let type_argument_pair = match argument_attr {
+            Some(attr) => self.array_node(self.current_block, &[type_value, argument_type, attr]),
+            None => self.array_node(self.current_block, &[type_value, argument_type]),
         };
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return pair.
@@ -317,7 +323,7 @@ where
         // Both slots' applications carry the four elements the apply arm reads.
         let value_operands = self.array_node(
             self.current_block,
-            &[function_value, argument_pair, c, function_ty],
+            &[function_value, value_argument_pair, c, function_ty],
         );
         let value_apply = self.op_node(
             self.current_block,
@@ -328,7 +334,7 @@ where
         let undecided_callee = self.fresh_cell();
         let type_operands = self.array_node(
             self.current_block,
-            &[undecided_callee, argument_pair, c, function_ty],
+            &[undecided_callee, type_argument_pair, c, function_ty],
         );
         let type_apply = self.op_node(
             self.current_block,
@@ -336,7 +342,7 @@ where
             Some(type_operands),
         );
         self.type_applies.insert(e, type_apply);
-        // The call's own type application; a function still under check is skipped.
+        // The call's type application at check; a function under check is skipped.
         if self.module.is_function_type(function_ty) {
             let in_progress = matches!(
                 self.module.function_type_function(function_ty),
@@ -344,12 +350,28 @@ where
                     if self.function_stack.iter().any(|&(checked, _)| checked == function)
             );
             if !in_progress {
+                let report = self.module.report_type_side_failures;
+                // The check's failure is attributed to the argument, and the type
+                // apply has its own node: it needs the same edge.
+                self.apply_edges.insert(
+                    type_apply,
+                    ApplyEdge {
+                        argument_expr: argument,
+                        apply_expr: e,
+                    },
+                );
+                let type_slot_argument = if report {
+                    type_argument_pair
+                } else {
+                    value_argument_pair
+                };
                 self.module.apply_function_type(
                     function_ty,
-                    argument_pair,
+                    type_slot_argument,
                     self.current_block,
                     type_apply,
                     c,
+                    report,
                 );
             }
         }

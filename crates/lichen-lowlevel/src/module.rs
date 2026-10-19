@@ -41,7 +41,17 @@ impl<P: Program> Module<P> {
             stamp_depth: 0,
             deep_depth: 0,
             budget_exhausted: None,
+            report_type_side_failures: false,
         }
+    }
+
+    /// Set whether a type-side parameter check keeps its errors.
+    ///
+    /// # Invariant
+    /// Set once per build, before the check; the value side's reporting is not
+    /// affected.
+    pub fn set_type_side_reporting(&mut self, report: bool) {
+        self.report_type_side_failures = report;
     }
 
     /// Compile `source` into a static artifact and register it under `key` — see

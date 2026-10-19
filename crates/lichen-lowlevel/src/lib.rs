@@ -865,6 +865,12 @@ pub struct Module<P: Program> {
     /// It is the record of why the last walk stopped, so a second walk knows it ran against
     /// an already abandoned graph.
     pub budget_exhausted: Option<BudgetExhausted>,
+    /// Whether the type side's parameter check keeps its errors (a `Check` build).
+    ///
+    /// # Invariant
+    /// It is a build fact, not a runtime mode: the type side reads it to choose
+    /// between discarding and reporting its errors; the value side never does.
+    pub report_type_side_failures: bool,
     pub unify_errors: Vec<UnifyError<P>>,
     /// Runtime evaluation failures, recorded instead of panicking; append-only like unify_errors.
     pub eval_errors: Vec<EvalError>,

@@ -18,6 +18,8 @@ pub(crate) enum ParameterCheck {
     Type,
     /// Run the check and report its errors: the value side's binding.
     Value,
+    /// Run the check and keep its errors: a `Check` build's type side.
+    Report,
 }
 
 /// A failed apply-time parameter check's context: the key back into [`Module::unify_errors`].
@@ -207,7 +209,8 @@ impl<P: Program> Module<P> {
     /// # Invariant
     /// The domain and codomain are this call's own clones ([`Self::instantiate`]),
     /// so a call site never monomorphises a polymorphic template; a type that
-    /// names no function binds nothing.
+    /// names no function binds nothing. `report` runs the parameter check at
+    /// the type side and keeps its errors; otherwise only the signature clones.
     pub fn apply_function_type(
         &mut self,
         type_node: NodeId,
@@ -215,18 +218,17 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: NodeId,
+        report: bool,
     ) -> bool {
         let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function(type_node) else {
             return false;
         };
-        self.apply_type_with(
-            function,
-            argument,
-            block,
-            node,
-            Some(cell),
-            ParameterCheck::Skip,
-        );
+        let check = if report {
+            ParameterCheck::Report
+        } else {
+            ParameterCheck::Skip
+        };
+        self.apply_type_with(function, argument, block, node, Some(cell), check);
         true
     }
 
