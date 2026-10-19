@@ -48,4 +48,17 @@ fn a_held_model_answers_what_the_streamed_one_answers() {
         resident.tokens, EXPECTED,
         "a model whose layers are placed names the host's tokens"
     );
+    // The serving binary's own sequence: hold, place every layer, place the head.
+    if let Err(refusal) = model.place_head() {
+        eprintln!("SKIPPED: the head does not fit: {refusal}");
+        return;
+    }
+    let served = model
+        .generate(9707, 2)
+        .unwrap_or_else(|refusal| panic!("the served model generates: {refusal}"));
+    println!("served: {:?}", served.tokens);
+    assert_eq!(
+        served.tokens, EXPECTED,
+        "the sequence the serving binary runs names the host's tokens"
+    );
 }
