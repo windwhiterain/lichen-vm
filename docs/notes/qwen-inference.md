@@ -599,6 +599,21 @@ opening left the model thinking, so its reasoning arrived as the reply. After bo
 today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
 alone.
 
+## The soak, run again on a service that answers words
+
+The first soak measured memory on a binary that was answering nonsense, which is enough to say nothing
+leaked and not enough to say the service was healthy. Re-run on the fixed one, a hundred and fifty requests
+of four tokens at concurrency eight, with an answer read at the end and the card sampled after every fifty:
+
+    batch 1: 4788 MiB, admitted 50, finished 50, refused 0
+    batch 2: 4732 MiB, admitted 100, finished 100, refused 0
+    batch 3: 4732 MiB, admitted 150, finished 150, refused 0
+    the answer: 'Hello! How can I assist you today? …'
+
+So the memory is flat, every admitted request finished, and the reply is words. The replacement character at
+the end of that answer is a token limit cutting a multi-byte character in half, which is what a token limit
+does rather than a defect.
+
 ## The refused request, finally seen
 
 The queue's refusal was claimed long before it was witnessed: a hundred connections arriving at once had
