@@ -365,7 +365,7 @@ where
                 } else {
                     value_argument_pair
                 };
-                self.module.apply_function_type(
+                let applied = self.module.apply_function_type(
                     function_ty,
                     type_slot_argument,
                     self.current_block,
@@ -373,6 +373,11 @@ where
                     c,
                     report,
                 );
+                // A Check failure settles its node: the shallow pass walks it again.
+                if report && !applied {
+                    self.module
+                        .write_node_value(type_apply, Some(P::Value::from(LowValue::Error)));
+                }
             }
         }
         let node = value_apply;

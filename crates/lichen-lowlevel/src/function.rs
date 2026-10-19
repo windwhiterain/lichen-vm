@@ -166,8 +166,8 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) {
-        self.apply_type_with(function, argument, block, node, cell, ParameterCheck::Type);
+    ) -> bool {
+        self.apply_type_with(function, argument, block, node, cell, ParameterCheck::Type)
     }
 
     /// The shared body of the two type applications; the check decides the bind.
@@ -179,9 +179,9 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
         check: ParameterCheck,
-    ) {
+    ) -> bool {
         let Some(instantiation) = self.instantiate(function, argument, block, node, check) else {
-            return;
+            return false;
         };
         // The result is the clone's return type, resolved before the bind; the
         // deep pass replicates to no class member.
@@ -192,7 +192,7 @@ impl<P: Program> Module<P> {
             self.evaluate_node(Dyn(applied), Some(block));
         }
         let Some(codomain) = self.pair_type_item(applied) else {
-            return;
+            return false;
         };
         let codomain = self.as_dynamic(codomain, block);
         self.evaluate_node(Dyn(codomain), Some(block));
@@ -201,6 +201,7 @@ impl<P: Program> Module<P> {
         if let Some(cell) = cell {
             self.unify(cell, codomain);
         }
+        true
     }
 
     /// Apply a function **type**'s signature for one call, binding `cell` to
@@ -211,6 +212,7 @@ impl<P: Program> Module<P> {
     /// so a call site never monomorphises a polymorphic template; a type that
     /// names no function binds nothing. `report` runs the parameter check at
     /// the type side and keeps its errors; otherwise only the signature clones.
+    /// Answers whether the type side applied (the cloned codomain was bound).
     pub fn apply_function_type(
         &mut self,
         type_node: NodeId,
@@ -228,8 +230,7 @@ impl<P: Program> Module<P> {
         } else {
             ParameterCheck::Skip
         };
-        self.apply_type_with(function, argument, block, node, Some(cell), check);
-        true
+        self.apply_type_with(function, argument, block, node, Some(cell), check)
     }
 
     /// Instantiate `function`'s template for `argument`: clone the return pair, then

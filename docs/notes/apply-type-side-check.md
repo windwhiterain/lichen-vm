@@ -67,14 +67,17 @@ colleague runs the two-mode table on the merge tip. The design makes the
 conflict a check diagnostic because the check-time call records the kept
 `unify_errors` entry, and `check_failed` stops the build before the sweep.
 
-## 4. Known edge: a shallow call can run its type side twice
+## 4. A failed shallow call runs its type side once
 
-The `@shallow` pass evaluates every registered type-apply node unconditionally,
-including one whose type side already failed. The second run's parameter-check
-errors are kept again; the ApplyError is de-duplicated by node
-(`apply_error_nodes`), so the second error has no apply attribution and can
-render a second, unattributed diagnostic. The settle — write the failed
-type-apply node's value as `LowValue::Error` so the second evaluation is
-memoized — is not landed; it costs the failure path in the `Apply` arm. A
-`Check` build that fails before the shallow pass is gated off, so the edge is
-limited to an `@shallow` element whose call the check refuses.
+A `Check` build that fails keeps its diagnostics and stops before the sweep, so
+an ordinary failing call is recorded once. The `@shallow` pass still walks every
+registered type-apply node unconditionally; without a settle the same failed
+call would run its type side a second time there — the second parameter-check
+error is kept again, and `apply_error_nodes`' per-node de-duplication leaves it
+without an apply attribution.
+
+`apply_type_with` now answers whether the type side applied, and `check_app`
+settles a failed `Check` type side by writing `LowValue::Error` into the
+type-apply node: the second evaluation finds a decided node and runs nothing, so
+one failure is one diagnostic. `Evaluate` is untouched — its type side is the
+signature-only clone and the value side reports.
