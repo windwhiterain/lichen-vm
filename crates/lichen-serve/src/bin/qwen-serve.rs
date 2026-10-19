@@ -44,7 +44,7 @@ enum Answer {
     /// All of them at the end, which is what a client reading a body waits for.
     Whole(tokio::sync::oneshot::Sender<Vec<usize>>),
     /// One at a time as they are chosen, which is what a streaming client reads.
-    Stream(tokio::sync::mpsc::UnboundedSender<usize>),
+    Stream(tokio::sync::mpsc::UnboundedSender<Option<usize>>),
 }
 
 /// What the HTTP side shares: the queue in front of the one worker.
@@ -110,7 +110,7 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
         };
         for (id, token) in answered {
             if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
-                let _ = tokens.send(token);
+                let _ = tokens.send(Some(token));
             }
         }
         let finished: Vec<usize> = waiting
@@ -127,7 +127,10 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
                 Some(Answer::Whole(reply)) => {
                     let _ = reply.send(said);
                 }
-                Some(Answer::Stream(_)) | None => {}
+                Some(Answer::Stream(tokens)) => {
+                    let _ = tokens.send(None);
+                }
+                None => {}
             }
             batched.retire(id);
         }
@@ -245,8 +248,8 @@ fn stream(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
-) -> Result<UnboundedReceiverStream<usize>, ()> {
-    let (tokens, answer) = tokio::sync::mpsc::unbounded_channel();
+) -> Result<UnboundedReceiverStream<Option<usize>>, ()> {
+    let (tokens, answer) = tokio::sync::mpsc::unbounded_channel::<Option<usize>>();
     shared
         .jobs
         .try_send(Job {
@@ -257,6 +260,17 @@ fn stream(
         })
         .map_err(|_| ())?;
     Ok(UnboundedReceiverStream::new(answer))
+}
+
+/// The chunk that says a streamed answer ended, which is what a client reads as the stop.
+fn finished_chunk() -> String {
+    json!({
+        "id": "chatcmpl-lichen",
+        "object": "chat.completion.chunk",
+        "model": MODEL,
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "length" }],
+    })
+    .to_string()
 }
 
 /// One token as a chat chunk, which is the shape a streaming client appends.
@@ -302,7 +316,11 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         };
         let tokenizer = Arc::clone(&shared.tokenizer);
         let mapped = futures_util::StreamExt::map(tokens, move |token| {
-            Ok::<_, std::convert::Infallible>(Event::default().data(chat_chunk(&token, &tokenizer)))
+            let chunk = match token {
+                Some(token) => chat_chunk(&token, &tokenizer),
+                None => finished_chunk(),
+            };
+            Ok::<_, std::convert::Infallible>(Event::default().data(chunk))
         });
         let body = futures_util::StreamExt::chain(
             mapped,
@@ -350,18 +368,25 @@ async fn complete(
         };
         let tokenizer = Arc::clone(&shared.tokenizer);
         let mapped = futures_util::StreamExt::map(tokens, move |token| {
-            let text = tokenizer.decode(std::slice::from_ref(&token));
-            Ok::<_, std::convert::Infallible>(
-                Event::default().data(
-                    json!({
-                        "id": "cmpl-lichen",
-                        "object": "text_completion",
-                        "model": MODEL,
-                        "choices": [{ "index": 0, "text": text, "finish_reason": null }],
-                    })
-                    .to_string(),
-                ),
-            )
+            let payload = match token {
+                Some(token) => json!({
+                    "id": "cmpl-lichen",
+                    "object": "text_completion",
+                    "model": MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "text": tokenizer.decode(std::slice::from_ref(&token)),
+                        "finish_reason": null,
+                    }],
+                }),
+                None => json!({
+                    "id": "cmpl-lichen",
+                    "object": "text_completion",
+                    "model": MODEL,
+                    "choices": [{ "index": 0, "text": "", "finish_reason": "length" }],
+                }),
+            };
+            Ok::<_, std::convert::Infallible>(Event::default().data(payload.to_string()))
         });
         let body = futures_util::StreamExt::chain(
             mapped,
