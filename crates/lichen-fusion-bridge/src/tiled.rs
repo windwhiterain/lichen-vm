@@ -146,6 +146,8 @@ pub enum Identity {
     Int(i64),
     /// A float identity, as the `f64` the declaration holds.
     Float(f64),
+    /// A brain-float identity, which is a float the fold reads at half width.
+    BFloat16(f64),
 }
 
 impl Identity {
@@ -154,6 +156,7 @@ impl Identity {
         match self {
             Identity::Int(_) => ScalarClass::Int,
             Identity::Float(_) => ScalarClass::Float,
+            Identity::BFloat16(_) => ScalarClass::BFloat16,
         }
     }
 
@@ -162,6 +165,7 @@ impl Identity {
         match self {
             Identity::Int(bits) => bits,
             Identity::Float(value) => (value as f32).to_bits() as i64,
+            Identity::BFloat16(value) => (value as f32).to_bits() as i64,
         }
     }
 
@@ -170,8 +174,8 @@ impl Identity {
         match class {
             ScalarClass::Int => Identity::Int(value as i64),
             ScalarClass::Float => Identity::Float(value),
-            // `0`, `1`, `-inf` are exact at bf16, so this float is the value itself.
-            ScalarClass::BFloat16 => Identity::Float(value),
+            // `0`, `1` and `-inf` are exact at bf16, and the class is what a tiling reads.
+            ScalarClass::BFloat16 => Identity::BFloat16(value),
         }
     }
 }
