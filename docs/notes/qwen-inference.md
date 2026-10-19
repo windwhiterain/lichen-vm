@@ -269,8 +269,15 @@ started from the prompt's last token alone answers as if the request were one wo
 `"
 : 10"` until the prefill landed and as `"Hello! How can I assist"` after it.
 
-What the surface does not have yet: a Chinese prompt, because the pre-tokenizer's split hits a backtracking
-limit the encoder drops, and true batching, because the batched head disagrees with the single one at two rows.
+A Chinese prompt works, and the way it failed is worth keeping: the byte table was GPT-2's, which names an
+unprintable byte `256 + byte`, while this checkpoint's vocabulary numbers them in order from 256 and stops at
+323 — so every continuation byte, which is most of a Chinese character's bytes, named a symbol no token has.
+The encoder dropped the unknown symbol rather than refusing it, so the loss was silent and every ASCII row
+still passed. A symbol the vocabulary lacks is now an error, a piece the split refuses is an error, and the
+ids for `你好，世界` are checked against a second implementation reading the same vocabulary.
+
+What the surface still does not have is true batching, because the batched head disagrees with the single one
+at two rows while the batched layer agrees with it at every one of the twenty-eight.
 
 ## Running it
 
