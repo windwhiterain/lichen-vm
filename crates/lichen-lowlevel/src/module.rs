@@ -494,6 +494,7 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
+            parameter_requirement: None,
             return_type: NodeId::default(),
             static_origin: None,
             parent,

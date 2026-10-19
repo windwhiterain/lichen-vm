@@ -207,6 +207,34 @@ where
         self.missing_slot_of(marker, self.loc(e, 2))
     }
 
+    /// The slot an argument provides for `marker`: its own, or for a compound the
+    /// combine of what its components provide.
+    ///
+    /// # Invariant
+    /// The reading is the annotation provider's, made recursive: an argument states the
+    /// missing top only where it has no sub-expressions. A struct keeps the meet of its
+    /// fields, so one lane-varying field makes the whole argument lane-varying to a
+    /// requirement.
+    pub(super) fn provided_slot(
+        &mut self,
+        argument: ExprId,
+        marker: &P::Attr,
+        ext: &dyn crate::attr::AttrExt<P>,
+    ) -> NodeId {
+        if self.state[argument].attr.is_some() {
+            return self.attr_or_missing(argument, marker);
+        }
+        let children = self.persp_combine_children(argument);
+        if children.is_empty() {
+            return self.attr_or_missing(argument, marker);
+        }
+        let attrs: Vec<NodeId> = children
+            .iter()
+            .map(|&child| self.provided_slot(child, marker, ext))
+            .collect();
+        ext.combine(self, &attrs)
+    }
+
     /// The attribute's *missing* slot node, shared when the attribute opted
     /// in, else built fresh by the extension.
     ///

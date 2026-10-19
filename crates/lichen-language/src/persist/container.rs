@@ -107,6 +107,14 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
+        // The parameter's requirement, when its source stated one.
+        match function.parameter_requirement {
+            None => w.u8(0),
+            Some(requirement) => {
+                w.u8(1);
+                w.u64(requirement.index as u64);
+            }
+        }
         // The re-export origin: a raw module key + function index.
         match function.origin {
             None => w.u8(0),
@@ -397,6 +405,15 @@ where
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
         let return_type = read_node_id(&mut r, node_count, "function return type")?;
+        let parameter_requirement = match r.u8()? {
+            0 => None,
+            1 => Some(read_node_id(
+                &mut r,
+                node_count,
+                "function parameter requirement",
+            )?),
+            _ => return Err("bad function requirement tag".into()),
+        };
         let origin = match r.u8()? {
             0 => None,
             1 => Some(StaticFunctionRef {
@@ -421,6 +438,7 @@ where
         }
         functions.push(StaticFunction {
             parameter,
+            parameter_requirement,
             r#return,
             return_type,
             origin,

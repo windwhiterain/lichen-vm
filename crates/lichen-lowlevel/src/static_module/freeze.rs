@@ -155,6 +155,9 @@ impl<P: Program> StaticModule<P> {
             function_map.insert(id, StaticFunctionId(functions.len()));
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
+                parameter_requirement: function
+                    .parameter_requirement
+                    .map(|requirement| node_map[&requirement]),
                 r#return: node_map[&function.r#return],
                 // A hand-built function may leave `return_type` unset; fall back to the
                 // return node, always mapped.

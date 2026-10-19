@@ -610,12 +610,21 @@ impl<P: Program> Module<P> {
                     return P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(minted)));
                 }
                 // A cloned function's scope is mapped like an array and homed on the target block.
-                let (scope, r#return, parameter, return_type, static_origin, asserts) = {
+                let (
+                    scope,
+                    r#return,
+                    parameter,
+                    parameter_requirement,
+                    return_type,
+                    static_origin,
+                    asserts,
+                ) = {
                     let function = &self.functions[function];
                     (
                         function.nodes.clone(),
                         function.r#return,
                         function.parameter,
+                        function.parameter_requirement,
                         function.return_type,
                         function.static_origin,
                         function.asserts.clone(),
@@ -627,6 +636,7 @@ impl<P: Program> Module<P> {
                     nodes: Vec::new(),
                     r#return,
                     parameter,
+                    parameter_requirement,
                     return_type: NodeId::default(),
                     // A clone of a materialized static closure is still that
                     // logical function, so the static origin travels with it.

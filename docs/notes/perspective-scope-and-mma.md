@@ -129,6 +129,12 @@ merge.
   dispatch's; the config annotation is not on the MMA path. The register-side check the
   value lattice already states is the uniform-operand requirement (`# compute.warp`), and
   the lane-varying fragment is the default.
+- **The op states its perspective, uncurried.** The vocabulary's `mma` takes one `Mma`
+  struct argument — not four curried lambdas — with the three tiles required warp-uniform
+  (`# warp` on the parameter) and the result certified `# 0`. A lane-varying operand is
+  refused at the call (`expected 32, found 1`), which is the paper's descriptor
+  requirement; the lane-varying *fragments* stay outside the host-buffer op, since a
+  buffer is uniform over every lane.
 - **Only MMA semantically consumes a perspective.** The emitter's hoist/vectorize (Axis
   C) is an *optimization* — [the roadmap](gpu-algorithm-roadmap.md) itself calls it "a
   constant factor, not a capability": a body that ignores the perspective still computes

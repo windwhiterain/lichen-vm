@@ -750,6 +750,13 @@ pub struct Function {
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
+    /// The parameter's perspective requirement, as its source stated it.
+    ///
+    /// # Invariant
+    /// The requirement is the annotation's own `[value, type]` term, not the parameter
+    /// pair's tail cell: a body may bind that cell through its own annotation, and a
+    /// requirement a body can overwrite is not one.
+    pub parameter_requirement: Option<NodeId>,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
     /// The static function this closure was materialized from; `None` for a source closure.
@@ -778,6 +785,8 @@ pub struct Function {
 
 pub struct StaticFunction {
     pub parameter: LocalNodeId,
+    /// The static mirror of [`Function::parameter_requirement`].
+    pub parameter_requirement: Option<LocalNodeId>,
     pub r#return: LocalNodeId,
     /// The static mirror of [`Function::return_type`].
     pub return_type: LocalNodeId,

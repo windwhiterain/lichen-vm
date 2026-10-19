@@ -65,7 +65,9 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
         array(c),
         c.len()
     ));
-    source.push_str(&format!("product = (compute.mma \"{backend}\" a b c)\n"));
+    source.push_str(&format!(
+        "product = (compute.mma (compute.Mma(.s \"{backend}\", .a a, .b b, .c c)))\n"
+    ));
     source.push_str(&format!(
         "compute.collect product : array{{Int, {}}}\n",
         ROWS * COLUMNS
@@ -101,4 +103,36 @@ fn the_gpu_product_matches_the_host() {
     };
     let (module, value, _root) = common::run(&source("gpu", &a, &b, &c));
     assert_eq!(words(&module, &value), expected);
+}
+
+#[test]
+fn a_lane_varying_operand_is_refused() {
+    let (a, b, c) = operands();
+    // The tile descriptors are warp-uniform (`# warp`); a lane-varying claim is refused.
+    let program = source("cpu", &a, &b, &c).replace(".a a", ".a (a # 1)");
+    let mut store = lichen_compute::language::new_store(None).expect("the package registers");
+    let (preprocessed, diagnostics) =
+        lichen_language::preprocess::preprocess(&program, None, &mut store);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let line_starts = lichen_language::lex::line_starts(&program);
+    let report = lichen_language::compile_with_imports_at::<lichen_compute::language::LangProgram>(
+        preprocessed.code,
+        &preprocessed.imports,
+        Some(store.registry()),
+        preprocessed.code_base,
+        &line_starts,
+        lichen_highlevel::no_native_ops(),
+    );
+    assert!(!report.ok(), "a lane-varying operand must not check");
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 32, found 1")),
+        "{messages:?}"
+    );
 }

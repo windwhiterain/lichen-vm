@@ -185,20 +185,26 @@ impl<P: Program> Module<P> {
         function: StaticFunctionRef,
         block: BlockId,
     ) -> Vec<NodeId> {
-        self.materialize_static_pair_tail(function, block, true)
+        self.materialize_static_pair_tail(function, block)
     }
 
-    /// The frozen parameter pair's attribute tail, copied into `block`.
+    /// The frozen parameter's requirement, copied into `block`.
     #[stacksafe]
-    pub fn materialize_static_parameter_tail(
+    pub fn materialize_static_parameter_requirement(
         &mut self,
         function: StaticFunctionRef,
         block: BlockId,
-    ) -> Vec<NodeId> {
-        self.materialize_static_pair_tail(function, block, false)
+    ) -> Option<NodeId> {
+        let module = self.static_module(function.module);
+        let requirement = module
+            .functions
+            .get(function.index.0)?
+            .parameter_requirement?;
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        Some(self.clone_static_signature_node(&module, requirement, block, &mut remap))
     }
 
-    /// `pair`'s attribute tail (the return pair's or the parameter pair's), copied.
+    /// The frozen return pair's attribute tail, copied into `block`.
     ///
     /// # Invariant
     /// The copies are the dynamic reach the reader needs: which attribute owns a slot is
@@ -208,17 +214,12 @@ impl<P: Program> Module<P> {
         &mut self,
         function: StaticFunctionRef,
         block: BlockId,
-        of_return: bool,
     ) -> Vec<NodeId> {
         let module = self.static_module(function.module);
         let Some(entry) = module.functions.get(function.index.0) else {
             return Vec::new();
         };
-        let pair = if of_return {
-            entry.r#return
-        } else {
-            entry.parameter
-        };
+        let pair = entry.r#return;
         let Some(value) = module.read(pair) else {
             return Vec::new();
         };
@@ -486,6 +487,7 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
+            parameter_requirement: None,
             return_type: NodeId::default(),
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.

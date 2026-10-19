@@ -122,6 +122,7 @@ where
         }
         // Invariant: the attribute cell stays undecided — a bound declared
         // value would be baked by the deep pass.
+        let mut parameter_requirement = None;
         if let Some(parameter_attribute) = parameter_attribute {
             // The attribute is compiled in body scope, like the type, so `n` may
             // reference the parameter itself.
@@ -139,9 +140,13 @@ where
             if self.attribute_extension(&marker).is_none() {
                 self.no_attr_ext_guard(self.loc(e, 2));
             }
+            parameter_requirement = Some(declared);
             self.function_param_attr.insert(e, (marker, declared));
         }
         let ret = self.check_expr(r#return);
+        // The requirement rides its own slot, so a body's annotation of the parameter
+        // cannot overwrite what the template states.
+        self.module.functions[function].parameter_requirement = parameter_requirement;
         // The return's certificate, recorded for a call site (attributes.md).
         if let Some(slot) = self.state[r#return].attr
             && self.merged_tails.contains_key(&r#return)
@@ -277,22 +282,23 @@ where
     /// A copied slot whose value is undecided is a wildcard and states nothing; a slot
     /// the extensions do not recognise is not a constraint this build checks.
     fn check_static_parameter(&mut self, function: StaticFunctionRef, argument: ExprId, e: ExprId) {
-        let tails = self
+        let Some(slot) = self
             .module
-            .materialize_static_parameter_tail(function, self.current_block);
-        for slot in tails {
-            let Some((marker, ext)) = self.static_tail_owner(slot) else {
-                continue;
-            };
-            let declared = slot_value_node(&*self, slot);
-            self.module.evaluate_node_deep(declared, None);
-            if self.node_value(declared).is_none() {
-                continue;
-            }
-            let found = self.attr_or_missing(argument, &marker);
-            let loc = self.loc(e, 2);
-            ext.unify_slots(self, found, slot, loc);
+            .materialize_static_parameter_requirement(function, self.current_block)
+        else {
+            return;
+        };
+        let Some((marker, ext)) = self.static_tail_owner(slot) else {
+            return;
+        };
+        let declared = slot_value_node(&*self, slot);
+        self.module.evaluate_node_deep(declared, None);
+        if self.node_value(declared).is_none() {
+            return;
         }
+        let found = self.provided_slot(argument, &marker, ext);
+        let loc = self.loc(e, 2);
+        ext.unify_slots(self, found, slot, loc);
     }
 
     /// The attribute that owns a copied frozen tail slot, with its behaviour.
@@ -369,9 +375,9 @@ where
                 let declared = crate::attr::slot_value_node(&*self, param_slot);
                 self.module.evaluate_node_deep(declared, None);
                 if self.node_value(declared).is_some() {
-                    let arg_missing = self.attr_or_missing(argument, &param_marker);
+                    let found = self.provided_slot(argument, &param_marker, ext);
                     let loc2 = self.loc(e, 2);
-                    ext.unify_slots(self, arg_missing, param_slot, loc2);
+                    ext.unify_slots(self, found, param_slot, loc2);
                 }
             }
         } else if let Some(sref) = static_callee {
