@@ -133,9 +133,9 @@ fn bump(counter: &AtomicU64, by: i64) {
 /// The counters, one row per tag.
 ///
 /// # Invariant
-/// `alive = resident + pooled + in flight`, where in flight is what a submission has recorded and
-/// not yet handed back; the three are moved between by the events that cause them, so a snapshot
-/// taken between two events always adds up.
+/// `alive = allocated - freed` exactly, whatever the bytes are doing now: a byte the driver holds is
+/// a byte the card must have, whether it is resident, pooled or in flight. `resident` and `pooled`
+/// are two places those bytes are, and `alive - resident - pooled` is what a submission holds.
 #[derive(Default)]
 pub struct Accounting {
     rows: [Row; 4],
@@ -182,17 +182,14 @@ impl Accounting {
         bump(&row.freed, bytes as i64);
     }
 
-    /// A buffer of `from` left the pool and is being used as `to`.
-    pub fn reused(&self, from: Tag, to: Tag, bytes: u64) {
-        bump(&self.row(from).pooled, -(bytes as i64));
-        bump(&self.row(to).alive, bytes as i64);
+    /// A buffer of `tag` left the pool, to be used as whatever this run needs it for.
+    pub fn unpooled(&self, tag: Tag, bytes: u64) {
+        bump(&self.row(tag).pooled, -(bytes as i64));
     }
 
     /// A buffer of `tag` was handed to the pool rather than to the driver.
     pub fn pooled(&self, tag: Tag, bytes: u64) {
-        let row = self.row(tag);
-        bump(&row.alive, -(bytes as i64));
-        bump(&row.pooled, bytes as i64);
+        bump(&self.row(tag).pooled, bytes as i64);
     }
 
     /// A buffer of `tag` was issued as a resident id.
@@ -208,7 +205,6 @@ impl Accounting {
     /// A buffer of `tag` changed its byte size under a resident id.
     pub fn restated(&self, tag: Tag, from: u64, to: u64) {
         self.released(tag, to as i64 - from as i64);
-        bump(&self.row(tag).alive, to as i64 - from as i64);
     }
 
     /// The staging mapping grew or shrank by `bytes`.

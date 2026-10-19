@@ -1685,7 +1685,7 @@ impl GpuContext {
             .and_then(Vec::pop)
         {
             self.accounting
-                .reused(buffer.tag, tag, DeviceBuffer::bytes(padded, class));
+                .unpooled(buffer.tag, DeviceBuffer::bytes(padded, class));
             return Ok(DeviceBuffer { tag, ..buffer });
         }
         let device = &self.device;

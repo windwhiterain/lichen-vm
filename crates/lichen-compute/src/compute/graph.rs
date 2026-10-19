@@ -15,7 +15,7 @@ use lichen_graph_ir::{
     Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Scalar as GraphScalar, Value,
     ValueId,
 };
-use lichen_kernel_ir::{KernelFragment, ScalarClass, ScalarLeaf};
+use lichen_kernel_ir::{KernelFragment, ParallelBackend, ResidentId, ScalarClass, ScalarLeaf};
 use lichen_lowlevel::LowValue;
 
 use super::{Backend, ComputeValue, ResidentBuffer};
@@ -627,6 +627,15 @@ pub fn run(
         );
     }
     let graph = &aligned(graph, &arguments)?;
+    // The ids the caller brought in, taken before the arguments move: a run never gives back a
+    // buffer it was handed.
+    let mut kept: Vec<ResidentId> = arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            RunArgument::Resident(resident) => Some(resident.id),
+            _ => None,
+        })
+        .collect();
     // The arguments are this call's, so their bytes move: a clone here copies every payload.
     let inputs: Vec<Value<'_>> = arguments
         .into_iter()
@@ -647,7 +656,7 @@ pub fn run(
         .returns()
         .map(<[ValueId]>::to_vec)
         .unwrap_or_else(|| (0..table.len()).collect());
-    returned
+    let results: Vec<RunResult> = returned
         .iter()
         .map(|value| {
             let entry = table.get(*value).ok_or(GraphRefusal::UnknownValue {
@@ -657,7 +666,35 @@ pub fn run(
             returned_role(entry)
         })
         .collect::<Result<_, GraphRefusal>>()
-        .map_err(|refusal| format!("this graph could not be read back: {refusal}"))
+        .map_err(|refusal| format!("this graph could not be read back: {refusal}"))?;
+    kept.extend(results.iter().filter_map(|result| match result {
+        RunResult::Resident(resident) => Some(resident.id),
+        _ => None,
+    }));
+    given_back(&*backend, &table, &kept);
+    Ok(results)
+}
+
+/// Hand back every buffer the run produced that the caller is not holding.
+///
+/// # Invariant
+/// **A value nothing returns and the caller did not bring in is a temporary**, and a temporary's
+/// device memory is nobody's but the run's: keeping it would make what a run costs the device a
+/// function of how many intermediates it happened to have rather than of what it returned. An id
+/// in `kept` is the caller's under a name the table also uses, so it is left alone, and each id
+/// is released once however many table entries carry it.
+fn given_back(backend: &dyn ParallelBackend, table: &[Value<'_>], kept: &[ResidentId]) {
+    let mut released: Vec<ResidentId> = Vec::new();
+    for value in table {
+        let Ok(id) = value.device_buffer() else {
+            continue;
+        };
+        if kept.contains(&id) || released.contains(&id) {
+            continue;
+        }
+        released.push(id);
+        backend.release(id);
+    }
 }
 
 /// State one element class along each chain of values a graph runs, or refuse a crossing.
