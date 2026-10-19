@@ -307,6 +307,23 @@ changes nothing. The batch pays each layer's weights once rather than once a seq
 attention still name one position and one cache, so those loop per sequence. The tokens are
 `[9707, 25, 358, 2776]` and `[785, 25, 330, 785]`, each what its start answers alone.
 
+## A batch of different lengths
+
+`Batched` holds requests at their own positions: `admit` fills a prompt's cache, `step` gives every live
+request one token and advances it, `answer` reads back what a request has said. Two requests of different
+prompt lengths, batched, answer exactly what each answers alone — that is `continuous_batch`'s assertion, and
+it is what the single-position batch before it could not tell apart.
+
+The barrier was smaller than it looked. The rotation reads one position per call, which looks like a
+single-position kernel, but a batch already calls it once a sequence: the only thing that had to change was
+`layer_batch` taking a position *per row* rather than one. The caches are held layer by layer across the
+live requests, so a step is still one dispatch a layer, and retiring a request moves the last live one into
+its place while keeping the identifier a caller holds.
+
+What a step costs and what it buys: `batch_generate` over two sequences measured **1.6×–2.2×** against the
+two runs it replaces. The service itself still answers one request at a time — the worker that would group
+its queue onto this primitive, and a sampler per request rather than one per batch, are the next step.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the
