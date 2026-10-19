@@ -16,10 +16,13 @@ use serde_json::{Value, json};
 
 use tokio_stream::wrappers::ReceiverStream;
 
-use lichen_serve::{Qwen, Sampling, Session, Tokenizer, Width};
+use lichen_serve::{Batched, Qwen, Sampling, Session, Tokenizer, Width};
 
 /// The name this service answers as, which a client uses to pick a model.
 const MODEL: &str = "qwen3-1.7b";
+
+/// How many requests one step answers, which is what the queue may grow to.
+const SEQUENCES: usize = 8;
 
 /// One request the worker is asked for.
 struct Job {
@@ -61,21 +64,69 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
     if model.hold_in_memory().is_err() || model.reside(28).is_err() || model.place_head().is_err() {
         return;
     }
-    while let Ok(job) = jobs.recv() {
-        match job.answer {
-            Answer::Whole(reply) => {
-                let answered =
-                    match model.generate_from(&job.prompt, job.limit, job.sampling, |_| {}) {
-                        Ok(generated) => generated.tokens[job.prompt.len()..].to_vec(),
-                        Err(_) => Vec::new(),
-                    };
-                let _ = reply.send(answered);
+    let mut batched = Batched::new(&model);
+    let mut waiting: std::collections::HashMap<usize, Answer> = std::collections::HashMap::new();
+    let mut closed = false;
+    loop {
+        // Everything waiting joins the batch, up to the number a step should hold.
+        while batched.live() < SEQUENCES && !closed {
+            match jobs.try_recv() {
+                Ok(job) => {
+                    let admitted = batched.admit(&job.prompt, job.limit, job.sampling);
+                    match admitted {
+                        Ok(id) => {
+                            waiting.insert(id, job.answer);
+                        }
+                        Err(_) => drop(job.answer),
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    closed = true;
+                    break;
+                }
             }
-            Answer::Stream(tokens) => {
-                let _ = model.generate_from(&job.prompt, job.limit, job.sampling, |token| {
-                    let _ = tokens.blocking_send(token);
-                });
+        }
+        if batched.live() == 0 {
+            if closed {
+                break;
             }
+            match jobs.recv() {
+                Ok(job) => {
+                    if let Ok(id) = batched.admit(&job.prompt, job.limit, job.sampling) {
+                        waiting.insert(id, job.answer);
+                    }
+                }
+                Err(_) => break,
+            }
+            continue;
+        }
+        let answered = match batched.step() {
+            Ok(answered) => answered,
+            Err(_) => break,
+        };
+        for (id, token) in answered {
+            if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
+                let _ = tokens.blocking_send(token);
+            }
+        }
+        let finished: Vec<usize> = waiting
+            .keys()
+            .copied()
+            .filter(|id| batched.done(*id))
+            .collect();
+        for id in finished {
+            let said = batched
+                .answer(id)
+                .map(<[usize]>::to_vec)
+                .unwrap_or_default();
+            match waiting.remove(&id) {
+                Some(Answer::Whole(reply)) => {
+                    let _ = reply.send(said);
+                }
+                Some(Answer::Stream(_)) | None => {}
+            }
+            batched.retire(id);
         }
     }
 }

@@ -98,6 +98,19 @@ pub fn choose(logits: &[f32], sampling: &Sampling, draw: &mut impl FnMut() -> f3
 /// # Invariant
 /// Its state advances on every call, so a run's draws are independent of each other and depend only on the
 /// seed and how many requests preceded them.
+pub fn next(state: &mut u64) -> f32 {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    let mixed = state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40;
+    (mixed as f32) / ((1u32 << 24) as f32)
+}
+
+/// A small deterministic generator, so a seeded run repeats.
+///
+/// # Invariant
+/// Its state advances on every call, so a run's draws are independent of each other and depend only on the
+/// seed and how many requests preceded them.
 pub fn randomness(seed: u64) -> impl FnMut() -> f32 {
     let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
     move || {

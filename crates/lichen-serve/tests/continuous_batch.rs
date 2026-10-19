@@ -23,12 +23,12 @@ fn a_batch_of_two_lengths_answers_what_each_answers_alone() {
     model
         .hold_in_memory()
         .unwrap_or_else(|refusal| panic!("the halves are held: {refusal}"));
-    let mut batched = Batched::new(&model, Sampling::greedy());
+    let mut batched = Batched::new(&model);
     let ids: Vec<usize> = PROMPTS
         .iter()
         .map(|prompt| {
             batched
-                .admit(prompt, TOKENS)
+                .admit(prompt, TOKENS, Sampling::greedy())
                 .unwrap_or_else(|refusal| panic!("a request is admitted: {refusal}"))
         })
         .collect();
