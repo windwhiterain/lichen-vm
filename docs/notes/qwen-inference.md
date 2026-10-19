@@ -361,7 +361,18 @@ service holds no per-request state once an answer is delivered — the resident 
 and the tokens' probabilities all give their memory back, which is what the earlier leak
 ([`graph::run`'s orphans](qwen-inference.md)) made worth measuring rather than assuming.
 
-The distribution over those two hundred: **p50 2.49 s, p95 7.05 s, p99 28.22 s**. The tail is a handful of
+The distribution over those two hundred: **p50 2.49 s, p95 7.05 s, p99 28.22 s**.
+
+## Steady state, which is the number to compare against
+
+The same service, fifty requests of warm-up thrown away and then a hundred measured by subtracting the
+histogram's buckets before from its buckets after: **p50 and p95 both 3.53 s, p99 4.19 s**, 200 tokens in
+42 s — **4.76 tokens a second** in aggregate. The tail is what changed: the cold run's p99 was **28.22 s** and
+the warm one's is **4.19 s**, because a cold request waits for the driver's caches while a warm one waits only
+for its batch. p50 and p95 landing in one bucket is the other half of the same fact — an eight-deep batch of
+two-token requests is a steady queue, so the spread is the batch's step, not the model's variance.
+
+ The tail is a handful of
 requests from the first batch, before the driver's caches warm; the histogram cannot say which, and the
 number to compare against is the same service under a steady load rather than after a cold start.
 
