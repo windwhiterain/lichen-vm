@@ -581,6 +581,25 @@ column and read by the column-major program, a layer **read from the file** is s
 the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a
 time. A single global address change cannot be right for both, and that is why the first two tries failed.
 
+## A regression the measurements did not catch, and the test that now does
+
+The layout change — a held layer stored by column and read by the column-major program — was verified by
+two tests that read an answer, and both of them run the **streamed** path. The serving binary does not: it
+calls `hold_in_memory` and then `reside`, and `reside` placed a layer through `split_layer`, which does not
+turn it. So the binary ran a column-major program over row-major bytes from the commit that added the
+layout until this one, and answered nonsense: `'edByBorderStyle…'` for a prompt that had answered
+`'Hello! How can I assist you today?'`.
+
+What missed it is worth recording more than the fix. Two hundred requests of a soak, and a hundred of the
+steady-state protocol, both ran over the broken binary and both reported clean — because they counted
+admitted requests, finished requests, tokens, steps, buckets and bytes, and **never read an answer**. A
+measurement that does not read what the server said is not a verification of the server; it is a
+verification of its plumbing.
+
+The test that closes it is `crates/lichen-serve/tests/held_answers.rs`: it answers a prompt on both layouts
+and compares the tokens, which is what the serving path needed and never had. The fix is in `reside`, which
+now places the layout the chosen program reads.
+
 ## The same measurement, after the layout and the batching
 
 The quiet-machine protocol re-run — fifty requests of warm-up discarded, a hundred measured by subtracting the

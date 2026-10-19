@@ -1016,7 +1016,12 @@ impl<'session> Qwen<'session> {
                 )?),
                 Width::Narrowed => {
                     let bytes = flat_bytes(&format!("layer{layer:02}"), self.width)?;
-                    read = split_layer(&bytes, self.width);
+                    // The placed bytes must be the layout the chosen program reads.
+                    read = if self.held.is_empty() {
+                        split_layer(&bytes, self.width)
+                    } else {
+                        held_layer(&bytes, self.width)
+                    };
                     Tensors::Narrowed(&read)
                 }
             };
