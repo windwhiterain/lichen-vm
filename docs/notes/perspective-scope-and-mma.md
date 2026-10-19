@@ -31,6 +31,26 @@ is the intended first consumer (hoist a uniform subexpression, and emit it as on
 the target has a vector width); it is a codegen feature, not a check. The checks above
 are the checker's; they constrain programs, but no GPU code is generated *from* them yet.
 
+### What "the emitter consumes it" would take
+
+Two mechanics, both larger than they look:
+
+- **A hoist.** The SPIR-V walk emits every expression per invocation. A value proven
+  uniform could be computed once per *workgroup* and shared instead — either on the host
+  (the config leaves already ride push constants, so the machinery exists for leaves) or
+  by one lane writing a workgroup variable behind a barrier. The first needs a host-side
+  evaluator for the body expression; the second needs shared memory and a barrier, which
+  the backend does not have yet ([shared-memory-and-barriers](shared-memory-and-barriers.md)).
+- **A vector form.** "Emitted as one where the target has a vector width" means the
+  value is uniform over the vector's lane group and the operation is vectorizable; the
+  emitter would have to build `vec4` values from scalars, which changes the whole value
+  model of the shader (loads, stores, arithmetic and the buffer layout).
+
+Neither changes the *answer*. A body that ignores the perspective computes the same
+result, one element per lane — which is why the author's reading (§6) holds: the emitter
+consumes a perspective only as a performance factor; MMA consumes it because the lane
+layout *is* the semantics.
+
 ## 3. The paper's requirement is not this lattice
 
 The reference document types `wmma` with `requires(thread[32])`: the operation involves a
