@@ -8,10 +8,10 @@ use std::sync::{Arc, PoisonError};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
-    FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation, PendingAssert,
-    Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule,
-    StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId,
+    Function, FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation,
+    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
+    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -358,25 +358,27 @@ pub(crate) fn referenced_keys_of<P: Program>(
 /// One value's contribution to [`referenced_keys`]: the single site of this match.
 fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<ModuleKey>) {
     match value.as_enum() {
-        Some(LowValue::Array(AnyHandle::Static(handle))) => {
-            keys.insert(handle.module);
-            // SAFETY: the payload lives in the dependency's shared arena, pinned by the
-            // registry holding it.
-            for item in unsafe { &*handle.offset } {
-                if let AnyNodeId::Static(sref) = item.node {
-                    keys.insert(sref.module);
+        Some(LowValue::Array(array)) => match *array {
+            AnyHandle::Static(handle) => {
+                keys.insert(handle.module);
+                // SAFETY: the payload lives in the dependency's shared arena, pinned by the
+                // registry holding it.
+                for item in unsafe { &*handle.offset } {
+                    if let AnyNodeId::Static(sref) = item.node {
+                        keys.insert(sref.module);
+                    }
                 }
             }
-        }
-        Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-            // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
-            // alive as long as the module is.
-            for item in unsafe { &*handle.0 } {
-                if let AnyNodeId::Static(sref) = item.node {
-                    keys.insert(sref.module);
+            AnyHandle::Dynamic(handle) => {
+                // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
+                // alive as long as the module is.
+                for item in unsafe { &*handle.0 } {
+                    if let AnyNodeId::Static(sref) = item.node {
+                        keys.insert(sref.module);
+                    }
                 }
             }
-        }
+        },
         Some(LowValue::Table(AnyHandle::Static(handle))) => {
             keys.insert(handle.module);
             // SAFETY: as in the static array arm above — the payload lives
@@ -528,11 +530,13 @@ impl<P: Program> StaticModule<P> {
         for node in &self.nodes {
             let Some(value) = node.value else { continue };
             match value.as_enum() {
-                Some(LowValue::Array(AnyHandle::Static(handle))) => {
-                    keys.insert(handle.module);
+                Some(LowValue::Array(array)) => {
+                    if let AnyHandle::Static(handle) = *array {
+                        keys.insert(handle.module);
+                    }
                     // SAFETY: a dependency's shared arena, kept alive by the registry
                     // while this artifact is filed.
-                    for item in unsafe { &*handle.offset } {
+                    for item in unsafe { array.items() } {
                         if let AnyNodeId::Static(sref) = item.node {
                             keys.insert(sref.module);
                         }

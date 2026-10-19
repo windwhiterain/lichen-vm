@@ -199,7 +199,9 @@ impl<P: Program> StaticModule<P> {
             let Some(value) = module.nodes[id].value else {
                 continue;
             };
-            if let Some(LowValue::Array(AnyHandle::Dynamic(handle))) = value.as_enum() {
+            if let Some(LowValue::Array(array)) = value.as_enum()
+                && let AnyHandle::Dynamic(handle) = *array
+            {
                 // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
                 // which the freeze borrows for the whole build.
                 let items = unsafe { &*handle.0 };
@@ -223,6 +225,19 @@ impl<P: Program> StaticModule<P> {
                 if seen.insert(key) {
                     unique.push((key.0, key.1, P::Value::alignment()));
                 }
+            }
+        }
+        // The module's default attribute array is laid out with the node payloads: it is
+        // a payload of its own, so a dynamic one needs the same copy or the artifact would
+        // name a block it is about to release.
+        if let Some(AnyHandle::Dynamic(handle)) = module.default_attributes {
+            // SAFETY: as in the dynamic array arm above, under the same block-arena
+            // contract; `module` is borrowed for the whole build.
+            let items = unsafe { &*handle.0 };
+            let bytes = std::mem::size_of_val(items);
+            let key = (handle.0 as *const u8 as usize, bytes);
+            if seen.insert(key) {
+                unique.push((key.0, key.1, std::mem::align_of::<ArrayItem>()));
             }
         }
         let mut cursor = 0usize;
@@ -265,6 +280,10 @@ impl<P: Program> StaticModule<P> {
             nodes,
             functions,
             arena,
+            attribute_layouts: module.attribute_layouts.clone(),
+            default_attributes: module.default_attributes.map(|handle| {
+                static_array_handle(handle, key, base, &offsets, &node_map)
+            }),
             read_only: mode == FreezeMode::ReadOnly,
             releases,
         };
@@ -275,6 +294,72 @@ impl<P: Program> StaticModule<P> {
 
 fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
+}
+
+/// Re-key an array payload as a static handle under `key`: phase 2's layout lookup and
+/// phase 3's item rewrite for a payload **no node carries**, which is how the module's
+/// default attribute array is frozen.
+///
+/// # Invariant
+///
+/// A dynamic handle's payload was laid out and copied in phase 2, so the lookup is
+/// total, and its item refs are rewritten in the arena copy exactly as a node's array
+/// payload's are; a static handle names a frozen dependency's shared arena and is filed
+/// verbatim, its refs absolute from birth. Every dynamic ref the default names is inside
+/// the artifact because [`closure`] walks the default's items.
+fn static_array_handle(
+    handle: AnyHandle<[ArrayItem]>,
+    key: ModuleKey,
+    base: *mut u8,
+    offsets: &HashMap<(usize, usize), usize>,
+    node_map: &HashMap<NodeId, LocalNodeId>,
+) -> StaticHandle<[ArrayItem]> {
+    let handle = match handle {
+        // A static handle names a frozen dependency's shared arena, filed verbatim.
+        AnyHandle::Static(handle) => return handle,
+        AnyHandle::Dynamic(handle) => handle,
+    };
+    // SAFETY: `Module::alloc_array` put the payload in a block arena of the borrowed
+    // module, which is alive for the whole build.
+    let items = unsafe { &*handle.0 };
+    let bytes = std::mem::size_of_val(items);
+    let offset = *offsets
+        .get(&(handle.0 as *const u8 as usize, bytes))
+        .expect("phase 2 laid out every dynamic payload of the module");
+    // SAFETY: as in the array arm of `rewrite_value`, with the same in-bounds copy.
+    let copied = unsafe {
+        std::slice::from_raw_parts_mut(base.add(offset) as *mut ArrayItem, items.len())
+    };
+    for item in copied.iter_mut() {
+        item.node = rewrite_node_ref(item.node, key, node_map);
+    }
+    StaticHandle {
+        module: key,
+        offset: ptr::slice_from_raw_parts(
+            // SAFETY: the in-bounds arena copy of `copied` above, at this payload's
+            // phase-2 offset.
+            unsafe { base.add(offset) } as *const ArrayItem,
+            copied.len(),
+        ),
+    }
+}
+
+/// One phase-3 node ref rewrite: a dynamic ref becomes a static one under `key`, and a
+/// static ref the source carries is filed verbatim.
+fn rewrite_node_ref(
+    node: AnyNodeId,
+    key: ModuleKey,
+    node_map: &HashMap<NodeId, LocalNodeId>,
+) -> AnyNodeId {
+    match node {
+        AnyNodeId::Dynamic(node) => AnyNodeId::Static(StaticNodeId {
+            module: key,
+            index: node_map[&node],
+        }),
+        // A static ref the source carries is filed verbatim and keeps naming
+        // the dependency.
+        static_ref @ AnyNodeId::Static(_) => static_ref,
+    }
 }
 
 /// The phase-3 value rewrite: dynamic payloads and refs → static form keyed by `key`.
@@ -293,9 +378,13 @@ fn rewrite_value<P: Program>(
     function_map: &HashMap<FunctionId, StaticFunctionId>,
 ) -> P::Value {
     match value.as_enum() {
-        Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
+        Some(LowValue::Array(array)) if matches!(*array, AnyHandle::Dynamic(_)) => {
             // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
             // which is borrowed for the whole build.
+            let handle = match *array {
+                AnyHandle::Dynamic(handle) => handle,
+                AnyHandle::Static(_) => unreachable!("the guard above admits only a dynamic handle"),
+            };
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
             // Phase 2 laid out and copied every dynamic payload, so the lookup is total.
@@ -308,29 +397,24 @@ fn rewrite_value<P: Program>(
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut ArrayItem, items.len())
             };
             for item in copied.iter_mut() {
-                item.node = match item.node {
-                    AnyNodeId::Dynamic(node) => AnyNodeId::Static(StaticNodeId {
-                        module: key,
-                        index: node_map[&node],
-                    }),
-                    // A static ref the source carries is filed verbatim and keeps naming
-                    // the dependency.
-                    static_ref @ AnyNodeId::Static(_) => static_ref,
-                };
+                item.node = rewrite_node_ref(item.node, key, node_map);
             }
-            P::Value::from(LowValue::Array(AnyHandle::Static(StaticHandle {
-                module: key,
-                offset: ptr::slice_from_raw_parts(
-                    // SAFETY: the in-bounds arena copy of `copied` above, at this
-                    // payload's phase-2 offset.
-                    unsafe { base.add(offset) } as *const ArrayItem,
-                    items.len(),
-                ),
-            })))
+            P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                AnyHandle::Static(StaticHandle {
+                    module: key,
+                    offset: ptr::slice_from_raw_parts(
+                        // SAFETY: the in-bounds arena copy of `copied` above, at this
+                        // payload's phase-2 offset.
+                        unsafe { base.add(offset) } as *const ArrayItem,
+                        items.len(),
+                    ),
+                }),
+                array.layout(),
+            )))
         }
         // A static payload is the dependency's shared arena, keyed by its final
         // key — verbatim, never re-keyed or copied.
-        Some(LowValue::Array(AnyHandle::Static(_)))
+        Some(LowValue::Array(_))
         | Some(LowValue::Table(AnyHandle::Static(_)))
         | Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
         Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
@@ -421,6 +505,9 @@ fn rewrite_value<P: Program>(
 /// is undecided, taken whole; and the whole function template. `ReadOnly` follows an operand
 /// only from a residual node, which is why such a value is not a key ([`FreezeMode`]).
 ///
+/// The module's **default attribute array** is a fifth kind: it is module state rather
+/// than a node's value, yet the artifact files it, so its items are roots of their own.
+///
 /// # Safety
 ///
 /// A value must report every node its opaque ext payload holds through
@@ -435,6 +522,15 @@ fn closure<P: Program>(
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
+    if let Some(AnyHandle::Dynamic(handle)) = module.default_attributes {
+        // SAFETY: `Module::alloc_array` put it in a block arena of `module`, which
+        // this walk borrows.
+        for item in unsafe { &*handle.0 } {
+            if let AnyNodeId::Dynamic(node) = item.node {
+                work.push(node);
+            }
+        }
+    }
     // Classes already expanded, once each — not once per visited member.
     let mut decided: HashSet<NodeId> = HashSet::new();
     while let Some(node) = work.pop() {
@@ -464,12 +560,14 @@ fn closure<P: Program>(
         value.traced(module, &mut traced);
         work.extend(traced);
         match value.as_enum() {
-            Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
+            Some(LowValue::Array(array)) => {
                 // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
                 // which this walk borrows.
-                for item in unsafe { &*handle.0 } {
-                    if let AnyNodeId::Dynamic(node) = item.node {
-                        work.push(node);
+                if let AnyHandle::Dynamic(handle) = *array {
+                    for item in unsafe { &*handle.0 } {
+                        if let AnyNodeId::Dynamic(node) = item.node {
+                            work.push(node);
+                        }
                     }
                 }
             }

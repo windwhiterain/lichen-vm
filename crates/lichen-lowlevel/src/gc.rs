@@ -1,7 +1,7 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvalError, LowValue,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayValue, BlockId, EvalError, LowValue,
     Module, NodeId, Program, ValueExt,
 };
 use lichen_utils::disjoint::{self, Node as _};
@@ -162,7 +162,7 @@ impl<P: Program> Module<P> {
             self.garbage_collect_node(operand, source, target);
         }
         let value = current.map(|value| match value.as_enum() {
-            Some(LowValue::Array(AnyHandle::Static(_))) => {
+            Some(LowValue::Array(array)) if matches!(*array, AnyHandle::Static(_)) => {
                 // A static payload lives in the frozen module's arena: no
                 // block to vacate, its item refs all static.
                 value
@@ -178,11 +178,13 @@ impl<P: Program> Module<P> {
                     }
                 }
                 // The whole payload moves into the target arena, so a
-                // compacted array keeps its markers.
+                // compacted array keeps its markers — and its layout, which
+                // travels with the value it describes.
                 if inside {
-                    P::Value::from(LowValue::Array(
+                    P::Value::from(LowValue::Array(ArrayValue::with_layout(
                         self.alloc_array(unsafe { array.items() }, target),
-                    ))
+                        array.layout(),
+                    )))
                 } else {
                     value
                 }
@@ -278,11 +280,12 @@ impl<P: Program> Module<P> {
         };
         let home = self.nodes[node].block;
         let relocated = match value.as_enum() {
-            Some(LowValue::Array(AnyHandle::Static(_))) => return,
+            Some(LowValue::Array(array)) if matches!(*array, AnyHandle::Static(_)) => return,
             // SAFETY: `array` is a live node's payload, and `home` outlives the node.
-            Some(LowValue::Array(array)) => P::Value::from(LowValue::Array(
+            Some(LowValue::Array(array)) => P::Value::from(LowValue::Array(ArrayValue::with_layout(
                 self.alloc_array(unsafe { array.items() }, home),
-            )),
+                array.layout(),
+            ))),
             Some(LowValue::Table(AnyHandle::Static(_))) => return,
             // SAFETY: `table` is a live node's payload, and `home` outlives the node.
             Some(LowValue::Table(table)) => P::Value::from(LowValue::Table(

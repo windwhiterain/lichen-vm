@@ -73,7 +73,7 @@ impl<P: Program> Module<P> {
                     };
                     let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
                     let array = self.alloc_array(&items, block);
-                    let result = P::Value::from(LowValue::Array(array));
+                    let result = P::Value::from(LowValue::Array(array.into()));
                     self.write_node_value_if_absent(node, Some(result.clone()));
                     if let Some(cell) = cell {
                         // The return type is resolved before the cell binds, as
@@ -194,7 +194,7 @@ impl<P: Program> Module<P> {
         });
         let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
         let array = self.alloc_array(&items, block);
-        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array))))
+        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array.into()))))
     }
 
     /// An array value node over `nodes`, in `block`.
@@ -204,6 +204,6 @@ impl<P: Program> Module<P> {
             .map(|&node| ArrayItem::new(Dyn(node)))
             .collect();
         let array = self.alloc_array(&items, block);
-        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array))))
+        self.add_node(block, None, Some(P::Value::from(LowValue::Array(array.into()))))
     }
 }

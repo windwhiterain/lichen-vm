@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
-    AnyFunctionId, AnyHandle, ArrayItem, LowOperator, LowValue, ModuleKey, Program,
+    AnyFunctionId, AnyHandle, ArrayItem, ArrayValue, LowOperator, LowValue, ModuleKey, Program,
     StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, TableItem, ValueExt as _,
 };
 
@@ -218,15 +218,20 @@ impl ValueCodec for LowValue {
                 w.u8(8);
                 w.u32(n.to_bits());
             }
-            LowValue::Array(AnyHandle::Static(handle)) => {
-                w.u8(1);
-                write_relocated_handle(w, modules, handle.module, handle.offset);
-            }
-            // Freezing rewrites every dynamic payload to a static ref, so
-            // this means the module was not a frozen artifact.
-            LowValue::Array(AnyHandle::Dynamic(_)) => {
-                return Err("cannot serialize a module carrying a dynamic array payload".into());
-            }
+            // Tag 1 keeps its meaning and gains the layout id, so the payload and the
+            // layout it carries round-trip as one value.
+            LowValue::Array(array) => match *array {
+                AnyHandle::Static(handle) => {
+                    w.u8(1);
+                    write_relocated_handle(w, modules, handle.module, handle.offset);
+                    w.u32(array.layout());
+                }
+                // Freezing rewrites every dynamic payload to a static ref, so
+                // this means the module was not a frozen artifact.
+                AnyHandle::Dynamic(_) => {
+                    return Err("cannot serialize a module carrying a dynamic array payload".into());
+                }
+            },
             LowValue::Table(AnyHandle::Static(handle)) => {
                 w.u8(6);
                 write_relocated_handle(w, modules, handle.module, handle.offset);
@@ -267,9 +272,11 @@ impl ValueCodec for LowValue {
         Ok(match r.u8()? {
             0 => LowValue::USize(r.u64()? as usize),
             8 => LowValue::Float(f32::from_bits(r.u32()?)),
-            1 => LowValue::Array(AnyHandle::Static(read_relocated_handle::<ArrayItem, P>(
-                r, self_key, self_arena, self_base, modules,
-            )?)),
+            1 => {
+                let handle =
+                    read_relocated_handle::<ArrayItem, P>(r, self_key, self_arena, self_base, modules)?;
+                LowValue::Array(ArrayValue::with_layout(AnyHandle::Static(handle), r.u32()?))
+            }
             2 => {
                 let module = ModuleKey::from_raw(r.u64()?);
                 let index = r.u64()? as usize;
