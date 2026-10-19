@@ -349,10 +349,18 @@ made executable — [attributes](attributes.md) §"A lane-group requirement"). T
 is lane-varying — and the value lattice cannot express it. The concrete symptom: a
 perspective on a kernel config parameter, `(k : ParA # 4)`, still fails the build in a
 **runtime** unify (`expected raw[?a, raw[?b, ?c]] -> raw[?d, ?e], found struct{…} -> ?j`)
-rather than the attribute check, because the kernel-type unify is what sees it. A
-meaningful config annotation needs the scope perspective, which is the same lane-group
-question as [shared-memory-and-barriers](shared-memory-and-barriers.md) and is the
-prerequisite for a real MMA item.
+rather than the attribute check. Measured further: the checker's attribute paths do not
+fire for it (the provider, element-pair and type-attribute reconciliations were each
+traced), and disabling the frozen return-attribute propagation does not change it — the
+failing unify is the **kernel-type merge** at the value side, where the annotation's
+presence changes the config pair's shape. A meaningful config annotation therefore needs
+the scope perspective *and* an attribute-tolerant kernel-type merge; the scope part is
+the same lane-group question as
+[shared-memory-and-barriers](shared-memory-and-barriers.md) and is the prerequisite for a
+real MMA item. The width a lane-group annotation names now has a vocabulary binding —
+`compute.warp = 32`, the backend's `SUBGROUP_WIDTH` — so a GPU program can state the
+uniform-load requirement in the shipping language ([attributes](attributes.md)
+§"A lane-group requirement").
 
 **And the part C does not cover.** A lane group that cannot talk to itself buys
 throughput, not capability. Tiled matrix multiply, a scan and a sub-group

@@ -1,4 +1,5 @@
 let type_of = x => {t = _; x: t; t}
+warp = 32
 KT = _x => struct{.I _, .O _}
 K = _x => struct{.native _, .I _, .O _}
 A = I => struct{.n Int, .I I}

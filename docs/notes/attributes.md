@@ -172,6 +172,13 @@ provider uniform over 32-groups (`32 | 0`, `32 | 64`) and refuses a lane-varying
 | `f (0 # 1)` | ✗ — `expected 32, found 1` |
 | `f (0 # 6)` | ✗ — `expected 32, found 6` (divisibility, not order) |
 
+**The shipping vocabulary names the width**: [compute.lichen](../crates/lichen-compute/src/compute.lichen)
+binds `warp = 32` (the backend's `SUBGROUP_WIDTH`), so a GPU program writes
+`f = (x : Int # compute.warp) => x` and gets the same four readings under `Mode::Check`
+— `f 7` ✓, `f (0 # 64)` ✓, `f (0 # 1)` → `expected 32, found 1`, `f (0 # 6)` →
+`expected 32, found 6`. Nothing in the runtime reads `warp` yet; it is the width an
+annotation may name.
+
 **This is not the paper's `requires(thread[32])`.** The reference document types `wmma`
 with a *scope* requirement — the 32 lanes participate in one operation — while a
 fragment's data is lane-varying inside the group. `Perspective` states value
