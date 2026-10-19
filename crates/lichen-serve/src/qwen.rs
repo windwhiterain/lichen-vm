@@ -438,6 +438,8 @@ fn flat(name: &str) -> Result<Vec<f32>, QwenRefusal> {
 
 /// The steps a forward uses, prepared once per session.
 struct Steps<'session> {
+    /// Nanoseconds spent inside the stages, which is what the device was asked for.
+    stage_nanos: std::cell::Cell<u64>,
     norm: crate::Prepared<'session>,
     projection: crate::Prepared<'session>,
     /// The projection for a layer read from the file, whose weight is still stored by row.
@@ -454,6 +456,17 @@ struct Steps<'session> {
 }
 
 impl<'session> Steps<'session> {
+    /// Add the time a stage took, so a caller can tell the device's work from the work around it.
+    fn add_stage(&self, started: std::time::Instant) {
+        self.stage_nanos
+            .set(self.stage_nanos.get() + started.elapsed().as_nanos() as u64);
+    }
+
+    /// How long the stages have held the device, which a caller resets by noting it before a step.
+    pub fn stage_nanos(&self) -> u64 {
+        self.stage_nanos.get()
+    }
+
     fn prepare(session: &'session Session, width: Width) -> Result<Self, QwenRefusal> {
         let prepared = |source: &str| session.prepare(source).map_err(QwenRefusal::Step);
         Ok(Self {
@@ -467,6 +480,7 @@ impl<'session> Steps<'session> {
                 Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
             },
             held: std::cell::Cell::new(false),
+            stage_nanos: std::cell::Cell::new(0),
             head: match width {
                 Width::Wide => prepared(crate::model::MATVEC_ROW_STEP)?,
                 Width::Narrowed => crate::narrowed(session, crate::model::MATVEC_ROW_STEP)?,
@@ -504,6 +518,7 @@ impl<'session> Steps<'session> {
         rows: i64,
         width: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
         let stepped = self
             .norm
             .step(vec![
@@ -514,6 +529,7 @@ impl<'session> Steps<'session> {
                 gain,
             ])
             .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
         answered(session, &stepped)
     }
 
@@ -562,6 +578,7 @@ impl<'session> Steps<'session> {
         weight: RunArgument,
         count: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
         let stepped = self
             .head
             .step(vec![
@@ -572,6 +589,7 @@ impl<'session> Steps<'session> {
                 weight,
             ])
             .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
         answered(session, &stepped)
     }
 
@@ -581,6 +599,7 @@ impl<'session> Steps<'session> {
         values: &[f32],
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
         let stepped = self
             .rotation
             .step(vec![
@@ -589,6 +608,7 @@ impl<'session> Steps<'session> {
                 self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
         answered(session, &stepped)
     }
 
@@ -599,6 +619,7 @@ impl<'session> Steps<'session> {
         up: &[f32],
         count: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        let started = std::time::Instant::now();
         let stepped = self
             .product
             .step(vec![
@@ -607,6 +628,7 @@ impl<'session> Steps<'session> {
                 self.payload(up),
             ])
             .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
         answered(session, &stepped)
     }
 
@@ -624,6 +646,7 @@ impl<'session> Steps<'session> {
         values: &[f32],
     ) -> Result<Vec<f32>, QwenRefusal> {
         let positions = keys.len() / (KEY_HEADS as usize * HEAD as usize);
+        let started = std::time::Instant::now();
         let stepped = self
             .attention
             .step(vec![
@@ -634,6 +657,7 @@ impl<'session> Steps<'session> {
                 self.payload(values),
             ])
             .map_err(QwenRefusal::Step)?;
+        self.add_stage(started);
         answered(session, &stepped)
     }
 }
@@ -1027,6 +1051,11 @@ impl<'session> Qwen<'session> {
             Some(held) => RunArgument::Resident(held[slot]),
             None => self.tensor(tensors, slot, offset, length),
         }
+    }
+
+    /// How long this model's stages have held the device, in nanoseconds.
+    pub fn stage_nanos(&self) -> u64 {
+        self.steps.stage_nanos()
     }
 
     /// The vocabulary head's weight, which is the embedding's own tensor.

@@ -255,7 +255,20 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
-## The floor, and the six times between it and a step
+## What a step spends around its stages
+
+The stage calls are timed now, so a step can be split without reading a machine's clock from outside: inside
+one step of one request, **0.458 s of 0.708 s** is inside `Prepared::step` and **0.250 s** is around it —
+uploads, read-backs, tensor setup and allocation. That share is measured within one run, which is what makes
+it worth more than the absolute numbers: the same probe's resident step read 0.576 s one round and 1.605 s the
+next on a machine other sessions compile on, so every **absolute** figure in this note carries that spread
+and the **ratios inside a run** do not.
+
+What it means for the mega kernel: fusing a layer's ten stages into one removes the stages' own dispatch
+count, which is the part this note has a floor for, and it does **not** by itself remove the 35% around them.
+Both are wanted, and the one measured without any new language surface is the 0.250 s.
+
+
 
 One dispatch with a row, so that nothing but the dispatch itself is being measured: **0.329 ms**, and the
 same **0.33 ms** at 4096 rows. `Prepared::step` under `Policy::Batch` records every node into one submission

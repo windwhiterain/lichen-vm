@@ -35,6 +35,15 @@ fn a_step_costs_what_its_weights_are_near() {
     let resident =
         step_once(&model).unwrap_or_else(|refusal| panic!("the resident step runs: {refusal}"));
     println!("resident on the device: {:.3} s", resident.as_secs_f64());
+    let before = model.stage_nanos();
+    let wall = step_once(&model).unwrap_or_else(|refusal| panic!("the step runs: {refusal}"));
+    let stages = std::time::Duration::from_nanos(model.stage_nanos() - before);
+    println!(
+        "a step is {:.3} s, its stages {:.3} s, so {:.3} s is around them",
+        wall.as_secs_f64(),
+        stages.as_secs_f64(),
+        wall.as_secs_f64() - stages.as_secs_f64()
+    );
     println!(
         "the bus costs {:.2}x",
         held.as_secs_f64() / resident.as_secs_f64()
