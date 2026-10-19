@@ -222,7 +222,7 @@ impl<P: Program> Module<P> {
         cell: NodeId,
         report: bool,
     ) -> bool {
-        let Some(AnyFunctionId::Dynamic(function)) = self.function_type_function(type_node) else {
+        let Some(function) = self.function_type_function(type_node) else {
             return false;
         };
         let check = if report {
@@ -230,7 +230,18 @@ impl<P: Program> Module<P> {
         } else {
             ParameterCheck::Skip
         };
-        self.apply_type_with(function, argument, block, node, Some(cell), check)
+        // A frozen callee's signature applies too (`static_function_type_apply`).
+        match function {
+            AnyFunctionId::Dynamic(function) => {
+                self.apply_type_with(function, argument, block, node, Some(cell), check)
+            }
+            // The value side owns a static callee's signature when nothing reports:
+            // it binds the cell when it materializes the body.
+            AnyFunctionId::Static(function) if report => {
+                self.static_function_type_apply(function, argument, block, node, Some(cell), check)
+            }
+            AnyFunctionId::Static(_) => false,
+        }
     }
 
     /// Instantiate `function`'s template for `argument`: clone the return pair, then

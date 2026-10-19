@@ -2,6 +2,7 @@
 //! shared with `Module::function_apply`.
 
 use super::*;
+use crate::function::ParameterCheck;
 impl<P: Program> Module<P> {
     /// Apply a static function: materialize into clones in `block`, then run the apply tail.
     #[stacksafe]
@@ -93,6 +94,117 @@ impl<P: Program> Module<P> {
         };
         self.stamp_depth = stamp;
         result
+    }
+
+    /// The type side: the signature's copies, the check, and `cell` bound.
+    #[stacksafe]
+    pub(crate) fn static_function_type_apply(
+        &mut self,
+        function: StaticFunctionRef,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<NodeId>,
+        check: ParameterCheck,
+    ) -> bool {
+        if self.depth_exhausted(node) {
+            return false;
+        }
+        let Some((parameter, codomain)) =
+            self.materialize_static_signature_with_classes(function, block)
+        else {
+            return false;
+        };
+        if check != ParameterCheck::Skip {
+            let recorded = self.unify_errors.len();
+            let failed = self.apply_parameter_check(
+                parameter,
+                argument,
+                block,
+                node,
+                AnyFunctionId::Static(function),
+                parameter,
+            );
+            // The type side discards only the errors this check records.
+            if check == ParameterCheck::Type {
+                self.unify_errors.truncate(recorded);
+            }
+            if failed {
+                return false;
+            }
+        }
+        let Some(cell) = cell else {
+            return true;
+        };
+        self.evaluate_node(Dyn(codomain), Some(block));
+        self.unify(cell, codomain);
+        true
+    }
+
+    /// The frozen signature copied into `block`, its frozen classes preserved.
+    #[stacksafe]
+    fn materialize_static_signature_with_classes(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+    ) -> Option<(NodeId, NodeId)> {
+        let module = self.static_module(function.module);
+        let (parameter, return_type) = {
+            let entry = module.functions.get(function.index.0)?;
+            (entry.parameter, entry.return_type)
+        };
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        let parameter = self.clone_static_signature_node(&module, parameter, block, &mut remap);
+        let codomain = self.clone_static_signature_node(&module, return_type, block, &mut remap);
+        if remap.len() > 1 {
+            let groups = crate::apply::regroup_clones(
+                remap.iter().map(|(&template, &clone)| (template, clone)),
+                |template| static_find(&module.nodes, template),
+            );
+            crate::apply::unify_clone_groups(groups, |first, clone| {
+                self.unify(first, clone);
+            });
+        }
+        Some((parameter, codomain))
+    }
+
+    /// One node of the frozen signature, copied; an array's items are copied with it.
+    #[stacksafe]
+    fn clone_static_signature_node(
+        &mut self,
+        module: &Arc<StaticModule<P>>,
+        local: LocalNodeId,
+        block: BlockId,
+        remap: &mut HashMap<LocalNodeId, NodeId>,
+    ) -> NodeId {
+        if let Some(&clone) = remap.get(&local) {
+            return clone;
+        }
+        let clone = self.add_node(block, None, None);
+        remap.insert(local, clone);
+        let Some(value) = module.read(local) else {
+            return clone;
+        };
+        let copied = match value.as_enum() {
+            Some(LowValue::Array(array)) => {
+                // SAFETY: the payload lives in `module`'s arena, pinned by the `Arc`.
+                let items = unsafe { array.items() };
+                let mut copied = Vec::with_capacity(items.len());
+                for item in items {
+                    let node = match item.node {
+                        AnyNodeId::Static(sref) if sref.module == module.key => {
+                            Dyn(self.clone_static_signature_node(module, sref.index, block, remap))
+                        }
+                        node => node,
+                    };
+                    copied.push(ArrayItem { node, ..*item });
+                }
+                P::Value::from(LowValue::Array(self.alloc_array(&copied, block)))
+            }
+            _ => value,
+        };
+        self.write_node_value(clone, Some(copied));
+        clone
     }
 
     /// Clone one static node into the dynamic world; `#[stacksafe]` because
