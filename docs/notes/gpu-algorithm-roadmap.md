@@ -360,7 +360,8 @@ the same lane-group question as
 real MMA item. The width a lane-group annotation names now has a vocabulary binding —
 `compute.warp = 32`, the backend's `SUBGROUP_WIDTH` — so a GPU program can state the
 uniform-load requirement in the shipping language ([attributes](attributes.md)
-§"A lane-group requirement").
+§"A lane-group requirement"). The design record and the options are
+[perspective-scope-and-mma](perspective-scope-and-mma.md).
 
 **And the part C does not cover.** A lane group that cannot talk to itself buys
 throughput, not capability. Tiled matrix multiply, a scan and a sub-group
