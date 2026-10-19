@@ -587,7 +587,15 @@ fn finished_chunk(reason: &'static str) -> String {
 /// # Invariant
 /// A token is one entry even when its text is several characters: the entry names the token's own spelling,
 /// which is what a client reading log probabilities measures against.
-fn logprob_content(tokenizer: &Tokenizer, picks: &[lichen_serve::Chosen]) -> Option<Vec<Value>> {
+fn logprob_content(
+    tokenizer: &Tokenizer,
+    picks: &[lichen_serve::Chosen],
+    rivals: usize,
+) -> Option<Vec<Value>> {
+    // A greedy answer keeps one candidate whether or not a client asked, so the request decides.
+    if rivals == 0 {
+        return None;
+    }
     let first = picks.first()?;
     if first.top.is_empty() {
         return None;
@@ -750,7 +758,7 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
                 },
                 "finish_reason": reason,
             });
-            if let Some(content) = logprob_content(&shared.tokenizer, picks) {
+            if let Some(content) = logprob_content(&shared.tokenizer, picks, rivals) {
                 choice["logprobs"] = json!({ "content": content });
             }
             choice
@@ -854,7 +862,7 @@ async fn complete(
                 "text": answered_text(&shared.tokenizer, answered, &stops),
                 "finish_reason": reason,
             });
-            if let Some(content) = logprob_content(&shared.tokenizer, picks) {
+            if let Some(content) = logprob_content(&shared.tokenizer, picks, rivals) {
                 choice["logprobs"] = json!({ "content": content });
             }
             choice
