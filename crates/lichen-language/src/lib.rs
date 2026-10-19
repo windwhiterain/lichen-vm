@@ -34,7 +34,7 @@ pub mod testing;
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use lichen_highlevel::checker::{Build, Checker};
+use lichen_highlevel::checker::{Build, Checker, Mode};
 use lichen_highlevel::ir::IR;
 use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
@@ -289,6 +289,7 @@ where
         cells,
         compiled_cells,
         source_id,
+        Mode::Evaluate,
     )
 }
 
@@ -307,6 +308,7 @@ pub fn build_report<P>(
     cells: Option<&mut CellStore>,
     compiled_cells: Vec<compile::CompiledCell>,
     source_id: &str,
+    mode: Mode,
 ) -> Report<P>
 where
     P: LangProgramShape,
@@ -321,8 +323,13 @@ where
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
-    let build =
-        Checker::<P>::build_in_attr_native(ir, registry.clone(), lang_attr_ext::<P>(), native_ops);
+    let build = Checker::<P>::build_in_attr_native_with_mode(
+        ir,
+        registry.clone(),
+        lang_attr_ext::<P>(),
+        native_ops,
+        mode,
+    );
     // The IR-time assembly refuses a claim it cannot complete, at the
     // expression that carried it (graph-fusion.md §3).
     diagnostics.extend(build.ir.claim_refusals.iter().map(|(expr, refusal)| {

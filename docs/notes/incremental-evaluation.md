@@ -469,9 +469,14 @@ entry point, and that nothing further should be built.
   as §4.1 defines it. The obligation that remains is the differential harness,
   not another design question. What is genuinely not known is the *take*
   (§4.5), which is a measurement, not a decision.
-- **Q9 — the wall-clock split.** Those counters measured redundancy, not cost. A
-  probe that separates the deep pass from the checker and the frontend is what
-  would say whether any of this matters; it is the one thing step 0 still owes.
+- **Q9 — the wall-clock split, answered by the two modes.** Those counters measured redundancy,
+  not cost, but the split now exists as a semantic boundary instead of a measurement: a build is
+  `Mode::Evaluate` (the definition pass and every top-level statement run) or `Mode::Check`
+  (every expression's type slot is decided; no value slot is entered). `BufferSession::set_mode`
+  carries the choice, a `Check` session neither loads nor writes cell artifacts, and
+  `apply-type-side-check.md` records the type side that makes the check mode report type
+  conflicts. The LSP still analyses in `Evaluate` until hover's contract for an undecided value
+  is ruled on; the wall-clock comparison of the two modes is then a probe over that switch.
 
 ## 8. Where the changes would land
 

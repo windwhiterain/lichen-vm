@@ -81,3 +81,14 @@ settles a failed `Check` type side by writing `LowValue::Error` into the
 type-apply node: the second evaluation finds a decided node and runs nothing, so
 one failure is one diagnostic. `Evaluate` is untouched — its type side is the
 signature-only clone and the value side reports.
+
+## 5. The check mode that consumes it
+
+`Checker::Mode::Check` gates the definition pass and the top-level statement evaluation, and
+sets `Module::set_type_side_reporting(true)` so the type-apply reports instead of truncating;
+its own pass then decides every expression's type slot. Measured on the merge tip: `f = (x :
+Int) => x; f "s"` reports `expected Int, found string` once in both modes, the caret on the
+argument, and the computed-type programs (`array{Int, 2 + 3}`) read the same in both.
+`BufferSession::set_mode` exposes the choice; a `Check` session loads and writes no cells.
+`incremental-evaluation.md` Q9 records why the LSP has not switched yet (hover's contract for
+an undecided value).

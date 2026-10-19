@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use stacksafe::stacksafe;
 
+use lichen_highlevel::checker::Mode;
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
 use lichen_highlevel::program::{PackageSource, TypeOperator, ValueType};
@@ -346,6 +347,7 @@ where
         None,
         Vec::new(),
         "",
+        Mode::Evaluate,
     );
     let span_index = report.span_index.take().map(Arc::new);
     let build = report.build.take().map(Arc::new);

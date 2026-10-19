@@ -111,6 +111,12 @@ where
     cell_cache: Option<PathBuf>,
     /// Whether a compile writes the cache back; a reader-only consumer loads and stops.
     cell_cache_save: bool,
+    /// What a compile decides: values (`Evaluate`) or types only (`Check`).
+    ///
+    /// # Invariant
+    /// A `Check` compile enters no value slot, so a divergent `@loop` cannot hang it, and it
+    /// neither loads nor writes cell artifacts: an artifact is a value.
+    mode: lichen_highlevel::checker::Mode,
 }
 
 /// The snapshot of the buffer a compile ran under.
@@ -250,6 +256,7 @@ where
             last: None,
             cell_cache: None,
             cell_cache_save: true,
+            mode: lichen_highlevel::checker::Mode::Evaluate,
         }
     }
 
@@ -271,6 +278,15 @@ where
         self.cell_cache = Some(dir.into());
         self.cell_cache_save = false;
         self
+    }
+
+    /// Compile in `mode` from now on; see [`lichen_highlevel::checker::Mode`].
+    ///
+    /// # Invariant
+    /// A `Check` session reports type diagnostics only: no body runs, so no apply-time value
+    /// check fires and no cell is frozen or loaded.
+    pub fn set_mode(&mut self, mode: lichen_highlevel::checker::Mode) {
+        self.mode = mode;
     }
 
     /// The registry this session's cells are filed in.
@@ -581,7 +597,7 @@ where
     }
 
     pub fn compile(&mut self) -> SessionReport<P> {
-        if self.last.is_none() {
+        if self.last.is_none() && self.mode == lichen_highlevel::checker::Mode::Evaluate {
             self.load_cells();
         }
         // The line starts every span is measured against: the original file's.
@@ -809,8 +825,10 @@ where
             Some(&mut self.cells),
             compiled_cells,
             &self.source_id,
+            self.mode,
         );
         if self.cell_cache_save
+            && self.mode == lichen_highlevel::checker::Mode::Evaluate
             && let Some(dir) = self.cell_cache.clone()
         {
             for (path, key) in &after {
