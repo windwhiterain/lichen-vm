@@ -279,6 +279,34 @@ ids for `你好，世界` are checked against a second implementation reading th
 What the surface still does not have is true batching, because the batched head disagrees with the single one
 at two rows while the batched layer agrees with it at every one of the twenty-eight.
 
+### A batch's second row, and where it was lost
+
+`Qwen::generate_batch` runs the sequences' rows in one dispatch wherever the step names no position and no
+cache, and its test says so by running each start alone and comparing. With `STARTS = [9707]` it passed,
+because **a single input row is the one case where the two index expressions agree**: `Qwen::projected`
+passes `per` — the outputs one input row produces — and a launch of `rows = n · per` outputs therefore
+sees `row / per = 0` for every row.
+
+At two starts the second row was exactly zero, and it was **not** the kernel, the emitter's addressing, or
+the scalar argument's arrival. A probe (`crates/lichen-serve/tests/probe_batch_row.rs`) runs
+`MATVEC_BATCH_STEP` at `rows = 6`, `dim = 2`, `per = 3` and answers `[1, 2, 2, 3, 4, 6]` — through
+`compute.plrun` and through `compute.graphrun` under the `BFloat16` pack alike — so `per` is read at the
+value the host passed, and `MATVEC_STEP` over the same launch of six answers all six rows.
+
+The weight was indexed by `row · dim`, which is only right while `row < per`. A batch shares **one** weight
+across its sequences, and that weight carries `per` rows, so an output belongs to the weight row
+`row − (row / per) · per` and to the input row `row / per`. Past the first sequence the weight read ran off
+the end of the tensor and — an out-of-range read answering zero, as the probe's own short buffer showed —
+the fold wrote its identity. `key`, `value`, `query`, `gate`, `up` and `down` all shared the one expression,
+which is why the whole row went quiet rather than one stage of it.
+
+**What it buys**, narrow and held in memory, warm, `generate_batch(&[9707, 785], 3)` against the two
+`generate(.., 3)` calls it replaces, measured twice and in both orders: the batch **3.43 s, 3.62 s, 3.79 s,
+4.71 s** and the two alone **6.77 s, 7.15 s, 7.35 s, 7.59 s** — **1.6× to 2.2×**, and the order of the pair
+changes nothing. The batch pays each layer's weights once rather than once a sequence; the rotation and the
+attention still name one position and one cache, so those loop per sequence. The tokens are
+`[9707, 25, 358, 2776]` and `[785, 25, 330, 785]`, each what its start answers alone.
+
 ## Running it
 
 `crates/lichen-serve/src/qwen.rs` holds the model: the loader, the twenty-eight streamed layers, the

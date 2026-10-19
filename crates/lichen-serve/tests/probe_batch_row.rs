@@ -6,9 +6,11 @@
 //! index expressions the kernel must carry are therefore different: `row / per` is the input row
 //! and `row % per` is the weight row, and the second one is the one a batch shares.
 
+use std::time::Instant;
+
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 use lichen_kernel_ir::{ScalarClass, ScalarData};
-use lichen_serve::{MATVEC_BATCH_STEP, MATVEC_STEP, Session};
+use lichen_serve::{MATVEC_BATCH_STEP, MATVEC_STEP, Qwen, Session, Width};
 
 /// Three input rows of two, exact in f32 and in a half.
 const XS: [f32; 6] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -20,6 +22,10 @@ const DIM: i64 = 2;
 const PER: i64 = 3;
 /// The launch: two input rows, each projected to `per` outputs.
 const ROWS: i64 = 6;
+
+/// The two starts the batch carries, and how many tokens each generates.
+const STARTS: [usize; 2] = [9707, 785];
+const TOKENS: usize = 3;
 
 /// What each output row has to be: the weight's row `row % per` over the input row `row / per`.
 const EXPECTED: [f32; ROWS as usize] = [1.0, 2.0, 2.0, 3.0, 4.0, 6.0];
@@ -86,8 +92,8 @@ fn which_weight_row_a_batch_reads() {
         answered(&session, &stepped)
     );
     lichen_compute::compute::clear_graph_pass();
-    let narrowed = lichen_serve::narrowed_projection(&session)
-        .unwrap_or_else(|refusal| panic!("{refusal}"));
+    let narrowed =
+        lichen_serve::narrowed_projection(&session).unwrap_or_else(|refusal| panic!("{refusal}"));
     let stepped = narrowed
         .step(vec![
             RunArgument::Count(ROWS),
@@ -102,8 +108,7 @@ fn which_weight_row_a_batch_reads() {
         answered(&session, &stepped)
     );
     lichen_compute::compute::clear_graph_pass();
-    // The single-row projection over the same launch: every output reads input row zero, and the
-    // weight's own rows are `rows`.
+    // The single-row projection over the same launch reads input row zero throughout.
     let single = session
         .prepare(MATVEC_STEP)
         .unwrap_or_else(|refusal| panic!("the single-row projection prepares: {refusal}"));
@@ -119,4 +124,55 @@ fn which_weight_row_a_batch_reads() {
         "[single] rows={ROWS} -> {:?}, wanted every output over input row zero",
         answered(&session, &stepped)
     );
+}
+
+/// What the batch of two buys against the two generations it replaces.
+///
+/// # Invariant
+/// Both sides are measured warm — one token each way first, so neither pays the page cache — and in
+/// both orders, because the first measurement of a pair carries whatever the card is still doing.
+#[test]
+fn what_a_batch_buys() {
+    let Ok(session) = Session::open() else {
+        eprintln!("SKIPPED what_a_batch_buys: no device");
+        return;
+    };
+    let mut model = Qwen::open_with(&session, Width::Narrowed)
+        .unwrap_or_else(|refusal| panic!("the narrowed model opens: {refusal}"));
+    model
+        .hold_in_memory()
+        .unwrap_or_else(|refusal| panic!("the halves are held: {refusal}"));
+    let batched = || {
+        let started = Instant::now();
+        let tokens = model
+            .generate_batch(&STARTS, TOKENS)
+            .unwrap_or_else(|refusal| panic!("the batch generates: {refusal}"));
+        (started.elapsed(), tokens)
+    };
+    let alone = || {
+        let started = Instant::now();
+        let tokens = STARTS
+            .iter()
+            .map(|start| {
+                model
+                    .generate(*start, TOKENS)
+                    .unwrap_or_else(|refusal| panic!("{start} alone generates: {refusal}"))
+                    .tokens
+            })
+            .collect::<Vec<_>>();
+        (started.elapsed(), tokens)
+    };
+    // One token each way, so neither measurement below pays the page cache.
+    let _ = model.generate_batch(&STARTS, 1);
+    let _ = model.generate(STARTS[0], 1);
+    let (first_batch, batch_tokens) = batched();
+    let (first_alone, alone_tokens) = alone();
+    let (second_alone, _) = alone();
+    let (second_batch, _) = batched();
+    println!("[cost] batch first  {first_batch:?}",);
+    println!("[cost] alone second {first_alone:?}");
+    println!("[cost] alone first  {second_alone:?}");
+    println!("[cost] batch second {second_batch:?}");
+    println!("[cost] batched {batch_tokens:?}");
+    println!("[cost] alone   {alone_tokens:?}");
 }
