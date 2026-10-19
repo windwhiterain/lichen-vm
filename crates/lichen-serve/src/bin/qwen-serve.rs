@@ -41,6 +41,28 @@ struct Job {
     sampling: Sampling,
     /// Where the answer goes.
     answer: Answer,
+    /// The strings the request stops at when the answer spells one of them.
+    stop: Vec<String>,
+}
+
+/// What a request may name as a stop, which OpenAI spells as one string or a list of them.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StopStrings {
+    /// One string.
+    One(String),
+    /// Several.
+    Many(Vec<String>),
+}
+
+impl StopStrings {
+    /// The strings themselves.
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            StopStrings::One(one) => vec![one],
+            StopStrings::Many(many) => many,
+        }
+    }
 }
 
 /// How a job hands its tokens back.
@@ -165,6 +187,7 @@ fn worker(
     // The requests that met a stop of their own, and are retired at the end of the step.
     let mut stopped: std::collections::HashMap<usize, &'static str> =
         std::collections::HashMap::new();
+    let mut stops: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
     let mut closed = false;
     loop {
         // Everything waiting joins the batch, up to the number a step should hold.
@@ -175,6 +198,7 @@ fn worker(
                     match admitted {
                         Ok(id) => {
                             metrics.admitted.fetch_add(1, Ordering::Relaxed);
+                            stops.insert(id, job.stop);
                             waiting.insert(id, job.answer);
                         }
                         Err(_) => drop(job.answer),
@@ -195,6 +219,7 @@ fn worker(
                 Ok(job) => {
                     if let Ok(id) = batched.admit(&job.prompt, job.limit, job.sampling) {
                         metrics.admitted.fetch_add(1, Ordering::Relaxed);
+                        stops.insert(id, job.stop);
                         waiting.insert(id, job.answer);
                     }
                 }
@@ -225,6 +250,12 @@ fn worker(
                 .map(<[usize]>::to_vec)
                 .unwrap_or_default();
             let spelled = tokenizer.decode(&said);
+            let named = stops
+                .get(&id)
+                .is_some_and(|wanted| wanted.iter().any(|stop| spelled.contains(stop.as_str())));
+            if named {
+                stopped.insert(id, "stop");
+            }
             if spelled.contains(END_OF_TURN_MARK) {
                 stopped.insert(id, "stop");
             }
@@ -250,6 +281,7 @@ fn worker(
                 }
                 None => {}
             }
+            stops.remove(&id);
             batched.retire(id);
             metrics.finished.fetch_add(1, Ordering::Relaxed);
         }
@@ -276,6 +308,9 @@ struct ChatRequest {
     top_k: Option<usize>,
     #[serde(default)]
     stream: bool,
+    /// Where the answer stops, which a client may name.
+    #[serde(default)]
+    stop: Option<StopStrings>,
 }
 
 /// A completion request's body.
@@ -290,6 +325,9 @@ struct CompletionRequest {
     top_k: Option<usize>,
     #[serde(default)]
     stream: bool,
+    /// Where the answer stops, which a client may name.
+    #[serde(default)]
+    stop: Option<StopStrings>,
 }
 
 /// The prompt a chat request becomes, in the template the checkpoint was tuned on.
@@ -340,6 +378,7 @@ async fn generate(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
+    stop: Vec<String>,
 ) -> Result<(Vec<usize>, &'static str), ()> {
     let (reply, answer) = tokio::sync::oneshot::channel();
     if shared
@@ -349,6 +388,7 @@ async fn generate(
             limit,
             sampling,
             answer: Answer::Whole(reply),
+            stop,
         })
         .is_err()
     {
@@ -369,6 +409,7 @@ fn stream(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
+    stop: Vec<String>,
 ) -> Result<UnboundedReceiverStream<Result<usize, &'static str>>, ()> {
     let (tokens, answer) = tokio::sync::mpsc::unbounded_channel::<Result<usize, &'static str>>();
     shared
@@ -378,6 +419,7 @@ fn stream(
             limit,
             sampling,
             answer: Answer::Stream(tokens),
+            stop,
         })
         .map_err(|_| ())?;
     Ok(UnboundedReceiverStream::new(answer))
@@ -399,12 +441,18 @@ fn finished_chunk(reason: &'static str) -> String {
 /// # Invariant
 /// The marker is not part of the answer OpenAI's surface returns, so the cut happens here: a client that
 /// saw it would read the checkpoint's control token as content.
-fn answered_text(tokenizer: &Tokenizer, ids: &[usize]) -> String {
+fn answered_text(tokenizer: &Tokenizer, ids: &[usize], stop: &[String]) -> String {
     let text = tokenizer.decode(ids);
-    match text.find(END_OF_TURN_MARK) {
-        Some(at) => text[..at].to_string(),
-        None => text,
+    let mut end = text.len();
+    if let Some(at) = text.find(END_OF_TURN_MARK) {
+        end = end.min(at);
     }
+    for wanted in stop {
+        if let Some(at) = text.find(wanted.as_str()) {
+            end = end.min(at);
+        }
+    }
+    text[..end].to_string()
 }
 
 /// One token as a chat chunk, which is the shape a streaming client appends.
@@ -449,7 +497,8 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
     };
     if request.stream {
-        let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
+        let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
+        let Ok(tokens) = stream(&shared, ids, limit, sampling, stops) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
         };
         let tokenizer = Arc::clone(&shared.tokenizer);
@@ -466,10 +515,13 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         );
         return Sse::new(body).into_response();
     }
-    let Ok((answered, reason)) = generate(&shared, ids.clone(), limit, sampling).await else {
+    let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
+    let Ok((answered, reason)) =
+        generate(&shared, ids.clone(), limit, sampling, stops.clone()).await
+    else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = answered_text(&shared.tokenizer, &answered);
+    let text = answered_text(&shared.tokenizer, &answered, &stops);
     Json(json!({
         "id": "chatcmpl-lichen",
         "object": "chat.completion",
@@ -501,7 +553,8 @@ async fn complete(
         Err(refusal) => return refuse(StatusCode::BAD_REQUEST, &refusal.to_string()),
     };
     if request.stream {
-        let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
+        let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
+        let Ok(tokens) = stream(&shared, ids, limit, sampling, stops) else {
             return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
         };
         let tokenizer = Arc::clone(&shared.tokenizer);
@@ -532,10 +585,13 @@ async fn complete(
         );
         return Sse::new(body).into_response();
     }
-    let Ok((answered, reason)) = generate(&shared, ids.clone(), limit, sampling).await else {
+    let stops = request.stop.map(StopStrings::into_vec).unwrap_or_default();
+    let Ok((answered, reason)) =
+        generate(&shared, ids.clone(), limit, sampling, stops.clone()).await
+    else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = answered_text(&shared.tokenizer, &answered);
+    let text = answered_text(&shared.tokenizer, &answered, &stops);
     Json(json!({
         "id": "cmpl-lichen",
         "object": "text_completion",
@@ -576,9 +632,6 @@ fn main() {
                 return;
             }
         };
-        let root = std::env::var("LICHEN_MODEL_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from(".model"));
         eprintln!("the model is loaded; the queue is open");
         let _ = ready.send(true);
         worker(&session, queue, spoken, counted);
