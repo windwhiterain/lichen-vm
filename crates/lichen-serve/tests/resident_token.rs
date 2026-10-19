@@ -37,6 +37,7 @@ fn placed_weights_answer_the_same_tokens_for_less() {
     };
     let mut placed = Qwen::open_with(&session, Width::Narrowed)
         .unwrap_or_else(|refusal| panic!("the placed model opens: {refusal}"));
+    session.report_device_memory("before placing");
     // A fully placed model reads the file once per tensor, so it does not also keep 3.2 GB of host copy.
     if std::env::var("LICHEN_ONLY_PLACED").is_err() {
         placed
@@ -49,6 +50,7 @@ fn placed_weights_answer_the_same_tokens_for_less() {
     placed
         .place_head()
         .unwrap_or_else(|refusal| panic!("the head is placed: {refusal}"));
+    session.report_device_memory(&format!("after {layers} layers and the head"));
     let holding = placed
         .generate(START, TOKENS)
         .unwrap_or_else(|refusal| panic!("the placed model generates: {refusal}"));

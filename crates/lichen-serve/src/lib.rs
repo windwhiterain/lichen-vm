@@ -317,6 +317,28 @@ impl Session {
             .map_err(|error| ServeRefusal::Device(error.to_string()))
     }
 
+    /// What the device is holding, by what each byte was allocated for.
+    ///
+    /// # Invariant
+    /// Read off atomics, never the backend's resident lock, so a caller may ask while a
+    /// submission is being recorded — which is the moment a placement is worth asking about.
+    pub fn device_report(&self) -> lichen_compute_gpu::DeviceReport {
+        self.context.device_report()
+    }
+
+    /// [`Self::device_report`], printed under `label`, when `LICHEN_VRAM_REPORT` names anything.
+    ///
+    /// # Invariant
+    /// Gated on the variable so an ordinary test run prints nothing: a measurement only some
+    /// runs want should not be in everyone's output.
+    pub fn report_device_memory(&self, label: &str) {
+        if std::env::var_os("LICHEN_VRAM_REPORT").is_none() {
+            return;
+        }
+        let report = self.device_report();
+        eprintln!("device memory {label}:\n{}", report.render());
+    }
+
     /// Hand a resident back to the device, so a service that steps for hours does not leak it.
     ///
     /// # Invariant

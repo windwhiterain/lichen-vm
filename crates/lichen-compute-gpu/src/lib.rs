@@ -8,9 +8,11 @@
 //! must match the CPU path bit for bit; one this backend does not handle is refused by
 //! name.
 
+pub mod accounting;
 pub mod dispatch;
 pub mod spirv;
 
+pub use accounting::{Accounting, DeviceReport, Tag};
 pub use dispatch::{
     DEFAULT_SLOT_DEPTH, GpuConfig, GpuContext, RunError, install, install_default,
     installed_backend_name, uninstall,

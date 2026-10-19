@@ -29,6 +29,7 @@ use lichen_kernel_ir::{
 };
 use lichen_runtime::{DeviceFacts, DeviceFactsSource};
 
+use crate::accounting::{Accounting, DeviceReport, Tag};
 use crate::spirv::{self, Binding, SpirvRefusal};
 
 /// Why a run could not happen.  Every variant names its own cause.
@@ -582,6 +583,12 @@ pub struct GpuContext {
     /// submission and one wait" is two numbers read off the device rather than one claim
     /// about a command buffer.
     waits: AtomicU64,
+    /// Every device-local byte this context has allocated, by what it was allocated for.
+    ///
+    /// # Invariant
+    /// Atomics only, never the `resident` lock: [`Self::allocate`] runs under that lock on a
+    /// path that releases, so a report taken there would deadlock the context against itself.
+    accounting: Accounting,
 }
 
 /// How deep a pool is when nobody says otherwise.
@@ -860,6 +867,7 @@ impl GpuContext {
             recycled: Mutex::new(HashMap::new()),
             submissions: AtomicU64::new(0),
             waits: AtomicU64::new(0),
+            accounting: Accounting::new(),
         })
     }
 
@@ -1087,6 +1095,8 @@ impl GpuContext {
             .into_iter()
             .map(|buffer| {
                 let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
+                self.accounting
+                    .issued(buffer.tag, DeviceBuffer::bytes(buffer.padded, buffer.class));
                 resident.insert(id, buffer);
                 id
             })
@@ -1201,7 +1211,7 @@ impl GpuContext {
                     // The allocation holds every one of them and still reaches a whole workgroup.
                     let allocated = (padded as vk::DeviceSize).max(len);
                     let padded_bytes = allocated * element;
-                    let buffer = self.allocate(allocated as usize, buffer_class)?;
+                    let buffer = self.allocate(allocated as usize, buffer_class, Tag::Upload)?;
                     // SAFETY: `offset` plus this block is inside the staging `reserve` sized at this
                     // width, and the claimed slot is idle.
                     unsafe {
@@ -1243,7 +1253,7 @@ impl GpuContext {
         // Each output is allocated and recorded at its own class, the width a fetch reads it at.
         let mut outputs = Vec::with_capacity(binding.outputs);
         for buffer_class in &output_classes {
-            let buffer = self.allocate(padded, *buffer_class)?;
+            let buffer = self.allocate(padded, *buffer_class, Tag::Output)?;
             descriptors.push(buffer.descriptor());
             outputs.push(DeviceBuffer {
                 handle: buffer.handle,
@@ -1252,6 +1262,7 @@ impl GpuContext {
                 // The class this output's element type was emitted for, so a fetch reads
                 // it back at the width it was written at.
                 class: *buffer_class,
+                tag: Tag::Output,
             });
         }
 
@@ -1489,7 +1500,7 @@ impl GpuContext {
             context: self,
             buffers: Vec::with_capacity(1),
         };
-        let source = self.allocate(allocated, input_class)?;
+        let source = self.allocate(allocated, input_class, Tag::Chain)?;
         scratch.buffers.push(source);
         // SAFETY: `reserve` sized and mapped this slot's staging for `len` elements.
         unsafe {
@@ -1512,8 +1523,8 @@ impl GpuContext {
         // One per link is slower, not merely bigger: the pool is empty at every call.
 
         // It holds because this is a linear chain; a fan-out is the graph's question.
-        let first = self.allocate(padded, output_class)?;
-        let second = self.allocate(padded, output_class)?;
+        let first = self.allocate(padded, output_class, Tag::Output)?;
+        let second = self.allocate(padded, output_class, Tag::Output)?;
 
         // One reset for the whole submission and none inside it: a reset frees sets an
         // earlier dispatch is still bound to.
@@ -1550,6 +1561,8 @@ impl GpuContext {
             self.recycle(first);
         }
         let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
+        self.accounting
+            .issued(Tag::Output, DeviceBuffer::bytes(padded, output_class));
         self.resident.lock().unwrap().insert(
             id,
             DeviceBuffer {
@@ -1557,6 +1570,7 @@ impl GpuContext {
                 memory: current.memory,
                 padded,
                 class: output_class,
+                tag: Tag::Output,
             },
         );
         Ok(id)
@@ -1592,7 +1606,7 @@ impl GpuContext {
         if index >= len {
             return Err(RunError::IndirectExtentOutOfReach { index, len });
         }
-        let block = self.allocate(SCALAR_WORDS, ScalarClass::Int)?;
+        let block = self.allocate(SCALAR_WORDS, ScalarClass::Int, Tag::Indirect)?;
         let command = Workgroups::Indirect {
             block: block.handle,
             source: buffer.handle,
@@ -1660,8 +1674,9 @@ impl GpuContext {
     /// # Invariant
     /// Its contents are undefined until something writes them, and every consumer writes all of
     /// it. The class is part of what a buffer is — its byte size and the width a fetch reads it
-    /// back at — so the pool is keyed on both.
-    fn allocate(&self, padded: usize, class: ScalarClass) -> Result<DeviceBuffer, RunError> {
+    /// back at — so the pool is keyed on both. The tag is what the allocation is counted under,
+    /// and a buffer taken from the pool is counted under the tag it is about to be used as.
+    fn allocate(&self, padded: usize, class: ScalarClass, tag: Tag) -> Result<DeviceBuffer, RunError> {
         if let Some(buffer) = self
             .recycled
             .lock()
@@ -1669,10 +1684,13 @@ impl GpuContext {
             .get_mut(&(padded, class))
             .and_then(Vec::pop)
         {
-            return Ok(buffer);
+            self.accounting
+                .reused(buffer.tag, tag, DeviceBuffer::bytes(padded, class));
+            return Ok(DeviceBuffer { tag, ..buffer });
         }
         let device = &self.device;
         let bytes = DeviceBuffer::bytes(padded, class);
+        self.accounting.allocated(tag, bytes);
         let handle = check("buffer creation", unsafe {
             device.create_buffer(
                 &vk::BufferCreateInfo::default()
@@ -1724,19 +1742,24 @@ impl GpuContext {
             memory,
             padded,
             class,
+            tag,
         })
     }
 
     /// Hand a device buffer back for reuse, or free it if the pool for its size
     /// and class is already full.
     fn recycle(&self, buffer: DeviceBuffer) {
+        let bytes = DeviceBuffer::bytes(buffer.padded, buffer.class);
         let mut recycled = self.recycled.lock().unwrap();
         let pool = recycled.entry((buffer.padded, buffer.class)).or_default();
         if pool.len() < RECYCLED_PER_SIZE {
             pool.push(buffer);
+            drop(recycled);
+            self.accounting.pooled(buffer.tag, bytes);
         } else {
             // Past the cap the memory is the caller's again, so it goes back to the driver.
             drop(recycled);
+            self.accounting.freed(buffer.tag, bytes);
             buffer.destroy(&self.device);
         }
     }
@@ -1806,7 +1829,8 @@ impl GpuContext {
         let Some(buffer) = resident.get_mut(&id) else {
             return Err(format!("buffer {} is not held here", id.0));
         };
-        let allocated = DeviceBuffer::bytes(buffer.padded, buffer.class);
+        let before = DeviceBuffer::bytes(buffer.padded, buffer.class);
+        let allocated = before;
         if DeviceBuffer::bytes(count, class) > allocated {
             return Err(format!(
                 "{} elements of {class:?} are more bytes than buffer {} holds",
@@ -1815,6 +1839,8 @@ impl GpuContext {
         }
         buffer.padded = count;
         buffer.class = class;
+        self.accounting
+            .restated(buffer.tag, before, DeviceBuffer::bytes(count, class));
         Ok(())
     }
 
@@ -1827,7 +1853,20 @@ impl GpuContext {
         let Some(buffer) = self.resident.lock().unwrap().remove(&id) else {
             return;
         };
+        self.accounting
+            .released(buffer.tag, -(DeviceBuffer::bytes(buffer.padded, buffer.class) as i64));
         self.recycle(buffer);
+    }
+
+    /// Every device-local byte this context is holding, by what it was allocated for.
+    ///
+    /// # Invariant
+    /// Atomics only: this is safe to call while a submission is being recorded, which is where a
+    /// per-allocation probe would otherwise have to read `resident` and deadlock.
+    pub fn device_report(&self) -> DeviceReport {
+        let mut report = self.accounting.report();
+        report.pipelines = self.pipelines.lock().unwrap().len();
+        report
     }
 
     /// Reset `slot`'s command buffer and open it for recording.
@@ -2244,15 +2283,26 @@ impl Drop for GpuContext {
         // Nothing may be in flight when a context is dropped: an invariant of every
         // submitting path.
 
+        if std::env::var_os("LICHEN_VRAM_REPORT").is_some() {
+            eprintln!(
+                "device memory still held at drop:\n{}",
+                self.accounting.report().render()
+            );
+        }
+
         // Destroying a command buffer under a running submission would be a
         // use-after-free rather than a leak.
         let device = &self.device;
         for (_, pool) in self.recycled.lock().unwrap().drain() {
             for buffer in pool {
+                self.accounting
+                    .freed(buffer.tag, DeviceBuffer::bytes(buffer.padded, buffer.class));
                 buffer.destroy(device);
             }
         }
         for (_, buffer) in self.resident.lock().unwrap().drain() {
+            self.accounting
+                .freed(buffer.tag, DeviceBuffer::bytes(buffer.padded, buffer.class));
             buffer.destroy(device);
         }
         for slot in &mut self.slots.lock().unwrap().entries {
@@ -2513,6 +2563,8 @@ struct DeviceBuffer {
     padded: usize,
     /// The class its elements are, and so the width they occupy.
     class: ScalarClass,
+    /// Why it was allocated, which is what a byte total is read against.
+    tag: Tag,
 }
 
 impl DeviceBuffer {
@@ -2646,6 +2698,9 @@ impl Staging {
         // The old mapping is dropped only once the replacement is usable, so a
         // failure above leaves the old one intact.
         self.destroy(context);
+        context
+            .accounting
+            .staging(bytes as i64 - self.capacity as i64);
         self.handle = handle;
         self.memory = memory;
         self.mapped = mapped;
@@ -2657,6 +2712,7 @@ impl Staging {
         if self.capacity == 0 {
             return;
         }
+        context.accounting.staging(-(self.capacity as i64));
         unsafe {
             context.device.unmap_memory(self.memory);
             context.device.destroy_buffer(self.handle, None);
