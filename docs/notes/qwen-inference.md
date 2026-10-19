@@ -363,6 +363,21 @@ and the tokens' probabilities all give their memory back, which is what the earl
 
 The distribution over those two hundred: **p50 2.49 s, p95 7.05 s, p99 28.22 s**.
 
+## Why the weights by column took three tries
+
+A projection reads its weight one row an output, so a lane's neighbours read addresses a whole row apart —
+the access a device serves worst. Storing those weights by column makes the same read contiguous across
+lanes, and the price is one transposition at load. Two attempts to land it disagreed with the host's tokens,
+and the reason was found by comparing the shipped program against a program a test had already verified:
+the address was right and the **weights were not all in the layout it named**.
+
+The layers are not the model's only projection. The **vocabulary head** is a second consumer of the same
+program, it is loaded from its own file rather than from a layer's, and it is read by `embed_row` a row at a
+time — so transposing it costs 593 MB of host memory that a repeated conversation prefix would not have to
+pay, and a global address change that does not account for it reads a different matrix. The shape that
+works: the layers by column and the head by row, with the head running the row-major program the tree
+already had and nothing else using.
+
 ## Steady state, which is the number to compare against
 
 The same service, fifty requests of warm-up thrown away and then a hundred measured by subtracting the
