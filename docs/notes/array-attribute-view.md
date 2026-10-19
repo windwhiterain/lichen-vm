@@ -91,15 +91,19 @@ Concretely:
    vocabulary's `perspective_of` spelling replacing the call-site references
    (`# @any`/`# x.to`), which are then deleted.
 
+## The superior's verdicts (recorded)
+
+- **The default attribute array holds wildcard slots.** A hole means "no claim",
+  and unification skips it, so a hole never couples two unrelated values.
+- **No runtime assert for a flowed attribute.** The design's point is that the
+  attribute slot is isomorphic to the type slot, so **the checker that catches a
+  type error catches an attribute error**: the same unification that decides a
+  type mismatch decides an attribute mismatch, statically. The checking model is
+  therefore unchanged — what changes is that the attribute slots are *wired* like
+  type slots, so the checker sees the values. Stage 3 measures whether this holds
+  (`type_of`'s shape and `perspective_of`'s must both work; the existing
+  requirement tests must keep refusing what they refuse).
+
 ## Open questions
 
-- **1. The default attribute array's content**: the wildcard slots ("no claim",
-  and the unify skips them) or undecided cells? A wildcard keeps a hole from
-  coupling two unrelated values; a cell would make every hole a shared variable.
-  The author proposes wildcards.
-- **2. The checking model for a flowed attribute**: once a caller's attribute
-  value reaches a callee's cell at run time, a static `# n` requirement on the
-  *result* can no longer be decided at check time. The options are a runtime
-  assert (the existing assert worklist) or keeping the check static only where
-  the value is decided. This decides how much static refusal the perspective
-  keeps.
+Nothing blocks stage 1. Stage 3 is where the verdict above is measured.
