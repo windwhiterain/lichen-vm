@@ -66,6 +66,7 @@ wait; a hundredth is refused with a `503` and an error object rather than droppe
 | `lichen_batch_steps` | batch steps taken |
 | `lichen_batch_live` | requests live in the batch, now |
 | `lichen_step_nanoseconds` | time spent inside batch steps |
+| `lichen_request_duration_seconds` | a histogram of each request's wall time, from the queue to its answer |
 
 ## What it has not got
 

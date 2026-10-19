@@ -94,7 +94,16 @@ struct Metrics {
     live: AtomicU64,
     /// Time spent inside batch steps, in nanoseconds.
     step_nanos: AtomicU64,
+    /// Requests whose wall time has been counted.
+    timed: AtomicU64,
+    /// The sum of their wall times, in nanoseconds.
+    request_nanos: AtomicU64,
+    /// How many requests finished within each power of two of microseconds.
+    buckets: [AtomicU64; LADDER],
 }
+
+/// How many powers of two a request's duration is counted across.
+const LADDER: usize = 32;
 
 impl Metrics {
     /// One line of the exposition format.
@@ -108,6 +117,53 @@ impl Metrics {
     }
 
     /// Every counter, in the exposition format a scraper reads.
+    /// Count one request's wall time, in nanoseconds.
+    fn timed(&self, nanos: u64) {
+        self.timed.fetch_add(1, Ordering::Relaxed);
+        self.request_nanos.fetch_add(nanos, Ordering::Relaxed);
+        let micros = (nanos / 1000).max(1);
+        let power = (63 - micros.leading_zeros()) as usize;
+        if let Some(bucket) = self.buckets.get(power) {
+            bucket.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The request durations, as the histogram a scraper reads.
+    fn render_durations(&self) -> String {
+        let mut text = String::from(
+            "# HELP lichen_request_duration_seconds a request's time from the queue to its answer
+",
+        );
+        text += "# TYPE lichen_request_duration_seconds histogram
+";
+        // A bucket's count is everything that came in under it, not only that interval of it.
+        let mut held = 0;
+        for (power, bucket) in self.buckets.iter().enumerate() {
+            held += bucket.load(Ordering::Relaxed);
+            let bound = 2f64.powi(power as i32) / 1_000_000.0;
+            text += &format!(
+                "lichen_request_duration_seconds_bucket{{le=\"{bound}\"}} {held}
+"
+            );
+        }
+        let counted = self.timed.load(Ordering::Relaxed);
+        let total = self.request_nanos.load(Ordering::Relaxed);
+        text += &format!(
+            "lichen_request_duration_seconds_bucket{{le=\"+Inf\"}} {counted}
+"
+        );
+        text += &format!(
+            "lichen_request_duration_seconds_count {counted}
+"
+        );
+        text += &format!(
+            "lichen_request_duration_seconds_sum {:.6}
+",
+            total as f64 / 1_000_000_000.0
+        );
+        text
+    }
+
     fn render(&self) -> String {
         let mut text = String::new();
         text += &self.line(
@@ -146,6 +202,7 @@ impl Metrics {
             "requests live in the batch",
             self.live.load(Ordering::Relaxed),
         );
+        text += &self.render_durations();
         text += &self.line(
             "lichen_step_nanoseconds",
             "counter",
@@ -386,6 +443,7 @@ async fn generate(
     sampling: Sampling,
     stop: Vec<String>,
 ) -> Result<(Vec<usize>, &'static str), ()> {
+    let started = std::time::Instant::now();
     let (reply, answer) = tokio::sync::oneshot::channel();
     if shared
         .jobs
@@ -401,7 +459,9 @@ async fn generate(
         shared.metrics.refused.fetch_add(1, Ordering::Relaxed);
         return Err(());
     }
-    answer.await.map_err(|_| ())
+    let answered = answer.await.map_err(|_| ())?;
+    shared.metrics.timed(started.elapsed().as_nanos() as u64);
+    Ok(answered)
 }
 
 /// Ask the worker for `limit` tokens and hand them on as they arrive.
