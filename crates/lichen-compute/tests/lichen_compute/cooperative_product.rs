@@ -75,6 +75,22 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
     source
 }
 
+/// The program with the product's value under `requirement`.
+///
+/// # Invariant
+/// The requirement is spelled on the product's own annotation, so it is checked
+/// against the certificate `compute.mma` states — not against the buffers.
+fn source_with_requirement(requirement: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
+    let plain = "(compute.mma (compute.Mma Int)(.s \"cpu\", .a a, .b b, .c c))";
+    let program = source("cpu", a, b, c);
+    let annotated = format!("({plain} # {requirement})");
+    assert!(
+        program.contains(plain),
+        "the product's expression is the one the requirement wraps"
+    );
+    program.replace(plain, &annotated)
+}
+
 /// The observed words, as the signed integers they are.
 fn words(
     module: &lichen_lowlevel::Module<lichen_compute::language::LangProgram>,
@@ -106,23 +122,31 @@ fn the_gpu_product_matches_the_host() {
 }
 
 #[test]
+fn the_product_is_warp_uniform_not_wider() {
+    let (a, b, c) = operands();
+    // The product is a per-warp segment: a `# 64` requirement is wider than its
+    // certificate, so it is refused.
+    let report = common::check(&source_with_requirement("64", &a, &b, &c));
+    assert!(!report.ok(), "the product is not 64-lane uniform");
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 64, found 32")),
+        "{messages:?}"
+    );
+}
+
+#[test]
 fn a_lane_varying_operand_is_refused() {
     let (a, b, c) = operands();
     // The tile descriptors are warp-uniform (`# warp`); a lane-varying claim is refused.
     let program = source("cpu", &a, &b, &c).replace(".a a", ".a (a # 1)");
-    let mut store = lichen_compute::language::new_store(None).expect("the package registers");
-    let (preprocessed, diagnostics) =
-        lichen_language::preprocess::preprocess(&program, None, &mut store);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let line_starts = lichen_language::lex::line_starts(&program);
-    let report = lichen_language::compile_with_imports_at::<lichen_compute::language::LangProgram>(
-        preprocessed.code,
-        &preprocessed.imports,
-        Some(store.registry()),
-        preprocessed.code_base,
-        &line_starts,
-        lichen_highlevel::no_native_ops(),
-    );
+    let report = common::check(&program);
     assert!(!report.ok(), "a lane-varying operand must not check");
     let messages: Vec<String> = report
         .diagnostics

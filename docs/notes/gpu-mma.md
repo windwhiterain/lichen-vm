@@ -93,7 +93,8 @@ creation. On top of it:
    where its product runs. The **perspective** reading is the paper's register-side one,
    applied to what a host buffer is: the three tiles are warp-uniform descriptors — each
    field states `# warp` — so a lane-varying operand is refused with `expected 32, found
-   1`, and the result is certified `# 0` — a host buffer is uniform over every lane. The
+   1`, and the result is certified `# warp` too: the product is a per-warp segment, so it
+   is warp-uniform and no wider (a `# 64` requirement on it is refused). The
    check reads the argument's provided perspective (`Checker::provided_slot`) against the
    declared field's attribute, which the type value carries in its field slot
    (`Checker::unify_value_field_attributes`); `Mma` is a type function so its fields'

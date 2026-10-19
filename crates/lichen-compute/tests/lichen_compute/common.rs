@@ -95,6 +95,26 @@ pub fn run(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
     run_at(source, None, &mut store)
 }
 
+/// `source` compiled and checked, never run.
+///
+/// # Invariant
+/// The store is fresh per call, so the embedded compute package registers once for this
+/// program and the report is the program's own: a test that asserts a refusal reads the
+/// diagnostics without panicking on the check.
+pub fn check(source: &str) -> lichen_language::Report<LangProgram> {
+    let mut store = new_store(None).expect("the embedded compute package registers");
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
+    assert!(diags.is_empty(), "the program's imports resolve: {diags:?}");
+    lichen_language::compile_with_imports_at::<LangProgram>(
+        preprocessed.code,
+        &preprocessed.imports,
+        Some(store.registry()),
+        preprocessed.code_base,
+        &lichen_language::lex::line_starts(source),
+        lichen_highlevel::no_native_ops(),
+    )
+}
+
 /// The device slot, which is process-global, so it is spelled once here.
 ///
 /// # Invariant

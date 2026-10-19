@@ -133,7 +133,9 @@ merge.
   a buffer's *disjoint* perspective is expressed by the *uniform* one: a segment of
   shared storage allocated per warp is written `buffer # warp`, and its reads and writes
   carry the warp-uniform requirement — the segment's base is what the warp agrees on, and
-  every lane addresses it through its own index and value. The requirement is stated
+  every lane addresses it through its own index and value. The certificate follows the
+  segment: a product over `# warp` tiles is a `# warp` buffer — warp-uniform, no wider —
+  and its readers require that. The requirement is stated
   where the buffer is named: `Read.from (Buf T) # warp`, `Write.to (Buf T) # warp`,
   `WriteAtomic.to (Buf T) # warp`. A compound element's slot is `[value, type, attrs…]`
   with the wildcard for an unspelled attribute, so a type function's field requirement
