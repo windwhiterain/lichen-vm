@@ -358,9 +358,10 @@ impl<P: Program> Module<P> {
             self.write_node_value(clone, mapped);
             // The claim follows `mapped`, not `carried`: an answer whose own
             // elements are open must not claim the run.
-            let claimed = mapped.is_some_and(|value| {
-                !self.static_answer_elements_are_undecided(value, &ctx.module)
-            });
+            let claimed = !undecided
+                && mapped.is_some_and(|value| {
+                    !self.static_answer_elements_are_undecided(value, &ctx.module)
+                });
             self.stamp_node_ran_if(clone, claimed);
             self.nodes[clone].operation = operation;
         } else {
@@ -371,9 +372,10 @@ impl<P: Program> Module<P> {
                 .read(local)
                 .map(|value| self.static_remap_value(value, ctx));
             self.write_node_value(clone, mapped);
-            let claimed = mapped.is_some_and(|value| {
-                !self.static_answer_elements_are_undecided(value, &ctx.module)
-            });
+            let claimed = !undecided
+                && mapped.is_some_and(|value| {
+                    !self.static_answer_elements_are_undecided(value, &ctx.module)
+                });
             self.stamp_node_ran_if(clone, claimed);
         }
         clone

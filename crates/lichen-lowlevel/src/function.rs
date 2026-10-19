@@ -541,9 +541,9 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        // An answer with open slots is the operator's result structure: it carries, but the run
-        // stamp stays zero.
-        let carried_answer = mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
+        // Only a proved answer is a run: an undecided value is a seed.
+        let carried_answer = evaluated_deep.is_some_and(|deep| !deep.undecided)
+            && mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
         self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
         // A clone is a singleton class here, so the slot write *is* the class write.

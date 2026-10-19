@@ -450,6 +450,16 @@ impl<P: Program> Module<P> {
                 let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
                     return self.ran_undecided(node);
                 };
+                // An entry cannot report "undecided": an open element keeps it so.
+                if let Some(LowValue::Array(array)) = operand.as_enum() {
+                    // SAFETY: `array` is a live operand payload; the entry keeps it so.
+                    let open = unsafe { array.items() }.iter().any(|item| {
+                        !item.shallow && self.evaluate_node(item.node, Some(block)).is_none()
+                    });
+                    if open {
+                        return self.ran_undecided(node);
+                    }
+                }
                 let Some(entry) = self.external(library, instance) else {
                     self.extension_diagnostics.push(ExtensionDiagnostic::note(
                         "native-link",
@@ -660,8 +670,26 @@ impl<P: Program> Module<P> {
                 }
             });
         }
+        // A native entry cannot report "undecided": an open operand keeps it open (§17).
+        let operand_undecided = match self.nodes[node].operation {
+            Some(operation)
+                if matches!(
+                    operation.operator.as_enum(),
+                    Some(LowOperator::External { .. })
+                ) =>
+            {
+                match operation.operand {
+                    Some(operand) => {
+                        self.evaluate_node_deep_inner(Dyn(operand), current, cache);
+                        self.ref_is_undecided(cache, Dyn(operand))
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
         // An array is undecided while a position is undecided or sits behind a shallow mark.
-        let undecided = self.value_is_undecided(cache, value);
+        let undecided = operand_undecided || self.value_is_undecided(cache, value);
         self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided });
         // The real verdict supersedes the cycle-cut assumption.
         self.nodes[node].assumed_concrete = false;
@@ -693,9 +721,10 @@ impl<P: Program> Module<P> {
     /// position.
     ///
     /// # Invariant
-    /// Only the value graph decides this: an operation's operand edge is not value-reachable,
-    /// and a decided value cannot depend on an operand its operator did not read.  Each
-    /// position's verdict is read through [`Self::ref_is_undecided`].
+    /// Only the value graph decides this, with one exception: a native entry's
+    /// answer cannot report undecided itself, so its operand's verdict is folded
+    /// in at the deep walk. Each position's verdict is read through
+    /// [`Self::ref_is_undecided`].
     fn value_is_undecided(
         &self,
         cache: &mut StaticModuleCache<P>,

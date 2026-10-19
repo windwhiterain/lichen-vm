@@ -2,12 +2,12 @@
 
 > Status: **proposed — ruled; measured: P0-a, P0-b, P0-c, the end-to-end proof, the
 > loader, the `link` directive, the recorder, the builder, the position map, the
-> program gate, and both check paths (CLI and editor).**
+> program gate, both check paths (CLI and editor), and the apply defect fixed (§17).**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
 > §11 the loader and the operand shape it settles, §12 the directive, §13 the
 > recorder, §14 the manifest writer and the position map, §15 the builder and the
-> program gate, §16 the editor's check path.
+> program gate, §16 the editor's check path, §17 the defect resolved.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -647,3 +647,42 @@ Two findings from wiring it:
 - **Hover names the wrapper's virtual source** ("defined at line 2 of
   `__link0.lichen`"), not the directive. Pointing the direct bindings at the
   `link` directive's span is the refinement; the check itself is right.
+
+## 17. The defect, resolved: an entry cannot say "undecided"
+
+§10 recorded the symptom. The mechanism is a chain of three facts:
+
+1. `value_of` on a parameter builds `Index([pair, 0])`, a **projection**, and an
+   aggregate operand holds those projections.
+2. The definition pass (`Mode::Evaluate` runs every body) evaluates the wrapper's
+   body with the template's open cells. An **array operand evaluates to a value**
+   even when its items are open, so the native entry ran and answered one value —
+   the entry ABI has no way to say "undecided".
+3. That value then looked decided: the body's binding carried it, so the apply's
+   clone returned it without ever re-running the entry with the argument.
+
+The fix has three parts:
+
+- **the `External` arm runs an entry only when every operand element is decided**;
+  an open element answers `ran_undecided`, so nothing downstream can mistake a
+  preview for an answer;
+- **the deep walk folds an `External` node's operand verdict into its own** — the
+  one place the operand edge is value-reachable, because the entry cannot report
+  undecided itself;
+- **a run is claimed only for a proved answer** (`evaluated_deep.undecided ==
+  false`), in both the dynamic and the frozen apply paths; an undecided verdict's
+  value is a seed, and the clone's operator runs.
+
+Measured with a native package (the same engine path a linked wrapper takes),
+wrapper `twice = (x : Int) => { r = $pair(x, x); r : Int; r }`:
+
+```text
+before:  item 31 -> None            # the definition pass answered anyway
+         twice: none: Int           # the application never re-ran the entry
+after:   TRACE static apply 0
+         item 53 -> Some(USize(5))  # the application's own argument
+         twice: 5: Int
+```
+
+The single-operand ABI the loader adopted in §11 was a workaround for this
+defect, not a requirement.
