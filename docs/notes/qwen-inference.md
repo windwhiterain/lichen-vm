@@ -378,6 +378,18 @@ pay, and a global address change that does not account for it reads a different 
 works: the layers by column and the head by row, with the head running the row-major program the tree
 already had and nothing else using.
 
+What the layout buys, measured on the service with the same hundred requests at concurrency eight: a step
+fell from **1.08 s to 0.86 s** and the aggregate rate rose from **4.76 to 5.88 tokens a second** — **1.24x**,
+not the two orders of magnitude the card's unused bandwidth suggested. So the read the device served worst
+was not the whole of the cost. What is left is the fold itself: every lane walks its weight's `dim` elements
+one at a time, 2048 of them for most projections, and whether the reduction claim splits that walk across
+lanes is the question the next measurement has to answer.
+
+Two paths read two layouts, which is what the attempts finally settled on: a **held** layer is stored by
+column and read by the column-major program, a layer **read from the file** is stored by row and read by
+the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a
+time. A single global address change cannot be right for both, and that is why the first two tries failed.
+
 ## Steady state, which is the number to compare against
 
 The same service, fifty requests of warm-up thrown away and then a hundred measured by subtracting the
