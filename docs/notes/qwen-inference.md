@@ -255,6 +255,21 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## Why the projection is not tiled, in the pass's own words
+
+The projection is prepared once and run at every shape, so its extent is a runtime `Count` — and that is
+exactly what the tiling pass refuses, printed by `Prepared::report`:
+
+    narrowed pass: node 0: pack "narrow" was refused: its launch extent is not readable here,
+                   and a tiled fold is built for a whole number of tiles
+    narrowed pass: node 0: the pack states BFloat16
+
+So the fold was never spread across the workgroup, and the reading that held the fold responsible for the
+per-row price was wrong for a reason the pass states better than any probe: a fold whose extent arrives at
+run time cannot be cut into tiles at prepare time. The fix is small and it is not the mega kernel: prepare
+the projection **per shape** with the extents written as literals, which is five programs — q, k and v, o,
+gate and up, and down — instead of one, and the pass then has a whole number of tiles to build.
+
 ## What the hand-off probe could not settle
 
 A chain of four projections, once through the host and once passing residents on: **0.004 s** against

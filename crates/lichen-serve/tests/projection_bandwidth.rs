@@ -41,8 +41,23 @@ fn a_projection_costs_what_its_rows_walk() {
         }
     };
     // The model's own programs are the narrowed ones, so a Float probe may be measuring a path it never runs.
+    match session.prepare(MATVEC_ROW_STEP) {
+        Ok(prepared) => {
+            println!("pass lines: {}", prepared.report().len());
+            for line in prepared.report() {
+                println!("pass: {line}");
+            }
+        }
+        Err(refusal) => println!("the row-major projection does not prepare: {refusal}"),
+    }
     let halved = match lichen_serve::narrowed(&session, MATVEC_ROW_STEP) {
-        Ok(prepared) => Some(prepared),
+        Ok(prepared) => {
+            println!("narrowed pass lines: {}", prepared.report().len());
+            for line in prepared.report() {
+                println!("narrowed pass: {line}");
+            }
+            Some(prepared)
+        }
         Err(refusal) => {
             eprintln!("the narrowed projection does not prepare: {refusal}");
             None
