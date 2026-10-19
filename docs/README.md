@@ -114,6 +114,7 @@ authority, and this table only names the state.
 | [README example sync](notes/readme-sync.md) | `lichen-tools`, `lichen-compute` (`tests/lichen_compute/readme.rs`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current |
 | [The plugin taxonomy](notes/plugin-taxonomy.md) | `lichen-highlevel` (`plugin`), `lichen-compute`, `lichen-std-native`, `lichen-perspective`, `lichen-language` | current |
+| [A native link library: a Rust generic behind a lichen generic](notes/native-link-library.md) | `lichen-highlevel` (`native`/`program`), `lichen-lowlevel` (`function`), `lichen-std-native`/`lichen-compute` (the plugin pattern), `lichen-package` | proposed — the Rust half of the boundary is measured; the lichen surface is designed, not yet measured |
 | [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-highlevel` (`native`) | current |
 | [Kernels as `.native`/`.I`/`.O` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`language`) | current — includes the SSA body model |
 | [A buffer is a struct wrapper, and a parallel result is the parameter's `.out`](notes/compute-buffer-wrapper.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute` (`tests`) | current — the host read's result class is open |
