@@ -18,6 +18,8 @@
 //! its own barrier rather than relying on the submit and the fence.
 
 use std::collections::HashMap;
+
+use crate::cooperative_matrix::{self, Advertised};
 use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -484,6 +486,8 @@ struct Candidate {
     shader_int64: bool,
     atomic_int64: bool,
     atomic_float_add: bool,
+    /// The integer cooperative-matrix shape the device advertises, or `None`.
+    cooperative_matrix: Option<Advertised>,
 }
 
 /// `VK_EXT_shader_atomic_float`, the device extension that owns `shaderBufferFloat32Atomics`.
@@ -530,6 +534,13 @@ pub struct GpuContext {
     /// separately absent: a device with 64-bit integer atomics and none over a float is common,
     /// and a float run must not be refused for a primitive the integer one did not ask for.
     atomic_float_add: bool,
+    /// The integer cooperative-matrix shape the device advertises, or `None`.
+    ///
+    /// # Invariant
+    /// The shape is the device's own answer ([`cooperative_matrix::advertised`]), and the
+    /// extension and feature are already enabled when it is `Some`; a caller that needs the
+    /// product checks this rather than asking again.
+    cooperative_matrix: Option<Advertised>,
     /// The most push-constant bytes this device offers.
     ///
     /// # Invariant
@@ -750,6 +761,7 @@ impl GpuContext {
             };
             let (atomic_int64, atomic_float_add) =
                 atomic_facts(&entry, &instance, physical, supports_int64);
+            let cooperative_matrix = cooperative_matrix::advertised(&entry, &instance, physical);
             let discrete = properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
             let better = match &chosen {
                 None => true,
@@ -772,6 +784,7 @@ impl GpuContext {
                     shader_int64: supports_int64,
                     atomic_int64,
                     atomic_float_add,
+                    cooperative_matrix,
                 });
             }
         }
@@ -788,6 +801,7 @@ impl GpuContext {
             shader_int64,
             atomic_int64,
             atomic_float_add,
+            cooperative_matrix,
         } = candidate;
         let name = device_name(&properties);
         let push_constant_bytes = properties.limits.max_push_constants_size;
@@ -821,6 +835,16 @@ impl GpuContext {
         if atomic_float_add {
             create = create.push_next(&mut atomic_float_features);
         }
+        // The cooperative matrix is enabled where the device advertises the shape.
+        let mut cooperative_matrix_features =
+            vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
+        let mut extension_names: Vec<*const std::ffi::c_char> = Vec::new();
+        if cooperative_matrix.is_some() {
+            cooperative_matrix_features = cooperative_matrix_features.cooperative_matrix(true);
+            create = create.push_next(&mut cooperative_matrix_features);
+            extension_names.push(vk::KHR_COOPERATIVE_MATRIX_NAME.as_ptr());
+        }
+        create = create.enabled_extension_names(&extension_names);
         let device = check("device creation", unsafe {
             instance.create_device(physical, &create, None)
         })?;
@@ -854,6 +878,7 @@ impl GpuContext {
             shader_int64,
             atomic_int64,
             atomic_float_add,
+            cooperative_matrix,
             push_constant_bytes,
             facts,
             pipelines: Mutex::new(HashMap::new()),
@@ -874,6 +899,16 @@ impl GpuContext {
     /// The device this context dispatches on.
     pub fn device_name(&self) -> &str {
         &self.name
+    }
+
+    /// The integer cooperative-matrix shape this device advertises, or `None`.
+    ///
+    /// # Invariant
+    /// `Some` means the extension and its feature were enabled at device creation, so a
+    /// dispatch of the cooperative-matrix module may be issued; `None` means the module
+    /// would be refused at pipeline creation.
+    pub fn cooperative_matrix(&self) -> Option<Advertised> {
+        self.cooperative_matrix
     }
 
     /// How many submissions this context may have in flight at once.

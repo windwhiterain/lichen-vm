@@ -9,6 +9,7 @@
 //! name.
 
 pub mod accounting;
+pub mod cooperative_matrix;
 pub mod dispatch;
 pub mod spirv;
 
