@@ -255,6 +255,30 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## The dispatch count, and what fusing it would take
+
+A step makes **281 dispatches** — a layer is ten: three norm, four projection, two rope, one attention — and
+the measured floor for one dispatch is about 0.4 ms, so the count alone is roughly 126 ms of a 576 ms step.
+The user's direction for that is **kernel fusion, a mega kernel**: one dispatch a layer rather than ten,
+which needs the stages to see each other's writes, which needs a barrier, which is the capability
+[shared-memory-and-barriers](shared-memory-and-barriers.md) calls the largest single item in its axis and
+whose staging table is the map of how far it has got.
+
+That table, read rather than assumed: step 1 (the revert of the zero-width `State` token) is the one
+**outstanding** row; steps 2, 3 and 4 landed (the lane-group width, the slice vocabulary with the barrier as
+data, the barrier scan); step 5's GPU half landed on its own (a `Workgroup` variable per slot, an
+`OpControlBarrier`, no change to the binding layout); step 7's placement landed at `77fafaf`; and step 8 --
+a `Reduction` tiled across the workgroup rather than folded per lane -- landed at `d3f984f`. So the
+capability is far enough along that the serving path **already installs** the tiling pass
+(`crates/lichen-serve/src/lib.rs`), which is what makes the next reading interesting: the projection is
+still per-lane, and the [staging table](shared-memory-and-barriers.md#9-the-staging) says why — the pass
+replaces `Folding::per_lane`'s schedule, while a program that writes `fold (k.dim, …)` folds the whole
+extent in every lane and cannot be tiled into something it does not already answer.
+
+So the first step toward the mega kernel is not a barrier: it is a projection **written in the form the
+tiling recognizes**, and the measurement that says whether that form is faster before the rest of a layer is
+rewritten into it.
+
 ## What a burst is answered with
 
 A request waits on a `oneshot` rather than a blocking receive, so a waiting handler yields its runtime thread
