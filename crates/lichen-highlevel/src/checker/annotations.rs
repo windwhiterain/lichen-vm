@@ -161,17 +161,14 @@ where
     /// alike, and `None` when the value's schema has no such slot.
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let value_tail = self.schema_tail(value).to_vec();
-        let pos = value_tail.iter().position(|m| m == marker)?;
+        if !value_tail.contains(marker) {
+            return None;
+        }
         let pair = self.state[value].term?;
-        // SAFETY: `pair` is a live node of this module; nothing in this crate
-        // calls `Module::drop_block`.
-        let items = unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(pair)) }?;
-        items
-            .get(shape::attr_slot(pos))
-            .and_then(|item| match item.node {
-                AnyNodeId::Dynamic(n) => Some(n),
-                AnyNodeId::Static(_) => None,
-            })
+        match self.slot_attribute(pair, marker.order_index() as u32)? {
+            AnyNodeId::Dynamic(node) => Some(node),
+            AnyNodeId::Static(_) => None,
+        }
     }
 
     /// The node a value carries for `marker`: its term pair's slot, else its
@@ -649,7 +646,9 @@ where
         pair.push(value_node);
         pair.push(type_pair);
         pair.extend(slots);
-        let pair = self.array_node(self.current_block, &pair);
+        // The pair's layout: slot `i` carries the canonical attribute `tail[i]` names.
+        let layout = self.layout_for_tail(&tail);
+        let pair = self.array_node_with_layout(self.current_block, &pair, layout);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(type_pair);

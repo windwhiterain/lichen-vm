@@ -265,7 +265,10 @@ impl<P: Program> Module<P> {
                     };
                     copied.push(ArrayItem { node, ..*item });
                 }
-                P::Value::from(LowValue::Array(self.alloc_array(&copied, block).into()))
+                P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                    self.alloc_array(&copied, block),
+                    array.layout(),
+                )))
             }
             _ => value,
         };
@@ -418,9 +421,10 @@ impl<P: Program> Module<P> {
         if !changed {
             return value;
         }
-        P::Value::from(LowValue::Array(
-            self.alloc_array(&remapped, ctx.target).into(),
-        ))
+        P::Value::from(LowValue::Array(ArrayValue::with_layout(
+            self.alloc_array(&remapped, ctx.target),
+            array.layout(),
+        )))
     }
 
     /// Re-home a same-module static closure with open captures into a fresh dynamic

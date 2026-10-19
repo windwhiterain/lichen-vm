@@ -3,12 +3,23 @@ use std::collections::HashSet;
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, FunctionIdentity, LowShape,
-    LowValue, Module, Node, NodeId, Program, StaticFunctionRef, StaticNodeId, ValueExt as _,
-    ancestors::AncestorPairs,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue,
+    FunctionIdentity, LowShape, LowValue, Module, Node, NodeId, PAIR_ATTR_BASE, Program,
+    StaticFunctionRef, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
+
+/// The node an array's layout gives canonical attribute `canonical`, or [`None`] for a
+/// hole.
+fn array_attribute_slot(
+    items: &'static [ArrayItem],
+    layout: &[u32],
+    canonical: u32,
+) -> Option<AnyNodeId> {
+    let position = layout.binary_search(&canonical).ok()?;
+    items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
+}
 
 /// One failed-unification step; `index` is authoritative, a static child names the default.
 #[derive(Debug, Clone, Copy)]
@@ -590,6 +601,111 @@ impl<P: Program> Module<P> {
             })
     }
 
+    /// The attribute layout an array carries, read from the registry of the arena
+    /// the array lives in.
+    fn array_layout(&self, array: &ArrayValue) -> Vec<u32> {
+        let layout = array.layout() as usize;
+        match **array {
+            AnyHandle::Dynamic(_) => self
+                .attribute_layouts
+                .get(layout)
+                .map(|layout| &**layout)
+                .unwrap_or_default()
+                .to_vec(),
+            AnyHandle::Static(handle) => self
+                .static_module(handle.module)
+                .attribute_layouts
+                .get(layout)
+                .map(|layout| &**layout)
+                .unwrap_or_default()
+                .to_vec(),
+        }
+    }
+
+    /// Unify two structural arrays, wiring the attribute slots by **canonical index**.
+    ///
+    /// # Invariant
+    /// Positions below [`PAIR_ATTR_BASE`] compare positionally; a side whose layout omits
+    /// an attribute is a hole and constrains nothing, so two arrays that spell different
+    /// tails still meet attribute to attribute. See `docs/notes/array-attribute-view.md`.
+    #[stacksafe]
+    fn unify_array_items(
+        &mut self,
+        a: ArrayValue,
+        b: ArrayValue,
+        path: &mut AncestorPairs<NodeId>,
+        depth: usize,
+        steps: &mut Vec<UnifyStep>,
+        root: (NodeId, NodeId),
+    ) -> bool {
+        // SAFETY: both payloads come from live nodes of this module, so their home
+        // blocks survive the recursion.
+        let (left, right) = (unsafe { a.items() }, unsafe { b.items() });
+        let plain = a.layout() == 0 && b.layout() == 0;
+        if plain && left.len() != right.len() {
+            return false;
+        }
+        let layout_a = if plain {
+            Vec::new()
+        } else {
+            self.array_layout(&a)
+        };
+        let layout_b = if plain {
+            Vec::new()
+        } else {
+            self.array_layout(&b)
+        };
+        let mut canonicals: Vec<u32> = layout_a.iter().chain(layout_b.iter()).copied().collect();
+        canonicals.sort_unstable();
+        canonicals.dedup();
+        let leading = if plain {
+            left.len()
+        } else {
+            left.len().min(right.len()).min(PAIR_ATTR_BASE)
+        };
+        let mut ok = true;
+        let mut descend =
+            |this: &mut Self, index: usize, na: AnyNodeId, nb: AnyNodeId, ok: &mut bool| -> bool {
+                steps.push(UnifyStep {
+                    index,
+                    a: node_or_default(na),
+                    b: node_or_default(nb),
+                });
+                let child_ok = this.unify_inner(
+                    Side::of(na, this.node_value(na)),
+                    Side::of(nb, this.node_value(nb)),
+                    path,
+                    depth + 1,
+                    steps,
+                    root,
+                );
+                steps.pop();
+                if !child_ok {
+                    *ok = false;
+                }
+                child_ok
+            };
+        for (index, (ia, ib)) in left.iter().zip(right.iter()).take(leading).enumerate() {
+            descend(self, index, ia.node, ib.node, &mut ok);
+            if !ok {
+                return false;
+            }
+        }
+        for canonical in canonicals {
+            let Some(na) = array_attribute_slot(left, &layout_a, canonical) else {
+                continue;
+            };
+            let Some(nb) = array_attribute_slot(right, &layout_b, canonical) else {
+                continue;
+            };
+            descend(self, PAIR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
+            if !ok {
+                return false;
+            }
+        }
+        ok
+    }
+
     /// Recursive core of [`Self::unify`]; `path` guards class pairs, `depth` the node-less ones.
     #[stacksafe]
     fn unify_inner(
@@ -641,20 +757,7 @@ impl<P: Program> Module<P> {
             };
             return match (x.as_enum(), y.as_enum()) {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                    // SAFETY: both are payloads of values read out of live nodes of this
-                    // module, so their home blocks have not been dropped.
-                    let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                    left.len() == right.len()
-                        && left.iter().zip(right.iter()).all(|(ia, ib)| {
-                            self.unify_inner(
-                                Side::of(ia.node, self.node_value(ia.node)),
-                                Side::of(ib.node, self.node_value(ib.node)),
-                                path,
-                                depth + 1,
-                                steps,
-                                root,
-                            )
-                        })
+                    self.unify_array_items(pa, pb, path, depth, steps, root)
                 }
                 // Two functions are one when their identities resolve to one
                 // logical function — the frozen/static pair included.
@@ -689,37 +792,17 @@ impl<P: Program> Module<P> {
             (Some(x), Some(y)) => {
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                        // SAFETY: both payloads come from live nodes of this module, so their home
-                        // blocks survive the recursion.
-                        let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                        if left.len() != right.len() {
+                        // A plain pair of arrays still disagrees on arity; an array pair
+                        // wires attributes and takes a hole for an absent one.
+                        if pa.layout() == 0
+                            && pb.layout() == 0
+                            && unsafe { pa.items() }.len() != unsafe { pb.items() }.len()
+                        {
                             self.record_error(ra, rb, steps, root);
                             return false;
                         }
                         path.insert(ra, rb);
-                        let mut ok = true;
-                        for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
-                            // Record the descent step before recursing, so the
-                            // deep failure's trace carries the full element path.
-                            steps.push(UnifyStep {
-                                index: i,
-                                a: node_or_default(na.node),
-                                b: node_or_default(nb.node),
-                            });
-                            let child_ok = self.unify_inner(
-                                Side::of(na.node, self.node_value(na.node)),
-                                Side::of(nb.node, self.node_value(nb.node)),
-                                path,
-                                depth + 1,
-                                steps,
-                                root,
-                            );
-                            steps.pop();
-                            if !child_ok {
-                                ok = false;
-                                break;
-                            }
-                        }
+                        let ok = self.unify_array_items(pa, pb, path, depth, steps, root);
                         path.remove(ra, rb);
                         if ok {
                             self.add_equality(ra, rb);

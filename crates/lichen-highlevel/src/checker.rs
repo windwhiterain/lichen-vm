@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use lichen_lowlevel::{
-    AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
-    NodeId, Operation, Registry,
+    AnyNodeId, ArrayItem, ArrayValue, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue,
+    Module, NodeId, Operation, Registry,
 };
 use stacksafe::stacksafe;
 
@@ -846,6 +846,12 @@ where
         // `Index(pair, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
         self.one_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(1))));
+        // The default attribute array: a hole reads a wildcard
+        // (`docs/notes/array-attribute-view.md`).
+        let cell = ArrayItem::new(AnyNodeId::Dynamic(self.any_value));
+        let defaults = vec![cell; crate::shape::PAIR_ATTR_BASE + P::Attr::ORDER.len()];
+        let defaults = self.module.alloc_array(&defaults, root);
+        self.module.set_default_attributes(defaults);
     }
 
     /// The shared `USize(0)` node — the `Index(pair, 0)` subscript every value
@@ -984,6 +990,21 @@ where
     }
 
     pub fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
+        self.array_node_with_layout(block, ids, 0)
+    }
+
+    /// [`Self::array_node`] with the array's **attribute layout**.
+    ///
+    /// # Invariant
+    /// `layout` is a registered id whose `i`-th canonical index names the attribute
+    /// the array's `PAIR_ATTR_BASE + i`-th slot carries; id `0` is the empty layout
+    /// ([`Self::array_node`]). See `docs/notes/array-attribute-view.md`.
+    pub fn array_node_with_layout(
+        &mut self,
+        block: BlockId,
+        ids: &[NodeId],
+        layout: u32,
+    ) -> NodeId {
         let items: Vec<ArrayItem> = ids
             .iter()
             .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
@@ -991,10 +1012,38 @@ where
         self.alloc_node(
             block,
             None,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, block).into(),
-            ))),
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                self.module.alloc_array(&items, block),
+                layout,
+            )))),
         )
+    }
+
+    /// The registered layout of a schema tail: slot `i` carries the canonical
+    /// attribute `tail[i]` names.
+    ///
+    /// # Invariant
+    /// The tail is in canonical order (the frontend emits it so), which is what
+    /// [`Module::register_attribute_layout`] requires.
+    pub(super) fn layout_for_tail(&mut self, tail: &[P::Attr]) -> u32 {
+        let indices: Vec<u32> = tail
+            .iter()
+            .map(|marker| marker.order_index() as u32)
+            .collect();
+        self.module.register_attribute_layout(&indices)
+    }
+
+    /// The full-width layout: slot `i` carries canonical attribute `i`.
+    pub(super) fn full_width_layout(&mut self) -> u32 {
+        self.layout_for_tail(&P::Attr::ORDER)
+    }
+
+    /// Canonical attribute `canonical` of `node`, through its layout and the default.
+    pub(super) fn slot_attribute(&self, node: NodeId, canonical: u32) -> Option<AnyNodeId> {
+        // SAFETY: `node` is a live node of this module; its value is the payload.
+        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
+        self.module.array_attribute(&value, canonical)
     }
 
     /// [`Self::array_node`] with the per-position `~` markers of a shallow

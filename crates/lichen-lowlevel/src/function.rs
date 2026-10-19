@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, Function,
+    FunctionId, LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -579,7 +579,11 @@ impl<P: Program> Module<P> {
                         ..item
                     })
                     .collect();
-                P::Value::from(LowValue::Array(self.alloc_array(&items, target).into()))
+                // The layout travels with the payload (`docs/notes/array-attribute-view.md`).
+                P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                    self.alloc_array(&items, target),
+                    array.layout(),
+                )))
             }
             Some(LowValue::Table(table)) => {
                 // The entry nodes clone like array items; the stored hash travels verbatim.

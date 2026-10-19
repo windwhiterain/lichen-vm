@@ -196,17 +196,15 @@ where
     P: HighProgram,
     P::Value: ValueType,
 {
-    // SAFETY: `pair` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let items = unsafe { crate::shape::array_items(module, AnyNodeId::Dynamic(pair)) }?;
-    for item in items.iter().skip(crate::shape::PAIR_ATTR_BASE) {
-        let AnyNodeId::Dynamic(slot) = item.node else {
+    let value = module.node_value(AnyNodeId::Dynamic(pair))?;
+    let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
+    for marker in P::Attr::ORDER {
+        let Some(AnyNodeId::Dynamic(slot)) =
+            module.array_attribute(&value, marker.order_index() as u32)
+        else {
             continue;
         };
-        if let Some(label) = P::Attr::ORDER
-            .iter()
-            .find_map(|marker| attrs(marker).label(module, slot))
-        {
+        if let Some(label) = attrs(marker).label(module, slot) {
             return Some(label);
         }
     }

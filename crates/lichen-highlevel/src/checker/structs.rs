@@ -737,15 +737,11 @@ where
                 continue;
             };
             let slot = self.module.as_dynamic(field.node, self.current_block);
-            // SAFETY: the slot is a value of a live node of this module.
-            let Some(slots) = (unsafe { self.module.array_items(slot) }) else {
-                continue;
-            };
-            for (order, marker) in P::Attr::ORDER.iter().enumerate() {
-                let Some(item) = slots.get(shape::attr_slot(order)) else {
+            for marker in P::Attr::ORDER {
+                let Some(item) = self.slot_attribute(slot, marker.order_index() as u32) else {
                     continue;
                 };
-                let declared = self.module.as_dynamic(item.node, self.current_block);
+                let declared = self.module.as_dynamic(item, self.current_block);
                 self.module.evaluate_node_deep(declared, None);
                 let value = self
                     .node_value(declared)

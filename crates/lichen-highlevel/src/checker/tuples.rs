@@ -94,8 +94,8 @@ where
             Some(attrs) => items.extend(attrs),
             None => items.extend(std::iter::repeat_n(any, P::Attr::ORDER.len())),
         }
-        let slot = self.array_node(self.current_block, &items);
-        slot
+        let layout = self.full_width_layout();
+        self.array_node_with_layout(self.current_block, &items, layout)
     }
 
     /// An element expression's **dense** attribute positions: its own slots where
@@ -115,15 +115,9 @@ where
         let Some(term) = self.state[el].term else {
             return slots;
         };
-        // SAFETY: `term` is a live node of this module; nothing in this crate
-        // calls `Module::drop_block`.
-        let Some(items) = (unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(term)) })
-        else {
-            return slots;
-        };
-        for (i, marker) in tail.iter().enumerate() {
-            if let Some(item) = items.get(shape::attr_slot(i))
-                && let AnyNodeId::Dynamic(node) = item.node
+        for marker in &tail {
+            if let Some(AnyNodeId::Dynamic(node)) =
+                self.slot_attribute(term, marker.order_index() as u32)
             {
                 slots[marker.order_index()] = node;
             }

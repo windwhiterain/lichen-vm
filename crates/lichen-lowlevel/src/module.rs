@@ -8,6 +8,47 @@ impl<P: Program> Default for Module<P> {
     }
 }
 
+/// The default attribute array's node for canonical attribute `canonical`.
+///
+/// # Invariant
+/// The array is read positionally — attribute `i` at `PAIR_ATTR_BASE + i` — so a default
+/// shorter than the canonical attribute count answers [`None`] for the attributes past its
+/// end rather than panicking.
+fn default_attribute(
+    defaults: Option<AnyHandle<[ArrayItem]>>,
+    canonical: u32,
+) -> Option<AnyNodeId> {
+    let defaults = defaults?;
+    // SAFETY: the payload of a value the module or a frozen module pins, so its home
+    // arena is live for this read.
+    let items = unsafe { defaults.items() };
+    items
+        .get(PAIR_ATTR_BASE + canonical as usize)
+        .map(|item| item.node)
+}
+
+/// Canonical attribute `canonical` of `array`, or [`default_attribute`]'s hole arm.
+///
+/// # Invariant
+/// `layout` is the registry entry the array's arena holds, so its binary search proves
+/// whether the array carries the attribute; [`PAIR_ATTR_BASE`] plus the found position is
+/// the slot, and a miss reads the default. See [`Module::array_attribute`].
+fn attribute_at(
+    array: &ArrayValue,
+    layout: &[u32],
+    defaults: Option<AnyHandle<[ArrayItem]>>,
+    canonical: u32,
+) -> Option<AnyNodeId> {
+    let position = match layout.binary_search(&canonical) {
+        Ok(position) => position,
+        Err(_) => return default_attribute(defaults, canonical),
+    };
+    // SAFETY: the payload of a value the module or a frozen module pins, so its home
+    // arena is live for this read.
+    let items = unsafe { array.items() };
+    items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
+}
+
 impl<P: Program> Module<P> {
     pub const MAX_APPLY_DEPTH: usize = 10_000;
     pub const MAX_DEEP_DEPTH: usize = 300_000;
@@ -120,27 +161,35 @@ impl<P: Program> Module<P> {
         let LowValue::Array(array) = value else {
             return None;
         };
-        let layout = self.attribute_layout(array.layout());
-        let position = match layout.binary_search(&canonical) {
-            Ok(position) => position,
-            Err(_) => return self.default_attribute(canonical),
-        };
-        // SAFETY: a payload of a live module's value, under the contract
-        // `AnyHandle::items` states.
-        let items = unsafe { array.items() };
-        items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
+        // A static array's registry and default live in the module it names.
+        match **array {
+            AnyHandle::Dynamic(_) => attribute_at(
+                array,
+                self.attribute_layout(array.layout()),
+                self.default_attributes,
+                canonical,
+            ),
+            AnyHandle::Static(handle) => {
+                let module = self.static_module(handle.module);
+                let layout = module
+                    .attribute_layouts
+                    .get(array.layout() as usize)
+                    .map(|layout| &**layout)
+                    .unwrap_or_default();
+                attribute_at(
+                    array,
+                    layout,
+                    module.default_attributes.map(AnyHandle::Static),
+                    canonical,
+                )
+            }
+        }
     }
 
     /// The default attribute array's node for canonical attribute `canonical` — the hole
     /// arm of [`Self::array_attribute`].
     fn default_attribute(&self, canonical: u32) -> Option<AnyNodeId> {
-        let defaults = self.default_attributes?;
-        // SAFETY: as above — a payload of a live module, so its home arena is
-        // live for this read.
-        let items = unsafe { defaults.items() };
-        items
-            .get(PAIR_ATTR_BASE + canonical as usize)
-            .map(|item| item.node)
+        default_attribute(self.default_attributes, canonical)
     }
 
     /// Set whether a type-side parameter check keeps its errors.

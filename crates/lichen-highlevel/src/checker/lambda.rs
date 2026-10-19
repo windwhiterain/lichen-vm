@@ -65,7 +65,9 @@ where
         let param = match attr_cell {
             Some((_, _, attr)) => {
                 self.state[parameter].attr = Some(attr);
-                self.array_node(return_block, &[value_cell, type_cell, attr])
+                let marker = self.ir.schema(parameter).tail[0];
+                let layout = self.layout_for_tail(&[marker]);
+                self.array_node_with_layout(return_block, &[value_cell, type_cell, attr], layout)
             }
             None => self.array_node(return_block, &[value_cell, type_cell]),
         };
@@ -385,21 +387,35 @@ where
         self.node_edges
             .insert(argument_value, self.loc(argument, 0));
         let argument_type = self.state[argument].ty.unwrap();
-        let argument_attr = parameter_marker
+        // The pair's attribute position is the argument's **provided** slot, so the
+        // callee's cell binds the caller's there.
+        let argument_attr = match parameter_marker {
+            Some(marker) => self
+                .attribute_extension(&marker)
+                .map(|ext| self.provided_slot(argument, &marker, ext)),
+            None => None,
+        };
+        let argument_layout = parameter_marker
             .as_ref()
-            .map(|marker| self.attr_or_missing(argument, marker));
-        let value_argument_pair = match argument_attr {
-            Some(attr) => {
-                self.array_node(self.current_block, &[argument_value, argument_type, attr])
-            }
-            None => self.array_node(self.current_block, &[argument_value, argument_type]),
+            .map(|marker| self.layout_for_tail(&[*marker]));
+        let value_argument_pair = match (argument_attr, argument_layout) {
+            (Some(attr), Some(layout)) => self.array_node_with_layout(
+                self.current_block,
+                &[argument_value, argument_type, attr],
+                layout,
+            ),
+            _ => self.array_node(self.current_block, &[argument_value, argument_type]),
         };
         // The type side's argument: the same slots with an undecided value, so
         // its check never evaluates the argument's value.
         let type_value = self.fresh_cell();
-        let type_argument_pair = match argument_attr {
-            Some(attr) => self.array_node(self.current_block, &[type_value, argument_type, attr]),
-            None => self.array_node(self.current_block, &[type_value, argument_type]),
+        let type_argument_pair = match (argument_attr, argument_layout) {
+            (Some(attr), Some(layout)) => self.array_node_with_layout(
+                self.current_block,
+                &[type_value, argument_type, attr],
+                layout,
+            ),
+            _ => self.array_node(self.current_block, &[type_value, argument_type]),
         };
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return pair.
