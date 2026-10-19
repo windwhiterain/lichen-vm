@@ -75,21 +75,36 @@ Both live in `crates/lichen-compute-gpu/tests/compute_gpu/mma_shader.rs`:
   the host's exact integer product. Measured: equal, bit for bit. The test skips
   where no device advertises the extension, like the suite's other device tests.
 
-## 5. What is not done yet
+## 5. The op, and what it does not cover
 
-`GpuContext` already answers the device's own fact: `cooperative_matrix()` is the
-advertised integer shape, and `Some` means the extension and its feature were enabled
-at device creation. The module runs and the device facts are in place; what is missing
-is the op around it.
+`GpuContext` answers the device's own fact: `cooperative_matrix()` is the advertised
+integer shape, and `Some` means the extension and its feature were enabled at device
+creation. On top of it:
 
-1. **The op and its fragment.** The kernel IR's execution model is one invocation per
-   element; a cooperative product is one *workgroup* per tile. The op needs either a
-   new fragment kind or a dedicated dispatch path, and the `LocalSize` is one
-   subgroup (32), not the backend's `LOCAL_SIZE_X` (64).
-2. **The CPU path.** The compute plugin's fused/wasm engine needs the same product in
-   integer arithmetic — exact, so it agrees by construction — before the op is
-   reachable from the language.
-3. **The surface.** A `compute.mma`-shaped wrapper binding the three buffers, and the
-   perspective story from [perspective-scope-and-mma](perspective-scope-and-mma.md):
-   the warp-uniform tile descriptors are `# 32` on the register axis, the fragments
-   are lane-varying, and the subgroup is the dispatch's.
+1. **The surface.** `compute.lichen` binds `mma = s => a => b => c => ($mma(s, a, b, c) :
+   (Buf Int))`. The backend is a required argument, as `parallel`'s is: a program says
+   where its product runs.
+2. **The op.** `ComputeOperator::Mma` reads the three buffers, checks that their
+   elements are the shape's (`16×32`, `32×16`, `16×16`) and inside the component ranges
+   (`s8` for the operands, `s32` for the accumulator), and answers a `Buf` of the
+   result. `"cpu"` computes the product on the host; `"gpu"` hands it to the installed
+   backend through [`ParallelBackend::cooperative_matrix`], which refuses by name where
+   the device advertises no shape.
+3. **The integration.** The product is one workgroup against a fragment, not a kernel
+   over an index range, so it rides the trait's own host-in/host-out method instead of
+   the launch set. The backend stages the operands into device-local buffers, dispatches
+   the module, and reads the result back; the host and the device answer the same words.
+
+It does not cover:
+
+- **resident operands.** An operand that is still on a device (a kernel's output) is
+  refused by name — collect it first. Feeding one straight in would need the product's
+  operands to be resident ids and a dispatch that binds them, which is the next slice.
+- **other shapes.** The emitted composition is the device's `s8`→`s32` one; the
+  floating shapes the extension also advertises are not emitted, because their
+  accumulation order is the hardware's and the CPU path could not agree bit for bit.
+- **the perspective link.** A buffer is a host value, so the product's operands carry
+  no lane perspective; the register-side story is
+  [perspective-scope-and-mma](perspective-scope-and-mma.md)'s: the warp-uniform tile
+  descriptors are `# 32` on the register axis, the fragments are lane-varying, and the
+  subgroup is the dispatch's.

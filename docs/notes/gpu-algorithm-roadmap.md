@@ -369,9 +369,11 @@ measurements and the verdict record are
 extension is present on this target's discrete device, and the backend can emit the
 `C = A · B + C` module for the advertised integer shape (`s8` in, `s32` accumulate,
 `M16 N16 K32`, subgroup scope): the module validates and the device's answer matches
-the host's exact reference bit for bit. What is missing is the op around it — the
-device-fact gating, the op's fragment and CPU path, and the surface. The measurements
-and the staged plan are [gpu-mma](gpu-mma.md).
+the host's exact reference bit for bit. The op is wired: `compute.mma` over three
+buffers, with `"cpu"` computing the same product on the host and `"gpu"` dispatching
+the device's cooperative matrix, both compared with the host's exact reference in the
+suite. Resident operands and other shapes are the remaining slices. The measurements
+and the design are [gpu-mma](gpu-mma.md).
 
 **And the part C does not cover.** A lane group that cannot talk to itself buys
 throughput, not capability. Tiled matrix multiply, a scan and a sub-group

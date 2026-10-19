@@ -911,6 +911,14 @@ pub enum ComputeOperator {
     Graph,
     /// `[graph, arguments]` — run a graph over its source function's values.
     GraphRun,
+    /// `[backend, a, b, c]` — the cooperative matrix product `c' = a·b + c`.
+    ///
+    /// # Invariant
+    /// `a`/`b` hold signed bytes and `c` signed words, row-major, over the shape
+    /// [`lichen_kernel_ir::COOPERATIVE_MATRIX_M`] states. The backend is a **required**
+    /// argument, as `parallel`'s is: a program says where its product runs, and the two
+    /// paths answer the same two's-complement words.
+    Mma,
 }
 
 // A buffer, a kernel and a parallel kernel persist; every other arm names a process handle.
@@ -1110,6 +1118,7 @@ impl OperatorCodec for ComputeOperator {
             ComputeOperator::GraphRun => 12,
             ComputeOperator::Buffer => 13,
             ComputeOperator::BufferCollect => 14,
+            ComputeOperator::Mma => 15,
         };
         w.u8(tag);
         Ok(())
@@ -1132,6 +1141,7 @@ impl OperatorCodec for ComputeOperator {
             12 => Ok(ComputeOperator::GraphRun),
             13 => Ok(ComputeOperator::Buffer),
             14 => Ok(ComputeOperator::BufferCollect),
+            15 => Ok(ComputeOperator::Mma),
             other => Err(format!("unknown compute-operator tag {other}")),
         }
     }
@@ -1780,6 +1790,91 @@ where
                     let handle = module.alloc_array(&items, block);
                     Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
                 }
+                ComputeOperator::Mma => {
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Mma expects an operand array of [backend, a, b, c]")
+                    };
+                    // SAFETY: `operands` is the array the VM just evaluated for this
+                    // operation; its home block is alive for the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(backend) = backend_argument::<P>(
+                        module,
+                        operands.first().and_then(|item| match item.node {
+                            AnyNodeId::Dynamic(node) => Some(node),
+                            AnyNodeId::Static(_) => None,
+                        }),
+                        MMA_DIAGNOSTIC,
+                    ) else {
+                        return None;
+                    };
+                    let Some(a) = mma_words(
+                        module,
+                        operands.get(1).map(|item| item.node),
+                        lichen_kernel_ir::COOPERATIVE_MATRIX_M
+                            * lichen_kernel_ir::COOPERATIVE_MATRIX_K,
+                        i8::MIN as i64,
+                        i8::MAX as i64,
+                    ) else {
+                        return None;
+                    };
+                    let Some(b) = mma_words(
+                        module,
+                        operands.get(2).map(|item| item.node),
+                        lichen_kernel_ir::COOPERATIVE_MATRIX_K
+                            * lichen_kernel_ir::COOPERATIVE_MATRIX_N,
+                        i8::MIN as i64,
+                        i8::MAX as i64,
+                    ) else {
+                        return None;
+                    };
+                    let Some(c) = mma_words(
+                        module,
+                        operands.get(3).map(|item| item.node),
+                        lichen_kernel_ir::COOPERATIVE_MATRIX_M
+                            * lichen_kernel_ir::COOPERATIVE_MATRIX_N,
+                        i32::MIN as i64,
+                        i32::MAX as i64,
+                    ) else {
+                        return None;
+                    };
+                    let product = match backend {
+                        Backend::Cpu => mma_product(&a, &b, &c),
+                        Backend::Gpu => {
+                            let Some(backend) = lichen_kernel_ir::parallel_backend() else {
+                                module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+                                    MMA_DIAGNOSTIC,
+                                    None,
+                                    "a \"gpu\" cooperative matrix product needs an installed compute backend, and this host installed none".to_string(),
+                                ));
+                                return None;
+                            };
+                            let bytes_a: Vec<i8> = a.iter().map(|word| *word as i8).collect();
+                            let bytes_b: Vec<i8> = b.iter().map(|word| *word as i8).collect();
+                            let words_c: Vec<i32> = c.iter().map(|word| *word as i32).collect();
+                            match backend.cooperative_matrix(&bytes_a, &bytes_b, &words_c) {
+                                Ok(product) => product.into_iter().map(i64::from).collect(),
+                                Err(reason) => {
+                                    module.record_extension_diagnostic(
+                                        ExtensionDiagnostic::failure(MMA_DIAGNOSTIC, None, reason),
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                    };
+                    let payload =
+                        module.alloc_payload(&pack_elements(ScalarClass::Int, &product), block);
+                    let payload = AnyNodeId::Dynamic(module.add_node(
+                        block,
+                        None,
+                        Some(<P::Value as From<ComputeValue>>::from(
+                            ComputeValue::Buffer(payload, ScalarClass::Int),
+                        )),
+                    ));
+                    let wrapper = buf_value::<P>(module, block, payload, ScalarClass::Int)?;
+                    module.node_value(AnyNodeId::Dynamic(wrapper))
+                }
                 ComputeOperator::Buffer => {
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1881,7 +1976,8 @@ where
             // return: both decline like `Jit`/`BufferCollect`.
             | ComputeOperator::Graph
             | ComputeOperator::GraphRun
-            | ComputeOperator::BufferCollect => None,
+            | ComputeOperator::BufferCollect
+            | ComputeOperator::Mma => None,
         }
     }
 }
@@ -4775,7 +4871,118 @@ fn class_name(class: ScalarClass) -> &'static str {
     }
 }
 
+/// The diagnostic category a cooperative matrix refusal is reported under.
+const MMA_DIAGNOSTIC: &str = "compute.mma";
+
+/// One cooperative matrix operand, as the words its buffer holds, or a named refusal.
+///
+/// # Invariant
+/// The elements are `Int` words inside the matrix's own component range: a byte operand
+/// outside `s8` would be truncated by the module and a word outside `s32` wrapped, so the
+/// range is checked rather than masked.
+fn mma_words<P>(
+    module: &mut Module<P>,
+    node: Option<AnyNodeId>,
+    count: u32,
+    min: i64,
+    max: i64,
+) -> Option<Vec<i64>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+{
+    let Some(node) = node else {
+        return None;
+    };
+    let Some(payload) = buf_payload::<P>(module, node) else {
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+            MMA_DIAGNOSTIC,
+            None,
+            format!(
+                "`compute.mma` takes buffers, and this operand is {}",
+                what_this_is(module, node)
+            ),
+        ));
+        return None;
+    };
+    let value = module.node_value(payload)?;
+    let Some(ComputeValue::Buffer(payload, class)) = AsEnum::<ComputeValue>::as_enum(&value) else {
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+            MMA_DIAGNOSTIC,
+            None,
+            "a cooperative matrix operand is still on the device: collect it first".to_string(),
+        ));
+        return None;
+    };
+    if class != ScalarClass::Int {
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+            MMA_DIAGNOSTIC,
+            None,
+            "a cooperative matrix operand must be a buffer of integers".to_string(),
+        ));
+        return None;
+    }
+    let items = buffer_items(&payload)?;
+    let elements = element_count(class, items.len());
+    if elements != count as usize {
+        module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+            MMA_DIAGNOSTIC,
+            None,
+            format!(
+                "a cooperative matrix operand holds {elements} element(s), and its shape takes {count}"
+            ),
+        ));
+        return None;
+    }
+    let mut words = Vec::with_capacity(elements);
+    for index in 0..elements {
+        let Some(bytes) = element_bytes(class, items, index) else {
+            return None;
+        };
+        let Some(LowValue::USize(word)) = element_value(class, bytes) else {
+            return None;
+        };
+        let word = word as i64;
+        if !(min..=max).contains(&word) {
+            module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+                MMA_DIAGNOSTIC,
+                None,
+                format!(
+                    "a cooperative matrix operand holds {word}, outside the shape's component range"
+                ),
+            ));
+            return None;
+        }
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// The host's cooperative matrix product, in the same two's-complement words the device
+/// answers.
+///
+/// # Invariant
+/// The sum is taken in `i64` and kept to the low 32 bits: the device's accumulator is `s32`,
+/// so wrapping there and truncating here are the same answer.
+fn mma_product(a: &[i64], b: &[i64], c: &[i64]) -> Vec<i64> {
+    let rows = lichen_kernel_ir::COOPERATIVE_MATRIX_M as usize;
+    let steps = lichen_kernel_ir::COOPERATIVE_MATRIX_K as usize;
+    let columns = lichen_kernel_ir::COOPERATIVE_MATRIX_N as usize;
+    let mut product = vec![0i64; rows * columns];
+    for row in 0..rows {
+        for column in 0..columns {
+            let mut sum = c[row * columns + column];
+            for step in 0..steps {
+                sum += a[row * steps + step] * b[step * columns + column];
+            }
+            product[row * columns + column] = i64::from(sum as i32);
+        }
+    }
+    product
+}
+
 /// A `compute.buffer` handed something that is not an array.
+
 fn not_an_array<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<P::Value>
 where
     P: Program,
@@ -7151,6 +7358,7 @@ macro_rules! compute_native_ops {
         static WRITE_ATOMIC: $crate::WriteAtomicOp = $crate::WriteAtomicOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
         static BUFFER: $crate::BufferOp = $crate::BufferOp;
+        static MMA: $crate::MmaOp = $crate::MmaOp;
         static GRAPH: $crate::GraphOp = $crate::GraphOp;
         static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
@@ -7170,6 +7378,7 @@ macro_rules! compute_native_ops {
             ),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
             ("buffer", &BUFFER as &dyn $crate::NativeOp<$program>),
+            ("mma", &MMA as &dyn $crate::NativeOp<$program>),
             ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
             ("graphrun", &GRAPHRUN as &dyn $crate::NativeOp<$program>),
         ];
@@ -7332,6 +7541,13 @@ pub struct BufferCollectOp;
 /// wrapper's `.native` slot is the `Buffer` node, exactly as `compute.plrun`'s is: the
 /// read/write role walk and `buf_payload` know one carrier, not two.
 pub struct BufferOp;
+
+/// `$mma(s, a, b, c)` — the cooperative matrix product over three buffers.
+///
+/// # Invariant
+/// The backend is a **required** argument, as `parallel`'s is: a program says where its
+/// product runs, and the two paths answer the same two's-complement words.
+pub struct MmaOp;
 
 /// `$graph(f)` — record `f`'s dispatches into a graph instead of running them.
 ///
@@ -7651,6 +7867,30 @@ where
         let xs = &args[0];
         let operands = ctx.array_node(&[xs.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Buffer), Some(operands));
+        NativeApply {
+            value: op,
+            decided: false,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for MmaOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$mma(s, a, b, c)` — the cooperative matrix product over three buffers.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
+        let operands =
+            ctx.array_node(&[args[0].value, args[1].value, args[2].value, args[3].value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Mma), Some(operands));
         NativeApply {
             value: op,
             decided: false,

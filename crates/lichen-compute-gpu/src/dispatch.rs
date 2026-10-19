@@ -125,6 +125,35 @@ pub enum RunError {
     UnknownResident { id: u64 },
     /// A pool depth of zero, which is not a smaller pool.
     NoSlots { wanted: usize },
+    /// A cooperative matrix product asked of a device that advertises none.
+    ///
+    /// # Invariant
+    /// The shape is the device's own advertisement, not the backend's: a device without the
+    /// extension has no primitive to run the product on, and answering a host computation under
+    /// this name would report a dispatch that did not happen.
+    NoCooperativeMatrix {
+        /// The device's name, as the refusal shows it.
+        device: String,
+    },
+    /// A cooperative matrix product whose operands are not the advertised shape.
+    ///
+    /// # Invariant
+    /// The lengths are the shape's, so a short operand would be read past and a long one
+    /// silently ignored; both are refused rather than clamped.
+    CooperativeMatrixShape {
+        /// The rows the product advertises.
+        m: usize,
+        /// The columns.
+        n: usize,
+        /// The reduction length.
+        k: usize,
+        /// The signed-byte operand's length.
+        a: usize,
+        /// The signed-byte operand's length.
+        b: usize,
+        /// The accumulator's length.
+        c: usize,
+    },
     /// A token naming a slot this context does not have.
     ///
     /// # Invariant
@@ -266,6 +295,14 @@ impl fmt::Display for RunError {
                 f,
                 "asked for {count} element(s) of a buffer allocated for {len}, so the read would \
                  run past what the run actually produced."
+            ),
+            RunError::NoCooperativeMatrix { device } => write!(
+                f,
+                "{device} advertises no cooperative matrix product: the s8 x s8 -> s32                  composition this backend emits is absent from the device's combinations."
+            ),
+            RunError::CooperativeMatrixShape { m, n, k, a, b, c } => write!(
+                f,
+                "a cooperative matrix product of {m}x{k} by {k}x{n} with a {m}x{n} accumulator                  was given {a}, {b} and {c} element(s): the operands are the advertised shape."
             ),
             RunError::Vulkan { stage, detail } => write!(f, "Vulkan {stage} failed: {detail}"),
         }
@@ -909,6 +946,332 @@ impl GpuContext {
     /// would be refused at pipeline creation.
     pub fn cooperative_matrix(&self) -> Option<Advertised> {
         self.cooperative_matrix
+    }
+
+    /// `C = A · B + C` on this device's cooperative matrix, or a refusal by name.
+    ///
+    /// # Invariant
+    /// The operands are the device's advertised shape, and the product is one workgroup:
+    /// every lane of the subgroup reaches the collective load, multiply and store once.
+    /// The matrix buffers are device-local; the host's bytes reach them through a staging
+    /// buffer, and the result comes back the same way.
+    pub fn run_cooperative_matrix(
+        &self,
+        a: &[i8],
+        b: &[i8],
+        c: &[i32],
+    ) -> Result<Vec<i32>, RunError> {
+        let Some(shape) = self.cooperative_matrix else {
+            return Err(RunError::NoCooperativeMatrix {
+                device: self.name.clone(),
+            });
+        };
+        let (m, n, k) = (shape.m as usize, shape.n as usize, shape.k as usize);
+        if a.len() != m * k || b.len() != k * n || c.len() != m * n {
+            return Err(RunError::CooperativeMatrixShape {
+                m,
+                n,
+                k,
+                a: a.len(),
+                b: b.len(),
+                c: c.len(),
+            });
+        }
+        let words = crate::cooperative_matrix::module(crate::cooperative_matrix::Bindings {
+            set: 0,
+            a: 0,
+            b: 1,
+            c: 2,
+        });
+        let a_bytes: Vec<u8> = a.iter().map(|value| *value as u8).collect();
+        let b_bytes: Vec<u8> = b.iter().map(|value| *value as u8).collect();
+        let c_bytes: Vec<u8> = c.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let (a_size, b_size, c_size) = (a_bytes.len(), b_bytes.len(), c_bytes.len());
+        // The staging buffer: A, B and C in, and the result back at the tail.
+        let staging_bytes = (a_size + b_size + 2 * c_size) as vk::DeviceSize;
+        let staging = check("staging buffer creation", unsafe {
+            self.device.create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(staging_bytes)
+                    .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+        })?;
+        let requirements = unsafe { self.device.get_buffer_memory_requirements(staging) };
+        let staging_type = memory_type(
+            &self.instance,
+            self.physical,
+            requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        let staging_memory = check("staging memory allocation", unsafe {
+            self.device.allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(requirements.size)
+                    .memory_type_index(staging_type),
+                None,
+            )
+        })?;
+        check("staging memory binding", unsafe {
+            self.device.bind_buffer_memory(staging, staging_memory, 0)
+        })?;
+        let mapped = check("staging mapping", unsafe {
+            self.device.map_memory(
+                staging_memory,
+                0,
+                staging_bytes,
+                vk::MemoryMapFlags::empty(),
+            )
+        })?;
+        // SAFETY: the mapping covers the whole staging buffer and the three slices fit it.
+        unsafe {
+            std::ptr::copy_nonoverlapping(a_bytes.as_ptr(), mapped.cast::<u8>(), a_size);
+            std::ptr::copy_nonoverlapping(
+                b_bytes.as_ptr(),
+                mapped.cast::<u8>().add(a_size),
+                b_size,
+            );
+            std::ptr::copy_nonoverlapping(
+                c_bytes.as_ptr(),
+                mapped.cast::<u8>().add(a_size + b_size),
+                c_size,
+            );
+            self.device.unmap_memory(staging_memory);
+        }
+        // The matrices: device-local, the size the shader reads them at.
+        let a_device = self.matrix_buffer(a_size)?;
+        let b_device = self.matrix_buffer(b_size)?;
+        let c_device = self.matrix_buffer(c_size)?;
+        let shader = check("shader creation", unsafe {
+            self.device
+                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+        })?;
+        let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..3)
+            .map(|binding| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(binding)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            })
+            .collect();
+        let set_layout = check("descriptor layout creation", unsafe {
+            self.device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                None,
+            )
+        })?;
+        let set_layouts = [set_layout];
+        let pipeline_layout = check("pipeline layout creation", unsafe {
+            self.device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts),
+                None,
+            )
+        })?;
+        let main = std::ffi::CStr::from_bytes_with_nul(b"main\0").expect("the name is terminated");
+        let pipeline = match unsafe {
+            self.device.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                &[vk::ComputePipelineCreateInfo::default()
+                    .stage(
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::COMPUTE)
+                            .module(shader)
+                            .name(main),
+                    )
+                    .layout(pipeline_layout)],
+                None,
+            )
+        } {
+            Ok(pipelines) => pipelines[0],
+            Err((_, code)) => {
+                return Err(RunError::Vulkan {
+                    stage: "pipeline creation",
+                    detail: format!("{code:?}"),
+                });
+            }
+        };
+        let pool = check("descriptor pool creation", unsafe {
+            self.device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(1)
+                    .pool_sizes(&[vk::DescriptorPoolSize::default()
+                        .ty(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(3)]),
+                None,
+            )
+        })?;
+        let sets = check("descriptor set allocation", unsafe {
+            self.device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(pool)
+                    .set_layouts(&set_layouts),
+            )
+        })?;
+        let descriptors = [
+            a_device.descriptor(),
+            b_device.descriptor(),
+            c_device.descriptor(),
+        ];
+        let mut writes = Vec::with_capacity(3);
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(sets[0])
+                    .dst_binding(index as u32)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(descriptor)),
+            );
+        }
+        unsafe { self.device.update_descriptor_sets(&writes, &[]) };
+        let command_pool = check("command pool creation", unsafe {
+            self.device
+                .create_command_pool(&vk::CommandPoolCreateInfo::default(), None)
+        })?;
+        let command = check("command buffer allocation", unsafe {
+            self.device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+        })?[0];
+        check("command buffer begin", unsafe {
+            self.device.begin_command_buffer(
+                command,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        })?;
+        // The three uploads, then the product, then the result copied back out.
+        for (staging_offset, buffer, bytes) in [
+            (0usize, a_device.handle, a_size),
+            (a_size, b_device.handle, b_size),
+            (a_size + b_size, c_device.handle, c_size),
+        ] {
+            let region = vk::BufferCopy::default()
+                .src_offset(staging_offset as vk::DeviceSize)
+                .dst_offset(0)
+                .size(bytes as vk::DeviceSize);
+            // SAFETY: the staging range and the buffer it lands in both hold `bytes`.
+            unsafe {
+                self.device
+                    .cmd_copy_buffer(command, staging, buffer, &[region]);
+            }
+        }
+        let to_compute = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        let to_transfer = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+        // SAFETY: every recorded command names objects created above and alive.
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                command,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[to_compute],
+                &[],
+                &[],
+            );
+            self.device
+                .cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
+            self.device.cmd_bind_descriptor_sets(
+                command,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline_layout,
+                0,
+                &sets,
+                &[],
+            );
+            self.device.cmd_dispatch(command, 1, 1, 1);
+            self.device.cmd_pipeline_barrier(
+                command,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[to_transfer],
+                &[],
+                &[],
+            );
+            let readback = vk::BufferCopy::default()
+                .src_offset(0)
+                .dst_offset((a_size + b_size) as vk::DeviceSize)
+                .size(c_size as vk::DeviceSize);
+            self.device
+                .cmd_copy_buffer(command, c_device.handle, staging, &[readback]);
+            check(
+                "command buffer end",
+                self.device.end_command_buffer(command),
+            )?;
+        }
+        let fence = check("fence creation", unsafe {
+            self.device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
+        })?;
+        let wait = (|| {
+            let commands = [command];
+            let submit = vk::SubmitInfo::default().command_buffers(&commands);
+            check("command submission", unsafe {
+                self.device.queue_submit(self.queue, &[submit], fence)
+            })?;
+            check("fence wait", unsafe {
+                self.device.wait_for_fences(&[fence], true, u64::MAX)
+            })
+        })();
+        let result = (|| {
+            wait?;
+            let pointer = check("staging mapping", unsafe {
+                self.device.map_memory(
+                    staging_memory,
+                    (a_size + b_size) as vk::DeviceSize,
+                    c_size as vk::DeviceSize,
+                    vk::MemoryMapFlags::empty(),
+                )
+            })?;
+            let mut bytes = vec![0u8; c_size];
+            // SAFETY: the mapping covers `c_size` bytes and `bytes` is that long.
+            unsafe {
+                std::ptr::copy_nonoverlapping(pointer.cast::<u8>(), bytes.as_mut_ptr(), c_size);
+                self.device.unmap_memory(staging_memory);
+            }
+            Ok(bytes
+                .chunks_exact(4)
+                .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("four bytes")))
+                .collect())
+        })();
+        // This call's own objects are not retained: one product is one pipeline.
+
+        // SAFETY: the device is idle and every handle is one this call created.
+        unsafe {
+            self.device.destroy_pipeline(pipeline, None);
+            self.device.destroy_pipeline_layout(pipeline_layout, None);
+            self.device.destroy_descriptor_pool(pool, None);
+            self.device.destroy_descriptor_set_layout(set_layout, None);
+            self.device.destroy_shader_module(shader, None);
+            self.device.destroy_command_pool(command_pool, None);
+            self.device.destroy_fence(fence, None);
+            self.device.destroy_buffer(staging, None);
+            self.device.free_memory(staging_memory, None);
+        }
+        self.recycle(a_device);
+        self.recycle(b_device);
+        self.recycle(c_device);
+        result
+    }
+
+    /// A raw matrix buffer of `bytes`, device-local, as the pool hands one out.
+    ///
+    /// # Invariant
+    /// The class is the accounting's, not the shader's: the buffer is bytes and the shader's
+    /// matrix types name their component widths itself, so a size that is a whole number of
+    /// `Int` elements is allocated at that width and nothing reads it as one.
+    fn matrix_buffer(&self, bytes: usize) -> Result<DeviceBuffer, RunError> {
+        let width = ScalarClass::Int.byte_width();
+        self.allocate(bytes.div_ceil(width), ScalarClass::Int, Tag::Output)
     }
 
     /// How many submissions this context may have in flight at once.
@@ -2391,6 +2754,11 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         count: usize,
     ) -> Result<Vec<ResidentId>, String> {
         GpuContext::run(self, launch, inputs, count).map_err(|error| error.to_string())
+    }
+
+    /// The device's own cooperative matrix, when the device advertises one.
+    fn cooperative_matrix(&self, a: &[i8], b: &[i8], c: &[i32]) -> Result<Vec<i32>, String> {
+        GpuContext::run_cooperative_matrix(self, a, b, c).map_err(|error| error.to_string())
     }
 
     /// The one backend that overrides the default: its pool hands the next

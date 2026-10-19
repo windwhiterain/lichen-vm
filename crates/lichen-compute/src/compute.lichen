@@ -22,5 +22,6 @@ write = (x : (Write _)) => $write(x.to, x.at, x.value)
 write_atomic = (x : (WriteAtomic _)) => $write_atomic(x.to, x.at, x.value)
 collect = (b : (Buf _)) => $collect(b)
 buffer = (xs : array{_, _}) => ($buffer(xs) : (Buf _))
+mma = (s : string) => (a : (Buf Int)) => (b : (Buf Int)) => (c : (Buf Int)) => ($mma(s, a, b, c) : (Buf Int))
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)

@@ -570,7 +570,30 @@ pub trait ParallelBackend: Send + Sync {
 
     /// Release a resident buffer. Idempotent on an id already released.
     fn release(&self, id: ResidentId);
+
+    /// The cooperative matrix product, or a refusal where this backend has none.
+    ///
+    /// # Invariant
+    /// The operands cross as host values: a product is one workgroup over whole matrices, not
+    /// a kernel over an index range. `A` is `M × K` signed bytes, `B` is `K × N` signed bytes,
+    /// `C` is `M × N` signed words, row-major, over [`COOPERATIVE_MATRIX_M`]'s shape. The
+    /// difference is two's-complement, so the arithmetic is exact. The default refuses by
+    /// name.
+    fn cooperative_matrix(&self, _a: &[i8], _b: &[i8], _c: &[i32]) -> Result<Vec<i32>, String> {
+        Err("this backend has no cooperative matrix product".to_string())
+    }
 }
+/// The cooperative matrix product's shape: `M16 N16 K32`, `s8` in and `s32` accumulate.
+///
+/// # Invariant
+/// The shape is the device composition [`ParallelBackend::cooperative_matrix`] states, and
+/// one statement of it keeps the host and the module from drifting: a host that computed a
+/// different shape would compare two different products.
+pub const COOPERATIVE_MATRIX_M: u32 = 16;
+/// The product's columns.
+pub const COOPERATIVE_MATRIX_N: u32 = 16;
+/// The reduction length.
+pub const COOPERATIVE_MATRIX_K: u32 = 32;
 
 /// The installed backend, if a host program installed one.
 ///
