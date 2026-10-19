@@ -255,6 +255,22 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## The pass fires, once both conditions hold
+
+Both fixes are in the tree — a brain-float identity stated at its own class
+(`crates/lichen-fusion-bridge/src/tiled.rs`), and a projection whose every extents are literals, taken
+from the shipped program by replacing its three runtime extent names. The pass's report changes from a
+refusal to a firing:
+
+    node 0: pack "narrow" fired for schema sha256:1df2f05c…: its plan stages `tile` in Shared over
+            64 lane(s), and its own marks declare `+` over 64 lane(s), seeding the fold with `0.0`
+
+so a projection **can** be tiled on this backend, by 64 lanes that share a slot — which is the first real
+step toward a layer as one kernel, and it took two small changes rather than a mega kernel. What remains
+before a number can be reported is plumbing: a tiled graph is a rewritten graph, and its argument list is
+not the one the untitled program takes (`node 0 was given value 2 as a buffer`), so the run that feeds it
+has to be written against the rewritten shape.
+
 ## Why the projection is not tiled, in the pass's own words
 
 The projection is prepared once and run at every shape, so its extent is a runtime `Count` — and that is
