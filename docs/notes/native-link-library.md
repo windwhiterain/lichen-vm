@@ -1,16 +1,16 @@
 # A native link library: a Rust generic behind a lichen generic
 
-> Status: **proposed** — a design for wrapping a third-party generic Rust crate
-> as a lichen generic, whose instantiations are explicit and whose object code is
-> one rlib that downstream Rust crates link. §2 is measured; §5's lichen surface
-> is designed from existing mechanisms and is not yet measured.
+> Status: **proposed — ruled by the maintainer; the phases are not started.**
+> §2 is measured; §4 is ruled (the instantiated code is dynamically loaded);
+> §5's lichen surface is designed from existing mechanisms and is not measured.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
 > (the per-application clone), `crates/lichen-compute/src/compute.rs`
 > (`LaunchOp`, the multi-operand native op), `lichen-std-native` (the reference
-> plugin), `crates/lichen-package/src/plugin.rs` (the compositor build), and the
-> refinement contract in [operator-polymorphism](operator-polymorphism.md) §3.
+> plugin), `lang_compose_vocabulary!` (`crates/lichen-language/src/program.rs`),
+> and the refinement contract in [operator-polymorphism](operator-polymorphism.md)
+> §3.
 > Companions: [compiler-plugin](compiler-plugin.md),
 > [plugin-taxonomy](plugin-taxonomy.md), [packages](packages.md),
 > [floating-point](floating-point.md) §4.2.
@@ -27,17 +27,13 @@ become lichen generics, the instantiations are **explicit**, one `.rlib` holds
 their object code, and downstream Rust crates link that rlib instead of
 instantiating again.
 
-This note answers three questions: what the Rust half can and cannot give (§2),
-what lichen already has and what it would need (§3–§6), and which decisions are
-the maintainer's (§7–§9).
-
 ## 2. The Rust half: an rlib is not a monomorphization barrier
 
 **Measured** in a throwaway workspace (`spike-rlib/` under the session worktree,
 never part of the tree): a generic library with a macro-generated multi-method
 `Grid<T>` impl (`blur`, `sharpen`, … twelve loop-bodied methods), an **instances**
-crate whose non-generic wrappers call the generic for `f32`, and three binaries —
-one calling the generic directly, one calling `#[inline(never)]` wrappers, one
+crate whose non-generic wrappers call the generic, and three binaries — one
+calling the generic directly, one calling `#[inline(never)]` wrappers, one
 calling `#[inline]` wrappers from a crate that contains nothing else.
 
 | reading (release, `--emit=llvm-ir`) | generic called directly | `#[inline(never)]` shims | `#[inline]` shims |
@@ -45,29 +41,27 @@ calling `#[inline]` wrappers from a crate that contains nothing else.
 | `define`s naming `generic_lib` in the binary's IR | **12** | **0** | **12** |
 | total `define`s | 20 | 8 | 20 |
 | IR size | 168 178 B | 38 379 B | 169 326 B |
-| the wrapper call as seen in the binary | — | 12 external `declare`s named by the instances crate | the generic re-instantiated under the binary's own hash |
+| the call as seen in the binary | — | 12 external `declare`s named by the instances crate | the generic re-instantiated under the binary's own hash |
 | binary size | 164 352 B | 164 352 B | — |
 | rebuild of the binary alone (median of 3) | ~161 ms | ~139 ms | — |
 
-What this pins, and what the rest of the note is built on:
+What this pins:
 
 1. **The generic body enters a crate exactly when that crate's own MIR names the
    generic.** Calling a non-generic wrapper names the wrapper, and the wrapper's
    body — which lives in the instances crate — already names a *specific*
    instance, so the downstream crate emits a call to it and instantiates nothing.
-2. **`#[inline]` undoes the boundary; `#[inline(never)]` is what makes it
-   load-bearing.** With an inline wrapper the downstream optimizer inlines the
-   wrapper, sees the generic call, and re-creates the instantiation under its own
-   hash — 12 `define`s, the same as calling the generic directly. The earlier
-   reading that suggested otherwise was an artefact of a test crate that held
-   both wrapper flavours: the `#[inline(never)]` half had already instantiated
-   the same types upstream, so the inline half found the instance and referenced
-   it. Isolated, the inline half re-instantiates.
+2. **`#[inline]` undoes the boundary.** With an inline wrapper the downstream
+   optimizer inlines the wrapper, sees the generic call, and re-creates the
+   instantiation under its own hash — 12 `define`s, exactly as calling the
+   generic directly. A test crate that held both wrapper flavours first suggested
+   the opposite: its `#[inline(never)]` half had already instantiated the same
+   types upstream, so the inline half found the instance and referenced it.
+   Isolated, the inline half re-instantiates.
 3. **The binary does not shrink.** An rlib is static: both binaries are the same
    size, because linking copies the code either way. What the rlib shares is the
-   **codegen**, not the bytes. That is the right claim to make to the project:
-   the win is compile time, and it scales with the generic IR volume, which the
-   IR-size row above shows is 4.4× here.
+   **codegen**, not the bytes — and the IR-size row shows the ratio that scales
+   (4.4× here, with a small body).
 4. **`-Zshare-generics` is not the mechanism and not a substitute.** The
    instances crate's instance is referenced because the wrapper's MIR names it,
    not because the compiler shares monomorphizations; and the unstable flag is
@@ -81,9 +75,9 @@ What this pins, and what the rest of the note is built on:
 The contract that follows is about **where the generic is named**, not about what
 is linked:
 
-> A downstream crate links the instance rlib and calls only non-generic entry
-> points whose bodies live in that rlib. One generic call in the downstream
-> crate's own MIR re-creates the instantiation there.
+> A consumer calls only non-generic entry points whose bodies were compiled once,
+> in the instance library. One generic call in a downstream crate's own MIR
+> re-creates the instantiation there.
 
 ## 3. The lichen half: the pieces already exist
 
@@ -110,24 +104,54 @@ application** (`function.rs:159`: *"a call site never monomorphises a polymorphi
 template"*), so a wrapper written once dispatches per call on the argument the
 caller actually passed.
 
-## 4. The shape: one declaration, three expansions
+## 4. The shape, as ruled: a thin plugin and a dynamically loaded library
+
+Two rulings fix it: the instantiated code is **dynamically loaded**, and the
+plugin side is **native-plugin-shaped and depends on lichen**; neither enters the
+lichen compiler (§7).
 
 ```
-vbd-spec            the one declaration: lichen type ↔ Rust type ↔ entry point
-   ├── vbd-instances   non-generic monomorphic wrappers              → the rlib (§2)
-   ├── vbd-lichen      the wrapper source + $vbd ops + dispatch      → a native plugin
-   └── downstream      Rust crates depend on vbd-instances and call its wrappers
+vbd-lichen      the plugin: the lichen wrapper source, the $vbd ops, the value
+                conversion, the dispatch. Depends on lichen-highlevel/lowlevel,
+                and is composed by the project's own host the way
+                lichen-std-native is.
+      │  loads at run time (libloading)
+vbd-instances   the instantiated code: a dynamic library generated from the
+                recorded set. Its ABI is plain data — scalars, pointer + length,
+                opaque handles — so it can be loaded into a process that already
+                has its own lichen.
+      │
+downstream      the project's Rust crates link the same library dynamically;
+                the heavy code is one file on disk and one mapping per process,
+                not one copy per downstream binary.
 ```
 
-The heavy code is instantiated **outside** the `P`-generic plugin: `vbd-lichen`
-is thin (the surface, the set, the dispatch) and monomorphises into the host like
-any other plugin, while `vbd-instances` is plain Rust with no lichen dependency
-at all. That split is what keeps the rlib shareable: nothing lichen-specific is in
-it.
+**Why dynamic and not static.** An rlib is an archive: linking it copies its
+object code into every downstream binary. §2's two binaries are byte-for-byte the
+same size with and without the instance rlib, so an rlib buys *codegen* time and
+nothing else. A dynamic library is the artifact that buys *link* time and binary
+size — the downstream link is a reference, and the code is mapped once.
 
-The three expansions come from **one** declaration so the lichen type, the Rust
-type, and the entry point cannot drift apart. A `macro_rules!` in `vbd-spec`,
-invoked once per consuming crate, is enough; a proc macro is not required.
+**Why the split is forced, not chosen.** A dynamically loaded library cannot be
+generic over the host's `Program`, and it must not carry a second copy of
+lichen's runtime: a second `Registry` would freeze its own modules, and the
+module identities lichen's artifacts carry would stop agreeing. So what crosses
+the boundary is plain data, and the lichen value conversion stays in the plugin.
+
+**How the plugin reaches it.** The library exports one `extern "C"` entry per
+instance (plus a descriptor naming the lichen kind each entry serves); the plugin
+resolves them with `libloading` — already in `Cargo.lock` at 0.8.9 — and its
+`run` dispatches through the resolved table.
+
+The stock `lichen-compiler` and the LSP never load `vbd-instances`; a program
+that uses vbd's generics runs under the project's host. That is the same
+arrangement `lichen-std-native` already has, and it is deliberate: the shipped
+toolchain carries no project-specific instantiation set.
+
+One question is still open inside this shape (§9): the **artifact kind** — a
+`cdylib` with the plain C ABI above, or a Rust `dylib` that can carry lichen
+types across the boundary but binds the library to the host's exact lichen build
+and compiler.
 
 ## 5. The lichen surface, and the readings it must be confirmed with
 
@@ -161,8 +185,8 @@ NativeApply { value: ctx.op_node(VbdOp::Sample, Some(operands)), decided: false 
 // run: element 0 is the type value, element 1 the argument; select, convert, call
 ```
 
-`run` matches the type value it reads against the spec's table and calls the
-matching `vbd_instances::*` entry. The wrapper still states the types it knows
+`run` matches the type value it reads against the instance table and calls the
+matching non-generic entry. The wrapper still states the types it knows
 (`r : t`) — the same division of labour as `sort` (`compiler-plugin.md:117–133`).
 
 Two things could make the probe fail, and both are known:
@@ -181,68 +205,112 @@ Two things could make the probe fail, and both are known:
   (`sample (Box Int) …`) the operand is an unevaluated node, and the op must
   either evaluate it or refuse the spelling.
 
-## 6. Why the instantiation is a declaration, and what lichen adds
+## 6. The set is derived; the mapping is declared
 
-The set cannot be *derived* from a lichen program: the lichen type `Float` does
-not say `f32`, and it is the Rust type that decides which instantiation is
-needed. So the set is **declared** in the spec; that is what "explicit
-instantiation" means here.
+The maintainer ruled that the instantiation set is **generated by a recorder**,
+not written by hand. That splits the problem cleanly:
 
-lichen's contribution is the **closure check**: the refinement makes every use's
-type argument one of the declared instances, at check time, per application. What
-that removes is the failure the boundary would otherwise have — a call whose type
-argument has no instance, discovered late and far from the call site.
+- **Declared** is the *mapping* — which lichen kind maps to which Rust type
+  (`Float => f32`, `Int => usize`) and which entry points the surface exposes.
+  This is real knowledge the lichen program does not carry: `Float` does not say
+  `f32`.
+- **Derived** is the *set* — which of those (surface entry, kind) pairs the
+  program actually uses. A recorder reads it off the built program, and the
+  generator emits exactly those instantiations.
 
-If a program should be able to *add* an instance, the missing piece is a
-**recorder** of the instantiations a whole program used, not a new boundary. Two
-candidate seams exist: the checker's per-apply `Build` state (the apply edges are
-already recorded) and the engine's per-application `instantiate_stamped`
-(`function.rs:270–344`), where `(template, argument type, result type)` is
-already in hand and a hook can only read. What that buys is pruning (build only
-the used instances) and an on-demand add; it cannot invent the Rust type, so a
-human or a rule still names it. It is not needed for the boundary to work.
+With the mapping a rule over kind markers, derivation can *invent* an instance: a
+program that uses `Float` gets the `f32` instantiation with no human in the loop.
+What it cannot invent is a *structural* type, because lichen's struct identity is
+a per-build counter (`ValueType::type_id`); a struct instantiation needs a
+declared name and that is the limit §8 records.
 
-## 7. Decisions to take
+The recorder must see, per call, the **decided** type argument. Two candidate
+seams, in ascending cost:
 
-1. **The spec: hand-written or generated.** Hand-written (macro) needs no
-   toolchain change and is checkable today; generated needs the recorder and a
-   build step, and still needs a declaration for the Rust type.
-2. **The link shape: plugin links the rlib, or a runtime table.** The plugin
-   depending on `vbd-instances` keeps the existing composition model (a compiler
-   rebuilt from its plugin set); a table installed at run time avoids the rebuild
-   but adds a registration the plugin's `run` must consult, and the host must
-   perform it.
-3. **`lichen run` and native generics.** With the plugin linking the rlib, the
-   CLI executes them like any other plugin, at the cost of a compositor rebuild
-   when the plugin set changes. A `cdylib` + loader is the alternative; it is not
-   statically linkable by downstream Rust crates, so it is the *second* artifact,
-   not the first.
-4. **Scalar width.** lichen's `Int` is `usize` and `Float` is `f32`
-   (`docs/language-spec.md` §3, [floating-point](floating-point.md) §4.2). An
-   `f64`/`i32` instantiation therefore has no lichen type: either the wrapper
-   exposes only the widths lichen has, or lichen gains a wider scalar.
+- **A whole-program scan after the check.** The wrapper's applies are in the
+  module; an apply's operand is an array whose first element is the type
+  argument's node, and a decided type constant is readable with
+  `Module::node_value`. The scan needs the wrapper's function identities (the
+  plugin can expose them) and nothing from the engine. It cannot see an
+  instantiation that only becomes concrete at run time — which is the same
+  boundary the refinement states.
+- **A hook at the engine's per-application instantiation**
+  (`instantiate_stamped`, `function.rs:270–344`), where `(template, argument
+  type, result type)` is already in hand. It sees every application, including
+  ones a module scan would have to reconstruct from nodes; it costs a read per
+  apply on the hot path.
+
+The first is the design's default; the second is the fallback if a scan cannot
+recover an instantiation the program used.
+
+## 7. The ruling
+
+The maintainer decided, in this session:
+
+1. **The instantiated code is dynamically loaded**, and the plugin side is
+   native-plugin-shaped and depends on lichen; neither enters the lichen
+   compiler. The artifact is therefore a dynamic library, not an rlib — the rlib
+   is only the static form downstream Rust crates may also want (§4).
+2. **The instantiation set is generated by a recorder**, not declared by hand
+   (§6).
+3. **Only lichen's own widths** are exposed: `Float = f32`, `Int = usize`. An
+   `f64`/`i32` instantiation is out of scope, and no wider scalar is added to
+   lichen for it.
 
 ## 8. Limits
 
-- **Scalar widths** — §7.4. `Float => f32` is the only lossless mapping today.
+- **Scalar widths** — ruled: lichen's own only (§7.3). `Float => f32` is the only
+  lossless mapping, so a function generic over `f64` is unreachable from lichen.
+- **The dynamic ABI is plain data.** Loading the library rules out generics,
+  function values, and lichen's own value type across the boundary: scalars cross
+  by value, arrays as pointer + length, and a struct as an opaque handle with
+  exported accessors. A `dylib` can lift this at the price §9 records.
 - **Struct instantiations.** A struct type's nominal `TypeId` is a per-build
   counter (`program.rs`, `TypeValue::TypeId`), so it cannot key an instance table
-  across runs; a struct instance must be **declared by name** in the spec, and
-  `run` must read the argument's declared type, not its id.
+  across runs; a struct instance must be **declared by name** in the mapping, and
+  the table must read that declaration, not the id.
 - **A computed type argument** (`sample (Box Int) …`) reaches `run` as an
-  unevaluated node; the op must evaluate it or the spec must refuse it. `sample
-  Float` is the supported spelling.
-- **A generic over a function or closure.** The spec names a concrete item; a
+  unevaluated node; the op must evaluate it or refuse the spelling. `sample
+  Float` is the supported form.
+- **A generic over a function or closure.** The mapping names a concrete item; a
   lichen function value has no Rust type to pass. This is the dictionary limit —
   it is real, and it is not solved here.
 - **Trait bounds.** Rust's bounds are not lichen's to state; a declared instance
-  whose type does not satisfy them is a `vbd-instances` compile error, which is
-  early enough but a Rust-shaped diagnostic.
-- **The correspondence is trusted.** Nothing checks that the lichen type in the
-  spec and the Rust type are the same value; the single declaration is the only
+  whose type does not satisfy them is a compile error in the generated crate,
+  which is early enough but a Rust-shaped diagnostic.
+- **The correspondence is trusted.** Nothing checks that the lichen kind and the
+  Rust type in the mapping are the same value; the single mapping is the only
   place they meet, which is why there must be exactly one.
 
-## 9. What is not decided
+## 9. The phases, and what is not decided
 
-The four §7 items. This note records the design and the one measured half; the
-maintainer's ruling on those items is what turns the rest into work.
+- **P0 — the surface probe, including the dynamic boundary.** A throwaway native
+  plugin with one hand-written instance table, a tiny hand-built dynamic library
+  behind it, and the four §5 readings measured. No lichen change. This is the
+  gate: if the refinement does not re-check per application, the closed-world
+  half of the design changes before any generator is written; if `libloading`
+  cannot give the plugin a stable table, the artifact kind changes.
+- **P1 — the recorder.** The whole-program scan (§6) over a real vbd-shaped
+  wrapper: the used (entry, kind) set, emitted as a plain list.
+- **P2 — the builder.** From the recorded set and the declared mapping, write the
+  dynamic library (one `extern "C"` entry per instance), build it with cargo, and
+  cache it by a content key — the same shape as the kernel disk cache
+  ([kernel-disk-cache](kernel-disk-cache.md)).
+- **P3 — the host.** The project's host composes the plugin and names the library
+  to load; the stock toolchain stays unchanged.
+
+Not decided yet, and needed before P2:
+
+- **The artifact kind.** A `cdylib` with the plain C ABI (§4) is the robust
+  dynamic form — it loads into any process and cannot duplicate lichen's runtime,
+  at the cost of marshalling every value. A Rust `dylib` can carry lichen types
+  and functions across the boundary, but it binds the library to the host's exact
+  lichen build and compiler, and downstream Rust crates can still instantiate
+  generics from its metadata.
+- **Who names the library.** The project's host installs its path (the shape
+  above), or the language learns a `link` dependency kind in the `---…---` block
+  so the library describes its own surface and the stock toolchain can load it.
+  The second is a language feature with a loader and a manifest; the first needs
+  no lichen change.
+- **What the recorder's output artifact is**: a Rust source fragment, a JSON list,
+  or a cache entry the builder reads.
