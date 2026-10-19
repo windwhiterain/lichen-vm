@@ -22,6 +22,9 @@ use lichen_serve::{Batched, Qwen, Sampling, Session, Tokenizer, Width};
 /// The name this service answers as, which a client uses to pick a model.
 const MODEL: &str = "qwen3-1.7b";
 
+/// What the checkpoint spells where a turn ends, which is a stop of its own.
+const END_OF_TURN_MARK: &str = "<|im_end|>";
+
 /// How many requests one step answers, which is what the queue may grow to.
 const SEQUENCES: usize = 8;
 
@@ -43,9 +46,9 @@ struct Job {
 /// How a job hands its tokens back.
 enum Answer {
     /// All of them at the end, which is what a client reading a body waits for.
-    Whole(tokio::sync::oneshot::Sender<Vec<usize>>),
+    Whole(tokio::sync::oneshot::Sender<(Vec<usize>, &'static str)>),
     /// One at a time as they are chosen, which is what a streaming client reads.
-    Stream(tokio::sync::mpsc::UnboundedSender<Option<usize>>),
+    Stream(tokio::sync::mpsc::UnboundedSender<Result<usize, &'static str>>),
 }
 
 /// What the service has done, which is what `/metrics` reports.
@@ -145,7 +148,12 @@ struct Shared {
 /// A generation is the worker's alone and never returns to the HTTP side, because the model's dispatches
 /// are host-blocking calls on one session: a second thread would share the device and the pool with it, and
 /// the queue is what turns that into one prompt after another rather than two at once.
-fn worker(session: &Session, jobs: mpsc::Receiver<Job>, metrics: Arc<Metrics>) {
+fn worker(
+    session: &Session,
+    jobs: mpsc::Receiver<Job>,
+    tokenizer: Arc<Tokenizer>,
+    metrics: Arc<Metrics>,
+) {
     let Ok(mut model) = Qwen::open_with(session, Width::Narrowed) else {
         return;
     };
@@ -154,6 +162,9 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>, metrics: Arc<Metrics>) {
     }
     let mut batched = Batched::new(&model);
     let mut waiting: std::collections::HashMap<usize, Answer> = std::collections::HashMap::new();
+    // The requests that met a stop of their own, and are retired at the end of the step.
+    let mut stopped: std::collections::HashMap<usize, &'static str> =
+        std::collections::HashMap::new();
     let mut closed = false;
     loop {
         // Everything waiting joins the batch, up to the number a step should hold.
@@ -206,25 +217,36 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>, metrics: Arc<Metrics>) {
         metrics.live.store(batched.live() as u64, Ordering::Relaxed);
         for (id, token) in answered {
             if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
-                let _ = tokens.send(Some(token));
+                let _ = tokens.send(Ok(token));
+            }
+            // A turn ends where its marker is spelled, matched as text rather than as one id.
+            let said = batched
+                .answer(id)
+                .map(<[usize]>::to_vec)
+                .unwrap_or_default();
+            let spelled = tokenizer.decode(&said);
+            if spelled.contains(END_OF_TURN_MARK) {
+                stopped.insert(id, "stop");
             }
         }
         let finished: Vec<usize> = waiting
             .keys()
             .copied()
-            .filter(|id| batched.done(*id))
+            .filter(|id| batched.done(*id) || stopped.contains_key(id))
             .collect();
         for id in finished {
             let said = batched
                 .answer(id)
                 .map(<[usize]>::to_vec)
                 .unwrap_or_default();
+            // The turn's end token is a stop of its own, which no client has to name.
+            let reason = stopped.remove(&id).unwrap_or("length");
             match waiting.remove(&id) {
                 Some(Answer::Whole(reply)) => {
-                    let _ = reply.send(said);
+                    let _ = reply.send((said, reason));
                 }
                 Some(Answer::Stream(tokens)) => {
-                    let _ = tokens.send(None);
+                    let _ = tokens.send(Err(reason));
                 }
                 None => {}
             }
@@ -318,7 +340,7 @@ async fn generate(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
-) -> Result<Vec<usize>, ()> {
+) -> Result<(Vec<usize>, &'static str), ()> {
     let (reply, answer) = tokio::sync::oneshot::channel();
     if shared
         .jobs
@@ -347,8 +369,8 @@ fn stream(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
-) -> Result<UnboundedReceiverStream<Option<usize>>, ()> {
-    let (tokens, answer) = tokio::sync::mpsc::unbounded_channel::<Option<usize>>();
+) -> Result<UnboundedReceiverStream<Result<usize, &'static str>>, ()> {
+    let (tokens, answer) = tokio::sync::mpsc::unbounded_channel::<Result<usize, &'static str>>();
     shared
         .jobs
         .try_send(Job {
@@ -362,14 +384,27 @@ fn stream(
 }
 
 /// The chunk that says a streamed answer ended, which is what a client reads as the stop.
-fn finished_chunk() -> String {
+fn finished_chunk(reason: &'static str) -> String {
     json!({
         "id": "chatcmpl-lichen",
         "object": "chat.completion.chunk",
         "model": MODEL,
-        "choices": [{ "index": 0, "delta": {}, "finish_reason": "length" }],
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }],
     })
     .to_string()
+}
+
+/// The text `ids` spell, cut where the turn's own marker begins.
+///
+/// # Invariant
+/// The marker is not part of the answer OpenAI's surface returns, so the cut happens here: a client that
+/// saw it would read the checkpoint's control token as content.
+fn answered_text(tokenizer: &Tokenizer, ids: &[usize]) -> String {
+    let text = tokenizer.decode(ids);
+    match text.find(END_OF_TURN_MARK) {
+        Some(at) => text[..at].to_string(),
+        None => text,
+    }
 }
 
 /// One token as a chat chunk, which is the shape a streaming client appends.
@@ -420,8 +455,8 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         let tokenizer = Arc::clone(&shared.tokenizer);
         let mapped = futures_util::StreamExt::map(tokens, move |token| {
             let chunk = match token {
-                Some(token) => chat_chunk(&token, &tokenizer),
-                None => finished_chunk(),
+                Ok(token) => chat_chunk(&token, &tokenizer),
+                Err(reason) => finished_chunk(reason),
             };
             Ok::<_, std::convert::Infallible>(Event::default().data(chunk))
         });
@@ -431,10 +466,10 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         );
         return Sse::new(body).into_response();
     }
-    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling).await else {
+    let Ok((answered, reason)) = generate(&shared, ids.clone(), limit, sampling).await else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = shared.tokenizer.decode(&answered);
+    let text = answered_text(&shared.tokenizer, &answered);
     Json(json!({
         "id": "chatcmpl-lichen",
         "object": "chat.completion",
@@ -442,7 +477,7 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         "choices": [{
             "index": 0,
             "message": { "role": "assistant", "content": text },
-            "finish_reason": "length",
+            "finish_reason": reason,
         }],
         "usage": usage(ids.len(), answered.len()),
     }))
@@ -472,7 +507,7 @@ async fn complete(
         let tokenizer = Arc::clone(&shared.tokenizer);
         let mapped = futures_util::StreamExt::map(tokens, move |token| {
             let payload = match token {
-                Some(token) => json!({
+                Ok(token) => json!({
                     "id": "cmpl-lichen",
                     "object": "text_completion",
                     "model": MODEL,
@@ -482,11 +517,11 @@ async fn complete(
                         "finish_reason": null,
                     }],
                 }),
-                None => json!({
+                Err(reason) => json!({
                     "id": "cmpl-lichen",
                     "object": "text_completion",
                     "model": MODEL,
-                    "choices": [{ "index": 0, "text": "", "finish_reason": "length" }],
+                    "choices": [{ "index": 0, "text": "", "finish_reason": reason }],
                 }),
             };
             Ok::<_, std::convert::Infallible>(Event::default().data(payload.to_string()))
@@ -497,15 +532,15 @@ async fn complete(
         );
         return Sse::new(body).into_response();
     }
-    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling).await else {
+    let Ok((answered, reason)) = generate(&shared, ids.clone(), limit, sampling).await else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
-    let text = shared.tokenizer.decode(&answered);
+    let text = answered_text(&shared.tokenizer, &answered);
     Json(json!({
         "id": "cmpl-lichen",
         "object": "text_completion",
         "model": MODEL,
-        "choices": [{ "index": 0, "text": text, "finish_reason": "length" }],
+        "choices": [{ "index": 0, "text": text, "finish_reason": reason }],
         "usage": usage(ids.len(), answered.len()),
     }))
     .into_response()
@@ -516,11 +551,22 @@ fn main() {
         .nth(1)
         .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
+    let root = std::env::var("LICHEN_MODEL_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(".model"));
+    let tokenizer = match Tokenizer::open(&root.join("tokenizer.json")) {
+        Ok(tokenizer) => Arc::new(tokenizer),
+        Err(refusal) => {
+            eprintln!("{refusal}");
+            std::process::exit(1);
+        }
+    };
     let (jobs, queue) = mpsc::sync_channel(QUEUE);
     let (ready, started) = mpsc::channel();
     // The name the handler answers to is the route's, so the counters are the one thing named apart.
     let counters = Arc::new(Metrics::default());
     let counted = Arc::clone(&counters);
+    let spoken = Arc::clone(&tokenizer);
     std::thread::spawn(move || {
         let session = match Session::open() {
             Ok(session) => session,
@@ -535,7 +581,7 @@ fn main() {
             .unwrap_or_else(|_| std::path::PathBuf::from(".model"));
         eprintln!("the model is loaded; the queue is open");
         let _ = ready.send(true);
-        worker(&session, queue, counted);
+        worker(&session, queue, spoken, counted);
     });
     if !started.recv().unwrap_or(false) {
         std::process::exit(1);
