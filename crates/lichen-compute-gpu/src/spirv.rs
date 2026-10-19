@@ -2750,11 +2750,16 @@ fn operand_class(launch: &LaunchSet<'_>, op: &KernelInstr, position: usize) -> O
         // **A `Select` arm**: a fact about the value in the position, not the op.
         KernelInstr::Select => None,
         KernelInstr::BufferReadCall(_) => (position == 0).then_some(ScalarClass::Int),
-        KernelInstr::SliceReadCall(_) => (position == 0).then_some(ScalarClass::Int),
+        KernelInstr::SliceReadCall(_) => matches!(position, 0 | 1).then_some(ScalarClass::Int),
         KernelInstr::BufferWriteCall(class) | KernelInstr::BufferAtomicAddCall(class) => {
             (position == 2).then_some(class)
         }
-        KernelInstr::SliceWriteCall(class) => (position == 2).then_some(class),
+        // The ordinal and the slot are indices, and a float body's slot is an `Int` scalar.
+        KernelInstr::SliceWriteCall(class) => match position {
+            0 | 1 => Some(ScalarClass::Int),
+            2 => Some(class),
+            _ => None,
+        },
         KernelInstr::CallKernel(callee) => {
             let (_, target) = launch.callee(callee)?;
             target.param_shape.leaf_classes().get(position).copied()
