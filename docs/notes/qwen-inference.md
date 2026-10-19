@@ -339,6 +339,20 @@ step, with a sampler per request rather than one per batch. Two requests sent to
 `The capital of France is`, four tokens each — were answered in **4 s** rather than the sum of their separate
 runs, the second of them ending `Paris`.
 
+## A baseline under load
+
+Thirty-two requests of eight tokens each, at concurrency eight, measured through the service's own
+histogram on an otherwise quiet machine: **p50 11.86 s, p95 and p99 33.55 s**, 256 tokens in **66 s** across
+**35 batch steps** — about **3.9 tokens a second** in aggregate against the ~0.8 a single request gets alone.
+The gap between p50 and p95 is the batch's own, and it is the thing to watch: a request waits for the batch
+it joined, so the tail is the queue's depth rather than the model's speed.
+
+The instrument cost three attempts to make honest. Its buckets were powers of two, then quarters of a power
+of two over a ladder that ended at four seconds, so every request fell into the last bucket and every
+quantile came back the same number. A ladder has to reach past the slowest request it means to describe: it
+now runs from a microsecond to about seventy minutes in 128 rungs, and a quantile is the first rung whose
+cumulative count reaches it.
+
 ## What was decided, and what was not
 
 The user's verdict on prefix caching, recorded because it rules out the next big optimisation for now:

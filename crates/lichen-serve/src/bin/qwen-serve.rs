@@ -78,7 +78,6 @@ enum Answer {
 /// # Invariant
 /// Every counter moves on the side that owns it: the HTTP side counts a refusal it answered, and the worker
 /// counts everything the batch did, so a number is never written by two threads at once.
-#[derive(Default)]
 struct Metrics {
     /// Requests taken onto the queue.
     admitted: AtomicU64,
@@ -102,8 +101,44 @@ struct Metrics {
     buckets: [AtomicU64; LADDER],
 }
 
-/// How many powers of two a request's duration is counted across.
-const LADDER: usize = 32;
+/// How many quarter-powers of two a request's duration is counted across.
+///
+/// # Invariant
+/// The bounds are quarters of a power of two, from a microsecond to hours: a bucket a whole power wide
+/// whole power wide is too coarse to tell one request's time from another's once a batch is answering.
+const LADDER: usize = 4 * 32;
+
+/// The upper bound of bucket `rung`, in microseconds.
+fn rung(rung: usize) -> u64 {
+    let whole = (rung / 4) as u32;
+    let quarter = (rung % 4) as u32;
+    // A quarter of a power of two is its fourth root, which is one of four constants.
+    let scale = [
+        1.0_f64,
+        1.189_207_115_002_721_1,
+        1.414_213_562_373_095_1,
+        1.681_792_830_507_429_6,
+    ];
+    (2f64.powi(whole as i32) * scale[quarter as usize]) as u64
+}
+
+impl Default for Metrics {
+    /// Every counter at rest, with a bucket for every rung of the ladder.
+    fn default() -> Self {
+        Self {
+            admitted: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            finished: AtomicU64::new(0),
+            tokens: AtomicU64::new(0),
+            steps: AtomicU64::new(0),
+            live: AtomicU64::new(0),
+            step_nanos: AtomicU64::new(0),
+            timed: AtomicU64::new(0),
+            request_nanos: AtomicU64::new(0),
+            buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+}
 
 impl Metrics {
     /// One line of the exposition format.
@@ -122,10 +157,10 @@ impl Metrics {
         self.timed.fetch_add(1, Ordering::Relaxed);
         self.request_nanos.fetch_add(nanos, Ordering::Relaxed);
         let micros = (nanos / 1000).max(1);
-        let power = (63 - micros.leading_zeros()) as usize;
-        if let Some(bucket) = self.buckets.get(power) {
-            bucket.fetch_add(1, Ordering::Relaxed);
-        }
+        let at = (1..LADDER)
+            .find(|rung_index| micros <= rung(*rung_index))
+            .unwrap_or(LADDER - 1);
+        self.buckets[at].fetch_add(1, Ordering::Relaxed);
     }
 
     /// The request durations, as the histogram a scraper reads.
@@ -138,9 +173,9 @@ impl Metrics {
 ";
         // A bucket's count is everything that came in under it, not only that interval of it.
         let mut held = 0;
-        for (power, bucket) in self.buckets.iter().enumerate() {
+        for (at, bucket) in self.buckets.iter().enumerate() {
             held += bucket.load(Ordering::Relaxed);
-            let bound = 2f64.powi(power as i32) / 1_000_000.0;
+            let bound = rung(at) as f64 / 1_000_000.0;
             text += &format!(
                 "lichen_request_duration_seconds_bucket{{le=\"{bound}\"}} {held}
 "
