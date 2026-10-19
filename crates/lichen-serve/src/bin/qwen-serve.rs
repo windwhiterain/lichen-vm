@@ -14,7 +14,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use lichen_serve::{Batched, Qwen, Sampling, Session, Tokenizer, Width};
 
@@ -23,6 +23,9 @@ const MODEL: &str = "qwen3-1.7b";
 
 /// How many requests one step answers, which is what the queue may grow to.
 const SEQUENCES: usize = 8;
+
+/// How many requests may wait for a place in a batch before the service refuses more.
+const QUEUE: usize = 64;
 
 /// One request the worker is asked for.
 struct Job {
@@ -41,13 +44,13 @@ enum Answer {
     /// All of them at the end, which is what a client reading a body waits for.
     Whole(mpsc::Sender<Vec<usize>>),
     /// One at a time as they are chosen, which is what a streaming client reads.
-    Stream(tokio::sync::mpsc::Sender<usize>),
+    Stream(tokio::sync::mpsc::UnboundedSender<usize>),
 }
 
 /// What the HTTP side shares: the queue in front of the one worker.
 #[derive(Clone)]
 struct Shared {
-    jobs: mpsc::Sender<Job>,
+    jobs: mpsc::SyncSender<Job>,
     tokenizer: Arc<Tokenizer>,
 }
 
@@ -107,7 +110,7 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
         };
         for (id, token) in answered {
             if let Some(Answer::Stream(tokens)) = waiting.get(&id) {
-                let _ = tokens.blocking_send(token);
+                let _ = tokens.send(token);
             }
         }
         let finished: Vec<usize> = waiting
@@ -209,11 +212,16 @@ fn refuse(status: StatusCode, message: &str) -> Response {
 }
 
 /// Ask the worker for `limit` tokens and wait for them.
-fn generate(shared: &Shared, prompt: Vec<usize>, limit: usize, sampling: Sampling) -> Vec<usize> {
+fn generate(
+    shared: &Shared,
+    prompt: Vec<usize>,
+    limit: usize,
+    sampling: Sampling,
+) -> Result<Vec<usize>, ()> {
     let (reply, answer) = mpsc::channel();
     if shared
         .jobs
-        .send(Job {
+        .try_send(Job {
             prompt,
             limit,
             sampling,
@@ -221,9 +229,9 @@ fn generate(shared: &Shared, prompt: Vec<usize>, limit: usize, sampling: Samplin
         })
         .is_err()
     {
-        return Vec::new();
+        return Err(());
     }
-    answer.recv().unwrap_or_default()
+    answer.recv().map_err(|_| ())
 }
 
 /// Ask the worker for `limit` tokens and hand them on as they arrive.
@@ -237,18 +245,18 @@ fn stream(
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
-) -> Result<ReceiverStream<usize>, ()> {
-    let (tokens, answer) = tokio::sync::mpsc::channel(64);
+) -> Result<UnboundedReceiverStream<usize>, ()> {
+    let (tokens, answer) = tokio::sync::mpsc::unbounded_channel();
     shared
         .jobs
-        .send(Job {
+        .try_send(Job {
             prompt,
             limit,
             sampling,
             answer: Answer::Stream(tokens),
         })
         .map_err(|_| ())?;
-    Ok(ReceiverStream::new(answer))
+    Ok(UnboundedReceiverStream::new(answer))
 }
 
 /// One token as a chat chunk, which is the shape a streaming client appends.
@@ -302,7 +310,9 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         );
         return Sse::new(body).into_response();
     }
-    let answered = generate(&shared, ids.clone(), limit, sampling);
+    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling) else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
+    };
     let text = shared.tokenizer.decode(&answered);
     Json(json!({
         "id": "chatcmpl-lichen",
@@ -359,7 +369,9 @@ async fn complete(
         );
         return Sse::new(body).into_response();
     }
-    let answered = generate(&shared, ids.clone(), limit, sampling);
+    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling) else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
+    };
     let text = shared.tokenizer.decode(&answered);
     Json(json!({
         "id": "cmpl-lichen",
@@ -376,7 +388,7 @@ fn main() {
         .nth(1)
         .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
-    let (jobs, queue) = mpsc::channel();
+    let (jobs, queue) = mpsc::sync_channel(QUEUE);
     let (ready, started) = mpsc::channel();
     std::thread::spawn(move || {
         let session = match Session::open() {
