@@ -1,8 +1,9 @@
 # A native link library: a Rust generic behind a lichen generic
 
-> Status: **proposed — ruled by the maintainer; P0-a and P0-c are measured.**
+> Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c and the end-to-end
+> proof are measured.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
-> through a `link` directive); P0-b is the next step.
+> through a `link` directive); §10 records the proof and the defect it found.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -343,8 +344,20 @@ The maintainer decided, in this session:
   manifest string round-tripped. The dylib also produced an import library, so a
   Rust consumer can link it dynamically. This is the reading that says ruling 2 is
   viable on this toolchain.
-- **P0-b — the `External` operator: next.** One core variant plus a runtime table,
-  and a `$name` op that lowers to it and runs through `OperatorExt::run`.
+- **P0-b — the `External` operator: done.** One core variant
+  (`LowOperator::External { library, instance }`), a runtime table
+  (`Module::install_external` plus a process-wide table, because a loaded library
+  is process-wide and the definition pass runs before a module is handed back),
+  the codec, and the low-type arm. Measured in-process
+  (`crates/lichen-lowlevel/tests/basic/external.rs`): the entry is called with the
+  operand's value and the module, `7 + 1` comes back as `8`, and a missing entry
+  is a note plus an undecided node, never a panic.
+- **P2 — the end-to-end proof: reached, with one defect (§10).** A generator wrote
+  a Rust crate from `[(Float, f32), (Int, usize)]`, built it as a `dylib`, loaded
+  it, and the lichen program `p.sample Float 1.5` answered `2.5: Float` and
+  `p.sample Int 3` answered `4: Int`; `p.sample string "a"` was refused by the
+  wrapper's refinement. The same run is **order-dependent**, and that is §10's
+  finding.
 - **P0-c — the lichen surface: measured, it works** (§5).
 - **P1 — the recorder.** The whole-program scan (§6) over a real vbd-shaped
   wrapper: the used (entry, kind) set.
@@ -364,3 +377,48 @@ Not decided yet:
   or a cache entry the builder reads.
 - **Whether the same source is also built as an rlib**, for Rust consumers that
   want static linking instead of the dylib.
+
+## 10. The end-to-end proof, and the defect it found
+
+The proof (a scratch workspace under `target/link-e2e`, not in the tree) is the
+whole chain in one run:
+
+1. the generator writes `gen/src/lib.rs` from the declared set — a generic
+   `sample_impl<T>` plus one `#[unsafe(no_mangle)] extern "C"` **entry per
+   family**, whose match arms are the monomorphizations;
+2. `cargo build --release -p gen` builds it as a `dylib`;
+3. the host `libloading`s it and installs the entry in the process-wide table;
+4. the same declaration emits the lichen wrapper
+   (`sample = (t ! link_kind) => (x : t) => { r = $link_sample x; r : t; r }`);
+5. the program runs: `p.sample Float 1.5` → `2.5: Float`, `p.sample Int 3` →
+   `4: Int`, `p.sample string "a"` → refused by the refinement.
+
+Two design answers the proof settled, and both are **refinements of the ruling**:
+
+- **`External { library, instance }` names a family, not a monomorphization.** The
+  native op's `build` cannot see the type argument (§5's fourth reading), and the
+  type value at run time is an implementation detail of the wrapper. What the
+  library dispatches on is the **operand's own representation** — `LowValue::Float`
+  versus `LowValue::USize` — which is one match inside the generated crate. The
+  monomorphizations live behind that match, which is exactly where source
+  generation puts them, and the lichen side never names them.
+- **The entry table is process-wide.** The definition pass evaluates the program
+  before any module is handed to the caller, so a per-module table installed after
+  the build is too late. `Module::install_external` still overrides per module;
+  the process-wide table is the loader's path.
+
+**The defect.** With a fresh store per program, the same binary run repeatedly
+answers correctly on some runs and `none` on others. The failing cases call the op
+node `NodeId(64v1)`, whose operand — the frozen wrapper's parameter value cell —
+is **undecided**; the working cases call `NodeId(128v1)`, whose operand the call's
+unify did write. The in-process probe is deterministic (7 → 8), so the operator is
+not the source. The hypothesis the readings support is that the frozen apply mints
+the parameter's value clone more than once, and the body's operand edge does not
+reach the cell the instantiation writes; *which* record it reaches varies between
+processes, which is what makes the failure intermittent rather than constant.
+
+That is the next work item, and it is a **pre-existing engine defect** this proof
+surfaces rather than causes. Two candidate fixes, in order of preference: one remap
+for the whole instantiation (the signature clone seeds it and the body clone joins
+it), or a first-class multi-argument operand on the native-op boundary that carries
+the apply's own argument nodes instead of a value snapshot.
