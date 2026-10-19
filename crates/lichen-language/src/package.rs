@@ -402,6 +402,14 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         source
     }
 
+    /// The lichen source of the library `id` names, when it is linked.
+    pub fn linked_source_of(&self, id: u32) -> Option<&str> {
+        self.linked
+            .iter()
+            .find(|(_, known, _)| *known == id)
+            .map(|(_, _, library)| library.source())
+    }
+
     /// The ops every linked library supplies, in load order.
     pub fn linked_ops(&self) -> NativeOps<P>
     where

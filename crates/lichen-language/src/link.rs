@@ -111,6 +111,42 @@ impl Manifest {
         })
     }
 
+    /// A manifest from its parts: what a generator writes and [`Self::parse`]
+    /// reads back.
+    pub fn new(build: impl Into<String>, families: Vec<Family>, source: impl Into<String>) -> Self {
+        Self {
+            build: build.into(),
+            families,
+            source: source.into(),
+        }
+    }
+
+    /// The manifest's text.
+    ///
+    /// # Invariant
+    /// `render` followed by `parse` is the identity: the loader has one writer
+    /// and one reader, so a generated library and its loader cannot disagree.
+    pub fn render(&self) -> String {
+        let mut text = String::with_capacity(self.source.len() + 64);
+        text.push_str(MANIFEST_VERSION);
+        text.push('\n');
+        text.push_str("build ");
+        text.push_str(&self.build);
+        text.push('\n');
+        for family in &self.families {
+            text.push_str("family ");
+            text.push_str(&family.name);
+            text.push(' ');
+            text.push_str(&family.instance.to_string());
+            text.push(' ');
+            text.push_str(&family.symbol);
+            text.push('\n');
+        }
+        text.push_str("source\n");
+        text.push_str(&self.source);
+        text
+    }
+
     /// The build tag the library was built with.
     pub fn build(&self) -> &str {
         &self.build

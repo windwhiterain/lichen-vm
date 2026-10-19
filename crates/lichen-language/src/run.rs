@@ -205,9 +205,10 @@ where
     if !diags.is_empty() {
         return Err(diags);
     }
-    // A linked library's wrapper is source: the spliced text compiles, so the
-    // program's positions shift by the prefix.
+    // A linked wrapper is source: the spliced text compiles, so a program
+    // position is mapped back to the source afterwards.
     let spliced;
+    let mut splice_map = None;
     let (code, code_base, line_starts) = if preprocessed.links.is_empty() {
         (
             preprocessed.code,
@@ -215,15 +216,40 @@ where
             crate::lex::line_starts(source),
         )
     } else {
+        let mut text = String::new();
+        let mut prefix_lines = 0u32;
+        let mut regions: Vec<(u32, u32, crate::lex::Span)> = Vec::new();
+        let mut loaded: Vec<u32> = Vec::new();
         for link in &preprocessed.links {
             let path = resolve_link_path(base, &link.path);
-            if let Err(message) = store.link(&path) {
-                return Err(vec![Diag::from_preprocess(PreprocessDiag::new(
-                    link.span, message,
-                ))]);
+            let id = match store.link(&path) {
+                Ok(id) => id,
+                Err(message) => {
+                    return Err(vec![Diag::from_preprocess(PreprocessDiag::new(
+                        link.span, message,
+                    ))]);
+                }
+            };
+            if loaded.contains(&id) {
+                continue;
             }
+            loaded.push(id);
+            let library = store.linked_source_of(id).expect("just linked");
+            let start = prefix_lines;
+            text.push_str(library);
+            if !library.ends_with('\n') {
+                text.push('\n');
+            }
+            prefix_lines = text.matches('\n').count() as u32;
+            regions.push((start, prefix_lines, link.span));
         }
-        let mut text = store.linked_source();
+        let code_line =
+            crate::lex::line_col(&crate::lex::line_starts(source), preprocessed.code_base).0;
+        splice_map = Some(SpliceMap {
+            prefix_lines,
+            regions,
+            code_line,
+        });
         text.push_str(preprocessed.code);
         spliced = text;
         (spliced.as_str(), 0, crate::lex::line_starts(&spliced))
@@ -233,7 +259,7 @@ where
     } else {
         store.linked_ops()
     };
-    let report = crate::compile_with_imports_at::<P>(
+    let mut report = crate::compile_with_imports_at::<P>(
         code,
         &preprocessed.imports,
         Some(store.registry()),
@@ -241,6 +267,9 @@ where
         &line_starts,
         ops,
     );
+    if let Some(map) = splice_map {
+        reposition(&mut report.diagnostics, &map);
+    }
     if !report.ok() {
         return Err(report.diagnostics);
     }
@@ -266,4 +295,40 @@ fn resolve_link_path(base: Option<&Path>, path: &str) -> PathBuf {
         })
         .unwrap_or_else(|| PathBuf::from("."));
     base_dir.join(path)
+}
+
+/// How a spliced compile maps back to the source the user wrote.
+struct SpliceMap {
+    /// How many lines the linked sources add before the program.
+    prefix_lines: u32,
+    /// Each linked source's line range in the spliced text, with the directive
+    /// it came from.
+    regions: Vec<(u32, u32, crate::lex::Span)>,
+    /// The original line the program's own text starts on.
+    code_line: u32,
+}
+
+/// Map a spliced diagnostic back to the user's source.
+///
+/// # Invariant
+/// A diagnostic grounded in another package (`file` set) keeps its own
+/// coordinates; only positions in the spliced text move.
+fn reposition<P: lichen_lowlevel::Program>(diagnostics: &mut [Diag<P>], map: &SpliceMap) {
+    for diag in diagnostics {
+        if diag.file.is_some() {
+            continue;
+        }
+        let Some((line, column)) = diag.span else {
+            continue;
+        };
+        if line > map.prefix_lines {
+            diag.span = Some((map.code_line + line - map.prefix_lines - 1, column));
+        } else if let Some((_, _, span)) = map
+            .regions
+            .iter()
+            .find(|(start, end, _)| line > *start && line <= *end)
+        {
+            diag.span = Some(*span);
+        }
+    }
 }

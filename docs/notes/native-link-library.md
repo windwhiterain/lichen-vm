@@ -1,11 +1,12 @@
 # A native link library: a Rust generic behind a lichen generic
 
 > Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c, the end-to-end
-> proof, the loader, the `link` directive and the recorder are measured.**
+> proof, the loader, the `link` directive, the recorder and the position map
+> are measured.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
 > through a `link` directive); §10 records the proof and the defect it found,
 > §11 the loader and the operand shape it settles, §12 the directive, §13 the
-> recorder.
+> recorder, §14 the manifest writer and the position map.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -374,9 +375,12 @@ The maintainer decided, in this session:
   process-wide table, hands the compiler one `External`-emitting op per family,
   and splices the source in front of the program so the wrapper compiles in the
   program's own module. §11 is the measurement and the operand-shape finding.
-- **P3 — positions and the CLI/LSP paths: next.** The splice shifts a program's
-  diagnostics by the wrapper prefix, so a position map comes first; then the
-  CLI and the LSP load what their blocks link.
+- **P3 — positions: done** (§14). `SpliceMap` maps a spliced diagnostic back to
+  the file: a program position by the prefix count, a wrapper position to its
+  `link` directive.
+- **P3 — the LSP path: next.** The CLI already runs through `evaluate_raw_reporting`,
+  so a `link` in its block works there; the language server still compiles
+  without the linked sources.
 
 Decided, by the P3 implementation:
 
@@ -545,3 +549,25 @@ becomes the wrapper's own `set(…)`, so a kind the program did not record is a
 The generator that turns `Vec<Used>` into Rust source is still the proof's host
 program (it writes the arms and the manifest); it is a build tool, not a
 compiler function, and the recorder is the part the compiler owns.
+
+## 14. The writer, and a program's own positions
+
+Two loose ends the loader left are closed:
+
+- **The manifest has one writer and one reader.** `Manifest::render` writes the
+  version line, `build`, one `family` line per family, `source`, and the source
+  verbatim; `Manifest::parse` reads exactly that back (`parse ∘ render` is the
+  identity). The proof's generator now calls `Manifest::new(…) .render()` and
+  embeds the text, so a generated library and its loader cannot disagree.
+- **A spliced diagnostic names the user's source.** `SpliceMap` records the
+  prefix's line count, each linked source's line range with the directive it came
+  from, and the original line the program starts on: a program position moves
+  back by the prefix, a wrapper position maps to its `link` directive, and a
+  diagnostic grounded in another package keeps its own coordinates.
+
+Measured:
+
+- `sample Float 1.5` → `2.5: Float`, through a manifest the generator rendered;
+- a two-line program whose second line is `sample Float "a"` reports
+  `Some((3, 14))` — `expected Float, found string` — which is line 3 of the file
+  (the second code line), not the fifth line of the spliced text.
