@@ -877,26 +877,80 @@ where
             return Err(std::mem::take(&mut diags));
         }
 
-        // The artifact identity: the source hash, then each dependency's own.
+        // A package's `link` binds dynamic libraries: splice their wrappers as
+        // the root does (docs/notes/package-graph.md §1).
+        let spliced;
+        let mut linked_paths: Vec<std::path::PathBuf> = Vec::new();
+        let (code, code_base, line_starts, ops) = if preprocessed.links.is_empty() {
+            (
+                preprocessed.code,
+                preprocessed.code_base,
+                crate::lex::line_starts(&source),
+                lichen_highlevel::no_native_ops(),
+            )
+        } else {
+            let mut text = String::new();
+            let mut loaded: Vec<u32> = Vec::new();
+            for link in &preprocessed.links {
+                let path = crate::link::resolve_path(Some(canonical), &link.path);
+                let id = match self.link(&path) {
+                    Ok(id) => id,
+                    Err(message) => {
+                        return Err(vec![Diag::from_preprocess(PreprocessDiag::new(
+                            link.span, message,
+                        ))]);
+                    }
+                };
+                if loaded.contains(&id) {
+                    continue;
+                }
+                loaded.push(id);
+                linked_paths.push(path);
+                let library = self.linked_library(id).expect("just linked");
+                text.push_str(library.source());
+                if !library.source().ends_with('\n') {
+                    text.push('\n');
+                }
+            }
+            text.push_str(preprocessed.code);
+            spliced = text;
+            (
+                spliced.as_str(),
+                0,
+                crate::lex::line_starts(&spliced),
+                self.linked_ops(),
+            )
+        };
+
+        // The artifact identity: the source plus the linked libraries' bytes.
         let deps: Vec<(String, ModuleKey)> = preprocessed
             .imports
             .iter()
             .map(|import| (self.dependency_file_id(&import.path), import.export.module))
             .collect();
-        let source_hash = persist::sha256(source.as_bytes());
+        let source_hash = if linked_paths.is_empty() {
+            persist::sha256(source.as_bytes())
+        } else {
+            let mut bytes = source.as_bytes().to_vec();
+            for path in &linked_paths {
+                if let Ok(library) = std::fs::read(path) {
+                    bytes.extend_from_slice(&library);
+                }
+            }
+            persist::sha256(&bytes)
+        };
         let hash = self.artifact_identity(source_hash, &deps);
         // A file ID is compiled once and overwritten: its key is stable.
         let (key, _is_new) = self.alloc_key(&file_id);
 
         // Compile against the shared registry so the import refs resolve in place.
-        let line_starts = crate::lex::line_starts(&source);
         let report = crate::compile_with_imports_at::<P>(
-            preprocessed.code,
+            code,
             &preprocessed.imports,
             Some(self.registry()),
-            preprocessed.code_base,
+            code_base,
             &line_starts,
-            lichen_highlevel::no_native_ops(),
+            ops,
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(report.diagnostics);
