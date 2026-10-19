@@ -321,8 +321,10 @@ live requests, so a step is still one dispatch a layer, and retiring a request m
 its place while keeping the identifier a caller holds.
 
 What a step costs and what it buys: `batch_generate` over two sequences measured **1.6×–2.2×** against the
-two runs it replaces. The service itself still answers one request at a time — the worker that would group
-its queue onto this primitive, and a sampler per request rather than one per batch, are the next step.
+two runs it replaces, and the service's worker now groups its queue onto `Batched`, up to eight requests a
+step, with a sampler per request rather than one per batch. Two requests sent together — `Hello` and
+`The capital of France is`, four tokens each — were answered in **4 s** rather than the sum of their separate
+runs, the second of them ending `Paris`.
 
 ## Running it
 
