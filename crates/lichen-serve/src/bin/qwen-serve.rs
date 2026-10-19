@@ -7,10 +7,14 @@ use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::Sse;
+use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+use tokio_stream::wrappers::ReceiverStream;
 
 use lichen_serve::{Qwen, Sampling, Session, Tokenizer, Width};
 
@@ -26,7 +30,15 @@ struct Job {
     /// How they are chosen.
     sampling: Sampling,
     /// Where the answer goes.
-    reply: mpsc::Sender<Vec<usize>>,
+    answer: Answer,
+}
+
+/// How a job hands its tokens back.
+enum Answer {
+    /// All of them at the end, which is what a client reading a body waits for.
+    Whole(mpsc::Sender<Vec<usize>>),
+    /// One at a time as they are chosen, which is what a streaming client reads.
+    Stream(tokio::sync::mpsc::Sender<usize>),
 }
 
 /// What the HTTP side shares: the queue in front of the one worker.
@@ -50,11 +62,21 @@ fn worker(session: &Session, jobs: mpsc::Receiver<Job>) {
         return;
     }
     while let Ok(job) = jobs.recv() {
-        let answered = match model.generate_from(&job.prompt, job.limit, job.sampling, |_| {}) {
-            Ok(generated) => generated.tokens[job.prompt.len()..].to_vec(),
-            Err(_) => Vec::new(),
-        };
-        let _ = job.reply.send(answered);
+        match job.answer {
+            Answer::Whole(reply) => {
+                let answered =
+                    match model.generate_from(&job.prompt, job.limit, job.sampling, |_| {}) {
+                        Ok(generated) => generated.tokens[job.prompt.len()..].to_vec(),
+                        Err(_) => Vec::new(),
+                    };
+                let _ = reply.send(answered);
+            }
+            Answer::Stream(tokens) => {
+                let _ = model.generate_from(&job.prompt, job.limit, job.sampling, |token| {
+                    let _ = tokens.blocking_send(token);
+                });
+            }
+        }
     }
 }
 
@@ -75,6 +97,8 @@ struct ChatRequest {
     temperature: Option<f32>,
     #[serde(default)]
     top_k: Option<usize>,
+    #[serde(default)]
+    stream: bool,
 }
 
 /// A completion request's body.
@@ -87,6 +111,8 @@ struct CompletionRequest {
     temperature: Option<f32>,
     #[serde(default)]
     top_k: Option<usize>,
+    #[serde(default)]
+    stream: bool,
 }
 
 /// The prompt a chat request becomes, in the template the checkpoint was tuned on.
@@ -140,13 +166,50 @@ fn generate(shared: &Shared, prompt: Vec<usize>, limit: usize, sampling: Samplin
             prompt,
             limit,
             sampling,
-            reply,
+            answer: Answer::Whole(reply),
         })
         .is_err()
     {
         return Vec::new();
     }
     answer.recv().unwrap_or_default()
+}
+
+/// Ask the worker for `limit` tokens and hand them on as they arrive.
+///
+/// # Invariant
+/// The stream ends when the worker drops its sender, which is when the generation ends: a client that reads
+/// to the end has read every token the worker chose, and the `[DONE]` the protocol wants is appended after
+/// the last of them rather than sent through the queue.
+fn stream(
+    shared: &Shared,
+    prompt: Vec<usize>,
+    limit: usize,
+    sampling: Sampling,
+) -> Result<ReceiverStream<usize>, ()> {
+    let (tokens, answer) = tokio::sync::mpsc::channel(64);
+    shared
+        .jobs
+        .send(Job {
+            prompt,
+            limit,
+            sampling,
+            answer: Answer::Stream(tokens),
+        })
+        .map_err(|_| ())?;
+    Ok(ReceiverStream::new(answer))
+}
+
+/// One token as a chat chunk, which is the shape a streaming client appends.
+fn chat_chunk(token: &usize, tokenizer: &Tokenizer) -> String {
+    let text = tokenizer.decode(std::slice::from_ref(token));
+    json!({
+        "id": "chatcmpl-lichen",
+        "object": "chat.completion.chunk",
+        "model": MODEL,
+        "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": null }],
+    })
+    .to_string()
 }
 
 async fn models() -> Json<Value> {
@@ -168,6 +231,24 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         7,
     );
     let prompt = chat_prompt(&request.messages);
+    if request.stream {
+        let ids = shared.tokenizer.encode(&prompt);
+        if ids.is_empty() {
+            return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing");
+        }
+        let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
+            return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
+        };
+        let tokenizer = Arc::clone(&shared.tokenizer);
+        let mapped = futures_util::StreamExt::map(tokens, move |token| {
+            Ok::<_, std::convert::Infallible>(Event::default().data(chat_chunk(&token, &tokenizer)))
+        });
+        let body = futures_util::StreamExt::chain(
+            mapped,
+            futures_util::stream::once(async { Ok(Event::default().data("[DONE]")) }),
+        );
+        return Sse::new(body).into_response();
+    }
     match shared.tokenizer.encode(&prompt) {
         ids if ids.is_empty() => refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing"),
         ids => {
@@ -202,6 +283,31 @@ async fn complete(
     let ids = shared.tokenizer.encode(&request.prompt);
     if ids.is_empty() {
         return refuse(StatusCode::BAD_REQUEST, "the prompt encodes to nothing");
+    }
+    if request.stream {
+        let Ok(tokens) = stream(&shared, ids, limit, sampling) else {
+            return refuse(StatusCode::SERVICE_UNAVAILABLE, "the worker is gone");
+        };
+        let tokenizer = Arc::clone(&shared.tokenizer);
+        let mapped = futures_util::StreamExt::map(tokens, move |token| {
+            let text = tokenizer.decode(std::slice::from_ref(&token));
+            Ok::<_, std::convert::Infallible>(
+                Event::default().data(
+                    json!({
+                        "id": "cmpl-lichen",
+                        "object": "text_completion",
+                        "model": MODEL,
+                        "choices": [{ "index": 0, "text": text, "finish_reason": null }],
+                    })
+                    .to_string(),
+                ),
+            )
+        });
+        let body = futures_util::StreamExt::chain(
+            mapped,
+            futures_util::stream::once(async { Ok(Event::default().data("[DONE]")) }),
+        );
+        return Sse::new(body).into_response();
     }
     let answered = generate(&shared, ids.clone(), limit, sampling);
     let text = shared.tokenizer.decode(&answered);
