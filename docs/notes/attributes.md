@@ -179,12 +179,15 @@ binds `warp = 32` (the backend's `SUBGROUP_WIDTH`), so a GPU program writes
 `expected 32, found 6`. Nothing in the runtime reads `warp` yet; it is the width an
 annotation may name.
 
-**This is not the paper's `requires(thread[32])`.** The reference document types `wmma`
-with a *scope* requirement — the 32 lanes participate in one operation — while a
-fragment's data is lane-varying inside the group. `Perspective` states value
-uniformity, so the check above is the uniform-load/broadcast shape; a warp-level MMA
-operand needs the scope perspective this codebase does not have yet
-([gpu-algorithm-roadmap](gpu-algorithm-roadmap.md) §4.2, §7).
+**This is the register half of what the paper's `requires(thread[32])` protects.** The
+reference document types `wmma` with a *scope* requirement — the 32 lanes participate in
+one operation — while a fragment's data is lane-varying inside the group. That
+participation is the *dispatch's* on this backend (64-lane workgroups, a 32-lane
+subgroup), so the scope half is a target invariant rather than a program annotation; what
+the value lattice states and checks is the register half — the operand the whole group
+must agree on (a uniform load, a tile base) is `# 32`, and a fragment's lane layout is
+the value's own perspective. The author's ruling and the recorded shape are in
+[perspective-scope-and-mma](perspective-scope-and-mma.md) §3, §6.
 
 It is worth recording a conclusion that was reached the wrong way first, because the
 wrong version is the tempting one. The obvious claim is that a GPU backend *needs*
