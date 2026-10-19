@@ -599,6 +599,23 @@ opening left the model thinking, so its reasoning arrived as the reply. After bo
 today? 😊'`, and `crates/lichen-serve/tests/chat_mark.rs` encodes a marker inside a template rather than
 alone.
 
+## How many clients the service is worth
+
+Fifty requests of four tokens at each of three concurrencies, measured by the same bucket subtraction:
+
+| concurrency | fifty requests in | p50 | p95 | tokens a second | refused |
+|---|---|---|---|---|---|
+| 8 | 27 s | 4.19 s | 4.19 s | 7.41 | 0 |
+| 16 | 27 s | 8.39 s | 9.98 s | 7.41 | 0 |
+| 32 | 27 s | 14.11 s | 16.78 s | 7.41 | 0 |
+
+The throughput column is the finding: it does not move. The batch holds eight, so the ninth request waits
+and every later one waits behind it, and the queue turns extra concurrency into latency at exactly the rate
+the first eight were being served — p50 **doubles** from eight to sixteen and is **three and a half times**
+its first value at thirty-two. So the service is worth **eight clients** and further ones buy queueing
+rather than throughput, and the number a deployment should scale on is `lichen_last_step_nanoseconds`
+against the queue depth rather than the client count.
+
 ## The soak, run again on a service that answers words
 
 The first soak measured memory on a binary that was answering nonsense, which is enough to say nothing
