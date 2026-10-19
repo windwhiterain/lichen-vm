@@ -18,7 +18,7 @@
 > §3.
 > Companions: [compiler-plugin](compiler-plugin.md),
 > [plugin-taxonomy](plugin-taxonomy.md), [packages](packages.md),
-> [floating-point](floating-point.md) §4.2.
+> [floating-point](floating-point.md) §4.2. §18 is the first real user.
 
 ## 1. The question
 
@@ -477,7 +477,6 @@ The finding that shaped the op, and its resolution:
 The single-operand ABI the loader adopted while the defect was open is gone; the
 family entry takes the argument array, and no argument shape is privileged.
 
-
 ## 12. The `link` directive
 
 A program now binds a library in its own block:
@@ -705,3 +704,53 @@ after:   TRACE static apply 0
 
 The single-operand ABI the loader adopted in §11 was a workaround for this
 defect, not a requirement.
+
+## 18. The first real user: a plant scene over six cached stages
+
+**Measured.** `link` now carries a library that is neither a scratch proof nor a
+placeholder: a whole alpine-oak scene, built by six `@cache` cells in a `.lichen`
+program, each cell one `extern "C"` entry family in a generated `dylib`.
+
+**What it is.** The language's value trait is `Debug + Copy + PartialEq`, so a
+lichen value cannot hold a handle of any kind. Every value that crosses the
+boundary is therefore a `usize`, and a process-global slab inside the library
+carries the object — which makes interning a **correctness** requirement rather
+than an optimisation, because a stage's id is the only name the next stage is
+given. A stage key is `(family, parent ids, parameter bits)`, and the same key
+answers the same id for the process's life.
+
+**What it measured.** A presentation edit (the key light's position) re-runs the
+document stage alone and is **6.09×** faster than a cold build of the same
+source; a geometry dial (`stations: 8 → 9`, or a leaf field's density) is
+**3.15×** and **2.91×**; the crown envelope is **1.07×** and the seed **1.00×**,
+which is the point — neither has anything downstream that could be reused. All
+five session documents fingerprint identically to the cold compile's, and the
+fingerprints are unchanged across a rebuild.
+
+**What it settled.** The `$` call takes all of a family's arguments at once and
+the entry receives the whole argument array, but the **wrapper curries them**:
+the language writes a parameter's type in the parameter position and one
+parameter at a time, so `(tree : Int, envelope : Float) => …` does not parse.
+
+**Where it lives.** The dependency arrow points from the application to lichen,
+not the other way: a lichen-vm checkout builds and tests with no application
+beside it, and the application names lichen by a sibling path. Code
+`../Whiting/crates/lichen-stages`, `../Whiting/crates/lichen-link`,
+`../Whiting/crates/lichen`; program
+`../Whiting/crates/lichen/examples/alpine_oak.lichen`; the probe
+`../Whiting/crates/lichen/examples/incremental_probe.rs` with its raw output
+committed at `../Whiting/crates/lichen/measurements.txt`. The note is
+`../Whiting/.agents/proposals/plant-pipeline-into-lichen.md`.
+
+**The one change this repository keeps** is §15's `render`: every generated
+entry carries `#[rustfmt::skip]`, so a generated library is a fixed point of
+`cargo fmt --all` and regenerating one does not leave the tree unformatted.
+
+**And what the first user measured about the gate.** `build_tag()` is now
+`git describe`, not a constant, so a generated library's committed source is
+stale the moment `lichen-language` is rebuilt, and both sides must be built from
+one target directory and one profile. Three runs of the same five edits — before
+the tag changed, after it changed, and after the vertical moved — produced
+identical documents, so the gate refuses a foreign library without gating the
+document. The three consequences, and the unbuilt `build.rs` that would remove
+them, are in the note.
