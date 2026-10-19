@@ -306,6 +306,9 @@ struct ChatRequest {
     temperature: Option<f32>,
     #[serde(default)]
     top_k: Option<usize>,
+    /// The nucleus a request asks for.
+    #[serde(default)]
+    top_p: Option<f32>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -323,6 +326,9 @@ struct CompletionRequest {
     temperature: Option<f32>,
     #[serde(default)]
     top_k: Option<usize>,
+    /// The nucleus a request asks for.
+    #[serde(default)]
+    top_p: Option<f32>,
     #[serde(default)]
     stream: bool,
     /// Where the answer stops, which a client may name.
@@ -488,7 +494,8 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         request.temperature.unwrap_or(0.0),
         request.top_k.unwrap_or(0),
         7,
-    );
+    )
+    .with_top_p(request.top_p.unwrap_or(1.0));
     let prompt = chat_prompt(&request.messages);
     let encoded = shared.tokenizer.encode(&prompt);
     let ids = match encoded {
@@ -545,7 +552,8 @@ async fn complete(
         request.temperature.unwrap_or(0.0),
         request.top_k.unwrap_or(0),
         7,
-    );
+    )
+    .with_top_p(request.top_p.unwrap_or(1.0));
     let encoded = shared.tokenizer.encode(&request.prompt);
     let ids = match encoded {
         Ok(ids) if !ids.is_empty() => ids,

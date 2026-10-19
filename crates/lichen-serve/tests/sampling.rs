@@ -42,3 +42,22 @@ fn a_top_one_sampler_takes_the_largest_and_a_seed_repeats() {
     };
     assert_eq!(first, second, "the same seed answers the same tokens");
 }
+
+/// A nucleus narrower than the largest candidate's own share still leaves that candidate.
+///
+/// # Invariant
+/// The kept run is never empty: a `top_p` of almost nothing would otherwise truncate to no candidate at all,
+/// and every draw would then take the first one anyway, but through a weight of zero rather than a choice.
+#[test]
+fn a_narrow_nucleus_is_the_largest_candidate() {
+    let logits = [0.1_f32, 2.5, -1.0, 0.4];
+    let sampling = Sampling::sampled(0.7, 0, 42).with_top_p(0.001);
+    let mut draw = randomness(sampling.seed);
+    for _ in 0..16 {
+        assert_eq!(
+            choose(&logits, &sampling, &mut draw),
+            1,
+            "a nucleus of almost nothing is the largest candidate"
+        );
+    }
+}

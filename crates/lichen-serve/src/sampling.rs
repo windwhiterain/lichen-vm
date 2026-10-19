@@ -11,6 +11,8 @@ pub struct Sampling {
     pub temperature: f32,
     /// How many of the largest logits are kept, or zero for every one of them.
     pub top_k: usize,
+    /// The smallest set of the largest candidates whose weight reaches this, or one for all of them.
+    pub top_p: f32,
     /// The seed, so a run at a temperature can be asked again and answer the same token.
     pub seed: u64,
 }
@@ -21,6 +23,7 @@ impl Sampling {
         Sampling {
             temperature: 0.0,
             top_k: 0,
+            top_p: 1.0,
             seed: 0,
         }
     }
@@ -30,7 +33,20 @@ impl Sampling {
         Sampling {
             temperature,
             top_k,
+            top_p: 1.0,
             seed,
+        }
+    }
+
+    /// The same sampling, keeping the smallest set of candidates whose weight reaches `top_p`.
+    ///
+    /// # Invariant
+    /// One keeps every candidate, so a request that states nothing samples what it also sampled before:
+    /// the nucleus is a narrowing of the same walk and never a different one.
+    pub fn with_top_p(self, top_p: f32) -> Self {
+        Sampling {
+            top_p: top_p.clamp(0.0, 1.0),
+            ..self
         }
     }
 
@@ -77,10 +93,25 @@ pub fn choose(logits: &[f32], sampling: &Sampling, draw: &mut impl FnMut() -> f3
         order.truncate(sampling.top_k.min(order.len()));
     }
     let largest = logits[order[0]] as f64;
-    let weights: Vec<f64> = order
+    let mut weights: Vec<f64> = order
         .iter()
         .map(|index| ((logits[*index] as f64 - largest) / temperature).exp())
         .collect();
+    // The nucleus keeps the smallest run holding this much weight, and never fewer than one.
+    if sampling.top_p < 1.0 {
+        let total: f64 = weights.iter().sum();
+        let mut held = 0.0;
+        let mut kept = 0;
+        for weight in &weights {
+            held += weight;
+            kept += 1;
+            if held / total >= f64::from(sampling.top_p) {
+                break;
+            }
+        }
+        order.truncate(kept.max(1));
+        weights.truncate(kept.max(1));
+    }
     let total: f64 = weights.iter().sum();
     let target = draw() as f64 * total;
     let mut running = 0.0;
