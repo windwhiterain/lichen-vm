@@ -311,7 +311,7 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
         "the first publish is the document's, got {document}"
     );
     assert!(
-        !document.contains("assertion failed"),
+        !document.contains("the refinement's predicate did not answer 1"),
         "the built-in's failure must not be published against the document: {document}"
     );
 
@@ -322,7 +322,7 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
         "the built-in's failure is published against its own file, got {builtin}"
     );
     assert!(
-        builtin.contains("assertion failed"),
+        builtin.contains("the refinement's predicate did not answer 1"),
         "the failure inside the built-in should be reported there, got {builtin}"
     );
 

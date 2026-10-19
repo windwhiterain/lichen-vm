@@ -210,11 +210,18 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         })
         .expect("hover on `launch`");
     let cells = type_variables(&hover);
-    assert_eq!(cells.len(), 10, "launch names five cells twice: {hover}");
-    for (index, cell) in cells.iter().enumerate() {
-        assert!(
-            !cells[..index].contains(cell),
-            "launch's cells are distinct, `{cell}` repeats: {hover}"
-        );
-    }
+    // The kernel struct's cells join the wrapper's, and each codomain repeats by name.
+    assert_eq!(
+        cells.len(),
+        24,
+        "launch names the kernel struct's cells in both halves: {hover}"
+    );
+    let mut distinct = cells.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        16,
+        "the two halves name their own cells: {hover}"
+    );
 }
