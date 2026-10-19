@@ -1,8 +1,10 @@
 # The array attribute view: sparse storage, full-width reading
 
-Status: **stage 1 landed** (`df24812c`, `dev`): the storage, the registry, the
-default and the persistence. Stages 2–3 (the reader reroute and the unify wiring)
-are not started; stage 3 is where the isomorphism is measured.
+Status: **stages 1–3 landed** (`df24812c`, `58ca01c2`): the storage and registry, the
+checker's layout-carrying builders and readers, the default array, and the unify wiring
+by canonical index. Stage 4 (the `perspective_of` spelling, and the deletion of the
+call-site reference tables it replaces) is **not** landed — its blocker is measured at
+the end of this note.
 
 ## The problem, in the superior's words
 
@@ -114,7 +116,7 @@ Concretely:
   (`type_of`'s shape and `perspective_of`'s must both work; the existing
   requirement tests must keep refusing what they refuse).
 
-## Measured with stage 1
+## Measured with stages 1–3
 
 - `lichen-lowlevel` 164 passed / 0 failed (1 ignored), `lichen-highlevel` 136 / 0,
   `lichen-language --test language` 275 / 0, and the artifact subset 16 / 0; the
@@ -123,7 +125,38 @@ Concretely:
   `Function { … }` literals in `crates/lichen-lowlevel/tests/basic/{assert,gc_safety,recursion,main}.rs`
   named none of the five function-attribute fields. Stage 1 repaired them
   (`None`); that repair is independent of the attribute view.
+- Stages 2–3 changed behaviour only where they were meant to: the two lane-varying
+  refusals (`a_lane_varying_buffer_is_refused`, `a_lane_varying_operand_is_refused`)
+  had *regressed* when the copy paths (`function.rs`'s clone, the static re-homes)
+  rebuilt an array with `.into()` and dropped its layout — every hole then read as a
+  wildcard and the refusal vanished. Preserving the layout in those copies restored
+  them; the compute suite is 252 passed (up from 250) plus the pre-existing
+  `pack_placement` failure, and the artifact version moved to 16 because a stage-1
+  artifact's slots carry no layout.
+- The accessor had to learn the static side: a loaded artifact's layout ids index the
+  *frozen* module's registry, not the live one's.
+
+## Stage 4's measured blocker
+
+The `type_of`-shaped `perspective_of` —
+
+```lichen
+perspective_of = x => {p = _; x # p; p}
+```
+
+— cannot yet replace the call-site references. Minimal reproduction, bare language:
+
+```lichen
+po = x => {p = _; x # p; p}
+f = x => ((0 # 2) # (po x))     // error: expected raw[?a, ?b], found 2
+```
+
+An annotation whose attribute value is a **call** takes the call's term — the apply
+node — as its declared slot, and the deep pass makes that class hold a two-element
+array, so the attribute unify compares an array against the number. `x # p` on an
+unannotated parameter already works (`f = x => {p = _; x # p; p}` answers `?a` and binds
+nothing), so the defect is the annotation-of-a-call path, not the binding.
 
 ## Open questions
 
-Stage 3 is where the verdict above is measured.
+Stage 4 is where the `type_of`-shaped spelling and the verdict above are measured.
