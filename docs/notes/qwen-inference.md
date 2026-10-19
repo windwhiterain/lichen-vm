@@ -581,6 +581,14 @@ column and read by the column-major program, a layer **read from the file** is s
 the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a
 time. A single global address change cannot be right for both, and that is why the first two tries failed.
 
+## The same measurement, after the layout and the batching
+
+The quiet-machine protocol re-run — fifty requests of warm-up discarded, a hundred measured by subtracting the
+histogram's buckets, concurrency eight — now reads **p50 2.49 s, p95 3.53 s, p99 3.53 s**, 200 tokens in
+**32 s**: **6.25 tokens a second** against the 4.76 of the same measurement before the layout changed, a
+**1.31x** that matches the 1.24x the layout was measured at on its own. `admitted` and `finished` both read
+150 and `refused` read 0, so nothing in the queue was lost or turned away.
+
 ## Steady state, which is the number to compare against
 
 The same service, fifty requests of warm-up thrown away and then a hundred measured by subtracting the
