@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use lichen_compute::compute::graph::{RunArgument, RunResult};
 
 use crate::{
-    ATTEND_CACHE_STEP, HIDDEN, MATVEC_STEP, RMS_NORM_STEP, ROPE_STEP, SWIGLU_STEP, ServeRefusal,
-    Session,
+    ATTEND_CACHE_STEP, HIDDEN, MATVEC_BATCH_STEP, RMS_NORM_STEP, ROPE_STEP, SWIGLU_STEP,
+    ServeRefusal, Session,
 };
 
 /// The model's shape, and the flat file's order — the contract with `.model/dump_layers.py`.
@@ -93,6 +93,14 @@ fn halves_to_floats(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// `count` rows of `width` elements each, as a count.
+///
+/// # Invariant
+/// The multiplication is here rather than at each site, so a site cannot multiply the wrong two numbers.
+fn rows(count: i64, width: i64) -> i64 {
+    count * width
+}
+
 /// The cache a layer keeps: one key and one value per position seen.
 #[derive(Default)]
 struct Cache {
@@ -170,7 +178,7 @@ impl<'session> Steps<'session> {
         Ok(Self {
             norm: prepared(RMS_NORM_STEP)?,
             projection: match width {
-                Width::Wide => prepared(MATVEC_STEP)?,
+                Width::Wide => prepared(MATVEC_BATCH_STEP)?,
                 Width::Narrowed => crate::narrowed_projection(session)?,
             },
             rotation: prepared(ROPE_STEP)?,
@@ -219,6 +227,11 @@ impl<'session> Steps<'session> {
         answered(session, &stepped)
     }
 
+    /// The projection of one or more input rows, `per` outputs a row.
+    ///
+    /// # Invariant
+    /// `per` is the outputs one input row produces, so the row an output reads is `output / per`: a single
+    /// input row passes its own output count and every output reads row zero.
     fn projected(
         &self,
         session: &Session,
@@ -226,12 +239,14 @@ impl<'session> Steps<'session> {
         weight: RunArgument,
         rows: i64,
         width: i64,
+        per: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
         let stepped = self
             .projection
             .step(vec![
                 RunArgument::Count(rows),
                 RunArgument::Count(width),
+                RunArgument::Count(per),
                 self.payload(values),
                 weight,
             ])
@@ -256,11 +271,17 @@ impl<'session> Steps<'session> {
         answered(session, &stepped)
     }
 
-    fn mixed(&self, session: &Session, gate: &[f32], up: &[f32]) -> Result<Vec<f32>, QwenRefusal> {
+    fn mixed(
+        &self,
+        session: &Session,
+        gate: &[f32],
+        up: &[f32],
+        count: i64,
+    ) -> Result<Vec<f32>, QwenRefusal> {
         let stepped = self
             .product
             .step(vec![
-                RunArgument::Count(INTERMEDIATE),
+                RunArgument::Count(count),
                 self.payload(gate),
                 self.payload(up),
             ])
@@ -472,6 +493,7 @@ impl<'session> Qwen<'session> {
                 self.head_weight(),
                 VOCABULARY as i64,
                 HIDDEN as i64,
+                VOCABULARY as i64,
             )?;
             let chosen = crate::sampling::choose(&logits, &sampling, &mut draw);
             tokens.push(chosen);
@@ -549,6 +571,7 @@ impl<'session> Qwen<'session> {
                 head,
                 VOCABULARY as i64,
                 HIDDEN as i64,
+                VOCABULARY as i64,
             )?;
             token = crate::sampling::choose(&logits, &sampling, &mut draw);
             tokens.push(token);
@@ -556,6 +579,71 @@ impl<'session> Qwen<'session> {
             on_token(token);
         }
         Ok(Generated { tokens, per_token })
+    }
+
+    /// Generate for several sequences at once, all starting at the same position.
+    ///
+    /// # Invariant
+    /// Every step after the first starts from the row of the token it chose, never from the state that chose
+    /// it: carrying the state forward answers the next position as if the model were its own input. The
+    /// rows share a dispatch wherever the step names no position and no cache, and the batch pays the
+    /// weights once rather than once a sequence.
+    pub fn generate_batch(
+        &self,
+        starts: &[usize],
+        count: usize,
+    ) -> Result<Vec<Vec<usize>>, QwenRefusal> {
+        let sequences = starts.len();
+        if sequences == 0 {
+            return Ok(Vec::new());
+        }
+        let mut caches: Vec<Vec<Cache>> = (0..LAYERS)
+            .map(|_| (0..sequences).map(|_| Cache::default()).collect())
+            .collect();
+        let mut hidden: Vec<f32> = starts
+            .iter()
+            .flat_map(|start| self.embed_row(*start))
+            .collect();
+        let mut tokens: Vec<Vec<usize>> = starts.iter().map(|start| vec![*start]).collect();
+        for position in 0..count {
+            for layer in 0..LAYERS {
+                hidden = self.layer_batch(layer, &hidden, &mut caches[layer], position as i64)?;
+            }
+            let normalised = self.steps.normalised(
+                self.session,
+                &hidden,
+                self.steps.payload(&self.final_norm),
+                sequences as i64,
+                HIDDEN as i64,
+            )?;
+            let logits = self.steps.projected(
+                self.session,
+                &normalised,
+                self.head_weight(),
+                rows(sequences as i64, VOCABULARY as i64),
+                HIDDEN as i64,
+                VOCABULARY as i64,
+            )?;
+            for sequence in 0..sequences {
+                let span = sequence * HIDDEN_SIZE..(sequence + 1) * HIDDEN_SIZE;
+                eprintln!(
+                    "[rows] p={position} row={sequence} hidden {:.4} logits {:.4}",
+                    hidden[span.clone()].iter().sum::<f32>(),
+                    logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY]
+                        .iter()
+                        .sum::<f32>()
+                );
+            }
+            let mut next: Vec<f32> = Vec::with_capacity(sequences * HIDDEN_SIZE);
+            for (sequence, chosen) in tokens.iter_mut().enumerate() {
+                let row = &logits[sequence * VOCABULARY..(sequence + 1) * VOCABULARY];
+                let token = crate::sampling::argmax(row);
+                chosen.push(token);
+                next.extend(self.embed_row(token));
+            }
+            hidden = next;
+        }
+        Ok(tokens)
     }
 
     /// Read every layer's bytes once, split into one shared slice a tensor, and keep them.
@@ -680,10 +768,27 @@ impl<'session> Qwen<'session> {
     fn layer(
         &self,
         layer: usize,
-        mut hidden: Vec<f32>,
+        hidden: Vec<f32>,
         cache: &mut Cache,
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
+        self.layer_batch(layer, &hidden, std::slice::from_mut(cache), position)
+    }
+
+    /// One layer over `caches.len()` sequences, all at `position`.
+    ///
+    /// # Invariant
+    /// A row's steps that do not name a position or a cache are independent, so they carry `n` rows in one
+    /// dispatch; the rotation names one position and the attention one cache, so those loop per sequence.
+    fn layer_batch(
+        &self,
+        layer: usize,
+        hidden: &[f32],
+        caches: &mut [Cache],
+        position: i64,
+    ) -> Result<Vec<f32>, QwenRefusal> {
+        let n = caches.len() as i64;
+        let mut hidden: Vec<f32> = hidden.to_vec();
         let read: Vec<std::sync::Arc<[u8]>>;
         let tensors = match self.width {
             Width::Wide => Tensors::Wide(flat(&format!("layer{layer:02}"))?),
@@ -702,53 +807,76 @@ impl<'session> Qwen<'session> {
             session,
             &hidden,
             self.weight(layer, &tensors, 0, GAIN, HIDDEN_SIZE),
-            1,
+            n,
             HIDDEN as i64,
         )?;
         let key = steps.projected(
             session,
             &normed,
             self.weight(layer, &tensors, 2, K, 1024 * 2048),
-            KEY_HEADS * HEAD,
+            rows(n, KEY_HEADS * HEAD),
             HIDDEN as i64,
+            KEY_HEADS * HEAD,
         )?;
         let key = steps.normalised(
             session,
             &key,
             self.weight(layer, &tensors, 5, K_NORM, 128),
-            KEY_HEADS,
+            rows(n, KEY_HEADS),
             HEAD,
         )?;
-        let key = steps.rotated(session, &key, position)?;
+        let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (KEY_HEADS * HEAD) as usize);
+        for sequence in 0..caches.len() {
+            let span = sequence * (KEY_HEADS * HEAD) as usize
+                ..(sequence + 1) * (KEY_HEADS * HEAD) as usize;
+            rotated.extend(steps.rotated(session, &key[span], position)?);
+        }
+        let key = rotated;
         let value = steps.projected(
             session,
             &normed,
             self.weight(layer, &tensors, 3, V, 1024 * 2048),
-            KEY_HEADS * HEAD,
+            rows(n, KEY_HEADS * HEAD),
             HIDDEN as i64,
+            KEY_HEADS * HEAD,
         )?;
-        cache.keys.extend_from_slice(&key);
-        cache.values.extend_from_slice(&value);
+        for (sequence, cache) in caches.iter_mut().enumerate() {
+            let span = sequence * (KEY_HEADS * HEAD) as usize
+                ..(sequence + 1) * (KEY_HEADS * HEAD) as usize;
+            cache.keys.extend_from_slice(&key[span.clone()]);
+            cache.values.extend_from_slice(&value[span]);
+        }
         let query = steps.projected(
             session,
             &normed,
             self.weight(layer, &tensors, 1, Q, 2048 * 2048),
-            HEADS * HEAD,
+            rows(n, HEADS * HEAD),
             HIDDEN as i64,
+            HEADS * HEAD,
         )?;
         let query = steps.normalised(
             session,
             &query,
             self.weight(layer, &tensors, 4, Q_NORM, 128),
-            HEADS,
+            rows(n, HEADS),
             HEAD,
         )?;
-        let query = steps.rotated(session, &query, position)?;
-        let attended = steps.attended(session, &query, &cache.keys, &cache.values)?;
+        let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (HEADS * HEAD) as usize);
+        for sequence in 0..caches.len() {
+            let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
+            rotated.extend(steps.rotated(session, &query[span], position)?);
+        }
+        let query = rotated;
+        let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
+        for (sequence, cache) in caches.iter().enumerate() {
+            let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
+            attended.extend(steps.attended(session, &query[span], &cache.keys, &cache.values)?);
+        }
         let out = steps.projected(
             session,
             &attended,
             self.weight(layer, &tensors, 6, O, 2048 * 2048),
+            rows(n, HIDDEN as i64),
             HIDDEN as i64,
             HIDDEN as i64,
         )?;
@@ -761,30 +889,33 @@ impl<'session> Qwen<'session> {
             session,
             &hidden,
             self.weight(layer, &tensors, 7, POST, HIDDEN_SIZE),
-            1,
+            n,
             HIDDEN as i64,
         )?;
         let gate = steps.projected(
             session,
             &prepared,
             self.weight(layer, &tensors, 8, GATE, 6144 * 2048),
-            INTERMEDIATE,
+            rows(n, INTERMEDIATE),
             HIDDEN as i64,
+            INTERMEDIATE,
         )?;
         let up = steps.projected(
             session,
             &prepared,
             self.weight(layer, &tensors, 9, UP, 6144 * 2048),
-            INTERMEDIATE,
+            rows(n, INTERMEDIATE),
             HIDDEN as i64,
+            INTERMEDIATE,
         )?;
-        let mixed = steps.mixed(session, &gate, &up)?;
+        let mixed = steps.mixed(session, &gate, &up, rows(n, INTERMEDIATE))?;
         let down = steps.projected(
             session,
             &mixed,
             self.weight(layer, &tensors, 10, DOWN, 2048 * 6144),
-            HIDDEN as i64,
+            rows(n, HIDDEN as i64),
             INTERMEDIATE,
+            HIDDEN as i64,
         )?;
         Ok(hidden
             .iter()

@@ -3,7 +3,7 @@
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::placement_pack::read_placement_pack;
 
-use crate::{MATVEC_STEP, Prepared, QwenRefusal, Session};
+use crate::{MATVEC_BATCH_STEP, Prepared, QwenRefusal, Session};
 
 /// The pack a human writes for `schema`: the class and a stage, which no projection is wide enough for.
 pub fn pack_text(schema: &str) -> String {
@@ -27,18 +27,18 @@ pub fn reported_schema(lines: &[String]) -> Option<String> {
 /// The projection's text with a tail that **runs** the graph, which is what makes the pass report.
 ///
 /// # Invariant
-/// The kernel half is `MATVEC_STEP`'s own text, so the schema the probe reports is the schema the
+/// The kernel half is `MATVEC_BATCH_STEP`'s own text, so the schema the probe reports is the schema the
 /// projection is prepared under: a pack matches on that hash and nothing else.
 fn probe_source() -> String {
     let tail = "\nbuilt\n";
-    let kernel = MATVEC_STEP
+    let kernel = MATVEC_BATCH_STEP
         .strip_suffix(tail)
         .unwrap_or_else(|| panic!("the step's tail is its last line"));
     format!(
         r#"{kernel}
 xs = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{{Float, 4}}) : (compute.Buf _))
 ws = (compute.buffer ([1.0, 0.0, 0.0, 1.0] : array{{Float, 4}}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built (2, 2, xs, ws))
+out = compute.collect (compute.graphrun built (2, 2, 2, xs, ws))
 out
 "#
     )
@@ -46,7 +46,7 @@ out
 
 /// The projection, prepared so a pack states `BFloat16` for its buffers.
 pub fn narrowed_projection(session: &Session) -> Result<Prepared<'_>, QwenRefusal> {
-    narrowed(session, MATVEC_STEP)
+    narrowed(session, MATVEC_BATCH_STEP)
 }
 
 /// Prepare `source` with a pack stating `BFloat16` for the classes its first node reads.
