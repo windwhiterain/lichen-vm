@@ -393,6 +393,15 @@ about **0.4 ms a dispatch**, at 84.9 GB/s of reads when the rows are many, a qua
 is not where the tokens go: a step's 860 ms holds some **340 dispatches**, and at this floor they account for
 about 136 ms. The rest is a per-stage question the next measurement has to ask, stage by stage.
 
+Reading a result back is not it: the same probe fetching each answer adds **0.041 ms** to a dispatch of
+0.4 ms, and at 4096 rows 0.060 ms. So the round trip a stage makes is cheap, and what is left is neither the
+fold, nor the layout, nor the read-back. The next probe therefore belongs **inside** the model rather than
+beside it: `StepCost` already carries the `submissions`, the `fence_waits` and the wall time of each run, so
+one instrumented layer answers whether the 860 ms is dispatch count, fence waiting, or work this probe's
+shapes never reproduced.
+
+
+
 Two paths read two layouts, which is what the attempts finally settled on: a **held** layer is stored by
 column and read by the column-major program, a layer **read from the file** is stored by row and read by
 the row-major one, and the vocabulary head is always the latter because `embed_row` reads it a row at a

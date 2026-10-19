@@ -44,28 +44,45 @@ fn a_projection_costs_what_its_rows_walk() {
         let placed = session
             .place(&weights, ScalarClass::Float)
             .unwrap_or_else(|refusal| panic!("the weights are placed: {refusal}"));
+        let arguments = || {
+            vec![
+                RunArgument::Count(rows as i64),
+                RunArgument::Count(DIM as i64),
+                RunArgument::Count((rows / DIM).max(1) as i64),
+                RunArgument::Buffer {
+                    class: ScalarClass::Float,
+                    data: values.clone(),
+                },
+                RunArgument::Resident(placed),
+            ]
+        };
         let started = Instant::now();
+        let mut answered = Vec::with_capacity(REPEATS);
         for _ in 0..REPEATS {
-            prepared
-                .step(vec![
-                    RunArgument::Count(rows as i64),
-                    RunArgument::Count(DIM as i64),
-                    RunArgument::Count((rows / DIM).max(1) as i64),
-                    RunArgument::Buffer {
-                        class: ScalarClass::Float,
-                        data: values.clone(),
-                    },
-                    RunArgument::Resident(placed),
-                ])
+            let stepped = prepared
+                .step(arguments())
                 .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
+            let [lichen_compute::compute::graph::RunResult::Resident(resident)] =
+                &stepped.results[..]
+            else {
+                panic!("a projection answers with one resident");
+            };
+            answered.push(*resident);
         }
+        let dispatched = started.elapsed().as_secs_f64() / REPEATS as f64;
+        let started = Instant::now();
+        for resident in &answered {
+            let _ = session.fetch(*resident).expect("it answers");
+        }
+        let read_back = started.elapsed().as_secs_f64() / REPEATS as f64;
         let _ = session.release(placed);
-        let each = started.elapsed().as_secs_f64() / REPEATS as f64;
+        let each = dispatched + read_back;
         let bytes = (rows * DIM * 4) as f64;
         println!(
-            "rows {rows:5} time {:.3} ms  per row {:.2} us  bytes/s {:.1} GB/s",
+            "rows {rows:5} dispatch {:.3} ms  read back {:.3} ms  both {:.3} ms  bytes/s {:.1} GB/s",
+            dispatched * 1000.0,
+            read_back * 1000.0,
             each * 1000.0,
-            each * 1e6 / rows as f64,
             bytes / each / 1e9
         );
     }
