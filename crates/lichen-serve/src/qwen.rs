@@ -609,7 +609,8 @@ impl<'session> Qwen<'session> {
         let mut tokens: Vec<Vec<usize>> = starts.iter().map(|start| vec![*start]).collect();
         for position in 0..count {
             for layer in 0..LAYERS {
-                hidden = self.layer_batch(layer, &hidden, &mut caches[layer], position as i64)?;
+                let positions = vec![position as i64; sequences];
+                hidden = self.layer_batch(layer, &hidden, &mut caches[layer], &positions)?;
             }
             let normalised = self.steps.normalised(
                 self.session,
@@ -636,6 +637,23 @@ impl<'session> Qwen<'session> {
             hidden = next;
         }
         Ok(tokens)
+    }
+
+    /// Fill a prompt's cache and hand back the state its first answer is read from.
+    ///
+    /// # Invariant
+    /// The prompt runs through every layer at its own position without producing a token, so the state
+    /// returned is the one the position after the prompt is read at.
+    fn filled(&self, prompt: &[usize]) -> Result<(Vec<Cache>, Vec<f32>, i64), QwenRefusal> {
+        let mut caches: Vec<Cache> = (0..LAYERS).map(|_| Cache::default()).collect();
+        let mut hidden = Vec::new();
+        for (position, token) in prompt.iter().enumerate() {
+            hidden = self.embed_row(*token);
+            for layer in 0..LAYERS {
+                hidden = self.layer(layer, hidden, &mut caches[layer], position as i64)?;
+            }
+        }
+        Ok((caches, hidden, prompt.len() as i64))
     }
 
     /// Read every layer's bytes once, split into one shared slice a tensor, and keep them.
@@ -764,7 +782,7 @@ impl<'session> Qwen<'session> {
         cache: &mut Cache,
         position: i64,
     ) -> Result<Vec<f32>, QwenRefusal> {
-        self.layer_batch(layer, &hidden, std::slice::from_mut(cache), position)
+        self.layer_batch(layer, &hidden, std::slice::from_mut(cache), &[position])
     }
 
     /// One layer over `caches.len()` sequences, all at `position`.
@@ -777,7 +795,7 @@ impl<'session> Qwen<'session> {
         layer: usize,
         hidden: &[f32],
         caches: &mut [Cache],
-        position: i64,
+        positions: &[i64],
     ) -> Result<Vec<f32>, QwenRefusal> {
         let n = caches.len() as i64;
         let mut hidden: Vec<f32> = hidden.to_vec();
@@ -821,7 +839,7 @@ impl<'session> Qwen<'session> {
         for sequence in 0..caches.len() {
             let span = sequence * (KEY_HEADS * HEAD) as usize
                 ..(sequence + 1) * (KEY_HEADS * HEAD) as usize;
-            rotated.extend(steps.rotated(session, &key[span], position)?);
+            rotated.extend(steps.rotated(session, &key[span], positions[sequence])?);
         }
         let key = rotated;
         let value = steps.projected(
@@ -856,7 +874,7 @@ impl<'session> Qwen<'session> {
         let mut rotated: Vec<f32> = Vec::with_capacity(caches.len() * (HEADS * HEAD) as usize);
         for sequence in 0..caches.len() {
             let span = sequence * (HEADS * HEAD) as usize..(sequence + 1) * (HEADS * HEAD) as usize;
-            rotated.extend(steps.rotated(session, &query[span], position)?);
+            rotated.extend(steps.rotated(session, &query[span], positions[sequence])?);
         }
         let query = rotated;
         let mut attended: Vec<f32> = Vec::with_capacity(caches.len() * HIDDEN_SIZE);
