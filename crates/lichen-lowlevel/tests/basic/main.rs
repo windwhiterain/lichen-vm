@@ -5,6 +5,7 @@ mod compaction;
 mod equality;
 mod evaluation;
 mod extension_channel;
+mod external;
 mod function;
 mod gc_class_shape;
 mod gc_class_walk;
@@ -184,7 +185,8 @@ impl OperatorExt<TestProgram> for TestOperator {
                 // them through `AsEnum` before falling through.
                 TestOperator::LowOperator(LowOperator::Index)
                 | TestOperator::LowOperator(LowOperator::Apply)
-                | TestOperator::LowOperator(LowOperator::TableGet) => {
+                | TestOperator::LowOperator(LowOperator::TableGet)
+                | TestOperator::LowOperator(LowOperator::External { .. }) => {
                     unreachable!("structural operators are dispatched by the VM")
                 }
                 TestOperator::Id => operand,

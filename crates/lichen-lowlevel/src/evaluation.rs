@@ -2,8 +2,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
-    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
-    ancestors::AncestorPairs, table::KeyState,
+    ExtensionDiagnostic, LowOperator, LowValue, Module, NodeId, OperatorExt, Program,
+    StaticModuleCache, ancestors::AncestorPairs, table::KeyState,
 };
 use lichen_utils::disjoint::Node as _;
 use lichen_utils::extend::AsEnum;
@@ -442,6 +442,34 @@ impl<P: Program> Module<P> {
                     }
                     _ => unreachable!("TableGet operand must be an array of [table, key]"),
                 }
+            }
+            Some(LowOperator::External { library, instance }) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("External expects an operand node")
+                };
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                let Some(entry) = self.external(library, instance) else {
+                    self.extension_diagnostics.push(ExtensionDiagnostic::note(
+                        "native-link",
+                        Some(node),
+                        format!("library {library} instance {instance} is not installed"),
+                    ));
+                    return self.ran_undecided(node);
+                };
+                let mut out = std::mem::MaybeUninit::<P::Value>::uninit();
+                // SAFETY: `install_external`'s contract: the pointers are the
+                // live module, one of its values, and one value's storage.
+                unsafe {
+                    entry(
+                        (self as *mut Module<P>).cast(),
+                        (&raw const operand).cast(),
+                        out.as_mut_ptr().cast(),
+                    );
+                }
+                // SAFETY: the entry's contract writes exactly one `P::Value`.
+                Some(unsafe { out.assume_init() })
             }
         };
         // An undecided answer is not cached: the run stamp records that it ran.

@@ -251,7 +251,31 @@ pub enum LowOperator {
     ///
     /// A miss records a [`EvalError`] and yields [`LowValue::Error`].
     TableGet,
+    /// One instance of a `link`ed library: `library` names it, `instance` the entry.
+    ///
+    /// # Safety
+    ///
+    /// The entry is the one the host installed ([`Module::install_external`]),
+    /// and its library was built by this module's program and compiler: it reads
+    /// the module's values through this build's layouts
+    /// (`docs/notes/native-link-library.md` §4). A missing entry is no panic: a
+    /// note is recorded and the node stays undecided.
+    External { library: u32, instance: u32 },
 }
+
+/// One dynamically loaded library's entry, erased to plain pointers so a program
+/// generic over `P` can hold it.
+///
+/// # Safety
+///
+/// `module` is a live `Module<P>` whose `P` is the library's program, `operand`
+/// a `P::Value` of that module, and `out` uninitialized storage for one
+/// `P::Value`, which the entry writes exactly once.
+pub type ExternalEntry = unsafe extern "C" fn(
+    module: *mut std::ffi::c_void,
+    operand: *const std::ffi::c_void,
+    out: *mut std::ffi::c_void,
+);
 
 /// What a program-specific value may look at while declaring the nodes it keeps alive.
 ///
@@ -910,6 +934,14 @@ pub struct Module<P: Program> {
     operator_for_diagnostics: Option<NodeId>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
+    /// The loaded libraries' entries, keyed by `(library, instance)` — see
+    /// [`Module::install_external`].
+    ///
+    /// # Invariant
+    /// Host-installed and never serialized: an artifact that names an
+    /// [`LowOperator::External`] operator requires the same library installed
+    /// wherever it is read.
+    externals: HashMap<(u32, u32), ExternalEntry>,
     /// The **mark anchors** each lowered marked expression reached, keyed by the
     /// node its value became.
     ///

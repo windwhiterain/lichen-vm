@@ -98,6 +98,8 @@ impl<P: Program> Module<P> {
                 };
                 *value
             }
+            // A loaded library's entry states no class: its result is opaque here.
+            LowOperator::External { .. } => return None,
         })
     }
 

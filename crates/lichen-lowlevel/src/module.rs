@@ -34,6 +34,7 @@ impl<P: Program> Module<P> {
             extension_diagnostics: Vec::new(),
             operator_for_diagnostics: None,
             global_ext: P::GlobalExt::default(),
+            externals: HashMap::new(),
             marks: HashMap::new(),
             gc_classes: HashSet::new(),
             gc_visited: HashSet::new(),
@@ -52,6 +53,22 @@ impl<P: Program> Module<P> {
     /// affected.
     pub fn set_type_side_reporting(&mut self, report: bool) {
         self.report_type_side_failures = report;
+    }
+
+    /// Install one instance of a `link`ed library so an [`LowOperator::External`]
+    /// operator can resolve it.
+    ///
+    /// # Invariant
+    /// The table belongs to the module: an `External` operator resolves only
+    /// against what this module's host installed, and installing the same key
+    /// twice replaces the entry the program would otherwise call.
+    pub fn install_external(&mut self, library: u32, instance: u32, entry: ExternalEntry) {
+        self.externals.insert((library, instance), entry);
+    }
+
+    /// The entry installed for `(library, instance)`, if any.
+    pub fn external(&self, library: u32, instance: u32) -> Option<ExternalEntry> {
+        self.externals.get(&(library, instance)).copied()
     }
 
     /// Compile `source` into a static artifact and register it under `key` — see

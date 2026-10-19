@@ -683,6 +683,11 @@ where
                      arith)"
                         .into(),
                 ),
+                LowOperator::External { .. } => Err(
+                    "unsupported external operator in kernel body (kernel-safe subset is scalar \
+                     arith)"
+                        .into(),
+                ),
             };
         }
 

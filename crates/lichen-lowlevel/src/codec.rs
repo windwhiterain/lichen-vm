@@ -322,6 +322,11 @@ impl OperatorCodec for LowOperator {
             LowOperator::Index => w.u8(0),
             LowOperator::Apply => w.u8(1),
             LowOperator::TableGet => w.u8(2),
+            LowOperator::External { library, instance } => {
+                w.u8(3);
+                w.u32(library);
+                w.u32(instance);
+            }
         }
         Ok(())
     }
@@ -331,6 +336,10 @@ impl OperatorCodec for LowOperator {
             0 => LowOperator::Index,
             1 => LowOperator::Apply,
             2 => LowOperator::TableGet,
+            3 => LowOperator::External {
+                library: r.u32()?,
+                instance: r.u32()?,
+            },
             tag => return Err(format!("unknown lowlevel operator tag {tag}")),
         })
     }
