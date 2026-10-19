@@ -12,6 +12,13 @@ const DIM: usize = 2048;
 /// The rows to time, from one workgroup's worth to enough to fill a device.
 const ROWS: [usize; 4] = [64, 256, 1024, 4096];
 
+/// Whether a result is kept, which decides whether the run that produced it releases it.
+///
+/// # Invariant
+/// A run releases every buffer it produced that the caller neither brought in nor is handed back, so a probe
+/// that keeps its answers never takes that path and measures a step the model never runs.
+const KEPT: [bool; 2] = [true, false];
+
 /// The walks each run repeats, so a dispatch's own cost is a small part of the measurement.
 const REPEATS: usize = 20;
 
@@ -31,6 +38,14 @@ fn a_projection_costs_what_its_rows_walk() {
         Err(refusal) => {
             eprintln!("SKIPPED: {refusal}");
             return;
+        }
+    };
+    // The model's own programs are the narrowed ones, so a Float probe may be measuring a path it never runs.
+    let halved = match lichen_serve::narrowed(&session, MATVEC_ROW_STEP) {
+        Ok(prepared) => Some(prepared),
+        Err(refusal) => {
+            eprintln!("the narrowed projection does not prepare: {refusal}");
+            None
         }
     };
     for rows in ROWS {
@@ -56,20 +71,31 @@ fn a_projection_costs_what_its_rows_walk() {
                 RunArgument::Resident(placed),
             ]
         };
-        let started = Instant::now();
+        let mut timings = Vec::new();
         let mut answered = Vec::with_capacity(REPEATS);
-        for _ in 0..REPEATS {
-            let stepped = prepared
-                .step(arguments())
-                .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
-            let [lichen_compute::compute::graph::RunResult::Resident(resident)] =
-                &stepped.results[..]
-            else {
-                panic!("a projection answers with one resident");
-            };
-            answered.push(*resident);
+        for kept in KEPT {
+            let started = Instant::now();
+            let mut last = None;
+            for _ in 0..REPEATS {
+                let stepped = prepared
+                    .step(arguments())
+                    .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
+                let [lichen_compute::compute::graph::RunResult::Resident(resident)] =
+                    &stepped.results[..]
+                else {
+                    panic!("a projection answers with one resident");
+                };
+                last = Some(*resident);
+                if kept {
+                    answered.push(*resident);
+                }
+            }
+            timings.push(started.elapsed().as_secs_f64() / REPEATS as f64);
+            if let (false, Some(resident)) = (kept, last) {
+                let _ = session.release(resident);
+            }
         }
-        let dispatched = started.elapsed().as_secs_f64() / REPEATS as f64;
+        let dispatched = timings[0];
         let started = Instant::now();
         for resident in &answered {
             let _ = session.fetch(*resident).expect("it answers");
@@ -79,11 +105,43 @@ fn a_projection_costs_what_its_rows_walk() {
         let each = dispatched + read_back;
         let bytes = (rows * DIM * 4) as f64;
         println!(
-            "rows {rows:5} dispatch {:.3} ms  read back {:.3} ms  both {:.3} ms  bytes/s {:.1} GB/s",
-            dispatched * 1000.0,
+            "rows {rows:5} kept {:.3} ms  released {:.3} ms  read back {:.3} ms  bytes/s {:.1} GB/s",
+            timings[0] * 1000.0,
+            timings[1] * 1000.0,
             read_back * 1000.0,
-            each * 1000.0,
             bytes / each / 1e9
         );
+        if let Some(halved) = &halved {
+            let halves: Vec<u8> = (0..rows * DIM)
+                .flat_map(|index| (((index % 251) as u16) << 4).to_le_bytes())
+                .collect();
+            let placed = session
+                .place(&halves, ScalarClass::BFloat16)
+                .unwrap_or_else(|refusal| panic!("the halves are placed: {refusal}"));
+            let half_values: Vec<u8> = (0..DIM)
+                .flat_map(|index| (((index % 97) as u16) << 4).to_le_bytes())
+                .collect();
+            let started = Instant::now();
+            for _ in 0..REPEATS {
+                let stepped = halved
+                    .step(vec![
+                        RunArgument::Count(rows as i64),
+                        RunArgument::Count(DIM as i64),
+                        RunArgument::Count((rows / DIM).max(1) as i64),
+                        RunArgument::Buffer {
+                            class: ScalarClass::BFloat16,
+                            data: half_values.clone(),
+                        },
+                        RunArgument::Resident(placed),
+                    ])
+                    .unwrap_or_else(|refusal| panic!("the narrowed projection runs: {refusal}"));
+                let _ = stepped;
+            }
+            println!(
+                "rows {rows:5} narrowed {:.3} ms",
+                started.elapsed().as_secs_f64() / REPEATS as f64 * 1000.0
+            );
+            let _ = session.release(placed);
+        }
     }
 }

@@ -393,6 +393,16 @@ about **0.4 ms a dispatch**, at 84.9 GB/s of reads when the rows are many, a qua
 is not where the tokens go: a step's 860 ms holds some **340 dispatches**, and at this floor they account for
 about 136 ms. The rest is a per-stage question the next measurement has to ask, stage by stage.
 
+The release a step's own buffers go through is not it either: the same probe keeping its answers and
+letting them be released measures 0.43 ms against 0.43 ms. And the narrowed path is not slower than the
+float one — 0.96 ms against 0.91 ms at 4096 rows.
+
+The measurement has a floor that is not the device's, though, and this file has to say so: the same probe's
+numbers moved by four between two runs — 0.42 ms against 0.9 to 3.5 ms for the same shapes — while other
+sessions on this machine were compiling. So the per-dispatch price the model pays is **not established** to
+be four times the probe's, which was the reading one round took: it is a spread this measurement cannot
+separate from a busy host.
+
 Where the weights live is worth **2.23x**, measured on one step of one request with the same program and the
 same shapes: **1.283 s** with the layers held in host memory and handed over as host-visible buffers, and
 **0.576 s** with them resident. That is the cheapest part of the answer so far, and it is also the reason
