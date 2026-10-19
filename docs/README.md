@@ -165,6 +165,7 @@ authority, and this table only names the state.
 | [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language`, `lichen-lowlevel`, external `whiting-definition` | proposed |
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the live open queue and the design decisions |
+| [Serving Qwen3-1.7B through an OpenAI surface](../crates/lichen-serve/README.md) | `crates/lichen-serve` (`qwen.rs`, `bin/qwen-serve.rs`) | current — how to build it, what it answers, and what it has not got; the measurements behind it are in [qwen-inference](notes/qwen-inference.md) |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule enforced in CI by `comments-check` |
 
 ## The book
