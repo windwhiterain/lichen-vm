@@ -255,6 +255,20 @@ cargo test --release -p lichen-serve --test resident_token` passes, still naming
 tokens were 2.9 s and 5.3 s across six runs, which is the afternoon's weather and not a property of the
 model — another session was on the card throughout.
 
+## What the first execution of a tiled projection found
+
+Feeding the rewritten graph took four tries; the fourth is the one that is not an argument-order error:
+
+    count, count, buffer, buffer: the backend failed recording the graph in one submission:
+    instruction 0 mixed an integer and a float in one operation. `Int` and `Float` do not convert in
+    either direction, so nothing here can make the two operands meet: this is a malformed fragment
+    rather than an unsupported shape.
+
+So the tiling fires, the graph is built, and the emit then refuses its first instruction for mixing an
+`Int` with a `Float`. That is a defect, and it is one **no run could have found before** the identity fix
+this note records: a bf16 reduction was refused at the plan check, so the tiled body it produces was never
+emitted on any device. The next step is therefore not a measurement — it is the emit's own instruction 0.
+
 ## The pass fires, once both conditions hold
 
 Both fixes are in the tree — a brain-float identity stated at its own class

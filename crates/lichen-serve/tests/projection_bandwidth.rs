@@ -63,6 +63,64 @@ fn a_projection_costs_what_its_rows_walk() {
             None
         }
     };
+    // The tiled graph is a rewritten graph, so its argument list is discovered rather than assumed.
+    let literal = MATVEC_ROW_STEP
+        .replace("compute.range k.n", "compute.range 2048")
+        .replace(".n s.n,", ".n 2048,")
+        .replace(".n s.n)", ".n 2048)");
+    if let Ok(prepared) = lichen_serve::narrowed(&session, &literal) {
+        let halves: Vec<u8> = (0..2048 * 2048)
+            .flat_map(|index| (((index % 251) as u16) << 4).to_le_bytes())
+            .collect();
+        let placed = session
+            .place(&halves, ScalarClass::BFloat16)
+            .unwrap_or_else(|refusal| panic!("the literal weights are placed: {refusal}"));
+        let values: Vec<u8> = (0..2048)
+            .flat_map(|index| (((index % 97) as u16) << 4).to_le_bytes())
+            .collect();
+        let count = || RunArgument::Count(2048);
+        let input = || RunArgument::Buffer {
+            class: ScalarClass::BFloat16,
+            data: values.clone(),
+        };
+        let weight = || RunArgument::Resident(placed);
+        let orders: Vec<(&str, Vec<RunArgument>)> = vec![
+            (
+                "counts then buffers",
+                vec![count(), count(), count(), input(), weight()],
+            ),
+            (
+                "buffers then counts",
+                vec![input(), weight(), count(), count(), count()],
+            ),
+            (
+                "count, count, buffer, buffer",
+                vec![count(), count(), input(), weight(), count()],
+            ),
+            (
+                "count, buffer, buffer, count",
+                vec![count(), input(), weight(), count(), count()],
+            ),
+        ];
+        for (name, arguments) in orders {
+            match prepared.step(arguments) {
+                Ok(_) => {
+                    println!("the tiled graph runs with: {name}");
+                    let started = Instant::now();
+                    for _ in 0..REPEATS {
+                        let _ = prepared.step(vec![count(), count(), count(), input(), weight()]);
+                    }
+                    println!(
+                        "literal narrowed {:.3} ms",
+                        started.elapsed().as_secs_f64() / REPEATS as f64 * 1000.0
+                    );
+                    break;
+                }
+                Err(refusal) => println!("{name}: {refusal}"),
+            }
+        }
+        let _ = session.release(placed);
+    }
     for rows in ROWS {
         let weights: Vec<u8> = (0..rows * DIM)
             .flat_map(|index| ((index % 251) as f32 * 0.001).to_le_bytes())
