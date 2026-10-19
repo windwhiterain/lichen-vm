@@ -709,6 +709,18 @@ where
         // each deep-evaluated condition.
         if !checker.check_failed() && checker.nonterminating.is_empty() {
             checker.module.check_asserts();
+            // A depth-budget stop in the drain is a diagnostic, not a silent pass.
+            if let Some(budget) = checker.module.budget_exhausted
+                && checker.nonterminating.is_empty()
+            {
+                checker.nonterminating.push(NonTerminating {
+                    loc: Loc {
+                        expr: root,
+                        path: Vec::new(),
+                    },
+                    budget: Some(budget),
+                });
+            }
         }
         // A released scope takes the edges into it.
         if !checker.gc_scopes.is_empty() {

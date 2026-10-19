@@ -56,8 +56,12 @@ where
         // Keyed by the template condition, which is what a failure records
         // (`AssertError::template`).
         self.assert_spellings.insert(condition, spelling);
-        self.module.add_assert(condition);
-        if let Some(function) = self.current_function() {
+        // A reporting build checks a body assert on its clone (apply-type-side-check §6).
+        let function = self.current_function();
+        if function.is_none() || !self.module.report_type_side_failures {
+            self.module.add_assert(condition);
+        }
+        if let Some(function) = function {
             self.module.functions[function].asserts.push(condition);
         }
     }

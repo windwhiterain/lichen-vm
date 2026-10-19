@@ -96,27 +96,35 @@ an undecided value).
 ## 6. A `Check` build evaluates the asserts it can decide
 
 The author's ruling: a `Check` build reports a builtin's refinement failure — the editor's
-green must mean "the refinement holds", not "nobody asked". Three changes carry it, and one
-is the reason a one-line registration change alone measured nothing:
+green must mean "the refinement holds", not "nobody asked". Four changes carry it, and the
+scope of the forcing is the part that had to be measured:
 
-- **The type side now carries the argument's value.** `check_app` passes
-  `value_argument_pair` to `apply_function_type` in both modes; the pair's value slot used
-  to be a fresh cell ("its check never evaluates the argument's value"), so a refinement
-  predicate that reads the argument — `add ["a", "b"]` — had nothing to decide and stayed
-  pending per `assert.rs`'s invariant. The parameter check evaluates the argument to the
-  pattern's depth, which is exactly the reach the predicate needs.
+- **A frozen callee's type side carries the argument's value.** `check_app` hands
+  `apply_function_type` the value-bearing pair for a static callee and the type-only pair
+  for a dynamic one. The value slot used to be a fresh cell in both modes ("its check never
+  evaluates the argument's value"), so a refinement predicate that reads the argument —
+  `add ["a", "b"]` — had nothing to decide and stayed pending per `assert.rs`'s invariant.
+  The scope is not cosmetic: handing the value to **every** call made the editor hang on a
+  legal lazy program. `a_lazy_binding_reports_type_but_no_value`'s Church-encoded `paradox`
+  expands through the applications its coercions guard, and the type side was forcing each
+  one at check time; with dynamic callees left type-only the same build finishes in 0.05 s.
 - **A reporting check registers the instantiated asserts.** `instantiate`'s
   `assert_count * usize::from(check == ParameterCheck::Value)` becomes `check != Skip`: a
   `Check` build runs no value side, so the type side is the only place the per-call clone
   can be registered. `static_function_type_apply` registers them too, walking the frozen
   asserts through the signature copies' remap so a condition references the parameter cells
   the check bound.
-- **One failure per body condition.** The definition pass and the type side can both
-  instantiate the same template for one call; `check_asserts` now answers the first
-  recorded `AssertError` per `template`.
+- **An unapplied body assert is not drained.** `register_assert` leaves it out of the
+  module worklist in a reporting build: its condition reads an unbound parameter, and
+  forcing it hands the editor a lazy expansion rather than an answer. The function still
+  owns the condition, so every applied call's clone is checked.
+- **A depth-budget stop is a diagnostic.** `check_asserts` stops the drain when
+  `budget_exhausted` is set (the module's `apply_depth_limit` guard — a stack bound, not a
+  work bound), and the build records `NonTerminating` instead of a silent pass.
 
 Measured on the merge tip with the shipping vocabulary, `Mode::Check`: `x = add ["a", "b"]`
 reports `the refinement's predicate did not answer 1` and `does not satisfy {Int, Float}`,
 attributed to `core.lichen`'s own source (the prelude's file) — `add [1, 2]` is clean;
 `f = (x : Int) => x; f "s"` reports its one diagnostic in both modes; the two-existing
-per-call assert tests read one error each, not two.
+per-call assert tests read one error each, not two; the lazy program's Check build answers
+in 0.05 s, with `paradox` still `None`.

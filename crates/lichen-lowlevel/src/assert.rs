@@ -48,7 +48,12 @@ impl<P: Program> Module<P> {
                 continue; // the condition's block was garbage-collected
             };
             let block = node.block;
-            let Some(value) = self.evaluate_node_deep(condition, Some(block)) else {
+            let value = self.evaluate_node_deep(condition, Some(block));
+            // A depth-budget stop leaves the rest pending; the build reports it.
+            if self.budget_exhausted.is_some() {
+                break;
+            }
+            let Some(value) = value else {
                 // Not triggered — the apply clone re-checks it per call.
                 self.asserts.swap(pending, i - 1);
                 pending += 1;

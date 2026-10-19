@@ -417,10 +417,15 @@ where
                         apply_expr: e,
                     },
                 );
-                // The argument's value rides along: a refinement assert reads it.
+                // A frozen callee's refinement reads the value (apply-type-side-check §6).
+                let type_slot_argument = if report && static_callee.is_none() {
+                    type_argument_pair
+                } else {
+                    value_argument_pair
+                };
                 let applied = self.module.apply_function_type(
                     function_ty,
-                    value_argument_pair,
+                    type_slot_argument,
                     self.current_block,
                     type_apply,
                     c,
