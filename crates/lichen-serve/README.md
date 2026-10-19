@@ -43,8 +43,10 @@ curl -s http://127.0.0.1:8099/metrics
 ```
 
 `/v1/completions` takes a `prompt` instead of `messages`. A request may state `temperature`, `top_k`,
-`max_tokens` and `stream`; every other field is accepted and ignored. A streamed answer ends with a chunk
-whose `finish_reason` is `length` and then `data: [DONE]`.
+`max_tokens`, `stream` and `stop` — one string, or an array of them; every other field is accepted and
+ignored. An answer's `finish_reason` is `length` when it reached `max_tokens` and `stop` when it met its
+`stop`, the checkpoint's own turn marker, or one of the strings the request named. A streamed answer ends
+with a chunk carrying that `finish_reason` and then `data: [DONE]`.
 
 ## What it does behind a request
 
@@ -68,7 +70,9 @@ wait; a hundredth is refused with a `503` and an error object rather than droppe
 ## What it has not got
 
 - No prefix caching, so a repeated conversation prefix is prefilled again every request.
-- No `stop` sequences, no `n`, no `logprobs`, no `top_p`.
+- No `n`, no `logprobs`, no `top_p`.
+- A `stop` string that spans two tokens is cut from the answer's text, but a streaming client may have
+  received the tokens that spell it before the cut is decided.
 - No keep-alive or HTTP/2 configuration: axum's defaults.
 - The tokenizer is re-read at start and held; it is not shared between processes.
 
