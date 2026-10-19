@@ -458,26 +458,25 @@ across processes: `sample Float 1.5` → `2.5`, `sample Int 3` → `4`,
 `sample Float 2.5` → `3.5`, `sample string "a"` → refused by the wrapper's
 refinement, the three numeric runs identical on five consecutive processes.
 
-The finding that shaped the op:
+The finding that shaped the op, and its resolution:
 
-- **An entry can reliably receive one operand, and it must be the wrapper's
-  parameter cell.** That cell is the node the apply's clone re-points per call, so
-  the entry sees this call's value (`Float(1.5)`, `USize(3)`, `Str("a")`).
-- **An aggregate built by `ctx.array_node` is not that node.** It is a *decided
-  value* holding item ids, and the apply clone does not re-point those ids: with
-  the operand `[t, x]`, the entry read `kind=None arg=None` in **both** paths —
-  the spliced (dynamic) one and the frozen one. So the type argument cannot ride
-  to the entry as a second operand today.
-- **What the library dispatches on is therefore the operand's representation** —
-  `LowValue::Float` versus `LowValue::USize` — which is one match inside the
-  generated crate, exactly where source generation puts the monomorphizations.
-  The lichen type argument stays a checker-side notion (the refinement closes the
-  set); the library never needs to name it.
+- **An entry first received one operand, and it had to be the wrapper's parameter
+  cell.** That cell is the node the apply's clone re-points per call, so the entry
+  saw this call's value (`Float(1.5)`, `USize(3)`, `Str("a")`). An aggregate built
+  by `ctx.array_node` read `kind=None arg=None` in **both** paths — the spliced
+  one and the frozen one.
+- **§17 resolved that:** an `External` entry now runs only on decided operands, so
+  the loader passes the call's **argument array** (`[t, x]`) and the entry reads
+  `item(module, operand, 0)` (the type value) and `item(module, operand, 1)` (the
+  argument). Measured: `kind=Some(TypeValue(TypeFloat)) arg=Some(LowValue(Float(1.5)))`
+  and `good: (2.5, 4): tuple{Float, Int}` (§15).
+- **What the library dispatches on is the type value** it reads from the array —
+  and the representation remains a second, cheaper signal. Source generation puts
+  the monomorphizations in the generated crate either way.
 
-The two-operand form (type value plus argument) is the shape §10's engine defect
-blocks: re-pointing a value array's items per application is the same missing
-remap. Until it lands, the family entry takes one operand, and a generic whose
-dispatch needs the type value must be called with the type inside the argument.
+The single-operand ABI the loader adopted while the defect was open is gone; the
+family entry takes the argument array, and no argument shape is privileged.
+
 
 ## 12. The `link` directive
 
@@ -581,13 +580,25 @@ Measured:
 
 - the library author supplies `items` (their traits, impls and generic code,
   inserted verbatim), `wrapper` (the lichen source the manifest carries), and one
-  `Entry` per family with its `Arm`s — the kind, the Rust pattern over the
-  operand's low value, and the expression it answers with;
-- `render::<P>(build)` writes the entry ABI, the match skeleton, the value
-  conversion, the manifest (through [`Manifest::render`]) and the program alias.
+  `Entry` per family with its **body** — the Rust expression that answers a call,
+  over `module`, `operand` and the generated `item` helper;
+- `render::<P>(build)` writes the entry ABI, the `arguments`/`item` helpers, the
+  value conversion, the manifest (through [`Manifest::render`]) and the program
+  alias.
 
-The recorder and the builder meet at the author's table: `Vec<Used>` says *which*
-kinds a program instantiated, the table says *with what*. A generated crate is
+The operand is the call's **argument array** (§11), so a body reads exactly the
+arguments it needs: the linked example reads `item(module, operand, 0)` (the type
+value) and `item(module, operand, 1)` (the argument) and dispatches on the type.
+Measured:
+
+```text
+entry: kind=Some(TypeValue(TypeFloat)) arg=Some(LowValue(Float(1.5)))
+entry: kind=Some(TypeValue(TypeInt))   arg=Some(LowValue(USize(3)))
+good: (2.5, 4): tuple{Float, Int}
+```
+
+The recorder and the builder meet at the author's body: `Vec<Used>` says *which*
+kinds a program instantiated, the body says *with what*. A generated crate is
 thin: the boilerplate is lichen's, the mapping is the author's.
 
 **The program gate.** `std::any::type_name::<P>()` is written into the manifest's
