@@ -42,7 +42,7 @@ struct Job {
 /// How a job hands its tokens back.
 enum Answer {
     /// All of them at the end, which is what a client reading a body waits for.
-    Whole(mpsc::Sender<Vec<usize>>),
+    Whole(tokio::sync::oneshot::Sender<Vec<usize>>),
     /// One at a time as they are chosen, which is what a streaming client reads.
     Stream(tokio::sync::mpsc::UnboundedSender<usize>),
 }
@@ -212,13 +212,13 @@ fn refuse(status: StatusCode, message: &str) -> Response {
 }
 
 /// Ask the worker for `limit` tokens and wait for them.
-fn generate(
+async fn generate(
     shared: &Shared,
     prompt: Vec<usize>,
     limit: usize,
     sampling: Sampling,
 ) -> Result<Vec<usize>, ()> {
-    let (reply, answer) = mpsc::channel();
+    let (reply, answer) = tokio::sync::oneshot::channel();
     if shared
         .jobs
         .try_send(Job {
@@ -231,7 +231,7 @@ fn generate(
     {
         return Err(());
     }
-    answer.recv().map_err(|_| ())
+    answer.await.map_err(|_| ())
 }
 
 /// Ask the worker for `limit` tokens and hand them on as they arrive.
@@ -310,7 +310,7 @@ async fn chat(State(shared): State<Shared>, Json(request): Json<ChatRequest>) ->
         );
         return Sse::new(body).into_response();
     }
-    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling) else {
+    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling).await else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
     let text = shared.tokenizer.decode(&answered);
@@ -369,7 +369,7 @@ async fn complete(
         );
         return Sse::new(body).into_response();
     }
-    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling) else {
+    let Ok(answered) = generate(&shared, ids.clone(), limit, sampling).await else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "the queue is full");
     };
     let text = shared.tokenizer.decode(&answered);
