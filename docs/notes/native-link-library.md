@@ -1,9 +1,10 @@
 # A native link library: a Rust generic behind a lichen generic
 
-> Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c and the end-to-end
-> proof are measured.**
+> Status: **proposed — ruled by the maintainer; P0-a, P0-b, P0-c, the end-to-end
+> proof and the loader are measured.**
 > §2, §5 and P0-a are measured readings; §4 is ruled (a Rust `dylib` loaded
-> through a `link` directive); §10 records the proof and the defect it found.
+> through a `link` directive); §10 records the proof and the defect it found,
+> §11 the loader and the operand shape it settles.
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -365,14 +366,25 @@ The maintainer decided, in this session:
   dylib (manifest + one entry per instance), build it with cargo, and cache it by
   a content key — the same shape as the kernel disk cache
   ([kernel-disk-cache](kernel-disk-cache.md)).
-- **P3 — `link` in the language layer.** The block directive, the loader, the
-  manifest parser, the version gate, and the per-module registration of the
-  library's ops.
+- **P3 — the loader: done, without the block directive.** `lichen_language::link`
+  loads a `dylib`, parses its manifest (version, `build`, the family table, and
+  the lichen source after a `source` line), installs every family entry in the
+  process-wide table, hands the compiler one `External`-emitting op per family,
+  and splices the source in front of the program so the wrapper compiles in the
+  program's own module. §11 is the measurement and the operand-shape finding.
+- **P3 — the block directive: next.** `vbd = link "path"` in the preprocessor,
+  the loader wired to it, and a position map for the spliced prefix.
+
+Decided, by the P3 implementation:
+
+- **The manifest encoding is text**: `lichen-link 1`, a `build` line,
+  `family <name> <instance> <symbol>` lines, a `source` line, and the lichen
+  source verbatim after it.
+- **The wrapper is spliced as source, not frozen as a package**: only the
+  spliced form instantiates per application deterministically (§10, §11).
 
 Not decided yet:
 
-- **The manifest encoding** — text, JSON, or a binary section — and how the
-  wrapper source and the instance table share it.
 - **What the recorder's output artifact is**: a Rust source fragment, a JSON list,
   or a cache entry the builder reads.
 - **Whether the same source is also built as an rlib**, for Rust consumers that
@@ -422,3 +434,37 @@ surfaces rather than causes. Two candidate fixes, in order of preference: one re
 for the whole instantiation (the signature clone seeds it and the body clone joins
 it), or a first-class multi-argument operand on the native-op boundary that carries
 the apply's own argument nodes instead of a value snapshot.
+
+## 11. The loader, and the operand the entry can actually receive
+
+`crates/lichen-language/src/link.rs` is the binding half: `LinkedLibrary::load`
+(a `dylib` and its manifest), `Manifest::parse` (the text form §9 left open),
+`install` (one `External` family entry per manifest line, in the process-wide
+table), `ops` (one `External`-emitting op per family, keyed by the manifest name),
+and `splice` (the wrapper source joined in front of the program).
+
+The proof, through the loader instead of a hand-written host, is deterministic
+across processes: `sample Float 1.5` → `2.5`, `sample Int 3` → `4`,
+`sample Float 2.5` → `3.5`, `sample string "a"` → refused by the wrapper's
+refinement, the three numeric runs identical on five consecutive processes.
+
+The finding that shaped the op:
+
+- **An entry can reliably receive one operand, and it must be the wrapper's
+  parameter cell.** That cell is the node the apply's clone re-points per call, so
+  the entry sees this call's value (`Float(1.5)`, `USize(3)`, `Str("a")`).
+- **An aggregate built by `ctx.array_node` is not that node.** It is a *decided
+  value* holding item ids, and the apply clone does not re-point those ids: with
+  the operand `[t, x]`, the entry read `kind=None arg=None` in **both** paths —
+  the spliced (dynamic) one and the frozen one. So the type argument cannot ride
+  to the entry as a second operand today.
+- **What the library dispatches on is therefore the operand's representation** —
+  `LowValue::Float` versus `LowValue::USize` — which is one match inside the
+  generated crate, exactly where source generation puts the monomorphizations.
+  The lichen type argument stays a checker-side notion (the refinement closes the
+  set); the library never needs to name it.
+
+The two-operand form (type value plus argument) is the shape §10's engine defect
+blocks: re-pointing a value array's items per application is the same missing
+remap. Until it lands, the family entry takes one operand, and a generic whose
+dispatch needs the type value must be called with the type inside the argument.

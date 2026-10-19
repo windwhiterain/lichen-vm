@@ -17,6 +17,7 @@ lichen-preprocess.workspace = true
 lichen-registry.workspace = true
 lichen-render.workspace = true
 lichen-utils.workspace = true
+libloading = "0.8"
 
 [dev-dependencies]
 # Only `tests/persist.rs` uses this: the compiler-slot contract test compares

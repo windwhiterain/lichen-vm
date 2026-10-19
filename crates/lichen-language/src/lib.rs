@@ -20,6 +20,7 @@ pub mod compile;
 pub mod diag;
 pub mod dirty;
 pub mod key;
+pub mod link;
 pub mod package;
 pub mod persist;
 pub mod preprocess;

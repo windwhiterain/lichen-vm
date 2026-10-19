@@ -1116,6 +1116,7 @@ version = "0.1.0"
 name = "lichen-language"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "lichen-doc",
  "lichen-highlevel",
  "lichen-language-lex",
