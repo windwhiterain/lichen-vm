@@ -42,6 +42,16 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The emitter's empty clone is fixed, and the next blocker is measured.** A kernel body
+holds clone nodes the checker's own undecided apply left behind (owner the body function,
+origin a template node, no value and no operation); the emitter refused them as opaque.
+It now emits an empty clone from its template. `parameter_path` also refuses a pair's type
+(`1`) and attribute (`2+`) positions as path steps. No test flips; the minimal `@loop`
+kernel now stops at "a kernel body's index cannot be placed": a read of `Index(<a
+computation>, 1)` whose chain ends at the marked function's parameter pair — the type
+position of a pair read as a value. The next step is the caller that asks for a type
+node's value.
+
 **The path walk is rewritten, and the blockers moved.** `parameter_value_path` now reads
 the chain from the value side (`state_path`): element positions alternate with the slot's
 value position, so a pair peel and every slot peel are dropped and a pair's type or

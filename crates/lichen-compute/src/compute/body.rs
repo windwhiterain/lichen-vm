@@ -328,7 +328,12 @@ where
                         self.publish_mark(definition, value);
                         value
                     }
-                    Define::Opaque => self.opaque(node)?,
+                    // An empty clone is emitted from its template
+                    // (`docs/notes/loop-conversion.md`).
+                    Define::Opaque => match self.module.node_origin(node) {
+                        Some(origin) if origin != node => self.value(origin)?,
+                        _ => self.opaque(node)?,
+                    },
                 },
             },
         };
@@ -509,7 +514,13 @@ where
                 Some(lichen_lowlevel::LowShape::Tuple(items))
                     if items.len() == 2 && items[1].is_none()
             );
-            if !dereference {
+            if dereference {
+                // A pair's type (`1`) and attributes (`2+`) are not values this body
+                // emits (`docs/notes/compound-element-slots.md`).
+                if step != 0 {
+                    return Ok(None);
+                }
+            } else {
                 positions.push(step);
             }
             cursor = *target;
