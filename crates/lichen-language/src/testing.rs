@@ -177,7 +177,11 @@ where
                             Some(AnyNodeId::Dynamic(node)) => module
                                 .node_value(AnyNodeId::Dynamic(node))
                                 .expect("an element slot has a value"),
-                            _ => panic!("a slot without a value position"),
+                            // A frozen package's slot names the artifact's own node.
+                            Some(node @ AnyNodeId::Static(_)) => module
+                                .node_value(node)
+                                .expect("a frozen element slot has a value"),
+                            None => panic!("a slot without a value position"),
                         }
                     }
                     _ => value,

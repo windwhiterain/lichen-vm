@@ -395,11 +395,12 @@ where
             self.check_expr(el);
             match depths[i] {
                 0 => {
-                    vals.push(self.value_of(el));
+                    // An element is a complete slot: the term is the value pair.
+                    vals.push(self.state[el].term.expect("an element is compiled"));
                     tys.push(self.state[el].ty.unwrap());
                 }
                 usize::MAX => {
-                    vals.push(self.value_of(el));
+                    vals.push(self.state[el].term.expect("an element is compiled"));
                     let ty = self.state[el].ty.unwrap();
                     if let Some(&type_apply) = self.type_applies.get(&el) {
                         self.shallow_types.push((type_apply, ty));
