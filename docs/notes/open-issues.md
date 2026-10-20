@@ -51,6 +51,17 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The seed rule is the superior's: a node with a type slot is not seeded.** Following
+that ruling, `prepare_template_low_types` no longer seeds the pair (its type slot states
+the shape); only the pair's **value** — a node without a type slot — takes the seed.
+Measured neutral (compute 117, lowlevel 164, other suites green). The `graph_jit`
+class-shape panic that motivated a refinement relaxation is **not** from that seed: it
+comes from a value seed whose stated type has an **open** position that an observation
+later decides. The relaxation (a later statement may fill the seed's open positions; a
+decided conflict still asserts) was measured **+1 (117 → 118)** with every suite green and
+the panic gone, but it is an Invariant change and **not approved**, so it is not in the
+tree.
+
 **The approved Invariant change is refuted by measurement.** With the superior's approval
 of both changes proposed here, they were implemented and measured: removing the unroll
 fallback for a refusing marked recursion takes compute **117 → 114** and fails

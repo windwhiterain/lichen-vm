@@ -819,8 +819,9 @@ pub fn prepare_template_low_types<P: Program>(
         ) {
             continue;
         }
-        module.seed_class_low_type(value, shape.clone());
-        module.seed_class_low_type(node, LowShape::Tuple(vec![Some(shape), None]));
+        // A pair has a type slot, so it takes no seed
+        // (`docs/notes/lowlevel-low-types.md`).
+        module.seed_class_low_type(value, shape);
     }
     module.infer_template_low_types(function);
 }
