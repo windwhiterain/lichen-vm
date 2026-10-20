@@ -588,3 +588,20 @@ children, 2044 nodes for one index function and 2839 for the graph body). The in
 on `Function::nodes` — "the nodes owned by this function's body" — is therefore not what
 the graph holds: the body nodes are attributed to the enclosing function. That is the
 next thing to measure before any rule can find a body's call by its function.
+
+## The body walk dies at an undecided cell (round thirteen)
+
+Measured on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`
+with temporary prints, since removed:
+
+- `compile_parallel_fragment` **is** entered for each kernel (two entries per check),
+  and its body pair has a value: the return pair's items are
+  `[value, type, <wildcards>]`.
+- The walk from `functions[fid].r#return` reads the pair, then its **value item is an
+  empty node** — no operation, no value (`3905: op=None value=None`). Nothing further
+  is reachable, so the body contains no `Apply` to walk: the `compute.write` call's
+  result was materialized as a **caller-side pair whose value is a fresh cell**, not as
+  the frozen write operation.
+- That is the same seam the class refusal reports: `write_value_node` finds no write
+  because the value the checker materialized for the call is undecided, and the deep
+  pass has no operation in this graph to decide it.
