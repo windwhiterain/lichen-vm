@@ -500,3 +500,18 @@ That is now the case: `shallow_regions` records every wrapper the check builds, 
 `lazy_region` asks the set through the node's origin chain (a clone answers for its
 template), falling back to the value mask only for a wrapper this check did not build
 (a frozen one). The wrapper's own value is not read.
+
+## 13. The pair-form wrapper, measured (round nineteen)
+
+Tried and reverted: the wrapper's first item as the **call's pair** (`state[e].term`)
+rather than its extracted value. Measured on the one-depth chain:
+
+- The read's element then is the apply node, whose value is the call's **result** — the
+  tuple value, an array of two element slots — so the normal read's `Index(element, 0)`
+  double-dereferences, and the attribute projections read `Index(tuple_value, 2..4)`:
+  three `IndexOutOfBounds` diagnostics, index 2/3/4 on an array of length 2.
+- The pair form therefore still needs the region read (value = the element) and the
+  region test to fire for those reads; with the constructional set it did not reach the
+  wrapper through the chain, so the form changed the failure without removing it.
+The form is the structurally right one (the type slot composes the same way); it needs
+the region test to resolve the wrapper through the pair chain first.
