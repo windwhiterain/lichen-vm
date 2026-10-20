@@ -157,24 +157,43 @@ impl<P: Program> Module<P> {
         true
     }
 
-    /// The frozen return pair, cloned into `block` and recorded as the applied pair.
-    pub(crate) fn record_static_applied_pair(
+    /// The frozen return graph, cloned with the parameter bound: the applied pair.
+    #[stacksafe]
+    pub(crate) fn materialize_static_return_apply(
         &mut self,
         function: StaticFunctionRef,
+        argument: NodeId,
         block: BlockId,
         node: NodeId,
     ) {
-        let module = self.static_module(function.module);
-        let Some(r#return) = module
-            .functions
-            .get(function.index.0)
-            .map(|entry| entry.r#return)
-        else {
+        if self.depth_exhausted(node) {
             return;
+        }
+        let stamp = self.stamp_depth;
+        self.stamp_depth = self.node_depth(node) + 1;
+        let static_module = self.static_module(function.module);
+        let (r#return, parameter) = {
+            let entry = &static_module.functions[function.index.0];
+            (entry.r#return, entry.parameter)
         };
-        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        let applied = self.clone_static_signature_node(&module, r#return, block, &mut remap);
+        let mut ctx = StaticApplyCtx {
+            target: block,
+            module: static_module,
+            remap: HashMap::new(),
+            applied: function.index,
+            branch_top: None,
+            tag: self.nodes[node].function,
+            origin: self.nodes[node].origin.unwrap_or(node),
+        };
+        let applied = self.static_node_apply(r#return, &mut ctx);
+        // The value side's bind, without its report.
+        if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
+            let recorded = self.unify_errors.len();
+            self.unify(cloned_parameter, argument);
+            self.unify_errors.truncate(recorded);
+        }
         self.applied_pairs.insert(node, applied);
+        self.stamp_depth = stamp;
     }
 
     /// The frozen asserts, cloned through the signature copies' remap.

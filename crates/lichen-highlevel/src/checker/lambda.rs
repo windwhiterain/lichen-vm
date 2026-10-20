@@ -516,11 +516,6 @@ where
                 .then(|| self.node_value(value))
                 .flatten()
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
-            if std::env::var("DBG_CERT2").is_ok() {
-                eprintln!(
-                    "DBG cert2: e={e:?} returns_parameter={returns_parameter} decided={decided:?}"
-                );
-            }
             match decided {
                 // A hole: the result follows the argument, per call.
                 None => {

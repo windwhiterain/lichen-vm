@@ -244,9 +244,9 @@ impl<P: Program> Module<P> {
                 self.static_function_type_apply(function, argument, block, node, Some(cell), check)
             }
             AnyFunctionId::Static(function) => {
-                // Nothing reports here, but the return pair still records the applied
+                // Nothing reports here, but the applied return graph still records the
                 // call's own attribute state.
-                self.record_static_applied_pair(function, block, node);
+                self.materialize_static_return_apply(function, argument, block, node);
                 false
             }
         }

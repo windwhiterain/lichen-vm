@@ -168,6 +168,17 @@ clone's return pair, materialized per call (`Checker::check_app`, `Module::appli
 So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
 
+**Why the attribute slot is not yet a type slot.** The type slot holds the type's
+*term*: the clone and the artifact materialize it, so a call's type is always read from
+the applied clone. The attribute slot holds only a *cell* — the annotation's value is
+unified into it, and the attribute's expression is not an item of the pair — so nothing
+in the pair can be re-evaluated at a call site, and a reference such as
+`perspective_of x.to` cannot name its field from the pair. That is the root of the
+non-isomorphism the superior measured: a frozen callee's field reference falls back to
+the argument's whole provided slot. Restoring the field-level reading isomorphically
+means putting the attribute's term in the slot as the type's term is: the clone then
+carries the expression and the call site evaluates it with the parameter bound.
+
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
 attribute is right in the type slot it is right in *any* attribute slot, so a pair's
 unify descends the attribute positions exactly as it descends the type slot — no skip,
