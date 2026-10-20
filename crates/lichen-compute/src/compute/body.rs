@@ -399,7 +399,11 @@ where
     fn loop_owner(&self, node: NodeId) -> Option<usize> {
         for index in (0..self.loops.len()).rev() {
             let function = self.loops[index].function;
-            if self.module.belongs_to(node, function).unwrap_or(false) {
+            let belongs = self.module.belongs_to(node, function).unwrap_or(false)
+                || self.module.node_origin(node).is_some_and(|origin| {
+                    self.module.belongs_to(origin, function).unwrap_or(false)
+                });
+            if belongs {
                 return Some(index);
             }
         }
@@ -415,7 +419,16 @@ where
     /// disagreement between the readers, not a shape to guess at.
     fn loop_value(&self, index: usize, node: NodeId) -> Result<Option<ValueId>, String> {
         let active = &self.loops[index];
-        let Some(path) = self.module.parameter_value_path(active.function, node) else {
+        // A clone of the marked function's node reads what its template does.
+        let path = self
+            .module
+            .parameter_value_path(active.function, node)
+            .or_else(|| {
+                self.module
+                    .node_origin(node)
+                    .and_then(|origin| self.module.parameter_value_path(active.function, origin))
+            });
+        let Some(path) = path else {
             return Ok(None);
         };
         let Some(slot) = active

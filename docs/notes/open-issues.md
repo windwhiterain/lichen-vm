@@ -42,6 +42,22 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The failure groups, measured** (`--nocapture`, first diagnostic per failing test):
+
+| first diagnostic | tests |
+|---|---|
+| a kernel body reached a node with neither a value nor an operation | 124 |
+| compute.graph: this function's return is not a value a graph can hand back | 97 |
+| a `@loop`-marked recursion … is not convertible (`StateShape`) | 83 |
+| compute.jit: the kernel parameter's class is not decided | 22 |
+
+so the **opaque** family is the dominant one, and it is the chain this note has been
+peeling. A clone of the marked function's node is now recognised by the nest
+(`loop_owner`/`loop_value` follow the origin), and the minimal `@loop` kernel's remaining
+opaque is the **entering tuple's element**: the state unification merges the initial
+tuple's element class with the step's read, so the element's defining node is the read
+(`s(1)`'s clone) and the emitter asks it for a value outside the nest.
+
 **The entering state's elements are peeled, and the wildcard is the blocker.**
 `loop_state` now takes each element slot's value (the third reader of the same pattern).
 The minimal `@loop` kernel's refusal traces to the label-annotated step element: its
