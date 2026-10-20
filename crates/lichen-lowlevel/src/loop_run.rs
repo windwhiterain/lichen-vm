@@ -4,8 +4,8 @@
 use lichen_utils::extend::AsEnum;
 
 use crate::{
-    AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, FunctionId, LoopArm, LoopConversion, LowValue,
-    Module, NodeId, Program,
+    AnyNodeId::Dynamic as Dyn, ArrayItem, ArrayValue, BlockId, FunctionId, LoopArm, LoopConversion,
+    LowValue, Module, NodeId, Program,
 };
 
 /// What one iteration decided.
@@ -71,9 +71,10 @@ impl<P: Program> Module<P> {
                         self.write_node_value_if_absent(node, decided);
                         return decided;
                     };
-                    let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
-                    let array = self.alloc_array(&items, block);
-                    let result = P::Value::from(LowValue::Array(array.into()));
+                    let pair = self.slot_pair(value, r#type, block);
+                    let Some(result) = self.node_value(Dyn(pair)) else {
+                        return None;
+                    };
                     self.write_node_value_if_absent(node, Some(result.clone()));
                     if let Some(cell) = cell {
                         // The return type is resolved before the cell binds, as
@@ -177,7 +178,11 @@ impl<P: Program> Module<P> {
         let value = if scalar {
             next[0]
         } else {
-            self.array_of(next, block)
+            // A tuple's value is an array of its element slots.
+            match self.slot_array(next, block) {
+                Some(value) => value,
+                None => self.array_of(next, block),
+            }
         };
         // A bare parameter — a hand-built graph, or anything outside the
         // `[value, type]` convention — takes the value alone.
@@ -192,13 +197,84 @@ impl<P: Program> Module<P> {
             // unchecked rather than pinning the template's own cell.
             self.add_node(block, None, None)
         });
-        let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
+        self.slot_pair(value, r#type, block)
+    }
+
+    /// A `[value, type, wildcards…]` pair at the module's full attribute width.
+    fn slot_pair(&mut self, value: NodeId, r#type: NodeId, block: BlockId) -> NodeId {
+        let attributes = match self.slot_width() {
+            Some(width) => width,
+            None => 0,
+        };
+        let mut items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
+        for _ in 0..attributes {
+            let any = self.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+            items.push(ArrayItem::new(Dyn(any)));
+        }
+        match self.slot_layout() {
+            Some(layout) => {
+                let array = self.alloc_array(&items, block);
+                self.add_node(
+                    block,
+                    None,
+                    Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                        array, layout,
+                    )))),
+                )
+            }
+            None => {
+                let array = self.alloc_array(&items, block);
+                self.add_node(
+                    block,
+                    None,
+                    Some(P::Value::from(LowValue::Array(array.into()))),
+                )
+            }
+        }
+    }
+
+    /// An array of element slots over `values`, at the full attribute width.
+    fn slot_array(&mut self, values: &[NodeId], block: BlockId) -> Option<NodeId> {
+        let attributes = self.slot_width()?;
+        let layout = self.slot_layout()?;
+        let mut items = Vec::with_capacity(values.len());
+        for &value in values {
+            let mut slot = vec![ArrayItem::new(Dyn(value))];
+            slot.push(ArrayItem::new(Dyn(self.add_node(block, None, None))));
+            for _ in 0..attributes {
+                let any = self.add_node(block, None, Some(P::Value::from(LowValue::Any)));
+                slot.push(ArrayItem::new(Dyn(any)));
+            }
+            let array = self.alloc_array(&slot, block);
+            let node = self.add_node(
+                block,
+                None,
+                Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                    array, layout,
+                )))),
+            );
+            items.push(ArrayItem::new(Dyn(node)));
+        }
         let array = self.alloc_array(&items, block);
-        self.add_node(
+        Some(self.add_node(
             block,
             None,
             Some(P::Value::from(LowValue::Array(array.into()))),
-        )
+        ))
+    }
+
+    /// The module's canonical attribute count: the default array's width past the
+    /// value and type positions.
+    fn slot_width(&self) -> Option<usize> {
+        // SAFETY: the default attributes are a live array of this module.
+        let width = unsafe { self.default_attributes()?.items() }.len();
+        Some(width.checked_sub(2)?)
+    }
+
+    /// The module's full-width attribute layout id.
+    fn slot_layout(&self) -> Option<u32> {
+        let attributes = self.slot_width()?;
+        self.layout_with_indices(&(0..attributes as u32).collect::<Vec<_>>())
     }
 
     /// An array value node over `nodes`, in `block`.
