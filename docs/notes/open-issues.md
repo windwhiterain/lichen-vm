@@ -35,11 +35,12 @@ temporary print (removed) traces one chain: `k`'s pair → its value → the `.i
 field's value → the `.b` slot → the value; the last container's **class holds a bare
 `USize(32)`**, with two members — one a template node of the kernel's function, one
 untagged. The checker's chain expects a pair at that position, so the value the body is
-evaluated against carries a bare scalar where the compound-slot encoding puts a pair. The
-only `32` in the prelude is `warp` (`warp = 32`, the perspective `Read`/`Write` put on
-their buffer field), so the next measurement is which attribute dispatch writes it into
-that class — the pattern fits a perspective reaching a value slot rather than an attribute
-slot.
+evaluated against carries a bare scalar where the compound-slot encoding puts a pair: the
+array the chain reaches is a **bare-element array**, its element a node holding `USize(32)`
+(the prelude's `warp`), while the checker's chain reads that element as a pair. This is the
+task `4645b439`'s own message names for the lowering-built values ("they must be built as
+slot arrays too"); the next step is to find the builder of that field array (the `.in`/`.out`
+value the body reads) and slot-encode it.
 
 The role walk itself is right (`roles.outputs = [[2, 0]]`: the `.out` field, its `.z`
 buffer). The `.to` resolution and the undecided-domain refusals follow from the same
