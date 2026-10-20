@@ -17,7 +17,3 @@ path = "src/bin/sync-readme.rs"
 # sub-language rather than the bare language the composer alone composes.
 lichen-compute.workspace = true
 lichen-language.workspace = true
-
-[dev-dependencies]
-# The layout test reads `cargo metadata`, so it parses the census Cargo reports.
-serde_json.workspace = true

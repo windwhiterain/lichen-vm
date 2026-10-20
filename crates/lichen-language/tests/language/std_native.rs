@@ -142,19 +142,12 @@ fn usize_of(value: &LangValue) -> usize {
 }
 
 /// The element values of an array (or tuple) value, evaluated in order.
+///
+/// # Invariant
+/// A compound's elements are complete slots, so the canonical reader resolves
+/// each one; this host's own value type is the language's.
 fn array_values(module: &Module<HostProgram>, value: &LangValue) -> Vec<LangValue> {
-    match AsEnum::<LowValue>::as_enum(value) {
-        Some(LowValue::Array(array)) => unsafe { array.items() }
-            .iter()
-            .map(|item| match item.node {
-                AnyNodeId::Dynamic(node) => module
-                    .node_value(AnyNodeId::Dynamic(node))
-                    .expect("an array element has a value"),
-                AnyNodeId::Static(_) => panic!("language arrays are dynamic"),
-            })
-            .collect(),
-        _ => panic!("expected an array value, got {value:?}"),
-    }
+    lichen_language::testing::array_values(module, value)
 }
 
 /// The `usize` elements of an array value, in order.

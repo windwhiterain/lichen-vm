@@ -15,7 +15,13 @@ where
     // SAFETY: `value` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, value) }?;
-    Some(items.iter().map(|item| item.node).collect())
+    // A member is a complete slot: the member's value is its first position.
+    Some(
+        items
+            .iter()
+            .map(|item| module.element_value_node(item.node).unwrap_or(item.node))
+            .collect(),
+    )
 }
 
 /// Whether `value` is a member of the set whose value is `set`. See

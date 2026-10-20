@@ -4,8 +4,11 @@
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg};
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
+use lichen_highlevel::shape;
 use lichen_lowlevel::codec::{OperatorCodec, Reader, Writer};
-use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt, Program};
+use lichen_lowlevel::{
+    AnyNodeId, ArrayItem, ArrayValue, BlockId, LowValue, Module, OperatorExt, Program,
+};
 use lichen_utils::extend::AsEnum;
 
 // Re-exported so a host builds the plugin's private op registry without
@@ -61,29 +64,56 @@ where
             };
             // SAFETY: `array` is the operand value's payload; its home block is
             // alive for all of `run`, so the slice stays valid.
-            let mut values: Vec<usize> = unsafe { array.items() }
-                .iter()
-                .filter_map(|item| {
-                    module
-                        .node_value(item.node)
-                        .and_then(|value| match value.as_enum() {
-                            Some(LowValue::USize(n)) => Some(n),
-                            _ => None,
-                        })
-                })
-                .collect();
+            let mut values: Vec<usize> = Vec::new();
+            for item in unsafe { array.items() }.iter() {
+                // A compound element is a complete slot: the value is its first
+                // position, and a bare operand array's element is the value itself.
+                let Some(element) = module.element_value_node(item.node) else {
+                    continue;
+                };
+                if let Some(LowValue::USize(n)) =
+                    module.node_value(element).and_then(|value| value.as_enum())
+                {
+                    values.push(n);
+                }
+            }
             values.sort_unstable();
-            let items: Vec<ArrayItem> = values
-                .into_iter()
-                .map(|n| {
-                    let node = module.add_node(
+            // The sorted array's elements are slots too: the value, an undecided
+            // type and the wildcards, at the module's full attribute width.
+            // SAFETY: the default attributes are a live array of this module.
+            let width = unsafe { module.default_attributes()?.items() }.len();
+            let indices: Vec<u32> =
+                (0..width.saturating_sub(shape::PAIR_ATTR_BASE) as u32).collect();
+            let layout = module.layout_with_indices(&indices)?;
+            let mut items: Vec<ArrayItem> = Vec::with_capacity(values.len());
+            for n in values {
+                let value = module.add_node(
+                    block,
+                    None,
+                    Some(<P::Value as From<LowValue>>::from(LowValue::USize(n))),
+                );
+                let mut slot = vec![ArrayItem::new(AnyNodeId::Dynamic(value))];
+                slot.push(ArrayItem::new(AnyNodeId::Dynamic(
+                    module.add_node(block, None, None),
+                )));
+                for _ in indices.iter() {
+                    let any = module.add_node(
                         block,
                         None,
-                        Some(<P::Value as From<LowValue>>::from(LowValue::USize(n))),
+                        Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
                     );
-                    ArrayItem::new(AnyNodeId::Dynamic(node))
-                })
-                .collect();
+                    slot.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
+                }
+                let handle = module.alloc_array(&slot, block);
+                let slot = module.add_node(
+                    block,
+                    None,
+                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                        ArrayValue::with_layout(handle, layout),
+                    ))),
+                );
+                items.push(ArrayItem::new(AnyNodeId::Dynamic(slot)));
+            }
             let handle = module.alloc_array(&items, block);
             Some(<P::Value as From<LowValue>>::from(LowValue::Array(
                 handle.into(),
