@@ -339,6 +339,31 @@ where
         self.argument_field(argument, position)
     }
 
+    /// The **value** a stated attribute slot answers, following the pair encoding.
+    ///
+    /// # Invariant
+    /// A slot is `[value, type]` and a call holds the applied return pair, so the chain
+    /// is followed until a value that is not a pair; an undecided position is a hole.
+    fn attribute_value(&mut self, slot: NodeId) -> Option<P::Value> {
+        let mut node = slot;
+        for _ in 0..8 {
+            self.module.evaluate_node_deep(node, None);
+            let value = self.node_value(node)?;
+            if let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value)
+                && array.layout() != 0
+            {
+                // SAFETY: the node's own payload, alive for this read.
+                let next = unsafe { array.items() }.first().map(|item| item.node);
+                if let Some(next) = next {
+                    node = self.module.as_dynamic(next, self.current_block);
+                    continue;
+                }
+            }
+            return Some(value);
+        }
+        None
+    }
+
     /// The argument's field at `position` of its struct type's order, following
     /// the written names when they reorder.
     fn argument_field(&mut self, argument: ExprId, position: usize) -> Option<ExprId> {
@@ -595,11 +620,8 @@ where
         {
             let value = slot_value_node(&*self, slot);
             // A decidable certificate is decided here; an undecided one is a hole.
-            self.module.evaluate_node_deep(value, None);
-            // A decided value is the slot's own, whether the node is a literal or
-            // an operation the evaluation settled.
             let decided = self
-                .node_value(value)
+                .attribute_value(slot)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
             match decided {
                 // A hole: the result follows a field the clone's reference names, or

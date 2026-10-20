@@ -115,19 +115,26 @@ impl<P: Program> Module<P> {
         else {
             return false;
         };
-        // The frozen return pair, cloned like the signature.
-        let applied = {
-            let module = self.static_module(function.module);
-            let r#return = module
-                .functions
-                .get(function.index.0)
-                .map(|entry| entry.r#return);
-            r#return.map(|r#return| {
-                self.clone_static_signature_node(&module, r#return, block, &mut remap)
-            })
-        };
-        if let Some(applied) = applied {
+        // The return pair through the signature's remap, so the graph stays bound.
+        let module = self.static_module(function.module);
+        let applied = module
+            .functions
+            .get(function.index.0)
+            .map(|entry| entry.r#return);
+        let mut remap = remap;
+        if let Some(r#return) = applied {
+            let mut ctx = StaticApplyCtx {
+                target: block,
+                module,
+                remap,
+                applied: function.index,
+                branch_top: None,
+                tag: self.nodes[node].function,
+                origin: self.nodes[node].origin.unwrap_or(node),
+            };
+            let applied = self.static_node_apply(r#return, &mut ctx);
             self.applied_pairs.insert(node, applied);
+            remap = ctx.remap;
         }
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
@@ -174,12 +181,22 @@ impl<P: Program> Module<P> {
         else {
             return;
         };
-        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        let applied = self.clone_static_signature_node(&module, r#return, block, &mut remap);
-        self.applied_pairs.insert(node, applied);
-        if let Some(&cloned_parameter) = remap.get(&parameter) {
+        // The body graph, not its pair: a frozen reference is a static ref otherwise.
+        let mut ctx = StaticApplyCtx {
+            target: block,
+            module,
+            remap: HashMap::new(),
+            applied: function.index,
+            branch_top: None,
+            tag: self.nodes[node].function,
+            origin: self.nodes[node].origin.unwrap_or(node),
+        };
+        let applied = self.static_node_apply(r#return, &mut ctx);
+        self.static_node_apply(parameter, &mut ctx);
+        if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
             self.applied_parameters.insert(node, cloned_parameter);
         }
+        self.applied_pairs.insert(node, applied);
     }
 
     /// The frozen asserts, cloned through the signature copies' remap.
