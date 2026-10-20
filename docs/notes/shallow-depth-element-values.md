@@ -557,3 +557,22 @@ Dumped with temporary prints, then removed:
   template node shared by every level; the type side's value merge is what joins the
   levels' parameter cells, so the fix has to keep the reporting merge while making it
   per-evaluation — not remove it.
+
+## 17. The recursive call's clones are chained, not independent (round twenty-four)
+
+Measured on `a_recursive_binding_inside_a_block_recurses`, prints since removed. The
+user's question — every call clones, so why does one node carry both calls' values? —
+is answered by the **origin chains** of the two compared nodes:
+
+- the parameter side is a clone chain `498 → 440 → 252 → 30`; the two templates are
+  `30` (a value slot, no value) and `42` (the `z - 1` Sub), and their **classes are
+  different** (`class(30) = 30`, `class(42) = 42`, measured).
+- But the clone made for the second call has origin `252` — **the first call's clone**
+  — not the template `30`. So the second call's clone was made *from the first call's
+  clone*, and it carries that call's value `3`; the argument clone carries `2`; the
+  parameter check unifies them and reports `3` against `2`.
+
+So the levels are not independent: the walk hands an earlier instantiation's clone to
+the next instantiation. The next measurement is *who references `252` in the template
+graph* — the walk's source, which decides whether the fix belongs in the clone rule's
+reference-in-place decision or in what the block's record field holds.
