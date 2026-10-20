@@ -51,6 +51,18 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The nested conflict is a checker typing, and the obvious repair breaks the prelude.**
+`prepare_template_low_types` seeds a pair's *value* with its type slot's shape, and the
+pair wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the
+container's type, not the element's. `check_index` types every element read with
+`elem_cell` (the **array** element type path
+`[TYPE_SHAPE_SLOT, ARRAY_TYPE_ELEMENT_SLOT, PAIR_TYPE_SLOT]`) and throws away
+`slot_read`'s own `element_ty` (`let _ = element_ty`); for a tuple/struct container the
+type must be the element **slot's** own type cell. Swapping to `element_ty` makes the
+embedded prelude fail to check ("this value is not a container — it has no element to
+read"), so the repair must keep the type-cell identity: choose the element slot's type
+cell for tuple/struct containers and the array element type only for arrays.
+
 **A nested tuple domain decodes, then conflicts with the class channel.** With the
 domain reader fixed, the simple `tuple{Int, Int}` jit compiles; the nested program
 (`tuple{tuple{Int, Int}, Int}`) still refused. A discriminator that recognises a **type
