@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The empty callee is the apply's only unstated operand.** The template apply's four
+operands read `[<none>, array, array, array]` — the callee alone has no value, while the
+argument pair, the result type cell and the function type are all decided arrays; the two
+sibling applies in the same body read a static function in that position. So the template
+stores a wildcard as the callee value; the clone then mints its empty cell. `slot_pair`'s
+attribute tail is where wildcards are minted for pairs, so the next question is whether the
+apply's callee operand *is* a pair's attribute slot rather than the function value — the
+operand order of `value_apply` is the thing to re-read.
+
 **The empty callee is a wildcard minted by the clone walk.** A backtrace on the 383rd
 empty node names `node_apply`'s **wildcard branch** inside `value_apply`: the template
 apply's operand array holds a **wildcard** (`Any`) at that position, and the clone walk
