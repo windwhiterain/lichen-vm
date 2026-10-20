@@ -174,18 +174,19 @@ impl<P: Program> Module<P> {
     /// because the seed and the observation of one value agree (the highlevel
     /// invariant, `docs/notes/lowlevel-low-types.md`).
     pub fn refine_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
-        let Some(entry) = self.nodes.get_mut(self.class_root(node)) else {
+        let root = self.class_root(node);
+        let Some(current) = self.nodes.get(root).map(|entry| entry.low_shape.clone()) else {
             return false;
         };
-        match &mut entry.low_shape {
+        match current {
             None => {
-                entry.low_shape = Some(shape);
+                self.nodes.get_mut(root).expect("a live class").low_shape = Some(shape);
                 true
             }
             Some(current) => {
                 debug_assert_eq!(
-                    current, &shape,
-                    "a class states one shape: its seed and its observation agree"
+                    current, shape,
+                    "a class states one shape: its seed and its observation agree (node {node:?})"
                 );
                 false
             }

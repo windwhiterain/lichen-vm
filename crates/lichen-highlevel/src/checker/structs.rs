@@ -107,8 +107,7 @@ where
             Some(value_ops),
         );
         self.stamp_read_node(element);
-        // A struct's fields are slots: the element is the field's
-        // `[value, type, attrs]` pair, so the value is its first position.
+        // A struct's fields are slots: the value is the slot's first position.
         let is_struct = shape::is_struct_type_any(
             &mut self.module,
             self.type_expr,

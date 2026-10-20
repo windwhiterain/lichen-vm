@@ -797,7 +797,9 @@ pub fn prepare_template_low_types<P: Program>(
         }
         // SAFETY: `array` is the payload of a value of this module.
         let items = unsafe { array.items() };
-        if items.len() < PAIR_ATTR_BASE {
+        // A term is **full width** (`docs/notes/attributes.md`).
+        let width = PAIR_ATTR_BASE + module.attribute_layout(array.layout()).len();
+        if items.len() != width {
             continue;
         }
         let Some(shape) = low_type_of_slot(module, items[PAIR_TYPE_SLOT].node) else {
@@ -1036,15 +1038,17 @@ pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Opti
 where
     P::Value: ValueType,
 {
-    if let Some(direct) = low_type_of(module, slot) {
-        return Some(direct);
-    }
-    // The pair indirection: the term's own value slot, tried once.
+    // A type expression's term holds the type value at its first position.
 
     // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    let items = unsafe { array_items(module, slot) }?;
-    low_type_of(module, items.first()?.node)
+    if let Some(items) = unsafe { array_items(module, slot) }
+        && let Some(value) = items.first().map(|item| item.node)
+        && let Some(shape) = low_type_of(module, value)
+    {
+        return Some(shape);
+    }
+    low_type_of(module, slot)
 }
 
 /// [`low_type_of`]'s array arm; `None` when the length is undecided.

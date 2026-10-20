@@ -301,7 +301,8 @@ where
                     .printer
                     .slot_type_any(shape[i].node)
                     .unwrap_or(shape[i].node);
-                out.push(self.element_any(v.node, ty));
+                let (value, ty) = self.element_slot(v.node, ty);
+                out.push(self.element_any(value, ty));
             }
             return Some(self.parens(&out));
         }
@@ -317,7 +318,8 @@ where
                 .unwrap_or(shape[0].node);
             let mut out = Vec::with_capacity(values.len());
             for v in values {
-                out.push(self.element_any(v.node, element_ty));
+                let (value, ty) = self.element_slot(v.node, element_ty);
+                out.push(self.element_any(value, ty));
             }
             return Some(format!("[{}]", out.join(", ")));
         }
@@ -333,7 +335,8 @@ where
                 .unwrap_or(shape[0].node);
             let mut out = Vec::with_capacity(values.len());
             for v in values {
-                out.push(self.element_any(v.node, element_ty));
+                let (value, ty) = self.element_slot(v.node, element_ty);
+                out.push(self.element_any(value, ty));
             }
             return Some(format!("set({})", out.join(", ")));
         }
@@ -352,7 +355,8 @@ where
                     .printer
                     .slot_type_any(fields[i].node)
                     .unwrap_or(fields[i].node);
-                out.push(self.element_any(v.node, ty));
+                let (value, ty) = self.element_slot(v.node, ty);
+                out.push(self.element_any(value, ty));
             }
             return Some(self.parens(&out));
         }
@@ -378,7 +382,26 @@ where
     /// refs, and each is met here in turn, so a reused cell prints as its form rather than as
     /// a raw dump. The cycle guards cover both halves: a dynamic value node by id, a type node
     /// by its absolute ref.
+    /// A compound's element: the value and type its slot states.
+    fn element_slot(&self, element: AnyNodeId, shape_ty: AnyNodeId) -> (AnyNodeId, AnyNodeId) {
+        let Some(LowValue::Array(array)) =
+            self.module.node_value(element).and_then(|v| v.as_enum())
+        else {
+            return (element, shape_ty);
+        };
+        if array.layout() == 0 {
+            return (element, shape_ty);
+        }
+        // SAFETY: `array` is the payload of a value of the module being rendered.
+        let items = unsafe { array.items() };
+        let value = items.first().map(|item| item.node).unwrap_or(element);
+        let ty = items.get(1).map(|item| item.node).unwrap_or(shape_ty);
+        (value, ty)
+    }
+
     pub(super) fn element_any(&mut self, id: AnyNodeId, ty: AnyNodeId) -> String {
+        // A compound's element is a slot: print its value against its own type.
+        let (id, ty) = self.element_slot(id, ty);
         if self.tpath.contains(ty) {
             return "…".to_string();
         }

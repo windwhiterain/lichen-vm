@@ -40,7 +40,7 @@ fn evaluate(source: &str) -> LangValue {
         .expect("the program's root value is undecided")
 }
 
-/// The node ids of an array value.
+/// The node ids of an array value: an element slot answers its value position.
 fn array_ids(value: LangValue) -> Vec<NodeId> {
     let LangValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
@@ -49,15 +49,46 @@ fn array_ids(value: LangValue) -> Vec<NodeId> {
     // block has not been dropped.
     unsafe { array.items() }
         .iter()
-        .map(|item| dyn_node(item.node))
+        .map(|item| match item.node {
+            AnyNodeId::Dynamic(node) => dyn_node(AnyNodeId::Dynamic(node)),
+            AnyNodeId::Static(_) => panic!("a static element in a language value"),
+        })
         .collect()
 }
 
+/// The value a node holds: a compound element slot answers its value position.
+fn element_value(module: &mut Module<LangProgram>, node: NodeId) -> Option<LangValue> {
+    let mut value = module.node_value(AnyNodeId::Dynamic(node));
+    while let Some(LangValue::LowValue(LowValue::Array(array))) = &value {
+        if array.layout() == 0 {
+            break;
+        }
+        // SAFETY: `array` is the payload of a value of the module under test.
+        let first = unsafe { array.items() }.first().map(|item| item.node);
+        value = match first {
+            Some(AnyNodeId::Dynamic(node)) => module.node_value(AnyNodeId::Dynamic(node)),
+            _ => None,
+        };
+    }
+    value
+}
+
+/// The `usize` a node holds, through its element slot.
+fn usize_of_node(module: &mut Module<LangProgram>, node: NodeId) -> usize {
+    let value = element_value(module, node).expect("a decided element");
+    usize_of(&value)
+}
+
 fn usize_of(value: &LangValue) -> usize {
-    let LangValue::LowValue(LowValue::USize(n)) = value else {
-        panic!("expected a usize value, got {value:?}");
-    };
-    *n
+    match value {
+        LangValue::LowValue(LowValue::Array(slot)) if slot.layout() != 0 => {
+            // SAFETY: a slot of a value the module just produced.
+            let first = unsafe { slot.items() }.first().map(|item| item.node);
+            panic!("expected a usize value, got a slot with first {first:?}");
+        }
+        LangValue::LowValue(LowValue::USize(n)) => *n,
+        _ => panic!("expected a usize value, got {value:?}"),
+    }
 }
 
 /// The rendered diagnostics of a failing program.
@@ -118,18 +149,10 @@ fn the_polymorphic_identity_checks() {
     let value = module.evaluate_node_deep(root, None).unwrap();
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2, "the tuple has two elements");
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        5
-    );
+    assert_eq!(usize_of_node(&mut module, ids[0]), 5);
     assert!(
         matches!(
-            module.node_value(AnyNodeId::Dynamic(ids[1])),
+            element_value(&mut module, ids[1]),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -146,7 +169,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
-            module.node_value(AnyNodeId::Dynamic(id)),
+            element_value(&mut module, id),
             Some(LangValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );
@@ -279,24 +302,8 @@ fn a_binding_used_twice_shares_one_node() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        5
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        5
-    );
+    assert_eq!(usize_of_node(&mut module, ids[0]), 5);
+    assert_eq!(usize_of_node(&mut module, ids[1]), 5);
 }
 
 #[test]
@@ -307,18 +314,10 @@ fn a_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        5
-    );
+    assert_eq!(usize_of_node(&mut module, ids[0]), 5);
     assert!(
         matches!(
-            module.node_value(AnyNodeId::Dynamic(ids[1])),
+            element_value(&mut module, ids[1]),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -404,18 +403,10 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        5
-    );
+    assert_eq!(usize_of_node(&mut module, ids[0]), 5);
     assert!(
         matches!(
-            module.node_value(AnyNodeId::Dynamic(ids[1])),
+            element_value(&mut module, ids[1]),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -1052,7 +1043,7 @@ fn a_bound_struct_type_is_reusable() {
     assert_eq!(ids.len(), 2);
     for id in ids {
         assert!(matches!(
-            module.node_value(AnyNodeId::Dynamic(id)),
+            element_value(&mut module, id),
             Some(LangValue::LowValue(LowValue::Array(_)))
         ));
     }
@@ -1126,35 +1117,13 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     let mut module = module;
     let instance = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(instance.len(), 2, "the instance wraps its two field values");
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(instance[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        3
-    );
-    let inner = array_ids(module.evaluate_node_deep(instance[1], None).unwrap());
+    assert_eq!(usize_of_node(&mut module, instance[0]), 3);
+    let inner_value =
+        element_value(&mut module, instance[1]).expect("the inner element is decided");
+    let inner = array_ids(inner_value);
     assert_eq!(inner.len(), 2, "the inner struct wraps its own two fields");
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(inner[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        10
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(inner[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        20
-    );
+    assert_eq!(usize_of_node(&mut module, inner[0]), 10);
+    assert_eq!(usize_of_node(&mut module, inner[1]), 20);
     // The id is the *occurrence*, not the instantiation.
     let d = diags(
         "A = I => struct{.n Int, .I I}\n\
@@ -1546,17 +1515,9 @@ fn a_struct_instance_reads_its_fields_by_name() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of_node(&mut module, ids[0]), 1);
     assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        1
-    );
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        element_value(&mut module, ids[1]),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
@@ -1602,17 +1563,12 @@ fn a_named_struct_instantiation_reorders_arguments() {
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
+        usize_of_node(&mut module, ids[0]),
         1,
         "a.x reads the reordered .x field"
     );
     assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        element_value(&mut module, ids[1]),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "a.y reads the reordered .y field"
     );
@@ -1634,17 +1590,9 @@ fn a_named_struct_instantiation_mixes_positional_and_named() {
     let (module, root) = run("S = struct{.x Int, .y Type}; a = S(.y Int, 1); (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
+    assert_eq!(usize_of_node(&mut module, ids[0]), 1);
     assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        1
-    );
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        element_value(&mut module, ids[1]),
         Some(LangValue::TypeValue(TypeValue::TypeInt))
     );
 }
@@ -1816,18 +1764,9 @@ fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of_node(&mut module, ids[0]), 1, "a.x");
     assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        1,
-        "a.x"
-    );
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        element_value(&mut module, ids[1]),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "a.y"
     );
@@ -1887,25 +1826,11 @@ fn a_bare_expression_in_a_block_is_a_statement_not_a_field() {
     let fields = array_ids(module.evaluate_node_deep(ids[0], None).unwrap());
     assert_eq!(fields.len(), 1, "only the binding is a field");
     assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(fields[0]))
-                .as_ref()
-                .unwrap()
-        ),
+        usize_of_node(&mut module, fields[0]),
         2,
         "the binding's value, not the discarded expression's"
     );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        2,
-        "a.x reads it"
-    );
+    assert_eq!(usize_of_node(&mut module, ids[1]), 2, "a.x reads it");
 }
 
 #[test]
