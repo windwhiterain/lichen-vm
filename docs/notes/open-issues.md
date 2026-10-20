@@ -33,6 +33,21 @@ the encoding's value reads, `assemble_parameter` builds a structure of slots, an
 `place_of_node` walks through type cells. Graph JIT is **1/10** (was 0/10); the whole
 compute suite is **97 passed** (was 81 at `7ac3e639`'s predecessor measurement).
 
+**The provided slot reads the type first** (`640b2705`): a compound's element attributes
+are read from its **type's** element slots before the value's components. The two
+`perspective_requirements` failures stay because the missing piece is upstream, measured:
+the frozen callee's return attribute is a **hole** in the artifact (its attribute position
+serializes as the wildcard), the reference analysis that named the field (`attr_refs`/
+`attribute_reference`) was deleted with `5146f747`, and a **term's own** attribute has no
+type position at all — a type value is `[shape, kind]` (a compound written type, whose
+*element* slots do carry attributes) or a first-class `TypeValue` for scalars, so
+`x # a`'s attribute lives only on the term's pair. Writing it into the type was tried and
+measured: the type unify fails (`expected struct{…}, found raw[…]`) for the first-class
+form, and the `.value` field's provided slot still drives the combine. So the field-level
+reference needs a decision, not another reader: carry the attribute in the type value
+(a type-encoding change), or record the referenced field again (the deleted
+`return_field`/`return_marker`, the cheap path now that `provided_slot` reads the type).
+
 **Where the compute block broke — measured by bisect.** The whole suite was **250/253**
 at `9ed0ee4b` (the attribute squash) and **81 passed** at `7ac3e639`. Two commits carry
 the drop:
