@@ -64,6 +64,7 @@ impl<P: Program> Module<P> {
             nodes: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
+            applied_pairs: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
@@ -648,9 +649,7 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
-            return_field: None,
-            return_marker: None,
-            return_certificate: None,
+
             return_type: NodeId::default(),
             static_origin: None,
             parent,

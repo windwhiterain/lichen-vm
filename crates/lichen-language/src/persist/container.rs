@@ -108,18 +108,7 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
-        // The return's argument field, `u8::MAX` meaning none.
-        w.u8(u8::try_from(function.return_field.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
-        // The certificate's canonical position, `u8::MAX` meaning none.
-        w.u8(u8::try_from(function.return_marker.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
-        // The return's certificate, when its source stated one.
-        match function.return_certificate {
-            None => w.u8(0),
-            Some(certificate) => {
-                w.u8(1);
-                w.u64(certificate.index as u64);
-            }
-        }
+
         // The re-export origin: a raw module key + function index.
         match function.origin {
             None => w.u8(0),
@@ -417,18 +406,6 @@ where
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
         let return_type = read_node_id(&mut r, node_count, "function return type")?;
-        let tag = |byte: u8| (byte != u8::MAX).then_some(u32::from(byte));
-        let return_field = tag(r.u8()?);
-        let return_marker = tag(r.u8()?);
-        let return_certificate = match r.u8()? {
-            0 => None,
-            1 => Some(read_node_id(
-                &mut r,
-                node_count,
-                "function return certificate",
-            )?),
-            _ => return Err("bad function certificate tag".into()),
-        };
         let origin = match r.u8()? {
             0 => None,
             1 => Some(StaticFunctionRef {
@@ -453,9 +430,6 @@ where
         }
         functions.push(StaticFunction {
             parameter,
-            return_field,
-            return_marker,
-            return_certificate,
             r#return,
             return_type,
             origin,

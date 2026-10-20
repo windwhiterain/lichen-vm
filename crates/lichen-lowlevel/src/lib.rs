@@ -795,13 +795,6 @@ pub struct Function {
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
-    /// The argument field a call's result follows, by position: set when the
-    /// return names a parameter field.
-    pub return_field: Option<u32>,
-    /// The return certificate's attribute marker position.
-    pub return_marker: Option<u32>,
-    /// The return's certificate: a body fact, copied at each call site.
-    pub return_certificate: Option<NodeId>,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
     /// The static function this closure was materialized from; `None` for a source closure.
@@ -830,12 +823,6 @@ pub struct Function {
 
 pub struct StaticFunction {
     pub parameter: LocalNodeId,
-    /// The static mirror of [`Function::return_field`].
-    pub return_field: Option<u32>,
-    /// The static mirror of [`Function::return_marker`].
-    pub return_marker: Option<u32>,
-    /// The static mirror of [`Function::return_certificate`].
-    pub return_certificate: Option<LocalNodeId>,
     pub r#return: LocalNodeId,
     /// The static mirror of [`Function::return_type`].
     pub return_type: LocalNodeId,
@@ -959,6 +946,8 @@ pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
+    /// The clone's return pair of each type-side apply, keyed by the apply node.
+    pub applied_pairs: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant

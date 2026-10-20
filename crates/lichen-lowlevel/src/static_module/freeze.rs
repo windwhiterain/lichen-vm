@@ -155,11 +155,6 @@ impl<P: Program> StaticModule<P> {
             function_map.insert(id, StaticFunctionId(functions.len()));
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
-                return_field: function.return_field,
-                return_marker: function.return_marker,
-                return_certificate: function
-                    .return_certificate
-                    .map(|certificate| node_map[&certificate]),
                 r#return: node_map[&function.r#return],
                 // A hand-built function may leave `return_type` unset; fall back to the
                 // return node, always mapped.

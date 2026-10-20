@@ -84,25 +84,23 @@ pair stays dense while a compound's *element slot* is full width (a slot is neve
 type value: `docs/notes/compound-element-slots.md`). The canonical positions still
 travel with the pair: a function's **parameter pair** states its requirement at the
 attribute's canonical position (the pair rides the artifact), and the **return
-certificate** plus its marker index is a recorded body fact (`Function::return_marker`/
-`return_certificate`), because a call's own attribute is checker state until the call
-runs. So a frozen call reads the requirement from the signature pair exactly as a source
-call does.
+certificate** is the applied clone's own return pair: the call's attribute is the
+clone's stated attribute, exactly as the call's type is the clone's codomain. So a
+frozen call reads the requirement from the signature pair exactly as a source call does.
 
 **A return attribute computed from the argument follows it.** The vocabulary writes
 `perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and a return
 spells `# (perspective_of x)` or `# (perspective_of x.to)`. The checker recognizes the
 **shape**, never the callee's name: a call whose argument is the enclosing parameter (or
-one of its fields) is a **reference** (`Checker::attribute_reference`). A reference to a
-field records its position in the parameter's struct (`Function::return_field`, persisted
-in the artifact) and the call site maps it through the constructor's written names, so a
-reordered field list still selects the named field; a reference to the whole parameter
-leaves the certificate a hole, and the call site takes the argument's **provided** slot.
-So `compute.read`'s result is `divisor(from, at)` evaluated per call site, and
-`compute.write`'s output buffer carries the input buffer's perspective whatever the
-written index and value are. The reference slot is a fresh cell, and the annotation's
-computed value is not validated against the body's provider — the body cannot know the
-caller's value, so the check belongs to the call site (`docs/notes/array-attribute-view.md`).
+one of its fields) is a **reference** (`Checker::attribute_reference`). The applied
+clone's return pair states the call's attribute: a reference to the whole parameter is
+decided against the argument's provided slot, and a reference the clone can decide (a
+field of a **dynamic** callee's bound parameter) is decided per call site. A frozen
+callee's reference is only materialized by the runtime apply, so a *static* field
+reference falls back to the argument's whole provided slot. The reference slot is a
+fresh cell, and the annotation's computed value is not validated against the body's
+provider — the body cannot know the caller's value, so the check belongs to the call
+site (`docs/notes/array-attribute-view.md`).
 
 ## The extension point (`AttrExt`)
 
@@ -165,10 +163,9 @@ sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.li
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
 the lattice's bottom: the value is uniform over exactly its own thread. A frozen
 callee's parameter requirement is the **parameter pair's** stated attribute at its
-canonical position (the pair rides the artifact); the return certificate and its marker
-are the recorded body facts (`StaticFunction::return_marker`/`return_certificate`), and
-a call site copies the decided certificate onto the call (`Checker::check_app`,
-`Module::materialize_static_return_certificate`). So a false claim is refused:
+canonical position (the pair rides the artifact); the return certificate is the applied
+clone's return pair, materialized per call (`Checker::check_app`, `Module::applied_pairs`).
+So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
 
 **An attribute slot is unified like any other slot.** The superior's verdict: if an

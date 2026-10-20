@@ -163,7 +163,7 @@ whose argument is the enclosing parameter is a reference to the whole argument, 
 whose argument is a named field of it is a reference to that field. The slot is a fresh
 cell and the call site resolves it — the whole-parameter case through the certificate
 hole's fallback (the argument's provided slot), the field case through
-`Function::return_field`.
+the applied clone's return pair.
 
 `# @any` reverted to the wildcard's plain meaning (a stated wildcard certificate is
 copied like any decided one); the `@any`-on-a-return overload is gone.

@@ -186,6 +186,9 @@ impl<P: Program> Module<P> {
         // The result is the clone's return type, resolved before the bind; the
         // deep pass replicates to no class member.
         let applied = instantiation.applied;
+        // The clone's return pair: the applied call's own pair, which states the
+        // attribute as the source return does.
+        self.applied_pairs.insert(node, applied);
         // Only a clone whose pair is absent is evaluated; forcing one that answers costs an
         // apply the deep budget counts.
         if self.pair_type_item(applied).is_none() {
@@ -240,7 +243,12 @@ impl<P: Program> Module<P> {
             AnyFunctionId::Static(function) if report => {
                 self.static_function_type_apply(function, argument, block, node, Some(cell), check)
             }
-            AnyFunctionId::Static(_) => false,
+            AnyFunctionId::Static(function) => {
+                // Nothing reports here, but the return pair still records the applied
+                // call's own attribute state.
+                self.record_static_applied_pair(function, block, node);
+                false
+            }
         }
     }
 
@@ -614,25 +622,12 @@ impl<P: Program> Module<P> {
                     return P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(minted)));
                 }
                 // A cloned function's scope is mapped like an array and homed on the target block.
-                let (
-                    scope,
-                    r#return,
-                    parameter,
-                    return_field,
-                    return_marker,
-                    return_certificate,
-                    return_type,
-                    static_origin,
-                    asserts,
-                ) = {
+                let (scope, r#return, parameter, return_type, static_origin, asserts) = {
                     let function = &self.functions[function];
                     (
                         function.nodes.clone(),
                         function.r#return,
                         function.parameter,
-                        function.return_field,
-                        function.return_marker,
-                        function.return_certificate,
                         function.return_type,
                         function.static_origin,
                         function.asserts.clone(),
@@ -644,9 +639,6 @@ impl<P: Program> Module<P> {
                     nodes: Vec::new(),
                     r#return,
                     parameter,
-                    return_field,
-                    return_marker,
-                    return_certificate,
                     return_type: NodeId::default(),
                     // A clone of a materialized static closure is still that
                     // logical function, so the static origin travels with it.

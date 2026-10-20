@@ -110,11 +110,25 @@ impl<P: Program> Module<P> {
         if self.depth_exhausted(node) {
             return false;
         }
-        let Some((parameter, codomain, remap)) =
+        let Some((parameter, codomain, mut remap)) =
             self.materialize_static_signature_with_classes(function, block)
         else {
             return false;
         };
+        // The frozen return pair, cloned like the signature.
+        let applied = {
+            let module = self.static_module(function.module);
+            let r#return = module
+                .functions
+                .get(function.index.0)
+                .map(|entry| entry.r#return);
+            r#return.map(|r#return| {
+                self.clone_static_signature_node(&module, r#return, block, &mut remap)
+            })
+        };
+        if let Some(applied) = applied {
+            self.applied_pairs.insert(node, applied);
+        }
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
             let failed = self.apply_parameter_check(
@@ -141,6 +155,26 @@ impl<P: Program> Module<P> {
         self.evaluate_node(Dyn(codomain), Some(block));
         self.unify(cell, codomain);
         true
+    }
+
+    /// The frozen return pair, cloned into `block` and recorded as the applied pair.
+    pub(crate) fn record_static_applied_pair(
+        &mut self,
+        function: StaticFunctionRef,
+        block: BlockId,
+        node: NodeId,
+    ) {
+        let module = self.static_module(function.module);
+        let Some(r#return) = module
+            .functions
+            .get(function.index.0)
+            .map(|entry| entry.r#return)
+        else {
+            return;
+        };
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        let applied = self.clone_static_signature_node(&module, r#return, block, &mut remap);
+        self.applied_pairs.insert(node, applied);
     }
 
     /// The frozen asserts, cloned through the signature copies' remap.
@@ -176,19 +210,6 @@ impl<P: Program> Module<P> {
                 });
             }
         }
-    }
-
-    /// The frozen return's certificate, copied into `block`.
-    #[stacksafe]
-    pub fn materialize_static_return_certificate(
-        &mut self,
-        function: StaticFunctionRef,
-        block: BlockId,
-    ) -> Option<NodeId> {
-        let module = self.static_module(function.module);
-        let certificate = module.functions.get(function.index.0)?.return_certificate?;
-        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        Some(self.clone_static_signature_node(&module, certificate, block, &mut remap))
     }
 
     /// A frozen signature pair copied into `block`.
@@ -444,12 +465,11 @@ impl<P: Program> Module<P> {
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
-        let (r#return, parameter, return_field, return_type, asserts, scope) = {
+        let (r#return, parameter, return_type, asserts, scope) = {
             let f = &ctx.module.functions[sref.index.0];
             (
                 f.r#return,
                 f.parameter,
-                f.return_field,
                 f.return_type,
                 f.asserts.clone(),
                 f.nodes.clone(),
@@ -461,10 +481,6 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
-            return_field,
-            return_marker: None,
-            // The certificate stays in the artifact.
-            return_certificate: None,
             return_type: NodeId::default(),
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.

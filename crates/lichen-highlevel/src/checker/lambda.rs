@@ -163,26 +163,6 @@ where
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
-        // Body facts: a call's attribute is unstated until the call runs.
-        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
-            let tail = self.schema_tail(r#return).to_vec();
-            self.module.functions[function].return_marker = tail
-                .iter()
-                .rev()
-                .find(|marker| {
-                    self.attribute_extension(*marker)
-                        .is_some_and(|ext| !ext.is_label())
-                })
-                .map(|marker| marker.order_index() as u32);
-            self.module.functions[function].return_certificate = self.state[r#return].attr;
-            if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
-                && let Some(parameter_type) = self.state[parameter].ty
-            {
-                let position = self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
-                self.module.functions[function].return_field =
-                    position.map(|position| position as u32);
-            }
-        }
         self.scopes.pop();
         self.current_block = saved;
         // The value node pre-exists — the self-reference applied it during the
@@ -368,24 +348,6 @@ where
             .first()
             .map(|(attribute, value)| (Some(*attribute), Some(*value)))
             .unwrap_or((None, None));
-        // The certificate and its marker are the recorded body facts.
-        let (return_marker, certificate) = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => (
-                self.module.functions[fid]
-                    .return_marker
-                    .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
-                self.module.functions[fid].return_certificate,
-            ),
-            Some(AnyFunctionId::Static(sref)) => (
-                self.module
-                    .static_function_markers(sref)
-                    .1
-                    .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
-                self.module
-                    .materialize_static_return_certificate(sref, self.current_block),
-            ),
-            None => (None, None),
-        };
         // The positional unify compares slot to slot; attribute equality is
         // checked below, the clone resetting its own cells.
         let argument_value = self.value_of(argument);
@@ -520,34 +482,33 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
-        // **The callee's return certificate is the call's** (attributes.md), decided
-        // once here.
-        let certificate = match (return_marker, certificate) {
-            (Some(marker), Some(slot)) => Some((slot, marker.order_index() as u32)),
-            _ => None,
-        };
-        // A return naming an argument field follows it per call: the output
-        // buffer's perspective is the input buffer's.
-        let return_field = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].return_field,
-            Some(AnyFunctionId::Static(sref)) => self.module.static_function_return_field(sref),
-            None => None,
-        };
-        if let (Some(position), Some(marker)) = (return_field, return_marker) {
-            // A return naming an argument field follows that field per call: the
-            // output buffer's perspective is the input buffer's.
-            if let Some(field) = self.argument_field(argument, position as usize)
-                && let Some(ext) = self.attribute_extension(&marker)
-            {
-                let provided = self.provided_slot(field, &marker, ext);
-                self.state[e].attr = Some(provided);
-                self.merged_tails.insert(e, vec![marker]);
+        // The applied clone's return pair states the call's attribute.
+        let returns_parameter = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => {
+                self.module.functions[fid].parameter == self.module.functions[fid].r#return
             }
-        } else if let Some((slot, index)) = certificate
+            Some(AnyFunctionId::Static(sref)) => {
+                self.module.static_function_returns_parameter(sref)
+            }
+            None => false,
+        };
+        let certificate = match returns_parameter {
+            true => None,
+            false => self
+                .module
+                .applied_pairs
+                .get(&type_apply)
+                .copied()
+                .and_then(|pair| self.stated_attributes(pair).first().copied())
+                .map(|(attribute, slot)| (slot, attribute.order_index() as u32)),
+        };
+        if let Some((slot, index)) = certificate
             && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
             && let Some(ext) = self.attribute_extension(&marker)
         {
             let value = slot_value_node(&*self, slot);
+            // A decidable certificate is decided here; an undecided one is a hole.
+            self.module.evaluate_node_deep(value, None);
             let decided = self
                 .module
                 .node_operation(value)
@@ -555,6 +516,11 @@ where
                 .then(|| self.node_value(value))
                 .flatten()
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
+            if std::env::var("DBG_CERT2").is_ok() {
+                eprintln!(
+                    "DBG cert2: e={e:?} returns_parameter={returns_parameter} decided={decided:?}"
+                );
+            }
             match decided {
                 // A hole: the result follows the argument, per call.
                 None => {

@@ -72,26 +72,13 @@ impl<P: Program> Module<P> {
             .clone()
     }
 
-    /// The frozen function's canonical attribute positions: the parameter
-    /// requirement's and the return certificate's.
-    pub fn static_function_markers(
-        &self,
-        function: StaticFunctionRef,
-    ) -> (Option<u32>, Option<u32>) {
+    /// Whether the frozen body returns its parameter: its return pair *is* the
+    /// parameter pair.
+    pub fn static_function_returns_parameter(&self, function: StaticFunctionRef) -> bool {
         self.static_module(function.module)
             .functions
             .get(function.index.0)
-            .map(|function| (None, function.return_marker))
-            .unwrap_or((None, None))
-    }
-
-    /// The frozen function's return field: the argument position a call's result
-    /// follows.
-    pub fn static_function_return_field(&self, function: StaticFunctionRef) -> Option<u32> {
-        self.static_module(function.module)
-            .functions
-            .get(function.index.0)
-            .and_then(|function| function.return_field)
+            .is_some_and(|function| function.parameter == function.r#return)
     }
 
     /// Read a static node's solved value verbatim, or [`None`] for a residual
