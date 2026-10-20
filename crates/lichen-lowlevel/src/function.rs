@@ -134,6 +134,25 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
+        if std::env::var("DBG_ARG").is_ok() {
+            let operand = self.nodes[node]
+                .operation
+                .and_then(|operation| operation.operand);
+            let items = operand
+                .and_then(|operand| unsafe { self.array_items_of(AnyNodeId::Dynamic(operand)) });
+            eprintln!(
+                "DBG arg: node={node:?} operand={operand:?} argument={argument:?} origin={:?} value={:?} op={:?} operand_items={:?}",
+                self.nodes[argument].origin,
+                self.nodes[argument].value.map(|value| format!("{value:?}")),
+                self.nodes[argument]
+                    .operation
+                    .map(|operation| format!("{:?}", operation.operator)),
+                items.map(|items| items
+                    .iter()
+                    .map(|item| (format!("{:?}", item.node), item.shallow))
+                    .collect::<Vec<_>>())
+            );
+        }
         let Some(instantiation) =
             self.instantiate(function, argument, block, node, ParameterCheck::Value)
         else {
@@ -482,8 +501,7 @@ impl<P: Program> Module<P> {
         ) {
             return self.add_node(ctx.target, None, None);
         }
-        // Membership is the anchor chain test or a closure-scope hit; otherwise the node is
-        // referenced in place.
+        // Membership is the anchor chain test or a closure-scope hit; else in place.
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
@@ -498,14 +516,34 @@ impl<P: Program> Module<P> {
             let source = &self.nodes[node];
             (source.value, source.operation, source.evaluated_deep)
         };
-        // A foreign closure, a computation, or a structure with open slots is not
-        // proven: each may still decide per call.
+        // The template root a clone instantiates, whose block may still be a scope.
+        let template_root = {
+            let mut root = node;
+            let mut hops = 0;
+            while let Some(origin) = self.nodes[root].origin {
+                root = origin;
+                hops += 1;
+                if hops > 64 {
+                    break;
+                }
+            }
+            root
+        };
+        // Only a template's own fact is proven; a computed value is that call's.
+        let template_decided = template_root == node
+            || (self.nodes[template_root].value.is_some()
+                && self.nodes[template_root]
+                    .evaluated_deep
+                    .is_some_and(|deep| !deep.undecided));
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided)
             && operation.is_none()
-            && value.is_none_or(|value| !self.answer_elements_are_undecided(value));
-        // A scope's content is this call's: sharing it would collect the
-        // template.
-        let scoped = self.blocks[self.nodes[node].block].parent.is_some();
+            && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
+            && template_decided;
+        // A scope's content is this call's; a clone of a scope's node is scoped too.
+        let scoped = self.blocks[self.nodes[node].block].parent.is_some()
+            || self.blocks[self.nodes[template_root].block]
+                .parent
+                .is_some();
         // Judged against the call's anchor, so one call gives a node one answer.
         let depends_on_parameter = node == ctx.parameter
             || Some(node) == ctx.parameter_slot
