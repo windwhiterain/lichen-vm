@@ -473,8 +473,10 @@ built
 It compiles **`in [Int] out [Int]`**. The **pair** is committed: `crates/lichen-compute/tests/lichen_compute/`
 `buf_element_class_recorded.lichen` (shows it) and `buf_element_class_direct.lichen` (does not), whose
 kernel, parameter and buffers are **byte-identical** — **the root expression is the only difference**
-(`k` against the `compute.graph` step). Each is its own test binary, so a single process's compile order
-cannot be what decides either answer. The historical record of the defect is the pair of assertions below, which
+(`k` against the `compute.graph` step). Each is a module of the one `lichen_compute` test binary
+([the layout](test-binary-layout.md)), so the layout no longer keeps the two compilations in separate
+processes — **what keeps them comparable is the reduction, not the binary**: the files differ in one
+expression. The historical record of the defect is the pair of assertions below, which
 were #[ignore]d with their reason so the suite stayed green while the defect was open; **the fix (7eedb125) removed the ignores**, and one command now shows them passing:
 
 ```
