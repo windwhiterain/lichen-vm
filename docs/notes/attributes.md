@@ -179,6 +179,16 @@ the argument's whole provided slot. Restoring the field-level reading isomorphic
 means putting the attribute's term in the slot as the type's term is: the clone then
 carries the expression and the call site evaluates it with the parameter bound.
 
+**A compound's elements are complete slots.** The superior's verdict: a struct's
+fields — and an array's or a tuple's elements — are the complete `[value, type,
+attributes]` pair, so a compound's value is an array of slots. A struct literal's value
+is its argument expressions' pairs; a field read takes the element slot's value
+position, and a slot's attribute position is the field's provided attribute. The low
+layer keeps its *value-level* shapes: the seed pass states full-width terms only, and
+`low_type_of_slot` reads a type expression's term through its value position, so a term
+is never decoded as a type. The compute ABI's class statements must unwrap the slot
+layer; the graph path's cfg class is the measured place they disagree.
+
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
 attribute is right in the type slot it is right in *any* attribute slot, so a pair's
 unify descends the attribute positions exactly as it descends the type slot — no skip,
