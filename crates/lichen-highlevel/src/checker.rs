@@ -1168,6 +1168,30 @@ where
         self.array_node_with_layout(block, &items, layout)
     }
 
+    /// Whether an element's value, through its origin chain, has no position for
+    /// the attribute slot `index`.
+    ///
+    /// # Invariant
+    /// A clone states no value at check time; the walk follows [`Module::node_origin`]
+    /// back to the template that holds the pair.
+    fn narrow_element(&self, element: NodeId, index: usize) -> bool {
+        let mut current = Some(element);
+        while let Some(node) = current {
+            if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) {
+                let Some(value) = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value) else {
+                    return true;
+                };
+                // SAFETY: the array is the value of a live node of this module.
+                let LowValue::Array(array) = value else {
+                    return true;
+                };
+                return unsafe { array.items() }.len() <= crate::shape::attr_slot(index);
+            }
+            current = self.module.node_origin(node);
+        }
+        false
+    }
+
     /// A pair carrying the element slot's attributes at their canonical positions.
     fn element_pair(&mut self, value: NodeId, ty: NodeId, element: NodeId) -> NodeId {
         let mut items = vec![value, ty];
@@ -1178,21 +1202,8 @@ where
                 .and_then(|node| node.dynamic())
             {
                 Some(slot) => slot,
-                // An element whose value is a narrow pair — a lazy region's own pair —
-                // states no attribute, so the slot is the wildcard.
-                None if self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(element))
-                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
-                    .is_some_and(|value| match value {
-                        LowValue::Array(array) => {
-                            unsafe { array.items() }.len() <= crate::shape::attr_slot(index)
-                        }
-                        _ => true,
-                    }) =>
-                {
-                    self.any()
-                }
+                // A narrow element states no attribute: the slot is the wildcard.
+                None if self.narrow_element(element, index) => self.any(),
                 None => {
                     let attribute = self.alloc_node(
                         self.current_block,
