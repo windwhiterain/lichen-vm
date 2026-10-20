@@ -77,7 +77,7 @@ where
                 }
             }
             values.sort_unstable();
-            // The result's elements are slots at the module's full attribute width.
+            // The result's elements are slots.
             // SAFETY: the default attributes are a live array of this module.
             let width = unsafe { module.default_attributes()?.items() }.len();
             let indices: Vec<u32> =
