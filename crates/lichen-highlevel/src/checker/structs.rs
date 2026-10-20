@@ -158,11 +158,16 @@ where
         };
         let position = match self.first_position(slot) {
             Some(node) => Some(node),
-            None => self
-                .selected_item(slot)
-                .and_then(|node| self.first_position(node)),
+            None => self.selected_item(slot),
         };
-        position.is_some_and(|node| self.masked_pair(node))
+        // The selected node may be the pair that holds the wrapper, or the wrapper
+        // itself: both readings are the same region.
+        position.is_some_and(|node| {
+            self.masked_pair(node)
+                || self
+                    .first_position(node)
+                    .is_some_and(|first| self.masked_pair(first))
+        })
     }
 
     /// The pair a call instantiates: the callee function's template return pair.
