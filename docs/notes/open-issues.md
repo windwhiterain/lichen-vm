@@ -23,18 +23,21 @@ So the earlier diagnosis — [graph-recording-rounds](graph-recording-rounds.md)
 `e659607e`: no dynamic write, an empty argument cell, the rule side holding no identity —
 describes the *pre-squash* failure and no longer matches the tree.
 
-**The current fault, measured.** Nine tests stop on `refine_class_low_type`'s "a class
-states one shape" assertion, raised from `infer_template_low_types`. The node is an `Index`
-whose class is already observed `USize` — the engine wrote the value the read selected —
-while the transfer states the *slot* pair `Tuple([Some(Tuple([None, Some(USize)])), None])`
-— the read selected a slot. One class, two statements: the engine states values, the
-transfer states slots.
+**The shape question is settled** (`a2fd2796`, the ruling in
+[lowlevel-low-types](lowlevel-low-types.md) §8): a class states the variant of its node's
+value, and the highlevel judges it from the node's type node. The ten tests no longer stop
+on the "a class states one shape" assertion.
 
-**The ruling:** settle which of the two a class states *before* the hand-off. The hand-off
-(the check records the written class of a `compute.write` call's `.value`, keyed by the
-apply node; the recording reads it instead of deriving it from the value graph) is the next
-step after that, and its design still stands — but it cannot fix an assertion raised while
-the kernel template's low types are computed.
+**What they stop on now — the lowering's own reading of the compound-slot encoding.** The
+role walk is right (`roles.outputs = [[2, 0]]`: the `.out` field, its `.z` buffer), but the
+write's `.to` no longer resolves to that path. Read from the code, not yet measured:
+`param_path` pushes one step per `Index`, while the checking encoding reads a field's slot
+and then its value position, so the extra dereference becomes a spurious field step. The same encoding shows up twice more in the ten failures: a read over
+a pair reports "this value is not a container — it has no element to read", and a kernel's
+domain reads undecided (so the polymorphic-template diagnostic fires on a monomorphic
+kernel). The fix is therefore in `lichen-compute`'s readers (`param_path`,
+`peeled_argument`, the argument/codomain walks), not the checker hand-off; the hand-off's
+design still stands for after that.
 
 ## 2. Nothing else
 

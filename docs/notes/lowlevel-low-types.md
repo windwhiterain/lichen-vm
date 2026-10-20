@@ -273,7 +273,23 @@ only invariant the field needs (an operation node's *cached* answer is decided o
 absent; it may still *compute* undecided) is stated where it is enforced,
 `evaluate_node_operation`'s postlude.
 
-## 8. What is deliberately open
+## 8. What a class states (the ruling)
+
+A node's low shape describes the **variant of that node's value**, and the
+highlevel judges that variant from the node's own type node — the type value at
+the term's value position (`shape::low_type_of_slot` follows a **pair** to its
+value; a plain `[shape, kind]` array *is* the type value). Consequently the
+transfer never adds an encoding layer: `Index(container, k)` answers the
+container's item as stored, so a class never states "a slot pair" as a value.
+Slot pairs remain structure the lowering walks; they are not a shape.
+
+Measured when the rule landed (`a2fd2796`): `lichen-language` 275/275,
+`lichen-highlevel` 136/136, `lichen-lowlevel` 164 (one ignored); the compute
+graph's ten `graph_jit` tests no longer stop on the "a class states one shape"
+assertion. What they stop on now is the lowering's **own** reading of the
+compound-slot encoding — see [open-issues](open-issues.md) §1.
+
+## 9. What is deliberately open
 
 - **Rendering the diagnostic.** `Module::extension_diagnostics` is the general
   channel for "a plugin declined to lower this computation" (every other channel
