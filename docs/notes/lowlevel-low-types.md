@@ -184,6 +184,15 @@ the checker's own conclusion (`value : type`), so it cannot contradict a
 transfer — and where a seed and a transfer do disagree, the lattice still joins
 them to `Unknown`.
 
+**An element read states the slot, its dereference the value.** A compound's elements
+are complete `[value, type, attributes]` slots, so `Index(compound, k)`'s transfer states
+`Tuple([element, Unknown])` — the slot's pair — and `Index(slot, 0)` then states the
+element's value shape. A seed states the value class from the declared type, so the pair
+and the value agree: the measured conflict was `Tuple([USize, USize])` (the value) against
+`USize` (a transfer that indexed the slot as if it were the tuple). The kernel path walk
+skips a step whose target states the slot pair, and the structural deepening reads an
+element's slot value; values the lowering itself builds must be slot arrays too.
+
 **Observation needs two sites, not one.** `write_node_value` is the choke-point
 for *re-binding* a node, but a literal, a kind marker, or a freshly built array
 arrives through `add_node` with its value already concrete — so observing only at
