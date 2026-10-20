@@ -154,12 +154,46 @@ where
         };
         // The operand array is `[slot, key]`; the slot's value position is the wrap.
         let slot = self.first_position(operand);
-
         let Some(slot) = slot else {
             return false;
         };
-        self.first_position(slot)
-            .is_some_and(|node| self.masked_pair(node))
+        let position = match self.first_position(slot) {
+            Some(node) => Some(node),
+            None => self
+                .selected_item(slot)
+                .and_then(|node| self.first_position(node)),
+        };
+        position.is_some_and(|node| self.masked_pair(node))
+    }
+
+    /// The array item a constant read selects: `[v0, v1][k]` is `vk`.
+    ///
+    /// # Invariant
+    /// Only a constant subscript is read through: a runtime index states nothing.
+    fn selected_item(&self, node: NodeId) -> Option<NodeId> {
+        let operation = self.module.node_operation(node)?;
+        if !matches!(
+            lichen_utils::extend::AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        // SAFETY: a payload of a value of this module; a stale node answers `None`.
+        let items = unsafe {
+            self.module
+                .array_items_of(AnyNodeId::Dynamic(operation.operand?))
+        }?;
+        let container = items
+            .first()
+            .map(|item| item.node)
+            .and_then(|node| node.dynamic())?;
+        let key = items.get(1)?.node.dynamic()?;
+        let position = self.module.usize_value(key)?;
+        let values = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(container)) }?;
+        values
+            .get(position as usize)
+            .map(|item| item.node)
+            .and_then(|node| node.dynamic())
     }
 
     /// The structural slot read shared by `a(k)` and `a.name`.
