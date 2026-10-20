@@ -42,6 +42,15 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The write's value reaches the marked body through a pair peel.** The backtrace from the
+loop lowering: `buffer_write → write_call → value → … → conditional → value_item → value →
+apply → lower_loop`. So the write's `.value` operand is the **fold's inlined `if`**, not
+the call: `NativeArg.value = value_of(field)` takes a compound field's *value*, which for a
+call argument is the call's **pair value** and, undecided, its class's definition — the
+function's return expression. The emitter then lowers that body as a loop. The next fix is
+upstream of the emitter: the write's value operand must be the call **expression**, not its
+pair-peeled value.
+
 **The failure groups, measured** (`--nocapture`, first diagnostic per failing test):
 
 | first diagnostic | tests |
