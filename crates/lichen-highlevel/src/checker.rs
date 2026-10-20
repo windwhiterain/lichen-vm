@@ -1084,6 +1084,36 @@ where
         )
     }
 
+    /// A layout-carrying masked array: the shallow wrapper.
+    ///
+    /// # Invariant
+    /// The width is [`shape::slot_width`], and the first item carries the mask.
+
+    fn array_node_masked_slot(&mut self, block: BlockId, ids: &[NodeId], mask: &[bool]) -> NodeId {
+        let mut items: Vec<ArrayItem> = ids
+            .iter()
+            .zip(mask.iter())
+            .map(|(&node, &shallow)| ArrayItem {
+                node: AnyNodeId::Dynamic(node),
+                shallow,
+            })
+            .collect();
+        let any = self.any();
+        items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(any)),
+            P::Attr::ORDER.len(),
+        ));
+        let layout = self.full_width_layout();
+        let array = self.module.alloc_array(&items, block);
+        self.alloc_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                array, layout,
+            )))),
+        )
+    }
+
     pub fn op_node(
         &mut self,
         block: BlockId,

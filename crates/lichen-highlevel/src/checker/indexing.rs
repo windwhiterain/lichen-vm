@@ -505,12 +505,15 @@ where
                 current = slot1;
             }
         }
-        // Rebuild from the innermost level out, each a fresh masked pair.
+        // Rebuild from the innermost level out, each a fresh masked slot.
         let mut wrapped = None;
         for &(slot0, slot1) in levels.iter().rev() {
             let next = wrapped.unwrap_or(slot1);
-            wrapped =
-                Some(self.array_node_masked(self.current_block, &[slot0, next], &[true, false]));
+            wrapped = Some(self.array_node_masked_slot(
+                self.current_block,
+                &[slot0, next],
+                &[true, false],
+            ));
         }
         wrapped.unwrap_or(self.state[e].term.unwrap())
     }

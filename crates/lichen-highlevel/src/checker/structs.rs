@@ -128,7 +128,7 @@ where
                     return false;
                 };
                 let items = unsafe { array.items() };
-                return items.len() == 2 && items[0].shallow;
+                return array.layout() != 0 && items.first().is_some_and(|item| item.shallow);
             }
             current = self.module.node_origin(node);
         }
