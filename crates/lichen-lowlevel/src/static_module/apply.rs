@@ -277,7 +277,18 @@ impl<P: Program> Module<P> {
         }
         let clone = self.add_node(block, None, None);
         remap.insert(local, clone);
+        // A frozen operation is copied with it: a value-only copy loses what it computes.
+        let operation = module.nodes[local.index].operation;
         let Some(value) = module.read(local) else {
+            if let Some(operation) = operation {
+                let operand = operation
+                    .operand
+                    .map(|operand| self.clone_static_signature_node(module, operand, block, remap));
+                self.nodes[clone].operation = Some(Operation {
+                    operator: operation.operator,
+                    operand,
+                });
+            }
             return clone;
         };
         let copied = match value.as_enum() {
@@ -308,6 +319,15 @@ impl<P: Program> Module<P> {
             }
             _ => value,
         };
+        if let Some(operation) = operation {
+            let operand = operation
+                .operand
+                .map(|operand| self.clone_static_signature_node(module, operand, block, remap));
+            self.nodes[clone].operation = Some(Operation {
+                operator: operation.operator,
+                operand,
+            });
+        }
         self.write_node_value(clone, Some(copied));
         clone
     }
