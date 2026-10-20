@@ -3558,7 +3558,9 @@ where
         let mut nested = path.to_vec();
         nested.push(at);
         let node = assemble_parameter(module, block, type_slot, Some(field), cells, &nested)?;
-        items.push(ArrayItem::new(AnyNodeId::Dynamic(node)));
+        // An element is a complete slot, like the result's own (`assemble_result`).
+        let slot = element_slot(module, block, node)?;
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(slot)));
     }
     Some(array_node::<P>(module, block, &items))
 }
@@ -4166,7 +4168,7 @@ where
 
     // A named read's index belongs to a type only the whole chain names, so a
     // level resolved as met would have to guess it.
-    let mut steps: Vec<IndexStep> = Vec::new();
+    let mut steps: Vec<(IndexStep, bool, bool)> = Vec::new();
     let mut current = node;
     // **This walk cannot answer a struct field read**: the parameter is joined to the read
     // only by the equality class.
@@ -4203,12 +4205,20 @@ where
                 None => break,
             }
         }
+        // A slot's value position is no path step: its second position is open.
+        let dereference = matches!(
+            module.class_low_type(target_node),
+            Some(lichen_lowlevel::LowShape::Tuple(items))
+                if items.len() == 2 && items[1].is_none()
+        );
         // The selector is a *name* when the read was written `a.name`, and a
         // *position* when it was written `a(0)`.
         match field_name(module, selector)? {
-            Some(name) => steps.push(IndexStep::Named(name)),
+            Some(name) => steps.push((IndexStep::Named(name), dereference, false)),
             None => match usize_value(module, selector) {
-                Some(position) => steps.push(IndexStep::Position(position)),
+                Some(position) => {
+                    steps.push((IndexStep::Position(position), dereference, position == 0))
+                }
                 None => return Ok(None),
             },
         }
@@ -4223,9 +4233,18 @@ where
     if steps.is_empty() {
         return Ok(None);
     }
-    // Collected innermost-first; the path reads outermost-first.
-    steps.reverse();
-    resolve_steps(module, param_pair, &steps)
+    // A constant `0` at an odd distance from the outer end is the slot's value read.
+    let count = steps.len();
+    let kept: Vec<IndexStep> = steps
+        .into_iter()
+        .enumerate()
+        .rev()
+        .filter_map(|(index, (step, deref, zero))| {
+            let odd = (count - 1 - index) % 2 == 1;
+            (!deref && !(zero && odd)).then_some(step)
+        })
+        .collect();
+    resolve_steps(module, param_pair, &kept)
 }
 
 /// Resolve a read's collected steps against the parameter's type, outermost first.
@@ -5623,6 +5642,19 @@ where
     P: Program,
     P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
 {
+    place_of_node_at(module, node, 0)
+}
+
+/// [`place_of_node`] with a depth bound: a block's tuple can name itself, and a
+/// cyclic value names no placeholder.
+fn place_of_node_at<P>(module: &Module<P>, node: AnyNodeId, depth: usize) -> Option<Vec<Placed>>
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+{
+    if depth > 16 {
+        return None;
+    }
     let value = module.node_value(node)?;
     if let Some(ComputeValue::GraphValue(id)) = AsEnum::<ComputeValue>::as_enum(&value) {
         return Some(vec![Placed::Value(id)]);
@@ -5648,9 +5680,12 @@ where
         {
             continue;
         }
-        placed.extend(place_of_node::<P>(module, item.node)?);
+        // A type cell or a wildcard names no value; only the placeholders beside them do.
+        if let Some(found) = place_of_node_at::<P>(module, item.node, depth + 1) {
+            placed.extend(found);
+        }
     }
-    Some(placed)
+    (!placed.is_empty()).then_some(placed)
 }
 
 /// The leaves of a graph run's argument, in the order the recording numbered its
