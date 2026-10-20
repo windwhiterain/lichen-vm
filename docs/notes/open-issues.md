@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The suite's count includes order-dependent failures, measured.** A bisect of
+`helper_refuses_a_parallel_refusal::a_compute_parallel_refusal_fails_the_helper` converged
+on a **docs-only** commit, which is impossible as a behavioural cause — and the test then
+passed **20 of 20** runs in isolation at HEAD while it fails inside the full suite (also
+single-threaded, 117/136 both ways). So the failure is *process-global state carried
+across tests* (the candidate carriers: the thread-local `GRAPH_POLICY`, the process kernel
+registry), not a per-test fact, and the bisect over it is invalid. The suite's 136 is
+therefore an upper bound on independent failures.
+
 **The seed rule is the superior's: a node with a type slot is not seeded.** Following
 that ruling, `prepare_template_low_types` no longer seeds the pair (its type slot states
 the shape); only the pair's **value** — a node without a type slot — takes the seed.
