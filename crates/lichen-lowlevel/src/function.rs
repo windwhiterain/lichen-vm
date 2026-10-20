@@ -717,6 +717,11 @@ impl<P: Program> Module<P> {
                 // The minted template owns its parameter, not the enclosing call's clone.
                 let template_parameter = parameter;
                 let saved_parameter = ctx.remap.remove(&template_parameter);
+                // The nested scope's clones are that call's image; the mint states its own.
+                let saved_scope: Vec<(NodeId, NodeId)> = scope
+                    .iter()
+                    .filter_map(|node| ctx.remap.remove_entry(node))
+                    .collect();
                 let mut minted_keys = Vec::new();
                 let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
@@ -774,6 +779,10 @@ impl<P: Program> Module<P> {
                 // The enclosing pass's own parameter clone, when it made one before the mint.
                 if let Some(saved) = saved_parameter {
                     ctx.remap.insert(template_parameter, saved);
+                }
+                // The enclosing pass keeps its image of the nested scope.
+                for (template, clone) in saved_scope {
+                    ctx.remap.insert(template, clone);
                 }
                 // Nodes cloned into the target are re-stamped to the fresh id, so the fresh template
                 // re-instantiates per call.
