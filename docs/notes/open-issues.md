@@ -42,6 +42,15 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**One conversion mismatch is fixed, one measured.** `parameter_value_path`'s two
+"chain ends at the parameter" branches now strip the pair's value position the same way
+(`loop_conversion.rs`), so a state read no longer surfaces as a spurious `[0, …]` prefix
+and stops being refused by the wildcard arm. No test flips on that alone. The remaining
+refusal is a read whose chain is `Index(Index(pair, 0), 4)` against a state of arity 2 —
+a five-slot structure read as state position four — so the next question is which
+function's parameter that read belongs to (the conversion's roots include nodes of the
+kernel the recursion sits in).
+
 **The loop conversion is the other half of the fuse/pack family.** `pack_placement` and
 `fuse_licence` programs first fail with `compute.parallel: a @loop-marked recursion this
 kernel body applies is not convertible ... the shape is a non-scalar carried state`

@@ -192,7 +192,10 @@ impl<P: Program> Module<P> {
                 return Some(path);
             }
             if target == parameter && position == 0 {
-                // The pair peel — the chain's root.
+                // The pair peel — the chain's root, stripped as the class branch does.
+                if path.len() >= 2 && path[0] == 0 {
+                    path.remove(0);
+                }
                 path.reverse();
                 return Some(path);
             }
