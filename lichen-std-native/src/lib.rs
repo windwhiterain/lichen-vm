@@ -66,8 +66,7 @@ where
             // alive for all of `run`, so the slice stays valid.
             let mut values: Vec<usize> = Vec::new();
             for item in unsafe { array.items() }.iter() {
-                // A compound element is a complete slot: the value is its first
-                // position, and a bare operand array's element is the value itself.
+                // A compound element is a slot: the value is its first position.
                 let Some(element) = module.element_value_node(item.node) else {
                     continue;
                 };
@@ -78,8 +77,7 @@ where
                 }
             }
             values.sort_unstable();
-            // The sorted array's elements are slots too: the value, an undecided
-            // type and the wildcards, at the module's full attribute width.
+            // The result's elements are slots at the module's full attribute width.
             // SAFETY: the default attributes are a live array of this module.
             let width = unsafe { module.default_attributes()?.items() }.len();
             let indices: Vec<u32> =
