@@ -28,26 +28,27 @@ describes the *pre-squash* failure and no longer matches the tree.
 value, and the highlevel judges it from the node's type node. The ten tests no longer stop
 on the "a class states one shape" assertion.
 
-**What they stop on now — measured.** The failing reads are the kernel bodies' own
-(`k.out.z`, `k.in.b`, `k.out.w`), reported as "this value is not a container — it has no
-element to read" during `compile_parallel_fragment`'s deep evaluation of the body. A
-temporary print (removed) traces one chain: `k`'s pair → its value → the `.in` slot → the
-field's value → the `.b` slot → the value; the last container's **class holds a bare
-`USize(32)`**, with two members — one a template node of the kernel's function, one
-untagged. The checker's chain expects a pair at that position, so the value the body is
-evaluated against carries a bare scalar where the compound-slot encoding puts a pair: the
-array the chain reaches is a **bare-element array**, its element a node holding `USize(32)`
-(the prelude's `warp`), while the checker's chain reads that element as a pair. This is the
-task `4645b439`'s own message names for the lowering-built values ("they must be built as
-slot arrays too"); the next step is to find the builder of that field array (the `.in`/`.out`
-value the body reads) and slot-encode it.
+**Three seams are fixed** (`6c07f147`): `param_path` counts field selections rather than
+the encoding's value reads, `assemble_parameter` builds a structure of slots, and
+`place_of_node` walks through type cells. Graph JIT is **1/10** (was 0/10); the whole
+compute suite is **97 passed** (was 81 at `7ac3e639`'s predecessor measurement).
 
-The role walk itself is right (`roles.outputs = [[2, 0]]`: the `.out` field, its `.z`
-buffer). The `.to` resolution and the undecided-domain refusals follow from the same
-broken reads: once a read yields the wrong value, the write's target names no output and
-the kernel's domain reads undecided. So the fix is in the attribute dispatch the compute
-prelude's `# warp` exercises, not in the checker hand-off; the hand-off's design still
-stands for after that.
+**Where the compute block broke — measured by bisect.** The whole suite was **250/253**
+at `9ed0ee4b` (the attribute squash) and **81 passed** at `7ac3e639`. Two commits carry
+the drop:
+
+- `5146f747` — "the applied clone's return pair states the call's attribute" — **250 →
+  247**: the frozen callee's return pair remains a hole at check time, so a call's
+  attribute falls back to the argument's whole provided slot. Its own message names the
+  follow-up ("the check-time materialization is the follow-up if the field-level reading
+  is wanted back"), with the cost it was deferred for: a full frozen-body clone per call
+  site.
+- `dabf4e2c` — "a struct value's fields are complete slots (red checkpoint)" — the
+  collapse. Its message records the plan: "Next: the renderer reads an element's
+  value/type/attributes from the slot's own positions …, then the same slot schema for
+  arrays and tuples, then the compute readers (`known_shape`/`flat_arity`/`class_at`)."
+  The language half is done (275/275); the compute readers are the open half — the three
+  seams above are its first three, not the last.
 
 ## 2. Nothing else
 
