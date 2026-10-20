@@ -180,14 +180,23 @@ means putting the attribute's term in the slot as the type's term is: the clone 
 carries the expression and the call site evaluates it with the parameter bound.
 
 **A compound's elements are complete slots.** The superior's verdict: a struct's
-fields — and an array's or a tuple's elements — are the complete `[value, type,
-attributes]` pair, so a compound's value is an array of slots. A struct literal's value
-is its argument expressions' pairs; a field read takes the element slot's value
-position, and a slot's attribute position is the field's provided attribute. The low
-layer keeps its *value-level* shapes: the seed pass states full-width terms only, and
-`low_type_of_slot` reads a type expression's term through its value position, so a term
-is never decoded as a type. The compute ABI's class statements must unwrap the slot
-layer; the graph path's cfg class is the measured place they disagree.
+fields — and an array's, a set's or a tuple's elements — are the complete `[value, type,
+attributes]` pair, so a compound's value is an array of slots. Every construction site
+puts the element expression's pair in the value; the element's attributes are its pair's
+attributes. A read (`a(k)`, `a.name`, `a[i]`) takes the element slot's value position and
+carries the element's attributes at their canonical positions
+(`Checker::element_pair`); an undecided element states its attribute as a lazy `Index` of
+its own slot, so an apply binds it and a certificate reads it. `Module::element_value_node`
+is the one element read for consumers: a slot's value position, the node itself for a
+bare value. Measured: `write_persp` reads `?a # 0`, `read_persp`/`read_persp2` `?a # 32`.
+
+**The remaining seam is the certificate's class.** A frozen callee's certificate is a
+clone of the callee's own cell; the frozen field read's attribute projection is a node of
+the frozen module, so the applied certificate cell has no done operation to read and the
+call falls back to the argument's whole provided slot (`write_persp2` reads `?a # 0`
+where the `.to` slot states `warp`). The fix is the apply's clone binding the frozen
+field read's container to the applied parameter's value, which is the same binding the
+value slots already carry.
 
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
 attribute is right in the type slot it is right in *any* attribute slot, so a pair's
