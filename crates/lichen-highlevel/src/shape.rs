@@ -1039,15 +1039,24 @@ pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Opti
 where
     P::Value: ValueType,
 {
-    // A type expression's term holds the type value at its first position.
-
-    // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    if let Some(items) = unsafe { array_items(module, slot) }
-        && let Some(value) = items.first().map(|item| item.node)
-        && let Some(shape) = low_type_of(module, value)
-    {
-        return Some(shape);
+    // A pair holds its type value at the value position; a type value is the
+    // `[shape, kind]` array itself.
+    let mut slot = slot;
+    for _ in 0..8 {
+        let Some(LowValue::Array(array)) =
+            module.node_value(slot).and_then(|value| value.as_enum())
+        else {
+            break;
+        };
+        if array.layout() == 0 {
+            break;
+        }
+        // SAFETY: `array` is a live payload of a node of `module`.
+        let items = unsafe { array.items() };
+        let Some(value) = items.first().map(|item| item.node) else {
+            break;
+        };
+        slot = value;
     }
     low_type_of(module, slot)
 }
