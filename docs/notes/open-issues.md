@@ -42,6 +42,17 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The loop conversion is the other half of the fuse/pack family.** `pack_placement` and
+`fuse_licence` programs first fail with `compute.parallel: a @loop-marked recursion this
+kernel body applies is not convertible ... the shape is a non-scalar carried state`
+(`docs/notes/loop-conversion.md` §4), and the graph refusal is the *second* diagnostic.
+Probing `LoopRefusal::StateShape`'s sites (`DBG_LOOP` line tags) names `check_reads`
+(`crates/lichen-lowlevel/src/loop_conversion.rs`): a whole-parameter read meets
+`tuple || arity != 1`, and an element read `s(k)` meets `k >= arity` — so the state's
+arity and its addressing disagree for a reduction chain whose step carries
+`(i + 1, 0.0 ~ "identity")`. That conversion runs from the fragment compiler, so it is a
+kernel-side reader of the same slot encoding.
+
 **The graph block's root is narrowed, not fixed.** Probes on a `compute.graph` body with
 two `plrun`s: the body's apply decides to a real `Buf`, `returned_value_ids` misses it,
 and **no refusal is recorded** — and `ComputeOperator::ParLaunch`'s `run` arm never
