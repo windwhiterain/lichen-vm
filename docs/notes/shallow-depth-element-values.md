@@ -611,7 +611,8 @@ that dropped every inserted key also broke two capture tests
 `a_closure_released_from_a_scope_is_still_callable`) — the scope filter is what keeps
 them green. The block recursion now unrolls past the **apply-depth budget** instead:
 the trace shows every recursive application passing the **same argument node** (`566`),
-so `z` never decreases. That shared argument is the next seam.
+so `z` never decreases. That shared argument is the next seam — §22 shows it is the same
+mint-ownership seam one level up, not a carry rule.
 
 ## 20. The recursion's shared argument, and a measured trade (round twenty-six)
 
@@ -639,7 +640,8 @@ captures — the nested function's scope list *holds* the captures (`a`, `b`, `x
 `a_nested_function_captures_the_applied_outer_parameter` and
 `a_closure_released_from_a_scope_is_still_callable` fail. A capture is therefore not
 distinguishable from the scope's own by the scope list, the function tag, or the block
-chain (all three tried and measured). The next seam is that distinction.
+chain (all three tried and measured). The next seam is that distinction — which §22 finds
+one level down, in the mint's ownership of the scope, not in the value's provenance.
 
 ## 21. Why the carry gate cannot be scoped (round twenty-seven)
 
@@ -657,4 +659,47 @@ The gate's failure was traced further:
 
 The next distinction must be a *value-level* one — the recursion's stale value is a
 slot's answer produced by a previous *call*, while a capture is a fact the enclosing
-call holds — not a scope/tag/block property.
+call holds — not a scope/tag/block property. **Refuted by §22:** the stale node was not a
+value-level fact at all; it was a node of the *minted template's own body* that the mint
+had adopted from the enclosing call's image, and it carried no owner tag.
+
+## 22. The mint owns its whole nested scope (round twenty-eight)
+
+The block recursion is green. The seam was not the value's provenance (§20, §21) but the
+**mint's ownership of its nested scope**.
+
+**The measured chain.** A temporary print in `node_apply`'s non-member arm (removed) shows,
+for every recursion level, four computed nodes referenced **in place**: `580`, `583`, `586`,
+`589`, each with an origin in the template (`359`, `386`, `389`, `392`), `function = None`,
+block `1`. One of them is the condition `z <= 0`, decided `0` by the first call — so every
+level takes the else branch and the check stops on the apply-depth budget. The top-level
+countdown (`f = n => if n <= 0 then 0 else f (n - 1); f 5`) references **zero** computed
+nodes in place: every level's nodes are fresh clones.
+
+**Why they are untagged.** The outermost call runs at the top level, so `instantiate_stamped`
+sets `ctx.tag = self.nodes[apply].function`, and a top-level apply node carries no function:
+the call's clones are created with `function = None`, and the `g 3` apply inside that image
+inherits it. The mint that follows (the closure `g` cloned in that call) shares the
+enclosing pass's `remap` (§18), so the nested scope's template nodes resolve to **those**
+clones rather than to fresh ones. The minted template's return then references the enclosing
+call's clones, and since those carry no owner tag, the next instantiation's membership test
+(`function_descends_from`) fails for them, so `node_apply` references them in place. A probe
+over the mint's re-stamp loop printed nothing (removed): the minted function's own `nodes`
+list does not hold them — the fresh template reaches them through the return graph.
+
+**The fix.** §19 took the nested function's *parameter* out of the shared memo; the rest of
+the scope still resolved through it. The mint now removes **every** node of the nested scope
+from the shared memo before its walk and restores the entries after it: the enclosing pass
+keeps its image, the minted template states its own. Nine lines in `value_apply`'s closure
+arm (`crates/lichen-lowlevel/src/function.rs`).
+
+**Measured on the merged tip:** `lichen-language` **275/275** (the block recursion is
+green), `lichen-highlevel` **136/136**, `lichen-lowlevel` **164** (one ignored), compute JIT
+**30/40** — the graph block is unchanged ([open-issues](open-issues.md) §1). A second probe
+over the same program shows **zero** computed nodes referenced in place (was four per level,
+with the number of levels unbounded).
+
+**The corrected reading of §20 and §21.** The "value carried from the enclosing call" was
+real, but it was a consequence: the minted template had adopted the enclosing call's image
+of its own body. §19 was half of the ownership rule; a scope, like a parameter, belongs to
+the template that states it.
