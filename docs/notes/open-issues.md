@@ -33,37 +33,27 @@ the encoding's value reads, `assemble_parameter` builds a structure of slots, an
 `place_of_node` walks through type cells. Graph JIT is **1/10** (was 0/10); the whole
 compute suite is **97 passed** (was 81 at `7ac3e639`'s predecessor measurement).
 
-**The provided slot reads the type first** (`640b2705`): a compound's element attributes
-are read from its **type's** element slots before the value's components. The two
-`perspective_requirements` failures stay because the missing piece is upstream, measured:
-the frozen callee's return attribute is a **hole** in the artifact (its attribute position
-serializes as the wildcard), the reference analysis that named the field (`attr_refs`/
-`attribute_reference`) was deleted with `5146f747`, and a **term's own** attribute has no
-type position at all — a type value is `[shape, kind]` (a compound written type, whose
-*element* slots do carry attributes) or a first-class `TypeValue` for scalars, so
-`x # a`'s attribute lives only on the term's pair. Writing it into the type was tried and
-measured: the type unify fails (`expected struct{…}, found raw[…]`) for the first-class
-form, and the `.value` field's provided slot still drives the combine. So the field-level
-reference needs a decision, not another reader: carry the attribute in the type value
-(a type-encoding change), or record the referenced field again (the deleted
-`return_field`/`return_marker`, the cheap path now that `provided_slot` reads the type).
+**The reference is definition-time shape data again** (`195600fa`): `5146f747` deleted
+`return_field`/`return_marker` (their static mirrors and artifact fields), and the
+applied-pair design cannot carry the reference for a frozen callee — the clone's return
+pair does hold the reference slot, but its first item is a static ref that cannot be
+rebound per call, so the certificate reads a hole. Measured, the frozen return pair's
+attribute *is* the reference (`StaticFunctionId(28)`), which is why restoring the shape
+works: the marker and the parameter field are recorded on the function (artifact format
+20), the checker's `attribute_reference` analysis fills them, and the call site resolves
+`argument_field` and takes that field's own provided attribute. `a_write_returns_the_
+input_buffer_perspective` is green; compute is **99 passed** (was 97).
 
-**Where the compute block broke — measured by bisect.** The whole suite was **250/253**
-at `9ed0ee4b` (the attribute squash) and **81 passed** at `7ac3e639`. Two commits carry
-the drop:
+Also reverted: `640b2705`'s type-first provided slot. A **type** states the *declared*
+requirement, not the provided value — the read test's lane-varying index proved it: the
+whole-argument combine must keep reading the field expressions.
 
-- `5146f747` — "the applied clone's return pair states the call's attribute" — **250 →
-  247**: the frozen callee's return pair remains a hole at check time, so a call's
-  attribute falls back to the argument's whole provided slot. Its own message names the
-  follow-up ("the check-time materialization is the follow-up if the field-level reading
-  is wanted back"), with the cost it was deferred for: a full frozen-body clone per call
-  site.
-- `dabf4e2c` — "a struct value's fields are complete slots (red checkpoint)" — the
-  collapse. Its message records the plan: "Next: the renderer reads an element's
-  value/type/attributes from the slot's own positions …, then the same slot schema for
-  arrays and tuples, then the compute readers (`known_shape`/`flat_arity`/`class_at`)."
-  The language half is done (275/275); the compute readers are the open half — the three
-  seams above are its first three, not the last.
+What stays open is the **whole-parameter reference** (`perspective_of x`, `read`'s
+return): its call site falls back to `provided_slot(argument)`, whose combine walks an
+instantiation's `[type, value]` children and then only the record's value expression, so
+a struct's field perspectives are never met and a lane-varying index stays warp-uniform
+(`a_read_takes_its_perspective_from_the_buffer_and_the_index`). The follow-up is the
+combine's field walk — the same one `provided_slot` needs for any compound argument.
 
 ## 2. Nothing else
 
