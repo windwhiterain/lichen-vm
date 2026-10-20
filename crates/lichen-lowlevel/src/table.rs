@@ -263,7 +263,9 @@ impl<P: Program> Module<P> {
                 // SAFETY: `array` is the payload of a live node of this module, and the
                 // unfolding only reads.
                 for item in unsafe { array.items() } {
-                    match self.hash_node(item.node, unfolding, depth - 1, mode) {
+                    // A compound's element is a slot: its value is the key content.
+                    let item = self.element_value_node(item.node).unwrap_or(item.node);
+                    match self.hash_node(item, unfolding, depth - 1, mode) {
                         KeyState::Hashed(item_hash) => hash = mix(hash ^ item_hash),
                         // An undecided position makes the whole key that.
                         verdict => return verdict,
@@ -421,10 +423,12 @@ impl<P: Program> Module<P> {
                     // `key_eq` only reads.
                     let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                     left.len() == right.len()
-                        && left
-                            .iter()
-                            .zip(right.iter())
-                            .all(|(ia, ib)| self.key_eq(ia.node, ib.node, path))
+                        && left.iter().zip(right.iter()).all(|(ia, ib)| {
+                            // A compound's element is a slot: its value is the key content.
+                            let ia = self.element_value_node(ia.node).unwrap_or(ia.node);
+                            let ib = self.element_value_node(ib.node).unwrap_or(ib.node);
+                            self.key_eq(ia, ib, path)
+                        })
                 }
                 // A table value keys by identity — its payload's `PartialEq`; see
                 // [`Self::hash_step`]'s table arm for the matching hash.
