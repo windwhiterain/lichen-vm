@@ -51,6 +51,13 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The wildcard is not set at check time.** A second probe of `check_app`'s callee value
+(compared through `AsEnum<LowValue>` this time, so the first probe's dead conversion is
+ruled out too) fires **nowhere**: every apply the checker builds names a real callee. So
+the wildcard reaches the template apply's operand array **after** the check — the
+remaining candidates are the type-side apply's undecided-callee cell and the clone walk's
+own operand-array construction.
+
 **The empty callee is the apply's only unstated operand.** The template apply's four
 operands read `[<none>, array, array, array]` — the callee alone has no value, while the
 argument pair, the result type cell and the function type are all decided arrays; the two
