@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The loop body's apply operand array is a pair.** Probed the clone walk's wildcard mints:
+they land at **index 0, 2, 3, 4 of a 5-item array with `layout 1`** — a `[value, type,
+attributes…]` pair — from the shared wildcard node. So the apply the loop body carries has
+a **pair** where its four-element operand array should be, and its first operand is the
+pair's *value* position (the unstated cell) instead of the function value. That is why the
+callee is empty and the record's call cannot be emitted. The next fix is in the loop
+conversion's operand construction: the apply's operand array must keep its four-element
+shape (`[callee, argument pair, result cell, function type]`), with the pair riding at the
+argument position only.
+
 **The wildcard is not set at check time.** A second probe of `check_app`'s callee value
 (compared through `AsEnum<LowValue>` this time, so the first probe's dead conversion is
 ruled out too) fires **nowhere**: every apply the checker builds names a real callee. So
