@@ -95,11 +95,27 @@ where
         pair
     }
 
-    /// Whether a node holds a shallow mark's pair: two items, the first lazy.
+    /// The first position of the array a node's class holds, through its origin.
     ///
     /// # Invariant
     /// A clone states no value at check time, so the walk follows
-    /// [`Module::node_origin`] back to the template that holds the pair.
+    /// [`Module::node_origin`] back to the template that holds the array.
+    fn first_position(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            // SAFETY: a payload of a value of this module; a stale node answers `None`.
+            if let Some(items) = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(node)) } {
+                return items
+                    .first()
+                    .map(|item| item.node)
+                    .and_then(|node| node.dynamic());
+            }
+            current = self.module.node_origin(node);
+        }
+        None
+    }
+
+    /// Whether a node holds a shallow mark's pair: two items, the first lazy.
     fn masked_pair(&self, node: NodeId) -> bool {
         let mut current = Some(node);
         while let Some(node) = current {
@@ -122,7 +138,7 @@ where
     /// A lazy region's own pair: the read addresses the pair, not a slot's value.
     ///
     /// # Invariant
-    /// The pair is the slot's value position and the slot is the read's operand.
+    /// The operands are the read's own, so both predate the read.
     fn lazy_region(&self, value: NodeId) -> bool {
         let Some(operation) = self.module.node_operation(value) else {
             return self.masked_pair(value);
@@ -136,29 +152,13 @@ where
         let Some(operand) = operation.operand else {
             return false;
         };
+        // The operand array is `[slot, key]`; the slot's value position is the wrap.
+        let slot = self.first_position(operand);
 
-        // SAFETY: a payload of a value of this module; a stale node answers `None`.
-        let Some(items) = (unsafe { self.module.array_items_of(AnyNodeId::Dynamic(operand)) })
-        else {
+        let Some(slot) = slot else {
             return false;
         };
-        let Some(slot) = items
-            .first()
-            .map(|item| item.node)
-            .and_then(|node| node.dynamic())
-        else {
-            return false;
-        };
-        // SAFETY: the slot array is a payload of a value of this module.
-        let Some(slot_items) = (unsafe { self.module.array_items_of(AnyNodeId::Dynamic(slot)) })
-        else {
-            return false;
-        };
-
-        slot_items
-            .first()
-            .map(|item| item.node)
-            .and_then(|node| node.dynamic())
+        self.first_position(slot)
             .is_some_and(|node| self.masked_pair(node))
     }
 
