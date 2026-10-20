@@ -578,3 +578,13 @@ is the write's value expression (`i + 10`, an `Int`). The remaining route is to 
 checker hand that class to the rule (it is the one reader that knows the write's value
 expression), or to freeze the prelude `Portable` so a decided node keeps its operator —
 `ReadOnly` deliberately stores none for a decided node (`freeze.rs`).
+
+**The attribution reading (round seven).** Route 1 failed for a reason worth keeping:
+`Module::node_function` attributes only **eight** nodes to the parallel index function —
+the signature nodes in `Function::nodes` — and none of the body's applies. A scan by
+function attribution therefore sees no write, while a scan by block sees the whole
+program: the checker homes nested functions in the enclosing block (`BlockId(1)`, no
+children, 2044 nodes for one index function and 2839 for the graph body). The invariant
+on `Function::nodes` — "the nodes owned by this function's body" — is therefore not what
+the graph holds: the body nodes are attributed to the enclosing function. That is the
+next thing to measure before any rule can find a body's call by its function.
