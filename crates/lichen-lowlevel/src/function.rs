@@ -488,8 +488,10 @@ impl<P: Program> Module<P> {
             let source = &self.nodes[node];
             (source.value, source.operation, source.evaluated_deep)
         };
-        // A value holding a foreign closure is cloned too: the proof cannot see through a body.
-        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided);
+        // A value holding a foreign closure is cloned too: the proof cannot see
+        // through a body. A computation is never proven: its value may depend on
+        // the call.
+        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided) && operation.is_none();
         // A scope's content is this call's: sharing it would collect the
         // template.
         let scoped = self.blocks[self.nodes[node].block].parent.is_some();
