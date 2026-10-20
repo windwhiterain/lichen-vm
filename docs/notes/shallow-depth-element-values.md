@@ -594,3 +594,21 @@ So the fix belongs at the mint: a minted closure's parameter must be **its own c
 in its own template image, not the enclosing call's bound clone. The remap is shared so
 captures rewrite to the fresh clones; the parameter is the one node that must not be
 shared.
+
+## 19. The mint now owns its template (round twenty-five)
+
+Fixed: the closure mint shared the enclosing instantiation's `remap`, so the minted
+template's parameter was the very node the enclosing call binds, and its scope's clones
+joined that call's clone groups. The mint now
+
+- removes the nested function's parameter from the shared memo before its walk,
+- drops the memo entries its own walk inserted **for the nested scope** (a capture's
+  entry stays, so the enclosing pass and the minted body name the same outer clone).
+
+Measured: the stale-value conflict (`3` against `2`) is **gone**. A first, broader form
+that dropped every inserted key also broke two capture tests
+(`a_nested_function_captures_the_applied_outer_parameter`,
+`a_closure_released_from_a_scope_is_still_callable`) — the scope filter is what keeps
+them green. The block recursion now unrolls past the **apply-depth budget** instead:
+the trace shows every recursive application passing the **same argument node** (`566`),
+so `z` never decreases. That shared argument is the next seam.
