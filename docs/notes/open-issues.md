@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The record's `.value` slot already holds the return expression.** Followed
+structurally: the write's operand is `Index(Index(record, 2), 0)`; the record's value array
+is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not a pair — so
+`check_record`'s `state[field].term` for the `.value` field was already the call's *value*
+(its return expression), not the apply's pair. A resolver that follows
+`Index(Index(array, k), 0)` to the array's item and looks it up in `applied_pairs` fires
+(the chain is found) but finds no applied pair there, so it changes nothing (117) and was
+reverted. The next fix is at the **call's term**: `check_app` must leave the call's pair as
+the field's term so the record keeps the call.
+
 **The write's value loses the call at the record, measured.** The write's third operand is
 `Index(3225, 0)`; `3225` is the write's field pair, its class's defining member is the
 **step's Add** (the fold body), and `3225` is **not** in `applied_pairs` — so no path in
