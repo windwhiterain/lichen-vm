@@ -1783,6 +1783,30 @@ where
     }
 
     /// One pending write's lowering, whichever instruction it becomes.
+    /// The call a value peel `Index(pair, 0)` names.
+    fn call_of_value_read(&self, node: NodeId) -> Option<NodeId> {
+        let operands = self.module.operands_of(node).ok()?;
+        if self.module.usize_value(*operands.get(1)?)? != 0 {
+            return None;
+        }
+        let container = *operands.first()?;
+        let lichen_lowlevel::Define::Computed(defined) =
+            self.module.define_in(self.function, container)
+        else {
+            return None;
+        };
+        let apply = self
+            .module
+            .node_operation(defined)
+            .is_some_and(|operation| {
+                matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Apply)
+                )
+            });
+        apply.then_some(defined)
+    }
+
     fn write_call(&mut self, operand: NodeId, atomic: bool) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
@@ -1824,7 +1848,12 @@ where
         self.tally.record_write(ordinal, element);
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
-        let value = self.value(value_node)?;
+        // A record stores the call's pair; the read peels it
+        // (`docs/notes/loop-conversion.md`).
+        let value = match self.call_of_value_read(value_node) {
+            Some(call) => self.value(call)?,
+            None => self.value(value_node)?,
+        };
         let instruction = if atomic {
             KernelInstr::BufferAtomicAddCall(element)
         } else {
