@@ -1013,8 +1013,13 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let expected = [1usize, 2, 3, 4];
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
+        // An element is a complete slot: the bound value is its first position.
+        let element = b
+            .module
+            .element_value_node(AnyNodeId::Dynamic(id))
+            .unwrap_or(AnyNodeId::Dynamic(id));
         assert_eq!(
-            b.module.node_value(AnyNodeId::Dynamic(id)),
+            b.module.node_value(element),
             Some(HighProgramValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );

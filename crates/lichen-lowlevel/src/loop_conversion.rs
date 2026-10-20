@@ -140,7 +140,8 @@ impl<P: Program> Module<P> {
         }
         let mut spine = Spine::new(self, function);
         spine.walk()?;
-        let state = spine.state()?;
+        let state = spine.state();
+        let state = state?;
         Ok(LoopConversion {
             function,
             state,
@@ -161,8 +162,9 @@ impl<P: Program> Module<P> {
     pub fn parameter_value_path(&self, function: FunctionId, node: NodeId) -> Option<Vec<usize>> {
         let parameter = self.functions[function].parameter;
         let value_cell = self.pair_value_half(parameter).unwrap_or(parameter);
+        let value_class = self.class_root(value_cell);
         // A bare reference to the value cell is the whole-value read.
-        if self.class_root(node) == self.class_root(value_cell) {
+        if self.class_root(node) == value_class {
             return Some(Vec::new());
         }
         let mut path = Vec::new();
@@ -178,9 +180,19 @@ impl<P: Program> Module<P> {
             let operands = self.operands_of(current).ok()?;
             let (target, selector) = (*operands.first()?, *operands.get(1)?);
             let position = self.usize_value(selector)?;
-            if target == parameter && position == 0 {
+            if self.class_root(target) == value_class {
+                // The chain ends at the parameter's value cell. The outermost step
+                // is the slot's value position, not a state position.
+                if path.len() >= 2 && path[0] == 0 {
+                    path.remove(0);
+                }
                 // The pair peel — the chain's root. The path collected so far
-                // is innermost-first; it reads outermost-first.
+                // is outernmost-first; it reads outermost-first.
+                path.reverse();
+                return Some(path);
+            }
+            if target == parameter && position == 0 {
+                // The pair peel — the chain's root.
                 path.reverse();
                 return Some(path);
             }
@@ -349,9 +361,12 @@ impl<P: Program> Spine<'_, P> {
         if arms.len() != 2 {
             return Err(LoopRefusal::StateShape);
         }
-        let arm = |index: usize| match arms[index].node {
-            AnyNodeId::Dynamic(node) => Ok(node),
-            AnyNodeId::Static(_) => Err(LoopRefusal::StateShape),
+        let arm = |index: usize| {
+            // An element is a complete slot: the arm is its value position.
+            match self.module.element_value_node(arms[index].node) {
+                Some(AnyNodeId::Dynamic(node)) => Ok(node),
+                _ => Err(LoopRefusal::StateShape),
+            }
         };
         // `[b, a][c]` is `if c then a else b`: element 1 answers the `1` edge.
         let on_zero = self.walk_arm(arm(0)?)?;
@@ -408,9 +423,17 @@ impl<P: Program> Spine<'_, P> {
         let next: Vec<NodeId> = match unsafe { self.module.array_items(value) } {
             Some(items) => items
                 .iter()
-                .map(|item| match item.node {
-                    AnyNodeId::Dynamic(node) => Ok(node),
-                    AnyNodeId::Static(_) => Err(LoopRefusal::StateShape),
+                .map(|item| {
+                    // An element is a complete slot: the carried value is its first
+                    // position.
+                    let item = self
+                        .module
+                        .element_value_node(item.node)
+                        .unwrap_or(item.node);
+                    match item {
+                        AnyNodeId::Dynamic(node) => Ok(node),
+                        AnyNodeId::Static(_) => Err(LoopRefusal::StateShape),
+                    }
                 })
                 .collect::<Result<_, _>>()?,
             None => vec![value],
