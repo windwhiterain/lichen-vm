@@ -51,6 +51,17 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The opaque is hit outside the nest, and the record keeps the unroll's result.**
+`opaque` prints `loops []` for node 3712 — the empty clone is lowered while emitting the
+**write call**, outside any nest, and the record's `.value` item is the step's **Add apply**
+(not the fold call's apply): the check-time **unroll** substituted the call's result into
+the record. The two coordinated changes that would fix this chain are recorded for the
+next round: (a) `function_apply` returns `None` (lazy) for a marked function whose
+conversion refuses instead of unrolling it, so the record keeps the call, and (b)
+`parameter_value_path` follows the chain to the parameter and pops the pair peel so the
+emitter's own conversion succeeds. Both touch Invariants (the unroll fallback and the
+refusal verdict) and need the superior's ruling before they are made.
+
 **The record's `.value` slot already holds the return expression.** Followed
 structurally: the write's operand is `Index(Index(record, 2), 0)`; the record's value array
 is `[1493, 525, 1583]` and item 2 (`1583`) is the step's **Add**, not a pair — so
