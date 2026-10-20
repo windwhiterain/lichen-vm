@@ -488,3 +488,15 @@ Measured on `a_recursive_binding_inside_a_block_recurses`, prints since removed:
   value is `USize(2)` (clones ending at a node of function 4). So the conflict is
   between a *value clone* and a *read clone*, one function apart — the pair unify is
   comparing a slot value against a dereference, not two values of one call.
+
+## 12. The region answer is a construction fact (round eighteen)
+
+The user's reading: **the type slot's own computation has no value during the check
+either**, and nothing complains about it — so an undecided value is not a reason the
+attribute side may fail. The region question must therefore be answered the way the
+type slot answers: by a fact the check states, not by reading a value.
+
+That is now the case: `shallow_regions` records every wrapper the check builds, and
+`lazy_region` asks the set through the node's origin chain (a clone answers for its
+template), falling back to the value mask only for a wrapper this check did not build
+(a frozen one). The wrapper's own value is not read.
