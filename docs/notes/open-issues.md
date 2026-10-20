@@ -28,16 +28,25 @@ describes the *pre-squash* failure and no longer matches the tree.
 value, and the highlevel judges it from the node's type node. The ten tests no longer stop
 on the "a class states one shape" assertion.
 
-**What they stop on now — the lowering's own reading of the compound-slot encoding.** The
-role walk is right (`roles.outputs = [[2, 0]]`: the `.out` field, its `.z` buffer), but the
-write's `.to` no longer resolves to that path. Read from the code, not yet measured:
-`param_path` pushes one step per `Index`, while the checking encoding reads a field's slot
-and then its value position, so the extra dereference becomes a spurious field step. The same encoding shows up twice more in the ten failures: a read over
-a pair reports "this value is not a container — it has no element to read", and a kernel's
-domain reads undecided (so the polymorphic-template diagnostic fires on a monomorphic
-kernel). The fix is therefore in `lichen-compute`'s readers (`param_path`,
-`peeled_argument`, the argument/codomain walks), not the checker hand-off; the hand-off's
-design still stands for after that.
+**What they stop on now — measured.** The failing reads are the kernel bodies' own
+(`k.out.z`, `k.in.b`, `k.out.w`), reported as "this value is not a container — it has no
+element to read" during `compile_parallel_fragment`'s deep evaluation of the body. A
+temporary print (removed) traces one chain: `k`'s pair → its value → the `.in` slot → the
+field's value → the `.b` slot → the value; the last container's **class holds a bare
+`USize(32)`**, with two members — one a template node of the kernel's function, one
+untagged. The checker's chain expects a pair at that position, so the value the body is
+evaluated against carries a bare scalar where the compound-slot encoding puts a pair. The
+only `32` in the prelude is `warp` (`warp = 32`, the perspective `Read`/`Write` put on
+their buffer field), so the next measurement is which attribute dispatch writes it into
+that class — the pattern fits a perspective reaching a value slot rather than an attribute
+slot.
+
+The role walk itself is right (`roles.outputs = [[2, 0]]`: the `.out` field, its `.z`
+buffer). The `.to` resolution and the undecided-domain refusals follow from the same
+broken reads: once a read yields the wrong value, the write's target names no output and
+the kernel's domain reads undecided. So the fix is in the attribute dispatch the compute
+prelude's `# warp` exercises, not in the checker hand-off; the hand-off's design still
+stands for after that.
 
 ## 2. Nothing else
 
