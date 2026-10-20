@@ -51,6 +51,17 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**A nested tuple domain decodes, then conflicts with the class channel.** With the
+domain reader fixed, the simple `tuple{Int, Int}` jit compiles; the nested program
+(`tuple{tuple{Int, Int}, Int}`) still refused. A discriminator that recognises a **type
+pair** by the kind marker in its type position (so `low_type_of_slot` decodes nested type
+pairs too) makes the nested program *decode* — and both remaining jit tests then **panic**
+at `equality.rs`'s class assertion: `a class states one shape`, left
+`Tuple([Some(USize), Some(USize)])`, right `USize`. So the nested element's class is seeded
+as the tuple while a leaf read observes a scalar: the domain reader and the class channel
+disagree about a nested domain, which is the next fix there. The discriminator change was
+reverted (it turned a refusal into a panic).
+
 **The alias retry fixes the conversion and flips nothing.** `562` (`Index(parameter, 0)`)
 is joined to the state's value cell `548` by `alias_read` when that read is *evaluated*
 (`evaluate_node_operation` → `alias_read` → `unify`), which is why later runs convert. A
