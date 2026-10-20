@@ -51,6 +51,18 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The superior's reading is confirmed: the record keeps the call's apply.** Measured: the
+write's container (the record's element read) defines — through `define_in` — to
+**`NodeId(1583)`**, a `LowOperator::Apply` whose `callee_function` is the marked function
+(the fold). So the call is *in the graph*; the emitter only misses it because it lowers
+the value peel (`Index(pair, 0)`), whose definition is the return expression (the `if`).
+Lowering the **call** there instead (a `call_of_value_read` resolver in `write_call`) moves
+the refusal to the next layer — "kernel body Apply is supported only for a cross-kernel
+(kernel-value) callee" — on the loop body's own `read` call, whose callee cell is not
+recognised as a frozen function. Measured 117 → **114**: the three loop-path tests regress
+because the loop path is still incomplete, so the fix was reverted; it is the right fix
+once the loop body's prelude-call callee resolves.
+
 **The suite's count includes order-dependent failures, measured.** A bisect of
 `helper_refuses_a_parallel_refusal::a_compute_parallel_refusal_fails_the_helper` converged
 on a **docs-only** commit, which is impossible as a behavioural cause — and the test then
