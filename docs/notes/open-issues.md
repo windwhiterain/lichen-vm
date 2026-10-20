@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The array read's typing is fixed for structured containers.** `check_index` now types
+its result by the **container's kind**: a tuple or struct element states its own type cell
+(`slot_read`'s `element_ty`), an array keeps the array element type. Measured: no test
+flips (compute 115), the embedded prelude still checks, and language 275 / highlevel 136
+stay green. The nested domain is still refused: with the type-pair decode added as well,
+the class-shape assertion still fires on the pair wrapping the **outer** read — so the
+offending type comes from the *tuple read* path (`structs.rs`, which already uses
+`slot_read`'s `ty_node`) or from the class seed on the container value, not from
+`check_index`.
+
 **The nested conflict is a checker typing, and the obvious repair breaks the prelude.**
 `prepare_template_low_types` seeds a pair's *value* with its type slot's shape, and the
 pair wrapping `p(0)(0)` (node 88, value a scalar read) states `tuple{Int, Int}` — the

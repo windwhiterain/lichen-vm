@@ -96,14 +96,38 @@ where
             Some(in_range_ops),
         );
         self.register_assert(in_range, self.loc(e, 0), false, AssertSpelling::Condition);
-        let _ = element_ty;
-        let pair = self.element_pair(value_node, elem_cell, element);
+        // A tuple or struct element states its **own** type cell
+        // (`docs/notes/compound-element-slots.md`).
+        let read_ty = if self.container_is_tuple(array_ty) {
+            element_ty
+        } else {
+            elem_cell
+        };
+        let pair = self.element_pair(value_node, read_ty, element);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
-        self.state[e].ty = Some(elem_cell);
+        self.state[e].ty = Some(read_ty);
         // The element's attributes are the read's: the slot is the field's own.
         self.state[e].attr = self.stated_element_slot(element);
         pair
+    }
+
+    /// Whether the container type names a **tuple or struct**: its elements are
+    /// slots that state their own types.
+    fn container_is_tuple(&self, ty: NodeId) -> bool {
+        let Some(kind) = shape::kind_of(&self.module, AnyNodeId::Dynamic(ty)) else {
+            return false;
+        };
+        let Some(marker) = shape::marker_of(&self.module, kind).and_then(dynamic_node) else {
+            return false;
+        };
+        let tuple_marker = self.module.node_value(AnyNodeId::Dynamic(marker));
+        let tuple = tuple_marker.is_some()
+            && tuple_marker
+                == self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(self.markers.tuple_type_marker));
+        tuple || shape::is_struct_marker_any(&self.module, AnyNodeId::Dynamic(marker))
     }
 
     /// A positional type access `X{n}` — element `index` of the container's
