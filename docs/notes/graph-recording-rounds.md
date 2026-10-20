@@ -540,3 +540,21 @@ argument loop, a per-dispatch print in `graph::record_dispatch`, and the `named_
 print at the conjunction point in `build_graph`, all gated on one environment variable and reverted
 before the commit. Each program was run alone with the full path and `--exact`, so no line belongs to
 another program.
+**The slot encoding's seam (measured on the twenty-six-test graph block).** With a
+compound's elements carrying complete `[value, type, attributes]` slots, the ten
+`graph_jit` tests refuse at `compute.parallel`'s output walk: "no output of this
+parallel index function carries a decided scalar class". Three readings, each taken
+with a temporary print and reverted:
+
+- the applied pair the checker records is `[value, type, wildcards…]`, and its **value
+  position is a two-item frozen array** — the annotation's value, not the `$write`
+  operation — so `write_value_node`'s walk finds no write;
+- `Shape::clone_static_signature_node` now copies a frozen node's **operation**, so a
+  reader that resolves operators can see one; this did not move the ten, which is what
+  points at the frozen return pair's own value;
+- scanning the index function's **block subtree** for the write call does not find it:
+  the applies found there belong to the graph body (`.I/.O` structs), not to `f1`'s
+  body, so the write call's node is homed elsewhere than `Function::block`'s subtree.
+
+`compute::jit_*` is 30/40 overall (all non-graph tests pass); the remaining ten are
+this walk.
