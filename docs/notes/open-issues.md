@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The approved Invariant change is refuted by measurement.** With the superior's approval
+of both changes proposed here, they were implemented and measured: removing the unroll
+fallback for a refusing marked recursion takes compute **117 → 114** and fails
+`host_loop::an_unconvertible_marked_recursion_still_expands` — that test *is* the
+fallback's contract — and adding the parameter-end path walk gives 114 with the same
+lowlevel failure. All three variants (unroll-only, walk-only, both) are negative, so both
+were reverted and the fallback stays: it is what lets those programs run at all, and the
+next work is the **loop path's runtime** for the plan/tiled shapes, not the fallback.
+
 **The opaque is hit outside the nest, and the record keeps the unroll's result.**
 `opaque` prints `loops []` for node 3712 — the empty clone is lowered while emitting the
 **write call**, outside any nest, and the record's `.value` item is the step's **Add apply**
