@@ -612,3 +612,31 @@ that dropped every inserted key also broke two capture tests
 them green. The block recursion now unrolls past the **apply-depth budget** instead:
 the trace shows every recursive application passing the **same argument node** (`566`),
 so `z` never decreases. That shared argument is the next seam.
+
+## 20. The recursion's shared argument, and a measured trade (round twenty-six)
+
+The trace after round 25 shows, for every recursive level, a fresh apply node and a
+fresh operand array, but the operand's **items 1..** are the same nodes: item 0 (the
+callee) is cloned per level, item 1 (the argument pair) is not. So `z` never decreases
+and the check stops on the apply-depth budget.
+
+Root cause measured: the argument pair is a *minted* template node whose value was
+copied from the enclosing call (`z - 1` with `z = 3` gives `2`), and the mint's `carried`
+rule copies it into every later template.
+
+Two rules were added and kept (measured unchanged: language 274/275, highlevel 136/136,
+lowlevel 164):
+
+- **scoped-ness is judged on the template root**, because a clone's block can be
+  parentless while its template lives in a function's scope;
+- **a clone is proven only when its template is**, because a value this instantiation
+  computed belongs to that call.
+
+**Negative, measured:** suppressing the carry for a mint's own scope
+(`closure_scope.contains(node)`) makes the block recursion **pass** (273/275 with it in
+place the recursion is green) but loses the enclosing call's applied values for
+captures — the nested function's scope list *holds* the captures (`a`, `b`, `x`), so
+`a_nested_function_captures_the_applied_outer_parameter` and
+`a_closure_released_from_a_scope_is_still_callable` fail. A capture is therefore not
+distinguishable from the scope's own by the scope list, the function tag, or the block
+chain (all three tried and measured). The next seam is that distinction.
