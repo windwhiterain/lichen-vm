@@ -139,35 +139,34 @@ where
     /// # Invariant
     /// The operands are the read's own, so both predate the read.
     fn lazy_region(&self, value: NodeId) -> bool {
-        let Some(operation) = self.module.node_operation(value) else {
-            return self.masked_pair(value);
-        };
-        if !matches!(
-            lichen_utils::extend::AsEnum::<LowOperator>::as_enum(&operation.operator),
-            Some(LowOperator::Index)
-        ) {
-            return self.masked_pair(value);
+        // The container's value *is* the region when it is the wrapper; a read's
+        // value is the array that read resolves to.
+        match self.array_of(value) {
+            Some(array) => self.masked_pair(array),
+            None => self.masked_pair(value),
         }
-        let Some(operand) = operation.operand else {
-            return false;
-        };
-        // The operand array is `[slot, key]`; the slot's value position is the wrap.
-        let slot = self.first_position(operand);
-        let Some(slot) = slot else {
-            return false;
-        };
-        let position = match self.first_position(slot) {
-            Some(node) => Some(node),
-            None => self.selected_item(slot),
-        };
-        // The selected node may be the pair that holds the wrapper, or the wrapper
-        // itself: both readings are the same region.
-        position.is_some_and(|node| {
-            self.masked_pair(node)
-                || self
-                    .first_position(node)
-                    .is_some_and(|first| self.masked_pair(first))
-        })
+    }
+
+    /// The array a node's evaluated value *is*.
+    ///
+    /// # Invariant
+    /// A read's own value is decided at evaluation, which a check may not force; its
+    /// constant selection and a call's template pair are the same value without it.
+    fn array_of(&self, node: NodeId) -> Option<NodeId> {
+        if unsafe { self.module.array_items_of(AnyNodeId::Dynamic(node)) }.is_some() {
+            return Some(node);
+        }
+        if let Some(selected) = self.selected_item(node)
+            && unsafe { self.module.array_items_of(AnyNodeId::Dynamic(selected)) }.is_some()
+        {
+            return Some(selected);
+        }
+        match self.module.callee_function(node) {
+            Some(function) => self
+                .module
+                .pair_value_half(self.module.functions[function].r#return),
+            None => None,
+        }
     }
 
     /// The pair a call instantiates: the callee function's template return pair.
