@@ -1171,7 +1171,13 @@ where
             .iter()
             .map(|element| {
                 let element = dynamic(element.node)?;
-                self.value(element)
+                // An element is a complete slot: the entering state is its value.
+                let value = self
+                    .module
+                    .element_value_node(element.into())
+                    .and_then(|node| node.dynamic())
+                    .unwrap_or(element);
+                self.value(value)
             })
             .collect()
     }

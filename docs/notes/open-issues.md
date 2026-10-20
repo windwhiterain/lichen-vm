@@ -42,6 +42,15 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The entering state's elements are peeled, and the wildcard is the blocker.**
+`loop_state` now takes each element slot's value (the third reader of the same pattern).
+The minimal `@loop` kernel's refusal traces to the label-annotated step element: its
+clone's operand is the annotation's **wildcard** (`Any`), which the clone walk mints as an
+empty cell, so the arithmetic lowering asks that empty node for a value and the emitter
+refuses it as opaque. The fix is the emitter's annotation handling — a label-annotated
+value must be emitted as its underlying value, not as an application of the label — which
+is the next step.
+
 **The empty clone is a leak across functions, measured.** Followed with a minimal
 `@loop` kernel: the kernel's body walks `VALUE 3712` (an empty clone, owner the kernel,
 origin `665`) into `VALUE 665`, a node of the **marked function's** template, and then
