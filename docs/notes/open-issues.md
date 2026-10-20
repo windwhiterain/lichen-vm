@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The loop body's prelude call has an empty callee cell.** With the call-lowering in
+place, the loop's own lowering starts and refuses at the fold body's `read` call: the apply
+`1064`'s callee `693` has **no value**, its class has no defining member, and
+`static_function_of_callee` answers `None` — so `routed_operator` cannot route it and the
+emitter refuses "kernel body Apply is supported only for a cross-kernel callee". The other
+applies in the body resolve (the fold's own `Apply` with a dynamic function, and two
+static function values), so the missing fact is specific to the callee cell the loop body
+carries. Next: find who mints `693` (a fresh cell, not a `materialize_leaf` — that one
+would carry the `Function(Static)` value) and make it carry the static function.
+
 **The superior's reading is confirmed: the record keeps the call's apply.** Measured: the
 write's container (the record's element read) defines — through `define_in` — to
 **`NodeId(1583)`**, a `LowOperator::Apply` whose `callee_function` is the marked function
