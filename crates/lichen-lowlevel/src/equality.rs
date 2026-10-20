@@ -238,7 +238,11 @@ impl<P: Program> Module<P> {
                         .iter()
                         .zip(elements)
                         .map(|(position, element)| {
-                            self.deepen_position(position.clone(), element.node, seen)
+                            // A compound's element is a slot: the value is its first position.
+                            let element = self
+                                .element_value_node(element.node)
+                                .unwrap_or(element.node);
+                            self.deepen_position(position.clone(), element, seen)
                         })
                         .collect(),
                 )
@@ -247,7 +251,9 @@ impl<P: Program> Module<P> {
                 let element = elements
                     .iter()
                     .fold((**element).clone(), |accumulated, item| {
-                        pick(accumulated, self.deepen_position(None, item.node, seen))
+                        // A compound's element is a slot: the value is its first position.
+                        let item = self.element_value_node(item.node).unwrap_or(item.node);
+                        pick(accumulated, self.deepen_position(None, item, seen))
                     });
                 LowShape::Array(Box::new(element), *length)
             }

@@ -83,8 +83,19 @@ impl<P: Program> Module<P> {
                 let container = self.low_type_of_node(self.operand_at(node, 0)?)?;
                 let index = self.constant_index(self.operand_at(node, 1)?)?;
                 match container {
-                    LowShape::Tuple(items) => items.get(index)?.clone(),
-                    LowShape::Array(element, length) if index < length => (*element).clone(),
+                    // A pair's position 0 is the value itself, its 1 the type.
+                    LowShape::Tuple(items) if items.len() == 2 && items[1].is_none() => {
+                        items.get(index)?.clone()
+                    }
+                    // An element is a complete slot: the read is the pair, and the next
+                    // `Index` on it is the value position.
+                    LowShape::Tuple(items) => items
+                        .get(index)?
+                        .clone()
+                        .map(|shape| LowShape::Tuple(vec![Some(shape), None])),
+                    LowShape::Array(element, length) if index < length => (*element)
+                        .clone()
+                        .map(|shape| LowShape::Tuple(vec![Some(shape), None])),
                     _ => return None,
                 }
             }

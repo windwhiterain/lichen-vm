@@ -2487,7 +2487,8 @@ where
     };
     let mut leaves = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
-        let element = dyn_node(item.node)?;
+        // An element is a complete slot: the leaf is its value position.
+        let element = dyn_node(module.element_value_node(item.node).unwrap_or(item.node))?;
         if is_tuple_value(module, element) {
             return Err(format!(
                 "a kernel codomain must be a scalar or a tuple of scalars, but element {index} \

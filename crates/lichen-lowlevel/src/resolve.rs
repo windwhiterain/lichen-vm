@@ -120,7 +120,14 @@ impl<P: Program> Module<P> {
             Some(items) => items
                 .iter()
                 .map(|item| match item.node {
-                    AnyNodeId::Dynamic(node) => Ok(node),
+                    // An element is a complete slot: its value is the position read.
+                    AnyNodeId::Dynamic(_) => match self.element_value_node(item.node) {
+                        Some(AnyNodeId::Dynamic(node)) => Ok(node),
+                        _ => Err(
+                            "a body reads a static reference into a frozen module, which has no                              node in this graph"
+                                .into(),
+                        ),
+                    },
                     AnyNodeId::Static(_) => Err(
                         "a body reads a static reference into a frozen module, which has no node in \
                          this graph"

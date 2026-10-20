@@ -502,7 +502,16 @@ where
                 cursor = *target;
                 break;
             }
-            positions.push(step);
+            // A slot's value position is no path step: the read's own element is
+            // the pair the transfer states.
+            let dereference = matches!(
+                self.module.class_low_type(*target),
+                Some(lichen_lowlevel::LowShape::Tuple(items))
+                    if items.len() == 2 && items[1].is_none()
+            );
+            if !dereference {
+                positions.push(step);
+            }
             cursor = *target;
         }
         let root = self.module.class_root(cursor);

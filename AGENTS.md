@@ -38,25 +38,6 @@ a workspace member and a dev-dependency of `lichen-highlevel`.
   Use the TestKit for the shape a question is about, and the language tests or the CLI
   for what a program finally answers.
 
-## Tests
-
-A crate carries **at most two** test binaries: the **lib** binary holding the inline
-`#[cfg(test)]` unit tests, and **one** external binary holding every integration
-area. An area is a module under `tests/<name>/`, never a second top-level file —
-Cargo links a binary per `tests/*.rs` and per `tests/<dir>/main.rs`, and each one
-statically links the whole stack.
-[The note](docs/notes/test-binary-layout.md) is the prose form, with the census.
-
-- **Run one test with an argument, not with a second file**: libtest's own free
-  filter is what selects it (`cargo test -p <crate> --test <name> <module>`,
-  `-- --exact <module>::<test>`, `-- --list`). An external binary's names carry no
-  crate prefix; a lib binary's do.
-- The inline half cannot be folded into the external one — a unit test reaches the
-  crate's private items — which is why two is the floor and not a concession.
-- **One binary means one thread pool over every test in the crate**: `cargo test`
-  gave 54 sequential processes, and now gives 77 tests at `--test-threads = cpus`.
-  On a suite that loads a model, cap it.
-
 ## Verify
 
 - `cargo check` for compilation pass.
