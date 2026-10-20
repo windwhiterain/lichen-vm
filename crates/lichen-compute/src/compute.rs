@@ -4501,6 +4501,10 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    // A compound's element is a complete slot: its value is the position read.
+    let Some(node) = module.element_value_node(node) else {
+        return Err("the argument holds no value".to_string());
+    };
     match module
         .node_value(node)
         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
