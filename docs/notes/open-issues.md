@@ -51,6 +51,17 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The write's value loses the call at the record, measured.** The write's third operand is
+`Index(3225, 0)`; `3225` is the write's field pair, its class's defining member is the
+**step's Add** (the fold body), and `3225` is **not** in `applied_pairs` — so no path in
+the emitter reaches the call. The cause is upstream of the emitter: the record's element
+slot was filled with the argument's **value** (`pair_value_half` of the call's pair = the
+function's return expression), so the call expression itself is not in the record and
+cannot be recovered. An `applied_call` interception in the emitter (a value read of an
+applied pair lowers the call) is written and measured neutral (117) — the pair is never an
+applied pair here — and was reverted. The fix must keep the call's **pair** in the record's
+element slot, which is the encoding question this arc is about.
+
 **The loop conversion's refusal still masks the opaque.** Re-tested the alias retry on
 the 117 tree: 114 (−3, the same `plan_staging`/`tiled_reduction` three). With the
 conversion succeeding, `tiled_reduction`'s kernel compilation reaches the **opaque**
