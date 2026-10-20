@@ -567,3 +567,14 @@ not resolve to field names at check time (`names=None` for every apply that is n
 `.I/.O` struct), so the write's struct is not identifiable that way. The frozen write
 body's reachable graph has **no operators at all** (`op=None` at every node), so the write
 is not recoverable from the artifact's nodes either.
+
+**Route 2 measured dead as well (round six).** The callee's frozen signature cannot name the
+write: its parameter *type cell* is a static cell whose class representative holds **no
+value** (`rep=…610 value=None`) — the artifact kept the prelude's signature undecided — and
+the caller's argument *type cell* does not resolve to field names either (`names=None`), so
+neither the artifact's names nor the call's own type states `Write`. What *is* decided at the
+call is the argument's **value**: the struct literal's field pairs, whose third slot's value
+is the write's value expression (`i + 10`, an `Int`). The remaining route is to let the
+checker hand that class to the rule (it is the one reader that knows the write's value
+expression), or to freeze the prelude `Portable` so a decided node keeps its operator —
+`ReadOnly` deliberately stores none for a decided node (`freeze.rs`).
