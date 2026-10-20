@@ -605,3 +605,23 @@ with temporary prints, since removed:
 - That is the same seam the class refusal reports: `write_value_node` finds no write
   because the value the checker materialized for the call is undecided, and the deep
   pass has no operation in this graph to decide it.
+
+## The module holds no dynamic write, only a static one (round fourteen)
+
+Measured, prints since removed:
+
+- After the check, the module carries **no node whose operator is `Write` or
+  `WriteAtomic`** (`writes=[]` over 4101 nodes, 1433 of them clones). The write the
+  rule looks for exists only as a **static reference** into the frozen compute
+  prelude: `clone_static_signature_node` keeps a value-less frozen node's static ref
+  ("a node with no value is an operation: it keeps its frozen reference, which the
+  reader resolves in that module"), and `write_node` only asks
+  `module.node_operation` about dynamic nodes.
+- The output node the rule is handed is a clone whose **origin chain ends at the
+  apply that instantiated the write** — a dynamic `Apply` whose value is a five-item
+  pair — so the *caller-side* apply, and through it this call's argument, is
+  reachable from the output the codomain names.
+- Therefore the later design choices are: resolve a static write reference in
+  `write_node` (the frozen module is readable through the registry), or take the
+  class from the reachable apply's argument (the `(Write _)` parameter's third
+  field). Both are rules-side; the checker's materialization itself is faithful.
