@@ -527,3 +527,18 @@ mutually recursive resolution:
   the node itself, the item a constant read selects, or the array a call's template
   return pair holds — and a call's template pair is what states the call's value before
   any evaluation decides it, which is the reading the type slot already uses.
+
+## 15. The block recursion's clone chains (round twenty-one)
+
+Dumped with temporary prints, then removed:
+
+- The conflicting nodes are **clones carrying a previous call's value**: one side is a
+  clone chain whose value is `USize(3)` (its origin chain crosses function tags 7 → 6 →
+  4 → 2), the other a clone of a read whose value is `USize(2)` (tags 6 → 4 → …). So a
+  later instantiation cloned an **earlier instantiation's node**, not the template.
+- The likely seam is the class topology the instantiation re-establishes:
+  `wire_apply_result` unifies the template apply with the instantiation's result, and
+  `unify_clone_groups` then regroups the next instantiation's clones against a class
+  that already holds the first call's values. A computation's clone must not carry a
+  previous call's value; the `proven concrete` rule now excludes computations, which is
+  necessary but was not sufficient for this case.
