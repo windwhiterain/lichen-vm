@@ -3,7 +3,7 @@
 
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{NoPersist, ProgramCodecOf};
-use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
+use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 /// A host over the bare language's leaves plus `lichen-std-native`.

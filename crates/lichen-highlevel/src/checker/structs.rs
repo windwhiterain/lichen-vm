@@ -94,26 +94,6 @@ where
         pair
     }
 
-    /// The first position of the array a node's class holds, through its origin.
-    ///
-    /// # Invariant
-    /// A clone states no value at check time, so the walk follows
-    /// [`Module::node_origin`] back to the template that holds the array.
-    fn first_position(&self, node: NodeId) -> Option<NodeId> {
-        let mut current = Some(node);
-        while let Some(node) = current {
-            // SAFETY: a payload of a value of this module; a stale node answers `None`.
-            if let Some(items) = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(node)) } {
-                return items
-                    .first()
-                    .map(|item| item.node)
-                    .and_then(|node| node.dynamic());
-            }
-            current = self.module.node_origin(node);
-        }
-        None
-    }
-
     /// Whether a node holds a shallow mark's pair: two items, the first lazy.
     fn masked_pair(&self, node: NodeId) -> bool {
         let mut current = Some(node);

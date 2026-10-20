@@ -195,25 +195,6 @@ where
     /// for a value that names no part of it.
     ///
     /// # Invariant
-    /// Recognised by **shape** — a call whose argument is the parameter or one of its
-    /// fields — never by the callee's name, so any `xxx_of` vocabulary function that
-    /// takes the parameter qualifies. `None` inside the returned option is the whole
-    /// parameter; `Some(name)` is that field.
-    fn attribute_reference(&self, pe: ExprId) -> Option<Option<&'static str>> {
-        let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
-            return None;
-        };
-        let Some(parameter) = self.current_parameters.last().copied() else {
-            return None;
-        };
-        if argument == parameter {
-            return Some(None);
-        }
-        match self.ir[argument].kind {
-            ExprKind::NamedField { container, name } if container == parameter => Some(Some(name)),
-            _ => None,
-        }
-    }
 
     /// The node that holds the `[value, type]` pair an attribute value answers with.
     ///
