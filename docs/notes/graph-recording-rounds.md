@@ -625,3 +625,23 @@ Measured, prints since removed:
   `write_node` (the frozen module is readable through the registry), or take the
   class from the reachable apply's argument (the `(Write _)` parameter's third
   field). Both are rules-side; the checker's materialization itself is faithful.
+
+### The argument route is measured dead too (round fourteen)
+
+The rule-side alternative — take the class from the reachable apply's argument — was
+tried and measured:
+
+- From the output's origin chain the write's apply is reached and its operand's
+  argument pair is read (`[value, type, wildcards…]`), but the pair's **value item is
+  an empty cell**: no operation, no value.
+- Calling `evaluate_node_deep` on the argument does not decide it — a cell with no
+  operation has nothing to run — so the struct's three field slots stay unreachable
+  and the third field's class cannot be read this way.
+- The chain reaches the write without an *identity*: the callee is a static function
+  whose `static_function_compute_operator` is `None`, the argument type's
+  `struct_fields` is `None`, and the third field is unnamed. Every rule-side
+  identification of "this is the write" is therefore unavailable.
+
+So the remaining route is a **checker hand-off**: the checker knows the `(Write _)`
+argument's field types when it checks the call, and only it can state the written
+class where the rule can read it.
