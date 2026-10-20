@@ -72,6 +72,8 @@ struct ApplyCtx<'a> {
     applied: FunctionId,
     /// The applied function's parameter pair, always cloned: the check runs per call.
     parameter: NodeId,
+    /// The parameter pair's value slot: re-minted per call, and never carried into.
+    parameter_slot: Option<NodeId>,
     /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
     /// a closure's fresh id.
     tag: Option<FunctionId>,
@@ -303,6 +305,9 @@ impl<P: Program> Module<P> {
         debug_assert!(self.functions[function].nodes.contains(&parameter));
         let mut remap = HashMap::new();
         let mut minted = HashMap::new();
+        let parameter_slot = unsafe { self.array_items_of(AnyNodeId::Dynamic(parameter)) }
+            .and_then(|items| items.first().map(|item| item.node))
+            .and_then(|node| node.dynamic());
         let mut ctx = ApplyCtx {
             target: block,
             blocks: HashMap::new(),
@@ -312,6 +317,7 @@ impl<P: Program> Module<P> {
             closure_scope: None,
             applied: function,
             parameter,
+            parameter_slot,
             tag: self.nodes[node].function,
             remap: &mut remap,
             minted: &mut minted,
@@ -496,6 +502,7 @@ impl<P: Program> Module<P> {
         let scoped = self.blocks[self.nodes[node].block].parent.is_some();
         // Judged against the call's anchor, so one call gives a node one answer.
         let depends_on_parameter = node == ctx.parameter
+            || Some(node) == ctx.parameter_slot
             || !proven_concrete
             || scoped
             || self.value_holds_foreign_function(value, ctx.anchor);
@@ -657,6 +664,9 @@ impl<P: Program> Module<P> {
                 ctx.minted.insert(function, fresh);
                 // The nested function's scope joins the clone's template, so its captures
                 // rewrite to the fresh clones.
+                let parameter_slot = unsafe { self.array_items_of(AnyNodeId::Dynamic(parameter)) }
+                    .and_then(|items| items.first().map(|item| item.node))
+                    .and_then(|node| node.dynamic());
                 let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
                     target,
@@ -666,6 +676,7 @@ impl<P: Program> Module<P> {
                     closure_scope: Some(&scope),
                     applied: function,
                     parameter,
+                    parameter_slot,
                     tag: Some(fresh),
                     remap: ctx.remap,
                     minted,
