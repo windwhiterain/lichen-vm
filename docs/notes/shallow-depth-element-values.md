@@ -515,3 +515,15 @@ rather than its extracted value. Measured on the one-depth chain:
   wrapper through the chain, so the form changed the failure without removing it.
 The form is the structurally right one (the type slot composes the same way); it needs
 the region test to resolve the wrapper through the pair chain first.
+
+## 14. What made the chain work (round twenty)
+
+The one-depth chain is green. The working form is the pair-form of §13 **plus** a
+mutually recursive resolution:
+
+- The wrapper's first item is the call's **pair** (the apply node), so a read of the
+  wrapper dereferences the pair a call states.
+- `array_of` and `selected_item` resolve each other: the array a node's value is is
+  the node itself, the item a constant read selects, or the array a call's template
+  return pair holds — and a call's template pair is what states the call's value before
+  any evaluation decides it, which is the reading the type slot already uses.
