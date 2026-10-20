@@ -514,6 +514,8 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             return_type: NodeId::default(),
+            return_marker: None,
+            return_field: None,
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.
             static_origin: Some(sref),

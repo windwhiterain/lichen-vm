@@ -697,6 +697,8 @@ impl<P: Program> Module<P> {
                     r#return,
                     parameter,
                     return_type: NodeId::default(),
+                    return_marker: None,
+                    return_field: None,
                     // A clone of a materialized static closure is still that
                     // logical function, so the static origin travels with it.
                     static_origin,

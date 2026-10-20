@@ -29,6 +29,8 @@ fn function_homed_in(
         r#return,
         parameter: NodeId::default(),
         return_type: NodeId::default(),
+        return_marker: None,
+        return_field: None,
         static_origin: None,
         asserts: Vec::new(),
         parent: None,

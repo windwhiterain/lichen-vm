@@ -163,6 +163,26 @@ where
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
+        // The return's attribute marker and the parameter field it follows are
+        // definition-time shape data, like the return type.
+        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
+            let tail = self.schema_tail(r#return).to_vec();
+            self.module.functions[function].return_marker = tail
+                .iter()
+                .rev()
+                .find(|marker| {
+                    self.attribute_extension(*marker)
+                        .is_some_and(|ext| !ext.is_label())
+                })
+                .map(|marker| marker.order_index() as u32);
+            if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
+                && let Some(parameter_type) = self.state[parameter].ty
+            {
+                let position = self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
+                self.module.functions[function].return_field =
+                    position.map(|position| position as u32);
+            }
+        }
         self.scopes.pop();
         self.current_block = saved;
         // The value node pre-exists — the self-reference applied it during the
@@ -535,8 +555,32 @@ where
             }
             None => false,
         };
+        // A body that states a reference hands the call site the field it follows.
+        let mut field_certificate = false;
+        let (return_marker, return_field) = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => (
+                self.module.functions[fid].return_marker,
+                self.module.functions[fid].return_field,
+            ),
+            Some(AnyFunctionId::Static(sref)) => (
+                self.module.static_function_return_marker(sref),
+                self.module.static_function_return_field(sref),
+            ),
+            None => (None, None),
+        };
+        if let (Some(position), Some(index)) = (return_field, return_marker)
+            && let Some(marker) = P::Attr::ORDER.get(index as usize).copied()
+            && let Some(ext) = self.attribute_extension(&marker)
+            && let Some(field) = self.argument_field(argument, position as usize)
+        {
+            let provided = self.provided_slot(field, &marker, ext);
+            self.state[e].attr = Some(provided);
+            self.merged_tails.insert(e, vec![marker]);
+            field_certificate = true;
+        }
         let certificate = match returns_parameter {
             true => None,
+            false if field_certificate => None,
             false => self
                 .module
                 .applied_pairs

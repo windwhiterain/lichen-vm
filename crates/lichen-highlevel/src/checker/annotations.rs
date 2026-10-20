@@ -196,6 +196,30 @@ where
     ///
     /// # Invariant
 
+    /// The field of the enclosing parameter an attribute value follows, or [`None`]
+    /// for a value that names no part of it.
+    ///
+    /// # Invariant
+    /// Recognised by **shape** — a call whose argument is the parameter or one of its
+    /// fields — never by the callee's name, so any `xxx_of` vocabulary function that
+    /// takes the parameter qualifies. `None` inside the returned option is the whole
+    /// parameter; `Some(name)` is that field.
+    fn attribute_reference(&self, pe: ExprId) -> Option<Option<&'static str>> {
+        let ExprKind::Apply { argument, .. } = self.ir[pe].kind else {
+            return None;
+        };
+        let Some(parameter) = self.current_parameters.last().copied() else {
+            return None;
+        };
+        if argument == parameter {
+            return Some(None);
+        }
+        match self.ir[argument].kind {
+            ExprKind::NamedField { container, name } if container == parameter => Some(Some(name)),
+            _ => None,
+        }
+    }
+
     /// The node that holds the `[value, type]` pair an attribute value answers with.
     ///
     /// # Invariant
@@ -246,12 +270,6 @@ where
         if self.state[argument].attr.is_some() {
             return self.attr_or_missing(argument, marker);
         }
-        // A type states its elements' attributes (`compound-element-slots.md`).
-        if let Some(ty) = self.state[argument].ty
-            && let Some(slots) = self.element_attribute_slots(ty, marker)
-        {
-            return ext.combine(self, &slots);
-        }
         let children = self.persp_combine_children(argument);
         if children.is_empty() {
             return self.attr_or_missing(argument, marker);
@@ -261,29 +279,6 @@ where
             .map(|&child| self.provided_slot(child, marker, ext))
             .collect();
         ext.combine(self, &attrs)
-    }
-
-    /// The attribute slots a compound **type** states, one per element.
-    ///
-    /// # Invariant
-    /// The type's element list is the field list; an element that spells no
-    /// attribute contributes nothing, and an empty answer falls back to the
-    /// value's own components.
-    fn element_attribute_slots(&mut self, ty: NodeId, marker: &P::Attr) -> Option<Vec<NodeId>> {
-        if self.node_value(ty).is_none() {
-            self.module.evaluate_node_deep(ty, None);
-        }
-        let pair = unsafe { self.module.array_items(ty) }?;
-        let shape = pair.first()?.node.dynamic()?;
-        let fields = unsafe { self.module.array_items(shape) }?;
-        let index = marker.order_index() as u32;
-        let attrs: Vec<NodeId> = fields
-            .iter()
-            .filter_map(|item| item.node.dynamic())
-            .filter_map(|slot| self.slot_attribute(slot, index))
-            .filter_map(|node| node.dynamic())
-            .collect();
-        (!attrs.is_empty()).then_some(attrs)
     }
 
     /// The provided slot against a declared value: one attribute requirement,
@@ -623,6 +618,15 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
+                // A value computed from a part of the parameter is a **reference**.
+                if let Some(field) = self.attribute_reference(pe) {
+                    self.attr_refs.insert(e, (*marker, field));
+                    // The reference's slot is a hole: the call site resolves it.
+                    let cell = self.fresh_cell();
+                    constraint_slot = Some(cell);
+                    slots.push(cell);
+                    continue;
+                }
                 // The slot is the annotation value's `[value, type]` term pair, the
                 // one shape every attribute shares.
                 let slot = self.annotation_value_slot(pe);

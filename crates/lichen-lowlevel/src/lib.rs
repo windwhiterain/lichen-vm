@@ -797,6 +797,10 @@ pub struct Function {
     pub parameter: NodeId,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
+    /// The marker index of the attribute the return body states.
+    pub return_marker: Option<u32>,
+    /// The field the return's attribute follows, when the body states a reference.
+    pub return_field: Option<u32>,
     /// The static function this closure was materialized from; `None` for a source closure.
     pub static_origin: Option<StaticFunctionRef>,
     /// The lexical parent function, or `None` at top level; not a keep-alive edge.
@@ -826,6 +830,10 @@ pub struct StaticFunction {
     pub r#return: LocalNodeId,
     /// The static mirror of [`Function::return_type`].
     pub return_type: LocalNodeId,
+    /// The static mirror of [`Function::return_marker`].
+    pub return_marker: Option<u32>,
+    /// The static mirror of [`Function::return_field`].
+    pub return_field: Option<u32>,
     /// The real original this static function is a re-export of; `None` for its own.
     pub origin: Option<StaticFunctionRef>,
     pub asserts: Vec<LocalNodeId>,

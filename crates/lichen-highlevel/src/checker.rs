@@ -151,6 +151,8 @@ where
     /// The enclosing lambdas' parameters, innermost last: an attribute naming
     /// one of their fields is a **reference**.
     current_parameters: Vec<ExprId>,
+    /// The attribute references an expression states: the marker and the field.
+    attr_refs: HashMap<ExprId, (P::Attr, Option<&'static str>)>,
     /// The `@gc` expressions this build compiled.
     ///
     /// # Invariant
@@ -554,6 +556,7 @@ where
             function_stack: Vec::new(),
             function_of: HashMap::new(),
             current_parameters: Vec::new(),
+            attr_refs: HashMap::new(),
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),

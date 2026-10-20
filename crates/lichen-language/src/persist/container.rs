@@ -108,6 +108,20 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
+        match function.return_marker {
+            None => w.u8(0),
+            Some(index) => {
+                w.u8(1);
+                w.u32(index);
+            }
+        }
+        match function.return_field {
+            None => w.u8(0),
+            Some(index) => {
+                w.u8(1);
+                w.u32(index);
+            }
+        }
 
         // The re-export origin: a raw module key + function index.
         match function.origin {
@@ -406,6 +420,16 @@ where
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
         let return_type = read_node_id(&mut r, node_count, "function return type")?;
+        let return_marker = match r.u8()? {
+            0 => None,
+            1 => Some(r.u32()?),
+            _ => return Err("bad function return marker tag".into()),
+        };
+        let return_field = match r.u8()? {
+            0 => None,
+            1 => Some(r.u32()?),
+            _ => return Err("bad function return field tag".into()),
+        };
         let origin = match r.u8()? {
             0 => None,
             1 => Some(StaticFunctionRef {
@@ -432,6 +456,8 @@ where
             parameter,
             r#return,
             return_type,
+            return_marker,
+            return_field,
             origin,
             asserts,
             nodes: scope,
