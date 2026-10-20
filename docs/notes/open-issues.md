@@ -51,6 +51,14 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The empty callee is owned by the marked function and has no origin.** Probed:
+`693`'s owner is the fold, `origin` is `None`, block 3 — a **fresh** node created while
+checking the fold's template, not a clone and not a `materialize_leaf` (those carry the
+`Function(Static)` value). `refused_pair` is ruled out as the source: it sets the value
+and the type to the *same* cell, and the apply's type operand (`694`) differs from `693`.
+The next probe is a backtrace on the checker's cell creation for the callee expression,
+not a guess.
+
 **The loop body's prelude call has an empty callee cell.** With the call-lowering in
 place, the loop's own lowering starts and refuses at the fold body's `read` call: the apply
 `1064`'s callee `693` has **no value**, its class has no defining member, and
