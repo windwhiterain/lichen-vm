@@ -408,16 +408,18 @@ where
                     tys.push(ty);
                 }
                 n => {
-                    // The wrapped term is a lazy region: its pair chain does not match
-                    // the element's type, so its reads get a fresh cell.
-                    vals.push(self.wrap_shallow(el, n));
+                    // The wrap is the element's value, and its reads get a fresh cell.
+                    let wrapped = self.wrap_shallow(el, n);
                     // A marked call is applied as the bare arm's is, so the mark's
                     // tail cell is decided before a read goes through it.
                     if let Some(&type_apply) = self.type_applies.get(&el) {
                         self.shallow_types
                             .push((type_apply, self.state[el].ty.unwrap()));
                     }
-                    tys.push(self.fresh_cell());
+                    let ty = self.fresh_cell();
+                    let element = self.state[el].term.expect("an element is compiled");
+                    vals.push(self.element_pair(wrapped, ty, element));
+                    tys.push(ty);
                 }
             }
             mask.push(depths[i] == usize::MAX);

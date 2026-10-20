@@ -51,8 +51,13 @@ where
         // A written annotation may be unevaluated.
         // Force it before deciding whether the read can be checked.
         self.module.evaluate_node_deep(container_ty, None);
+        let container_value = self.value_of(container);
+        // A lazy region's read states no type requirement: its pair is open.
+        self.module.evaluate_node_deep(container_value, None);
+        let lazy = self.lazy_region(container_value);
         // The requirement names the container's **kind**, never its type.
-        if self.type_is_concrete(container_ty) {
+        if lazy {
+        } else if self.type_is_concrete(container_ty) {
             let kind = self.tuple_kind_requirement();
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
             // The kind read runs first: an unevaluated `Index` holds no value, so
@@ -68,7 +73,6 @@ where
         } else if !self.is_loop_state(container) {
             return self.refuse_undecided_container(e, container, container_ty, "tuple read");
         }
-        let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
         self.read_site = Some(self.loc(e, 0));
@@ -77,7 +81,12 @@ where
         let position = self.constant_position(key);
         let (element, value_node, ty_node) =
             self.slot_read(container_ty, container_value, key_value, position);
-        let pair = self.element_pair(value_node, ty_node, element);
+        // A lazy region's read states no attribute: its pair is the wildcard pair.
+        let pair = if lazy {
+            self.pair_of(value_node, ty_node)
+        } else {
+            self.element_pair(value_node, ty_node, element)
+        };
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
@@ -86,15 +95,72 @@ where
         pair
     }
 
+    /// Whether a node holds a shallow mark's pair: two items, the first lazy.
+    fn masked_pair(&self, node: NodeId) -> bool {
+        let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) else {
+            return false;
+        };
+        let Some(value) = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value) else {
+            return false;
+        };
+        // SAFETY: the array is the value of a live node of this module.
+        let LowValue::Array(array) = value else {
+            return false;
+        };
+        let items = unsafe { array.items() };
+        items.len() == 2 && items[0].shallow
+    }
+
+    /// A lazy region's own pair: the read addresses the pair, not a slot's value.
+    ///
+    /// # Invariant
+    /// The pair is the slot's value position and the slot is the read's operand.
+    fn lazy_region(&self, value: NodeId) -> bool {
+        let Some(operation) = self.module.node_operation(value) else {
+            return self.masked_pair(value);
+        };
+        if !matches!(
+            lichen_utils::extend::AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return self.masked_pair(value);
+        }
+        let Some(operand) = operation.operand else {
+            return false;
+        };
+        // SAFETY: a payload of a value of this module; a stale node answers `None`.
+        let Some(items) = (unsafe { self.module.array_items_of(AnyNodeId::Dynamic(operand)) })
+        else {
+            return false;
+        };
+        let Some(slot) = items
+            .first()
+            .map(|item| item.node)
+            .and_then(|node| node.dynamic())
+        else {
+            return false;
+        };
+        // SAFETY: the slot array is a payload of a value of this module.
+        let Some(slot_items) = (unsafe { self.module.array_items_of(AnyNodeId::Dynamic(slot)) })
+        else {
+            return false;
+        };
+        slot_items
+            .first()
+            .map(|item| item.node)
+            .and_then(|node| node.dynamic())
+            .is_some_and(|node| self.masked_pair(node))
+    }
+
     /// The structural slot read shared by `a(k)` and `a.name`.
     /// See `docs/notes/eval-before-unify.md`.
     ///
     /// # Invariant
-    /// A known `position` makes the read's type decided rather than lazy: it is
-    /// the field's own node out of the field list, which a class question can
-    /// see through where an unevaluated `Index` it cannot. A **frozen** field type
-    /// is materialized as a leaf of this table, so a frozen field is decided the
-    /// same way; an undecided container keeps the lazy form, resolved at the apply.
+    /// A known `position` makes the read's type decided rather than lazy: it is the
+    /// field's own node out of the field list, which a class question sees through
+    /// where an unevaluated `Index` cannot. A frozen field type is materialized as a
+    /// leaf, so it is decided the same way; an undecided container keeps the lazy
+    /// form, resolved at the apply.
     pub(super) fn slot_read(
         &mut self,
         container_ty: NodeId,
@@ -102,6 +168,8 @@ where
         key: NodeId,
         position: Option<usize>,
     ) -> (NodeId, NodeId, NodeId) {
+        // A lazy region's pair is narrower than a slot: the element is its value.
+        let lazy = self.lazy_region(container_value);
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let element = self.op_node(
             self.current_block,
@@ -109,6 +177,10 @@ where
             Some(value_ops),
         );
         self.stamp_read_node(element);
+        if lazy {
+            let ty_node = self.fresh_cell();
+            return (element, element, ty_node);
+        }
         // A compound's elements are complete slots: the value is the first position.
         let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
         let value_node = self.op_node(

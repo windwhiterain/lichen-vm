@@ -1148,6 +1148,21 @@ where
                 .and_then(|node| node.dynamic())
             {
                 Some(slot) => slot,
+                // An element whose value is a narrow pair — a lazy region's own pair —
+                // states no attribute, so the slot is the wildcard.
+                None if self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(element))
+                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+                    .is_some_and(|value| match value {
+                        LowValue::Array(array) => {
+                            unsafe { array.items() }.len() <= crate::shape::attr_slot(index)
+                        }
+                        _ => true,
+                    }) =>
+                {
+                    self.any()
+                }
                 None => {
                     let attribute = self.alloc_node(
                         self.current_block,
