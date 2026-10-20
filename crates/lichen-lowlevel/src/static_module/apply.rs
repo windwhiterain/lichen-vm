@@ -178,22 +178,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The frozen parameter's requirement, copied into `block`.
-    #[stacksafe]
-    pub fn materialize_static_parameter_requirement(
-        &mut self,
-        function: StaticFunctionRef,
-        block: BlockId,
-    ) -> Option<NodeId> {
-        let module = self.static_module(function.module);
-        let requirement = module
-            .functions
-            .get(function.index.0)?
-            .parameter_requirement?;
-        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
-        Some(self.clone_static_signature_node(&module, requirement, block, &mut remap))
-    }
-
     /// The frozen return's certificate, copied into `block`.
     #[stacksafe]
     pub fn materialize_static_return_certificate(
@@ -205,6 +189,25 @@ impl<P: Program> Module<P> {
         let certificate = module.functions.get(function.index.0)?.return_certificate?;
         let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
         Some(self.clone_static_signature_node(&module, certificate, block, &mut remap))
+    }
+
+    /// A frozen signature pair copied into `block`.
+    #[stacksafe]
+    pub fn materialize_static_signature_pair(
+        &mut self,
+        function: StaticFunctionRef,
+        return_pair: bool,
+        block: BlockId,
+    ) -> Option<NodeId> {
+        let module = self.static_module(function.module);
+        let entry = module.functions.get(function.index.0)?;
+        let local = if return_pair {
+            entry.r#return
+        } else {
+            entry.parameter
+        };
+        let mut remap: HashMap<LocalNodeId, NodeId> = HashMap::new();
+        Some(self.clone_static_signature_node(&module, local, block, &mut remap))
     }
 
     /// The frozen signature copied into `block`, its frozen classes preserved.
@@ -441,22 +444,11 @@ impl<P: Program> Module<P> {
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
-        let (
-            r#return,
-            parameter,
-            parameter_marker,
-            return_marker,
-            return_field,
-            return_type,
-            asserts,
-            scope,
-        ) = {
+        let (r#return, parameter, return_field, return_type, asserts, scope) = {
             let f = &ctx.module.functions[sref.index.0];
             (
                 f.r#return,
                 f.parameter,
-                f.parameter_marker,
-                f.return_marker,
                 f.return_field,
                 f.return_type,
                 f.asserts.clone(),
@@ -469,12 +461,9 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
-            parameter_requirement: None,
-            parameter_marker,
-            return_marker,
             return_field,
-            // A re-homed closure never answers a checker's read: the certificate
-            // stays in the artifact.
+            return_marker: None,
+            // The certificate stays in the artifact.
             return_certificate: None,
             return_type: NodeId::default(),
             // The materialization's dynamic↔static identity: this closure names

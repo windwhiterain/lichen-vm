@@ -237,7 +237,7 @@ where
     // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, ty) }?;
-    if items.len() == 2 {
+    if items.len() >= 2 {
         Some(items[TYPE_SHAPE_SLOT].node)
     } else {
         None
@@ -253,7 +253,7 @@ where
     // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, ty) }?;
-    if items.len() == 2 {
+    if items.len() >= 2 {
         Some(items[TYPE_KIND_SLOT].node)
     } else {
         None
@@ -269,7 +269,7 @@ where
     // SAFETY: `kind` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, kind) }?;
-    if items.len() == 2 {
+    if items.len() >= 2 {
         Some(items[KIND_MARKER_SLOT].node)
     } else {
         None
@@ -289,7 +289,7 @@ where
     let Some(items) = (unsafe { array_items(module, AnyNodeId::Static(sref)) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && module.node_value(items[PAIR_VALUE_SLOT].node) == Some(P::Value::type_marker())
         && matches!(items[PAIR_TYPE_SLOT].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
 }
@@ -327,7 +327,7 @@ where
     let Some(items) = (unsafe { array_items(module, kind) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && module.node_value(items[KIND_MARKER_SLOT].node) == Some(marker)
         && is_universe_any(module, universe, items[KIND_UNIVERSE_SLOT].node)
 }
@@ -360,7 +360,7 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && kind_marker_is_any(
             module,
             universe,
@@ -392,7 +392,7 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    if items.len() != 2 {
+    if items.len() < 2 {
         return false;
     }
     // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
@@ -400,7 +400,7 @@ where
     let Some(kind_items) = (unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }) else {
         return false;
     };
-    kind_items.len() == 2
+    kind_items.len() >= 2
         && is_universe_any(module, universe, kind_items[KIND_UNIVERSE_SLOT].node)
         && is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node)
 }
@@ -420,7 +420,7 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && kind_marker_is_any(
             module,
             universe,
@@ -444,7 +444,7 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && kind_marker_is_any(
             module,
             universe,
@@ -485,7 +485,7 @@ where
     let Some(items) = (unsafe { array_items(module, marker) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && module.node_value(items[STRUCT_MARKER_TAG_SLOT].node)
             == Some(P::Value::type_struct_marker())
 }
@@ -505,7 +505,7 @@ where
     let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
-    items.len() == 2
+    items.len() >= 2
         && is_universe_any(module, universe, items[KIND_UNIVERSE_SLOT].node)
         && is_struct_marker_any(module, items[KIND_MARKER_SLOT].node)
 }
@@ -527,13 +527,13 @@ where
     // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
     let items = unsafe { array_items(module, ty) }?;
-    if items.len() != 2 {
+    if items.len() < 2 {
         return None;
     }
     let shape = items[TYPE_SHAPE_SLOT].node;
     // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`.
     let kind_items = unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }?;
-    if kind_items.len() != 2 {
+    if kind_items.len() < 2 {
         return None;
     }
     // The struct marker `[payload, TypeStruct]`; the tag is the honest signal.
@@ -674,6 +674,201 @@ where
     Some(names)
 }
 
+/// The **named fields** and field-type list of the struct type a **slot** names.
+///
+/// # Invariant
+/// The slot's convention stays here: the term is the slot itself, a node that
+/// carries it at its value slot (an apply's answer), or either one as a class
+/// member answers through its representative. A caller above `lowlevel` never
+/// chooses among those spellings.
+pub fn struct_fields<P: Program>(
+    module: &Module<P>,
+    slot: AnyNodeId,
+) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
+where
+    P::Value: ValueType,
+{
+    for slot in type_slot_candidates(module, slot) {
+        for ty in [TypeRef::Term(slot), TypeRef::Slot(slot)] {
+            if let Some(names) = field_names(module, ty)
+                && let Some(shape) = field_list(module, ty)
+            {
+                return Some((names, shape));
+            }
+        }
+    }
+    None
+}
+
+/// The types of a field-type list's entries: an element is a slot, so a field's
+/// type is its type position.
+pub fn field_types<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<Vec<AnyNodeId>>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, shape) }?;
+    Some(
+        items
+            .iter()
+            .map(|item| slot_type(module, item.node).unwrap_or(item.node))
+            .collect(),
+    )
+}
+
+/// The type node at `path` inside the struct type a slot names — a leaf's own
+/// type, resolved one field at a time.
+pub fn field_type_at<P: Program>(
+    module: &Module<P>,
+    slot: AnyNodeId,
+    path: &[usize],
+) -> Option<AnyNodeId>
+where
+    P::Value: ValueType,
+{
+    let mut at = slot;
+    for &index in path {
+        let (_, shape) = struct_fields(module, at)?;
+        at = field_types(module, shape)?.get(index).copied()?;
+    }
+    Some(at)
+}
+
+/// The spellings a type **slot** may wear: itself, and — for a class member — its
+/// representative first.
+fn type_slot_candidates<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Vec<AnyNodeId>
+where
+    P::Value: ValueType,
+{
+    let mut candidates = vec![slot];
+    if let AnyNodeId::Dynamic(node) = slot {
+        let representative = module.class_root(node);
+        if representative != node {
+            candidates.push(AnyNodeId::Dynamic(representative));
+        }
+    }
+    candidates
+}
+
+/// The **domain** a kernel function's parameter states, read from its type.
+///
+/// # Invariant
+/// A pure read: nothing is seeded and no inference runs. `None` is "the type does
+/// not state a domain" (a polymorphic template), which the caller refuses.
+pub fn kernel_parameter_domain<P: Program>(
+    module: &Module<P>,
+    function: lichen_lowlevel::AnyFunctionId,
+) -> Option<LowShape>
+where
+    P::Value: ValueType,
+{
+    let lichen_lowlevel::AnyFunctionId::Dynamic(function) = function else {
+        return None;
+    };
+    let pair = module.functions.get(function)?.parameter;
+    let type_slot = module.pair_type_item(pair)?;
+    low_type_of_slot(module, type_slot)
+}
+
+/// Prepare a template's low types for a lowering: seed each term's type cell and
+/// run the fixed point over the body.
+///
+/// # Invariant
+/// The encoding and the class channel stay here; a lowering reads values'
+/// shapes through [`value_low_shape`] and never seeds or infers itself.
+pub fn prepare_template_low_types<P: Program>(
+    module: &mut Module<P>,
+    function: lichen_lowlevel::FunctionId,
+) where
+    P::Value: ValueType,
+{
+    for node in module.functions[function].nodes.clone() {
+        let Some(LowValue::Array(array)) = module
+            .node_value(AnyNodeId::Dynamic(node))
+            .and_then(|value| value.as_enum())
+        else {
+            continue;
+        };
+        // Only a pair carries a layout; width cannot tell it from a data tuple
+        // (`docs/notes/array-attribute-view.md`).
+        if array.layout() == 0 {
+            continue;
+        }
+        // SAFETY: `array` is the payload of a value of this module.
+        let items = unsafe { array.items() };
+        if items.len() < PAIR_ATTR_BASE {
+            continue;
+        }
+        let Some(shape) = low_type_of_slot(module, items[PAIR_TYPE_SLOT].node) else {
+            continue;
+        };
+        let Some(value) = items[PAIR_VALUE_SLOT].node.dynamic() else {
+            continue;
+        };
+        // The wildcard states nothing, so it has no shape to seed.
+        if matches!(
+            module
+                .node_value(AnyNodeId::Dynamic(value))
+                .and_then(|value| value.as_enum()),
+            Some(LowValue::Any)
+        ) {
+            continue;
+        }
+        module.seed_class_low_type(value, shape.clone());
+        module.seed_class_low_type(node, LowShape::Tuple(vec![Some(shape), None]));
+    }
+    module.infer_template_low_types(function);
+}
+
+/// The shape of the value at `node`, as the graph recorded it for its class.
+pub fn value_low_shape<P: Program>(module: &Module<P>, node: AnyNodeId) -> Option<LowShape>
+where
+    P::Value: ValueType,
+{
+    node.dynamic()
+        .and_then(|node| module.low_type_of_node(node))
+}
+
+/// A function's **parameter pair** — the `[value, type]` term a lowering reads.
+pub fn function_parameter_pair<P: Program>(
+    module: &Module<P>,
+    function: lichen_lowlevel::AnyFunctionId,
+) -> Option<lichen_lowlevel::NodeId> {
+    let lichen_lowlevel::AnyFunctionId::Dynamic(function) = function else {
+        return None;
+    };
+    Some(module.functions.get(function)?.parameter)
+}
+
+/// A pair's **value half**.
+pub fn pair_value<P: Program>(
+    module: &Module<P>,
+    pair: lichen_lowlevel::NodeId,
+) -> Option<lichen_lowlevel::NodeId> {
+    module.pair_value_half(pair)
+}
+
+/// A pair's **type half**.
+pub fn pair_type<P: Program>(
+    module: &Module<P>,
+    pair: lichen_lowlevel::NodeId,
+) -> Option<AnyNodeId> {
+    module.pair_type_item(pair)
+}
+
+/// Whether two references name **one value**: the encoding's identity is the
+/// equality class, and that read stays here.
+pub fn is_same_value<P: Program>(module: &Module<P>, a: AnyNodeId, b: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    match (a.dynamic(), b.dynamic()) {
+        (Some(a), Some(b)) => module.class_root(a) == module.class_root(b),
+        _ => false,
+    }
+}
+
 /// Where `name` sits in a name→index table — the fold a named read performs.
 ///
 /// # Invariant
@@ -696,11 +891,11 @@ where
 /// `docs/notes/lowlevel-low-types.md`.
 ///
 /// # Invariant
-/// The decode is by **kind marker** and says [`LowShape::Unknown`] explicitly
-/// rather than falling back to a scalar: a type the vocabulary has no shape for
-/// states *nothing*, and a silent fallback would let a `jit` compile a domain it
-/// invented.
-pub fn low_type_of<P: Program>(module: &Module<P>, type_value: AnyNodeId) -> LowShape
+/// The decode is by **kind marker** and answers `None` rather than falling back to
+/// a scalar: a type the vocabulary has no shape for states *nothing*, and a silent
+/// fallback would let a `jit` compile a domain it invented. A position inside a
+/// shape that nothing states is `None` too; the shape type has no `Unknown`.
+pub fn low_type_of<P: Program>(module: &Module<P>, type_value: AnyNodeId) -> Option<LowShape>
 where
     P::Value: ValueType,
 {
@@ -708,87 +903,77 @@ where
     // denote one class.
     if let Some(value) = module.node_value(type_value) {
         if value == P::Value::int_marker() {
-            return LowShape::USize;
+            return Some(LowShape::USize);
         }
         if value == P::Value::float_marker() {
-            return LowShape::Float;
+            return Some(LowShape::Float);
         }
         if value == P::Value::string_marker() || value == P::Value::type_marker() {
-            // The same refusals as the array spelling below: a string is not a
-            // machine scalar, and a type is not a value at all.
-            return LowShape::Unknown;
+            // A string is not a machine scalar, and a type is not a value at all.
+            return None;
         }
     }
     // Anything that is not a `[shape, kind]` type expression is unreadable.
 
     // SAFETY: `type_value` is a live node of `module`; nothing in this crate
     // calls `Module::drop_block`.
-    let Some(kinded) = (unsafe { array_items(module, type_value) }) else {
-        return LowShape::Unknown;
-    };
-    if kinded.len() != 2 {
-        return LowShape::Unknown;
+    let kinded = (unsafe { array_items(module, type_value) })?;
+    if kinded.len() < 2 {
+        return None;
     }
     // A **function value's own type**, `f : f`: its halves are its own
     // signature cells, read by `function_shape`.
     if let Some((domain, codomain)) = module.function_type_signature(type_value) {
-        return function_shape(module, domain, codomain);
+        return Some(function_shape(module, domain, codomain));
     }
     let shape = kinded[TYPE_SHAPE_SLOT].node;
     // An atomic type: its shape slot holds the marker itself.
-    let Some(shape_value) = module.node_value(shape) else {
-        return LowShape::Unknown;
-    };
+    let shape_value = module.node_value(shape)?;
     if shape_value == P::Value::int_marker() {
-        return LowShape::USize;
+        return Some(LowShape::USize);
     }
     if shape_value == P::Value::float_marker() {
         // A float is a **decided** member of the vocabulary, so a declared
         // `[float, K]` states it.
-        return LowShape::Float;
+        return Some(LowShape::Float);
     }
     if shape_value == P::Value::string_marker() || shape_value == P::Value::type_marker() {
-        // A string is not a machine scalar, and a type is not a value at all.
-        return LowShape::Unknown;
+        return None;
     }
     // A compound type: the marker is the kind's.
 
     // SAFETY: `kinded[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
     // in this crate calls `Module::drop_block`.
-    let Some(kind) = (unsafe { array_items(module, kinded[TYPE_KIND_SLOT].node) }) else {
-        return LowShape::Unknown;
-    };
-    if kind.len() != 2 {
-        return LowShape::Unknown;
+    let kind = (unsafe { array_items(module, kinded[TYPE_KIND_SLOT].node) })?;
+    if kind.len() < 2 {
+        return None;
     }
-    let Some(marker) = module.node_value(kind[KIND_MARKER_SLOT].node) else {
-        return LowShape::Unknown;
-    };
-    if marker == P::Value::tuple_type_marker() {
-        // A tuple type's shape *is* its element-slot list, so each element's
-        // type is its slot's type position.
+    let marker = module.node_value(kind[KIND_MARKER_SLOT].node)?;
+    if marker == P::Value::tuple_type_marker()
+        || is_struct_marker_any(module, kind[KIND_MARKER_SLOT].node)
+    {
+        // A structure's shape is its positional field list: read as a tuple
+        // (`docs/notes/lowlevel-low-types.md`).
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
-        let Some(elements) = (unsafe { array_items(module, shape) }) else {
-            return LowShape::Unknown;
-        };
-        return LowShape::Tuple(
+        let elements = (unsafe { array_items(module, shape) })?;
+        return Some(LowShape::Tuple(
             elements
                 .iter()
-                .map(|element| match slot_type(module, element.node) {
-                    Some(ty) => low_type_of(module, ty),
-                    None => LowShape::Unknown,
+                .map(|element| {
+                    slot_type(module, element.node).and_then(|ty| low_type_of(module, ty))
                 })
                 .collect(),
-        );
+        ));
     }
     if marker == P::Value::array_type_marker() {
-        // An undecided length makes the whole shape undecided — a length
-        // nobody knows is not a length of zero.
+        // An undecided element makes the whole shape undecided — a shape nobody
+        // states is not a shape of `None`.
         return match low_type_of_array(module, shape) {
-            Some((element, length)) => LowShape::Array(Box::new(element), length),
-            None => LowShape::Unknown,
+            Some((Some(element), length)) => Some(LowShape::Array(Box::new(Some(element)), length)),
+            Some((None, length)) => Some(LowShape::Array(Box::new(None), length)),
+            None => None,
         };
     }
     if marker == P::Value::table_type_marker() {
@@ -796,34 +981,27 @@ where
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
-        let Some(halves) = (unsafe { array_items(module, shape) }) else {
-            return LowShape::Unknown;
-        };
-        let half = |node: AnyNodeId| match slot_type(module, node) {
-            Some(ty) => low_type_of(module, ty),
-            None => LowShape::Unknown,
-        };
-        return LowShape::Table(
+        let halves = (unsafe { array_items(module, shape) })?;
+        let half = |node: AnyNodeId| slot_type(module, node).and_then(|ty| low_type_of(module, ty));
+        return Some(LowShape::Table(
             Box::new(half(halves[TABLE_TYPE_KEY_SLOT].node)),
             Box::new(half(halves[TABLE_TYPE_VALUE_SLOT].node)),
-        );
+        ));
     }
     if marker == P::Value::function_type_marker() {
         // A function type's shape is the `[domain, codomain]` pair.
 
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
-        let Some(halves) = (unsafe { array_items(module, shape) }) else {
-            return LowShape::Unknown;
-        };
-        return function_shape(
+        let halves = (unsafe { array_items(module, shape) })?;
+        return Some(function_shape(
             module,
             halves[FUNCTION_TYPE_DOMAIN_SLOT].node,
             halves[FUNCTION_TYPE_CODOMAIN_SLOT].node,
-        );
+        ));
     }
-    // A struct, or a kind this decoder does not know.
-    LowShape::Unknown
+    // A kind this decoder does not know.
+    None
 }
 
 /// A **function shape** built from its two halves — the one spelling of "read
@@ -854,29 +1032,26 @@ where
 /// structural guess: a term pair and a type value have the same two-slot
 /// silhouette. What separates them is the terminal marker — the `Type` marker,
 /// the one kind [`low_type_of`] refuses — so a pair never decodes directly.
-pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> LowShape
+pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Option<LowShape>
 where
     P::Value: ValueType,
 {
-    let direct = low_type_of(module, slot);
-    if direct.is_known() {
-        return direct;
+    if let Some(direct) = low_type_of(module, slot) {
+        return Some(direct);
     }
     // The pair indirection: the term's own value slot, tried once.
 
     // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, slot) }) else {
-        return LowShape::Unknown;
-    };
-    let Some(value) = items.first() else {
-        return LowShape::Unknown;
-    };
-    low_type_of(module, value.node)
+    let items = unsafe { array_items(module, slot) }?;
+    low_type_of(module, items.first()?.node)
 }
 
-/// [`low_type_of`]'s array arm; `None` when either half is undecided.
-fn low_type_of_array<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<(LowShape, usize)>
+/// [`low_type_of`]'s array arm; `None` when the length is undecided.
+fn low_type_of_array<P: Program>(
+    module: &Module<P>,
+    shape: AnyNodeId,
+) -> Option<(Option<LowShape>, usize)>
 where
     P::Value: ValueType,
 {
@@ -889,11 +1064,7 @@ where
     // An array's element position is a **slot**, so the element type is its type
     // position.
     let element = slot_type(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node)
-        .map(|ty| low_type_of(module, ty))
-        .unwrap_or(LowShape::Unknown);
-    if !element.is_known() {
-        return None;
-    }
+        .and_then(|ty| low_type_of(module, ty));
     let LowValue::USize(length) = module
         .node_value(parts[ARRAY_TYPE_LENGTH_SLOT].node)?
         .as_enum()?

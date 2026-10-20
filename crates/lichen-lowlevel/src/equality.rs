@@ -167,7 +167,12 @@ impl<P: Program> Module<P> {
         Some(unsafe { array.items() })
     }
 
-    /// Join `shape` into `node`'s class low type: the single monotone write side.
+    /// Refine `node`'s class low type: the single write side.
+    ///
+    /// # Invariant
+    /// A class's shape is stated once; every later statement is exactly that shape,
+    /// because the seed and the observation of one value agree (the highlevel
+    /// invariant, `docs/notes/lowlevel-low-types.md`).
     pub fn refine_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
         let Some(entry) = self.nodes.get_mut(self.class_root(node)) else {
             return false;
@@ -178,15 +183,16 @@ impl<P: Program> Module<P> {
                 true
             }
             Some(current) => {
-                let joined = LowShape::join(current, &shape);
-                let changed = joined != *current;
-                *current = joined;
-                changed
+                debug_assert_eq!(
+                    current, &shape,
+                    "a class states one shape: its seed and its observation agree"
+                );
+                false
             }
         }
     }
 
-    /// Refine `node`'s class low type from a concrete value's top-level tag, O(1) and monotone.
+    /// Refine `node`'s class low type from a concrete value's top-level tag.
     pub(crate) fn observe_class_low_type(&mut self, node: NodeId, value: P::Value) {
         let Some(shape) = observed_low_shape(value) else {
             return;
@@ -194,23 +200,22 @@ impl<P: Program> Module<P> {
         self.refine_class_low_type(node, shape);
     }
 
-    /// One structural element: an undecided position takes the element's low type, a decided one keeps it.
+    /// One structural element: a stated position is kept, an open one takes the
+    /// element's own shape.
     fn deepen_position(
         &self,
-        position: LowShape,
+        position: Option<LowShape>,
         element: AnyNodeId,
         seen: &mut HashSet<NodeId>,
-    ) -> LowShape {
-        if position.is_known() {
+    ) -> Option<LowShape> {
+        if position.is_some() {
             return position;
         }
         let AnyNodeId::Dynamic(element) = element else {
-            return LowShape::Unknown;
+            return None;
         };
-        let Some(shape) = self.class_low_type(element).cloned() else {
-            return LowShape::Unknown;
-        };
-        self.deepen_low_type(element, shape, seen)
+        let shape = self.class_low_type(element).cloned()?;
+        Some(self.deepen_low_type(element, shape, seen))
     }
 
     /// [`Module::low_type_of_node`] at one level; `seen` cuts a self-referential cycle.
@@ -220,9 +225,6 @@ impl<P: Program> Module<P> {
         shape: LowShape,
         seen: &mut HashSet<NodeId>,
     ) -> LowShape {
-        if !shape.is_known() {
-            return shape;
-        }
         let root = self.class_root(node);
         if !seen.insert(root) {
             return shape;
@@ -244,10 +246,7 @@ impl<P: Program> Module<P> {
                 let element = elements
                     .iter()
                     .fold((**element).clone(), |accumulated, item| {
-                        LowShape::join(
-                            &accumulated,
-                            &self.deepen_position(LowShape::Unknown, item.node, seen),
-                        )
+                        pick(accumulated, self.deepen_position(None, item.node, seen))
                     });
                 LowShape::Array(Box::new(element), *length)
             }
@@ -424,7 +423,7 @@ impl<P: Program> Module<P> {
                 };
                 // SAFETY: `array` is the payload of `node`, a live node of
                 // this module, so its home block has not been dropped.
-                if unsafe { array.items() }.len() != 2 {
+                if unsafe { array.items() }.len() < 2 {
                     return false;
                 }
                 // SAFETY: as above — `node` is a live node of this module.
@@ -455,7 +454,7 @@ impl<P: Program> Module<P> {
         };
         // SAFETY: `array` is a static payload read through `sref`; the registered module pins it.
         let items = unsafe { array.items() };
-        items.len() == 2
+        items.len() >= 2
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
@@ -511,7 +510,7 @@ impl<P: Program> Module<P> {
         // SAFETY: `carrier` is a live node of this module; nothing here drops
         // a block.
         let items = (unsafe { self.array_items(carrier) })?;
-        if items.len() != 2 {
+        if items.len() < 2 {
             return None;
         }
         self.node_value(items[0].node)
@@ -578,7 +577,7 @@ impl<P: Program> Module<P> {
         };
         // SAFETY: a static payload read through `sref`; the registered module pins it.
         let items = unsafe { array.items() };
-        if items.len() != 2 {
+        if items.len() < 2 {
             return None;
         }
         // Asked by class, as the dynamic recogniser does: a frozen class may keep the cycle on a member.
@@ -691,18 +690,8 @@ impl<P: Program> Module<P> {
                 return false;
             }
         }
-        for canonical in canonicals {
-            let Some(na) = array_attribute_slot(left, &layout_a, canonical) else {
-                continue;
-            };
-            let Some(nb) = array_attribute_slot(right, &layout_b, canonical) else {
-                continue;
-            };
-            descend(self, PAIR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
-            if !ok {
-                return false;
-            }
-        }
+        // Attribute positions are not structural (`docs/notes/attributes.md`).
+        let _ = (canonicals, array_attribute_slot);
         ok
     }
 
@@ -943,29 +932,34 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
     }
 }
 
+/// The stated shape of two options: whichever is `Some`, and the invariant says a
+/// second statement is the first.
+fn pick(left: Option<LowShape>, right: Option<LowShape>) -> Option<LowShape> {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            debug_assert_eq!(left, right, "one shape, stated twice");
+            Some(left)
+        }
+        (Some(shape), None) | (None, Some(shape)) => Some(shape),
+        (None, None) => None,
+    }
+}
+
 /// Whether a side's class holds the wildcard `Any`.
 fn is_wildcard<V: AsEnum<LowValue>>(value: Option<V>) -> bool {
     matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any))
 }
 
-/// The low type a concrete value's tag states, never reading the payload; payload starts `Unknown`.
+/// The low type a concrete value's tag states, never reading the payload.
+///
+/// # Invariant
+/// Observation states only a **scalar**: a shape with positions is the checker's to
+/// state (its type is the authority), and a partial statement from here would
+/// disagree with that seed. A class states one shape (the highlevel invariant).
 fn observed_low_shape(value: impl AsEnum<LowValue>) -> Option<LowShape> {
     match value.as_enum()? {
         LowValue::USize(_) => Some(LowShape::USize),
         LowValue::Float(_) => Some(LowShape::Float),
-        LowValue::Array(array) => Some(LowShape::Array(
-            Box::new(LowShape::Unknown),
-            // SAFETY: only the length is read, and the caller holds the value on this borrow of the module.
-            unsafe { array.items().len() },
-        )),
-        LowValue::Table(_) => Some(LowShape::Table(
-            Box::new(LowShape::Unknown),
-            Box::new(LowShape::Unknown),
-        )),
-        LowValue::Function(_) => Some(LowShape::Function(
-            Box::new(LowShape::Unknown),
-            Box::new(LowShape::Unknown),
-        )),
         _ => None,
     }
 }

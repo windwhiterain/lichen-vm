@@ -64,6 +64,5 @@ fn known_shape<P: Program>(module: &Module<P>, node: AnyNodeId) -> Option<LowSha
 where
     P::Value: ValueType,
 {
-    let shape = low_type_of(module, node);
-    shape.is_known().then_some(shape)
+    low_type_of(module, node)
 }

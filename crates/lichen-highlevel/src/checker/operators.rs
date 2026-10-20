@@ -55,7 +55,7 @@ where
                 let element = self.element_slot(None, Some(element_cell), None);
                 let shape = self.array_node(self.current_block, &[element]);
                 let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-                let set_ty = self.array_node(self.current_block, &[shape, kind]);
+                let set_ty = self.slot_pair(self.current_block, shape, kind);
                 self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
             BinOp::Add
@@ -160,7 +160,7 @@ where
     /// (one operand stated, so `x` is pinned to `Int`) from `x + y` (neither
     /// stated, so the operation stays polymorphic).
     fn class_is_stated(&self, ty: NodeId) -> bool {
-        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_known()
+        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_some()
     }
 
     /// Whether an expression's type slot names the `Float` class.
@@ -169,10 +169,11 @@ where
     /// The decode is [`crate::shape::low_type_of_slot`]: it answers
     /// [`LowShape::Float`] for a slot naming the float type — directly, or
     /// through the pair an annotated parameter's type cell holds — and
-    /// [`LowShape::Unknown`] for a cell that has not bound. So an undecided
+    /// `None` for a cell that has not bound. So an undecided
     /// operand selects no class.
     fn names_float_class(&self, ty: NodeId) -> bool {
-        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
+        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty))
+            == Some(LowShape::Float)
     }
 
     /// A prefix keyword operator — the two class conversions, `max`/`min` and the three
@@ -246,7 +247,7 @@ where
     /// undecided operand's cell may be one a kernel body's other positions read, so pinning
     /// it here would refuse the program those positions describe.
     fn unify_stated_class(&mut self, operand: ExprId, ty: NodeId, class: NodeId) {
-        if crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_known() {
+        if crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_some() {
             self.check_unify(ty, class, self.loc(operand, 1), DiagKind::Conv);
         }
     }

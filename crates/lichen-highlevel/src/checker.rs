@@ -36,7 +36,10 @@ pub enum Mode {
     Check,
 }
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
-use crate::shape::for_each_kind_marker;
+use crate::shape::{PAIR_ATTR_BASE, for_each_kind_marker, slot_width};
+
+/// The attribute dispatch's depth cap (`docs/notes/attributes.md`).
+const MAX_ATTRIBUTE_DEPTH: usize = 64;
 
 mod annotations;
 mod asserts;
@@ -822,25 +825,31 @@ where
         let root = self.current_block;
         // The kind markers, one shared node each, in registry order.
         for_each_kind_marker!(define_install_markers[self, root]);
+        // The wildcard: one node, because unification neither merges nor writes it.
+        self.any_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::Any)));
         // `K = [Type, K]`: point its type slot at itself; the lowlevel deep
         // pass cuts the self-loop it reaches.
         let universe = self.alloc_node(root, None, None);
-        let items = [
+        let mut items = vec![
             ArrayItem::new(AnyNodeId::Dynamic(self.markers.type_marker)),
             ArrayItem::new(AnyNodeId::Dynamic(universe)),
         ];
+        items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(self.any_value)),
+            P::Attr::ORDER.len(),
+        ));
+        let layout = self.full_width_layout();
         self.module.write_node_value(
             universe,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, root).into(),
-            ))),
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                self.module.alloc_array(&items, root),
+                layout,
+            )))),
         );
         self.type_expr = universe;
-        self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
-        self.float_type = self.array_node(root, &[self.markers.float_marker, self.type_expr]);
-        self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
-        // The wildcard: one node, because unification neither merges nor writes it.
-        self.any_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::Any)));
+        self.int_type = self.kind_expr(root, self.markers.int_marker);
+        self.float_type = self.kind_expr(root, self.markers.float_marker);
+        self.string_type = self.kind_expr(root, self.markers.string_marker);
         // The positional-read constants, the subscripts of `Index(pair, 0)` and
         // `Index(pair, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
@@ -1076,13 +1085,53 @@ where
 
     /// A pair node `[value, type]` built around two already-compiled nodes.
     fn pair_of(&mut self, value: NodeId, ty: NodeId) -> NodeId {
-        self.array_node(self.current_block, &[value, ty])
+        self.slot_pair(self.current_block, value, ty)
+    }
+
+    /// A **pair** of the recursive encoding at full attribute width: `[first,
+    /// second, wildcards…]`.
+    ///
+    /// # Invariant
+    /// Every pair the checker mints comes from here, so a reader finds its two
+    /// meaningful slots at [`crate::shape::PAIR_VALUE_SLOT`]/[`crate::shape::PAIR_TYPE_SLOT`] and
+    /// every other slot is the wildcard an unstated attribute is.
+    fn slot_pair(&mut self, block: BlockId, first: NodeId, second: NodeId) -> NodeId {
+        let any = self.any();
+        let mut items = Vec::with_capacity(slot_width::<P>());
+        items.push(first);
+        items.push(second);
+        items.extend(std::iter::repeat_n(any, P::Attr::ORDER.len()));
+        let layout = self.full_width_layout();
+        self.array_node_with_layout(block, &items, layout)
+    }
+
+    /// A pair with one attribute slot at its canonical position — a parameter's,
+    /// a signature's or an argument's.
+    fn attribute_pair(
+        &mut self,
+        block: BlockId,
+        value: NodeId,
+        ty: NodeId,
+        marker: &P::Attr,
+        slot: NodeId,
+    ) -> NodeId {
+        let any = self.any();
+        let mut items = vec![value, ty];
+        for index in 0..P::Attr::ORDER.len() {
+            items.push(if index == marker.order_index() {
+                slot
+            } else {
+                any
+            });
+        }
+        let layout = self.full_width_layout();
+        self.array_node_with_layout(block, &items, layout)
     }
 
     /// The kind expression of a compound type: `[marker, Type]`, where `marker`
     /// is a kind marker (see [`crate::shape`]).
     fn kind_expr(&mut self, block: BlockId, marker: NodeId) -> NodeId {
-        self.array_node(block, &[marker, self.type_expr])
+        self.slot_pair(block, marker, self.type_expr)
     }
 
     /// The function type expression `[[domain, codomain], [FunctionType, K]]`
@@ -1106,7 +1155,7 @@ where
     ) -> (NodeId, NodeId, NodeId) {
         let shape = self.array_node(block, &[domain, codomain]);
         let kind = self.kind_expr(block, self.markers.function_type_marker);
-        let pair = self.array_node(block, &[shape, kind]);
+        let pair = self.slot_pair(block, shape, kind);
         (shape, kind, pair)
     }
 
@@ -1120,7 +1169,7 @@ where
     fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
         let payload = self.array_node(self.current_block, &[id, names, names_in_order]);
         let tag = self.type_struct_marker_node();
-        self.array_node(self.current_block, &[payload, tag])
+        self.slot_pair(self.current_block, payload, tag)
     }
 
     /// The struct-kind requirement a decided-tier read states: `[[payload,
@@ -1132,10 +1181,7 @@ where
     /// struct analogue of the tuple read's `[TypeTuple, K]` unify.
     fn struct_kind_requirement(&mut self) -> NodeId {
         let payload = self.fresh_cell();
-        let marker = self.array_node(
-            self.current_block,
-            &[payload, self.type_struct_marker_node()],
-        );
+        let marker = self.slot_pair(self.current_block, payload, self.type_struct_marker_node());
         self.kind_expr(self.current_block, marker)
     }
 
@@ -1184,7 +1230,7 @@ where
         let marker = self.struct_marker_node(id, names, names_in_order);
         self.module.evaluate_node_deep(marker, None);
         let kind = self.kind_expr(self.current_block, marker);
-        let wrapper = self.array_node(self.current_block, &[shape, kind]);
+        let wrapper = self.slot_pair(self.current_block, shape, kind);
         (shape, kind, wrapper)
     }
 
@@ -1454,7 +1500,7 @@ where
                 // SAFETY: `pair` was materialized into the current block, so its
                 // arena is alive.
                 let Some(items) =
-                    (unsafe { self.module.array_items(pair) }).filter(|items| items.len() == 2)
+                    (unsafe { self.module.array_items(pair) }).filter(|items| items.len() >= 2)
                 else {
                     let pair = self.refused_pair(e);
                     self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
@@ -1526,6 +1572,110 @@ where
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
     }
+
+    /// Dispatch every attribute slot either side states to its own `unify_slots`
+    /// (`docs/notes/attributes.md`).
+    fn dispatch_attribute_slots(&mut self, a: NodeId, b: NodeId, loc: &Loc, depth: usize) {
+        if depth >= MAX_ATTRIBUTE_DEPTH {
+            return;
+        }
+        let Some(LowValue::Array(array_a)) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(a))
+            .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+        else {
+            return;
+        };
+        let Some(LowValue::Array(array_b)) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(b))
+            .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+        else {
+            return;
+        };
+        let stated_a = self.stated_attributes(a);
+        let stated_b = self.stated_attributes(b);
+        let mut seen: Vec<P::Attr> = Vec::new();
+        for (attribute, slot_a) in &stated_a {
+            if seen.contains(attribute) {
+                continue;
+            }
+            seen.push(*attribute);
+            let Some(ext) = self.attribute_extension(attribute) else {
+                continue;
+            };
+            let found = match stated_b.iter().find(|(other, _)| other == attribute) {
+                Some((_, slot_b)) => *slot_b,
+                None => self.missing_slot_of(attribute, loc.clone()),
+            };
+            ext.unify_slots(self, *slot_a, found, loc.clone());
+        }
+        for (attribute, slot_b) in &stated_b {
+            if seen.contains(attribute) {
+                continue;
+            }
+            seen.push(*attribute);
+            let Some(ext) = self.attribute_extension(attribute) else {
+                continue;
+            };
+            let found = self.missing_slot_of(attribute, loc.clone());
+            ext.unify_slots(self, found, *slot_b, loc.clone());
+        }
+        // SAFETY: both payloads are values of this module, alive for this borrow.
+        let (items_a, items_b) = (unsafe { array_a.items() }, unsafe { array_b.items() });
+        let attributes = PAIR_ATTR_BASE;
+        for (left, right) in
+            items_a
+                .iter()
+                .zip(items_b.iter())
+                .enumerate()
+                .filter_map(|(index, (left, right))| {
+                    let pair = array_a.layout() != 0 && index >= attributes;
+                    match (pair, left.node.dynamic(), right.node.dynamic()) {
+                        (false, Some(left), Some(right)) => Some((left, right)),
+                        _ => None,
+                    }
+                })
+        {
+            self.dispatch_attribute_slots(left, right, loc, depth + 1);
+        }
+    }
+
+    /// The attributes a pair states, one node per canonical slot.
+    fn stated_attributes(&self, pair: NodeId) -> Vec<(P::Attr, NodeId)> {
+        let Some(LowValue::Array(array)) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(pair))
+            .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+        else {
+            return Vec::new();
+        };
+        let layout = self.module.attribute_layout(array.layout());
+        // SAFETY: `array` is the payload of a value of the module being checked.
+        let items = unsafe { array.items() };
+        layout
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, canonical)| {
+                // The wildcard states nothing: it is the hole a pair carries for an
+                // attribute no one named.
+                let wildcard = items
+                    .get(PAIR_ATTR_BASE + offset)?
+                    .node
+                    .dynamic()
+                    .and_then(|node| self.module.node_value(AnyNodeId::Dynamic(node)))
+                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value));
+                if matches!(wildcard, Some(LowValue::Any)) {
+                    return None;
+                }
+                let value = items.get(PAIR_ATTR_BASE + offset)?.node.dynamic()?;
+                let attribute = P::Attr::ORDER
+                    .iter()
+                    .find(|attribute| attribute.order_index() as u32 == *canonical)?;
+                Some((*attribute, value))
+            })
+            .collect()
+    }
 }
 
 impl<P: HighProgram> Ctx<P> for Checker<P>
@@ -1584,6 +1734,8 @@ where
     for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
+        // A pair's attribute slots are checked by their attributes, not structurally.
+        self.dispatch_attribute_slots(a, b, &loc, 0);
         // The seam's contract is the check itself.
         Checker::check_unify(self, a, b, loc, kind);
     }
@@ -1596,7 +1748,8 @@ where
         kind: DiagKind,
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
-        Checker::check_unify_relaxed(self, a, b, loc, kind, is_subtype)
+        self.dispatch_attribute_slots(a, b, &loc, 0);
+        Checker::check_unify_relaxed(self, a, b, loc, kind, is_subtype);
     }
 
     fn node_value(&self, node: NodeId) -> Option<P::Value> {

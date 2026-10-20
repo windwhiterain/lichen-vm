@@ -248,7 +248,7 @@ impl<P: Program> Module<P> {
         // SAFETY: each operand is a live node of this module, or of a
         // frozen module outliving the reference it was read through.
         match unsafe { self.array_items_of(target.node) } {
-            Some(items) if items.len() == 2 => Some(Selection::Computed),
+            Some(items) if items.len() >= 2 => Some(Selection::Computed),
             _ => None,
         }
     }

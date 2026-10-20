@@ -18,7 +18,7 @@ impl<P: Program> Module<P> {
     ///
     /// Seed the parameter classes with [`Module::seed_class_low_type`] first: the
     /// pass has no seed of its own, so an unseeded position stays
-    /// [`LowShape::Unknown`], the signal a backend treats conservatively. The
+    /// `None`, the signal a backend treats conservatively. The
     /// template's own value graph is the whole domain — a node outside it is
     /// not refined here.
     pub fn infer_template_low_types(&mut self, function: FunctionId) {
@@ -63,12 +63,20 @@ impl<P: Program> Module<P> {
     /// the other passes left it. A leaf always declines: the pass is a
     /// *computation* route, and a leaf has no computation.
     fn low_type_transfer(&self, node: NodeId) -> Option<LowShape> {
+        // A pair-valued node is a term: the seed states its shape, and `Index` derives
+        // the result from that pair.
+        if matches!(
+            self.nodes.get(node)?.value.and_then(|value| value.as_enum()),
+            Some(LowValue::Array(array)) if array.layout() != 0
+        ) {
+            return None;
+        }
         let operation = self.nodes.get(node)?.operation?;
         let Some(structural) = AsEnum::<LowOperator>::as_enum(&operation.operator) else {
             // Not a structural operator: ask the vocabulary that defined it.
             return self.extension_low_type(&operation.operator, self.operand_low_types(node));
         };
-        Some(match structural {
+        match structural {
             // `Index(container, k)` yields the element at `k`; the index must
             // be decided, or a mis-selected element is a wrong type.
             LowOperator::Index => {
@@ -76,7 +84,7 @@ impl<P: Program> Module<P> {
                 let index = self.constant_index(self.operand_at(node, 1)?)?;
                 match container {
                     LowShape::Tuple(items) => items.get(index)?.clone(),
-                    LowShape::Array(element, length) if index < length => *element,
+                    LowShape::Array(element, length) if index < length => (*element).clone(),
                     _ => return None,
                 }
             }
@@ -87,7 +95,7 @@ impl<P: Program> Module<P> {
                 else {
                     return None;
                 };
-                *codomain
+                (*codomain).clone()
             }
             // `TableGet(table, _)` yields the table's value shape: a miss
             // computes `Error`, which states no shape.
@@ -96,11 +104,11 @@ impl<P: Program> Module<P> {
                 else {
                     return None;
                 };
-                *value
+                (*value).clone()
             }
             // A loaded library's entry states no class: its result is opaque here.
             LowOperator::External { .. } => return None,
-        })
+        }
     }
 
     /// The low type an extension operator states for its result; the

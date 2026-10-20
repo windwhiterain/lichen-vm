@@ -220,7 +220,7 @@ where
         let value_slot = self.element_slot(None, Some(value_cell), None);
         let shape = self.array_node(self.current_block, &[key_slot, value_slot]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let table_ty = self.array_node(self.current_block, &[shape, kind]);
+        let table_ty = self.slot_pair(self.current_block, shape, kind);
         self.check_unify(
             container_ty,
             table_ty,
@@ -276,7 +276,7 @@ where
         let element = self.element_slot(None, Some(element_ty), None);
         let shape = self.array_node(self.current_block, &[element, length]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let ty_node = self.slot_pair(self.current_block, shape, kind);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
@@ -311,7 +311,7 @@ where
         let element = self.element_slot(None, Some(element_ty), None);
         let shape = self.array_node(self.current_block, &[element]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let ty_node = self.slot_pair(self.current_block, shape, kind);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
@@ -366,7 +366,7 @@ where
         let value_ty = self.element_slot(None, Some(value_ty), None);
         let shape = self.array_node(self.current_block, &[key, value_ty]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let ty_node = self.slot_pair(self.current_block, shape, kind);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
@@ -428,7 +428,7 @@ where
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let ty_node = self.slot_pair(self.current_block, shape, kind);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
@@ -484,7 +484,7 @@ where
                 let Some(items) = (unsafe { self.module.array_items(current) }) else {
                     break;
                 };
-                if items.len() != 2 {
+                if items.len() < 2 {
                     break;
                 }
                 let slot0 = self.module.as_dynamic(items[0].node, self.current_block);
@@ -492,7 +492,7 @@ where
                 // SAFETY: `slot1` was just materialized into the current
                 // block, whose arena is alive.
                 let descend =
-                    unsafe { self.module.array_items(slot1) }.is_some_and(|next| next.len() == 2);
+                    unsafe { self.module.array_items(slot1) }.is_some_and(|next| next.len() >= 2);
                 levels.push((slot0, slot1));
                 if !descend {
                     break;
@@ -529,7 +529,7 @@ where
         let element = self.element_slot_of(element_type);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.slot_pair(self.current_block, shape, kind);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
@@ -548,7 +548,7 @@ where
         let slot = self.element_slot_of(element);
         let shape = self.array_node(self.current_block, &[slot]);
         let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.slot_pair(self.current_block, shape, kind);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
@@ -566,7 +566,7 @@ where
         let value = self.element_slot_of(elements[1]);
         let shape = self.array_node(self.current_block, &[key, value]);
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.slot_pair(self.current_block, shape, kind);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);

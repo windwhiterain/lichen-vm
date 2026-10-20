@@ -238,7 +238,7 @@ where
             // SAFETY: `array` is the payload of a value read from a live node of
             // `module`; this helper releases no block.
             let items = unsafe { array.items() };
-            if items.len() == 2 {
+            if items.len() >= 2 {
                 module.node_value(items[0].node)
             } else {
                 None

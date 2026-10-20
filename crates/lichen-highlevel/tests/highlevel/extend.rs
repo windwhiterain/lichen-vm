@@ -189,7 +189,11 @@ fn the_checker_runs_on_an_extended_union() {
         .iter()
         .map(|item| dyn_node(item.node))
         .collect::<Vec<_>>();
-    assert_eq!(ids, &[float_value, build.type_expr]);
+    // Full width: the two meaningful slots, then the wildcard an unstated
+    // attribute is.
+    assert!(ids.len() >= 2, "the pair is at least its two slots wide");
+    assert_eq!(ids[0], float_value);
+    assert_eq!(ids[1], build.type_expr);
 }
 
 #[test]

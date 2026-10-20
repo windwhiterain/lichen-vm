@@ -30,8 +30,10 @@ refusals that follow are the honest ones:
 
 - `UNDECIDED_DOMAIN` — the parameter's type cell is genuinely empty (an
   *unannotated* parameter): annotate it.
-- `the kernel parameter's domain is a struct type …` — the type was read and it
-  is a nominal struct, which has no low shape at all.
+- ~~`the kernel parameter's domain is a struct type …`~~ — **retracted by the
+  superior's verdict (round 2): a struct is interpreted as a tuple**, so a
+  nominal struct parameter's domain is a `Tuple` of its field shapes and this
+  refusal (with `DomainStatement::Struct`) is obsolete.
 - `the kernel parameter's domain has no class this lowering can read` — a stated
   domain with no position to name (a non-tuple structure).
 - **`… has a position with no class: position n.m …`** — the type was read, it is

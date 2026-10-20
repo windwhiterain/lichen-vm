@@ -82,9 +82,12 @@ encoding reads, so widening every pair to the canonical attribute width would ma
 type `[shape, kind, attrs…]` and break type-level functions. That is why an expression
 pair stays dense while a compound's *element slot* is full width (a slot is never a
 type value: `docs/notes/compound-element-slots.md`). The canonical positions still
-travel: a function records its requirement's and its certificate's marker index, and the
-artifact persists them (`StaticFunction::parameter_marker`/`return_marker`), so a frozen
-call reads the attribute from the position exactly as a source call does.
+travel with the pair: a function's **parameter pair** states its requirement at the
+attribute's canonical position (the pair rides the artifact), and the **return
+certificate** plus its marker index is a recorded body fact (`Function::return_marker`/
+`return_certificate`), because a call's own attribute is checker state until the call
+runs. So a frozen call reads the requirement from the signature pair exactly as a source
+call does.
 
 **A return attribute computed from the argument follows it.** The vocabulary writes
 `perspective_of` the way `type_of` is written — `x => {p = _; x # p; p}` — and a return
@@ -161,13 +164,20 @@ model: the certificate for which expressions are uniform across an aligned lane 
 sub-language's wrapper ([compute.lichen](../crates/lichen-compute/src/compute.lichen))
 declares `# 1` on the lane-varying leaves — `range`, `row`, `col` and `read` — which is
 the lattice's bottom: the value is uniform over exactly its own thread. A frozen
-callee's parameter requirement and return certificate ride the artifact with the
-**canonical position of their attribute** (`StaticFunction::parameter_marker` and
-`return_marker`), recorded where the source build read its schema; a call site resolves
-the marker from that position instead of recognising the slot's content, then copies
-the decided slot onto the call (`Checker::check_app`,
+callee's parameter requirement is the **parameter pair's** stated attribute at its
+canonical position (the pair rides the artifact); the return certificate and its marker
+are the recorded body facts (`StaticFunction::return_marker`/`return_certificate`), and
+a call site copies the decided certificate onto the call (`Checker::check_app`,
 `Module::materialize_static_return_certificate`). So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
+
+**Attribute slots are never structural.** The superior's verdict: if an attribute is
+right in the type slot it must be right in *any* attribute slot, so no pair's unify
+compares or binds its attribute positions — the lowlevel pair unify skips them, and the
+checker dispatches every stated attribute slot of either side to that attribute's own
+`AttrExt::unify_slots` (`Checker::dispatch_attribute_slots`): one mechanism for a type
+field's `# n`, a parameter's requirement and a return's certificate alike. A wildcard
+states nothing and is never dispatched.
 
 Two readings changed with it, and both are the same statement — **a type is not a
 uniformity requirement**:

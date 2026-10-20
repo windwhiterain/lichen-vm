@@ -108,18 +108,9 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
-        // The parameter's requirement, when its source stated one.
-        match function.parameter_requirement {
-            None => w.u8(0),
-            Some(requirement) => {
-                w.u8(1);
-                w.u64(requirement.index as u64);
-            }
-        }
         // The return's argument field, `u8::MAX` meaning none.
         w.u8(u8::try_from(function.return_field.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
-        // The canonical attribute positions, `u8::MAX` meaning none.
-        w.u8(u8::try_from(function.parameter_marker.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
+        // The certificate's canonical position, `u8::MAX` meaning none.
         w.u8(u8::try_from(function.return_marker.unwrap_or(u8::MAX as u32)).unwrap_or(u8::MAX));
         // The return's certificate, when its source stated one.
         match function.return_certificate {
@@ -177,55 +168,45 @@ where
     Ok(w.into_bytes())
 }
 
-/// Write an optional [`LowShape`] (the node's stored low type).
-fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
+/// The compatibility contract: a shape's tag never changes, and an unstated
+/// position is tag `0`.
+fn write_low_shape(w: &mut Writer, shape: &Option<LowShape>) {
     match shape {
         None => w.u8(0),
-        Some(shape) => {
-            w.u8(1);
-            write_low_shape(w, shape);
-        }
-    }
-}
-
-/// The compatibility contract: a shape's tag never changes, and a new shape
-/// takes the next unused one.
-fn write_low_shape(w: &mut Writer, shape: &LowShape) {
-    match shape {
-        LowShape::USize => w.u8(0),
-        LowShape::Tuple(items) => {
-            w.u8(1);
+        Some(LowShape::USize) => w.u8(1),
+        Some(LowShape::Tuple(items)) => {
+            w.u8(2);
             w.u64(items.len() as u64);
             for item in items {
                 write_low_shape(w, item);
             }
         }
-        LowShape::Array(elem, len) => {
-            w.u8(2);
+        Some(LowShape::Array(elem, len)) => {
+            w.u8(3);
             write_low_shape(w, elem);
             w.u64(*len as u64);
         }
-        LowShape::Function(param, result) => {
-            w.u8(3);
+        Some(LowShape::Function(param, result)) => {
+            w.u8(4);
             write_low_shape(w, param);
             write_low_shape(w, result);
         }
-        LowShape::Table(key, value) => {
-            w.u8(4);
+        Some(LowShape::Table(key, value)) => {
+            w.u8(5);
             write_low_shape(w, key);
             write_low_shape(w, value);
         }
-        LowShape::Unknown => w.u8(5),
-        LowShape::Float => w.u8(6),
+        Some(LowShape::Float) => w.u8(6),
     }
 }
 
+/// Write a node's stored low type: exactly the shape form above.
+fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
+    write_low_shape(w, shape);
+}
+
 fn read_low_shape_opt(r: &mut Reader<'_>) -> Result<Option<LowShape>, String> {
-    match r.u8()? {
-        0 => Ok(None),
-        1 => Ok(Some(read_low_shape(r, 1)?)),
-        _ => Err("bad low_shape option tag".into()),
-    }
+    read_low_shape(r, 1)
 }
 
 /// The deepest [`LowShape`] nesting a node's shape marker may declare.
@@ -242,37 +223,37 @@ const MAX_LOW_SHAPE_DEPTH: usize = 256;
 ///
 /// The cap is checked before the match, so the recursion cannot outgrow the
 /// native stack.
-fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<LowShape, String> {
+fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<Option<LowShape>, String> {
     if depth > MAX_LOW_SHAPE_DEPTH {
         return Err(format!(
             "artifact low_shape nests deeper than the {MAX_LOW_SHAPE_DEPTH}-level cap"
         ));
     }
     match r.u8()? {
-        0 => Ok(LowShape::USize),
-        1 => {
+        0 => Ok(None),
+        1 => Ok(Some(LowShape::USize)),
+        2 => {
             let len = r.u64()? as usize;
             let mut items = reserve(r, len, "low_shape tuple elements")?;
             for _ in 0..len {
                 items.push(read_low_shape(r, depth + 1)?);
             }
-            Ok(LowShape::Tuple(items))
+            Ok(Some(LowShape::Tuple(items)))
         }
-        2 => {
+        3 => {
             let elem = Box::new(read_low_shape(r, depth + 1)?);
             let len = r.u64()? as usize;
-            Ok(LowShape::Array(elem, len))
+            Ok(Some(LowShape::Array(elem, len)))
         }
-        3 => Ok(LowShape::Function(
+        4 => Ok(Some(LowShape::Function(
             Box::new(read_low_shape(r, depth + 1)?),
             Box::new(read_low_shape(r, depth + 1)?),
-        )),
-        4 => Ok(LowShape::Table(
+        ))),
+        5 => Ok(Some(LowShape::Table(
             Box::new(read_low_shape(r, depth + 1)?),
             Box::new(read_low_shape(r, depth + 1)?),
-        )),
-        5 => Ok(LowShape::Unknown),
-        6 => Ok(LowShape::Float),
+        ))),
+        6 => Ok(Some(LowShape::Float)),
         _ => Err("bad low_shape tag".into()),
     }
 }
@@ -436,18 +417,8 @@ where
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
         let return_type = read_node_id(&mut r, node_count, "function return type")?;
-        let parameter_requirement = match r.u8()? {
-            0 => None,
-            1 => Some(read_node_id(
-                &mut r,
-                node_count,
-                "function parameter requirement",
-            )?),
-            _ => return Err("bad function requirement tag".into()),
-        };
         let tag = |byte: u8| (byte != u8::MAX).then_some(u32::from(byte));
         let return_field = tag(r.u8()?);
-        let parameter_marker = tag(r.u8()?);
         let return_marker = tag(r.u8()?);
         let return_certificate = match r.u8()? {
             0 => None,
@@ -482,10 +453,8 @@ where
         }
         functions.push(StaticFunction {
             parameter,
-            parameter_requirement,
-            parameter_marker,
-            return_marker,
             return_field,
+            return_marker,
             return_certificate,
             r#return,
             return_type,

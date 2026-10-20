@@ -565,7 +565,7 @@ where
             // SAFETY: `value_ty` is a live node of this module; nothing in
             // this crate calls `Module::drop_block`.
             let value_shape = match unsafe { self.module.array_items(value_ty) } {
-                Some(items) if items.len() == 2 => {
+                Some(items) if items.len() >= 2 => {
                     // Materialize static refs so the shape can participate in
                     // dynamic array construction below.
                     let shape = self.module.as_dynamic(items[0].node, self.current_block);

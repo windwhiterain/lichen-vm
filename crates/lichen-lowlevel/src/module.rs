@@ -186,12 +186,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The default attribute array's node for canonical attribute `canonical` — the hole
-    /// arm of [`Self::array_attribute`].
-    fn default_attribute(&self, canonical: u32) -> Option<AnyNodeId> {
-        default_attribute(self.default_attributes, canonical)
-    }
-
     /// Set whether a type-side parameter check keeps its errors.
     ///
     /// # Invariant
@@ -654,10 +648,8 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
-            parameter_requirement: None,
-            parameter_marker: None,
-            return_marker: None,
             return_field: None,
+            return_marker: None,
             return_certificate: None,
             return_type: NodeId::default(),
             static_origin: None,

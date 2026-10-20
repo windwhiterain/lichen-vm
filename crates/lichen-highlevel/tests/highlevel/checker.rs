@@ -86,12 +86,18 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
 /// so is never the shared `Build::int_type` node; element 1 is the universe,
 /// compared by node identity against the canonical `b.type_expr`.
 fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[NodeId]) -> bool {
-    ids.len() == 2
+    ids.len() >= 2
         && matches!(
             b.module.node_value(AnyNodeId::Dynamic(ids[0])),
             Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
         )
         && ids[1] == b.type_expr
+}
+
+/// A pair's width in the checked program: the value and type slots plus one
+/// per attribute.
+fn width() -> usize {
+    lichen_highlevel::shape::slot_width::<ProgramImpl>()
 }
 
 /// Whether `node` is the int type — the two-slot test `is_int_type_ids` states.
@@ -118,7 +124,7 @@ fn int_literal_checks() {
     // The type of 5 is [int, [Type, ↺]], rebuilt fresh per occurrence.
     assert!(is_int_type(&b, b.state[five].ty.unwrap()));
     let ids = array_ids(&b, b.state[five].ty.unwrap());
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), width());
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
@@ -152,7 +158,7 @@ fn the_type_universe_is_self_referential() {
     assert_eq!(b.state[t].term, Some(b.type_expr));
     assert_eq!(b.state[t].ty, Some(b.type_expr), "Type : Type");
     let ids = array_ids(&b, b.type_expr);
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), width());
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeType))
@@ -236,7 +242,11 @@ fn lambda_has_arrow_type() {
     // `[Function(fid), ↺]`, slot 1 being the node itself.
     let ftype = b.state[l].ty.unwrap();
     let ids = array_ids(&b, ftype);
-    assert_eq!(ids.len(), 2, "a function-type node is a pair [func, self]");
+    assert_eq!(
+        ids.len(),
+        width(),
+        "a function-type node is a pair [func, self]"
+    );
     assert_eq!(
         ids[1], ftype,
         "slot 1 is the node itself (self-referential)"
@@ -292,7 +302,11 @@ fn typed_tuple_is_a_kinded_tuple() {
     assert!(b.ok, "[1, 2] should check");
     let ty = b.state[tup].ty.unwrap();
     let ids = array_ids(&b, ty);
-    assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
+    assert_eq!(
+        ids.len(),
+        width(),
+        "a type expression is a pair [shape, kind]"
+    );
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
     // Each shape element is an element slot `[value, type, attrs…]`, so the
@@ -307,7 +321,7 @@ fn typed_tuple_is_a_kinded_tuple() {
         ));
     }
     let kind_ids = array_ids(&b, ids[1]);
-    assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids.len(), width());
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
@@ -328,7 +342,7 @@ fn real_array_type_is_type_and_length() {
     // The type of the array type is its kind [ArrayType, Type].
     let ty = b.state[arr].ty.unwrap();
     let kind_ids = array_ids(&b, ty);
-    assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids.len(), width());
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
@@ -353,7 +367,7 @@ fn real_array_type_is_type_and_length() {
     );
     // The pair is [shape, kind].
     let ids = array_ids(&b, b.state[arr].term.unwrap());
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), width());
     assert_eq!(ids[0], shape);
     assert_eq!(ids[1], ty);
 }
@@ -416,7 +430,11 @@ fn array_literal_is_homogeneous() {
     assert!(b.ok, "[1, 2] as an array literal should check");
     let ty = b.state[arr].ty.unwrap();
     let ids = array_ids(&b, ty);
-    assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
+    assert_eq!(
+        ids.len(),
+        width(),
+        "a type expression is a pair [shape, kind]"
+    );
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
     // The element position is a slot: the shared element type unifies to int.
@@ -433,7 +451,7 @@ fn array_literal_is_homogeneous() {
         "instance[1] is the element count"
     );
     let kind_ids = array_ids(&b, ids[1]);
-    assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids.len(), width());
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
@@ -752,7 +770,7 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     // The requirement names the container's **kind**: the expected side is the
     // array kind, not the container's own type.
     let requirement = array_ids(&b, diags[0].b);
-    assert_eq!(requirement.len(), 2, "a kind is a [marker, K] pair");
+    assert_eq!(requirement.len(), width(), "a kind is a [marker, K] pair");
     assert!(
         matches!(
             b.module.node_value(AnyNodeId::Dynamic(requirement[0])),
@@ -887,7 +905,7 @@ fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     // The resolved root type is the tuple type `tuple{Int, Type}`; each element's
     // type is its slot's type position.
     let pair = array_ids(&b, b.root_ty);
-    assert_eq!(pair.len(), 2);
+    assert_eq!(pair.len(), width());
     let shape = array_ids(&b, pair[0]);
     let e0 = array_ids(&b, shape[0]);
     assert!(is_int_type(&b, e0[1]), "element 0's cell syncs to int");
@@ -1236,11 +1254,15 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     // the kind slot is a standard [marker, K] pair; see `lichen_highlevel::shape`.
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
-    assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids.len(), width());
     assert_eq!(kind_ids[1], b.type_expr);
     let marker = kind_ids[0];
     let marker_ids = array_ids(&b, marker);
-    assert_eq!(marker_ids.len(), 2, "the marker is a [value, type] pair");
+    assert_eq!(
+        marker_ids.len(),
+        width(),
+        "the marker is a [value, type] pair"
+    );
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
@@ -1334,9 +1356,9 @@ fn a_named_struct_carries_a_name_to_index_table() {
     assert!(b.ok);
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
-    assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids.len(), width());
     let marker_ids = array_ids(&b, kind_ids[0]);
-    assert_eq!(marker_ids.len(), 2);
+    assert_eq!(marker_ids.len(), width());
     let payload_ids = array_ids(&b, marker_ids[0]);
     assert_eq!(payload_ids.len(), 3);
     // the names field (the payload's slot 1) is a constant table: "a" -> 0,
@@ -1780,7 +1802,7 @@ fn an_underscore_annotation_infers_the_type() {
     let mut b = build(a, w);
     assert!(b.ok, "5 : _ should check");
     let ids = array_ids(&b, b.state[a].ty.unwrap());
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.len(), width());
     assert_eq!(
         b.module.equality_representative(ids[0]),
         b.module.equality_representative(b.int_marker),

@@ -29,8 +29,6 @@ fn function_homed_in(
         r#return,
         parameter: NodeId::default(),
         return_type: NodeId::default(),
-        parameter_requirement: None,
-        parameter_marker: None,
         return_marker: None,
         return_field: None,
         return_certificate: None,

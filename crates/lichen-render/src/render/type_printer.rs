@@ -180,12 +180,12 @@ where
         }
         // `[head, K]` — an atomic type: the kind slot is the self-looping
         // universe, so render the head (`int`, `Type`, …).
-        if elements.len() == 2 && self.is_universe_any(elements[1].node) {
+        if elements.len() >= 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
         // A function-type node `[Function(fid), ↺]`: its signature lives in the
         // template, not a `[dom, cod]` shape.
-        if elements.len() == 2
+        if elements.len() >= 2
             && self.slot1_is_self(elements[1].node, AnyNodeId::Dynamic(node))
             && let Some(fv) = self.module.node_value(elements[0].node)
             && let Some(LowValue::Function(fid)) = fv.as_enum()
@@ -195,7 +195,7 @@ where
         }
         // A struct type: the kind is the standard marker pair, whose id renders
         // `#n` to distinguish same-shaped structs.
-        if elements.len() == 2
+        if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             // SAFETY: `kind` is a value read from the live node `elements[1]`;
@@ -213,11 +213,11 @@ where
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
-        if elements.len() == 2
+        if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             && let kind = unsafe { kind.items() }
-            && kind.len() == 2
+            && kind.len() >= 2
             && self.is_universe_any(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
@@ -228,7 +228,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "{} -> {}",
@@ -261,7 +261,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "array{{{}, {}}}",
@@ -290,7 +290,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "table{{{}, {}}}",
@@ -304,16 +304,19 @@ where
         }
         // A bare `[in, out]` shape is an arrow only when the checker registered
         // the shape; otherwise it reads raw.
-        if elements.len() == 2 && self.is_arrow(node) {
+        if elements.len() >= 2 && self.is_arrow(node) {
             return format!(
                 "{} -> {}",
                 self.any_node(elements[0].node),
                 self.any_node(elements[1].node)
             );
         }
-        // Fallback: render the raw elements, marked as raw.
+        // Fallback: dump the raw elements, a pair's two meaningful slots only
+        // (`docs/notes/array-attribute-view.md`).
+        let width = logical_width(self.module, node, elements.len());
         let parts: Vec<String> = elements
             .iter()
+            .take(width)
             .map(|item| self.any_node(item.node))
             .collect();
         format!("raw[{}]", parts.join(", "))
@@ -369,7 +372,7 @@ where
         // SAFETY: `array` is the value read through `sref`, whose registered
         // module pins the arena.
         let items = unsafe { array.items() };
-        let [head, tail] = items else {
+        let [head, tail, ..] = items else {
             return None;
         };
         let head = self.module.node_value(head.node)?;
@@ -622,12 +625,12 @@ where
         }
         // `[head, K]` — an atomic type: the kind slot is the self-looping
         // universe, so render the head (`int`, `Type`, …).
-        if elements.len() == 2 && self.is_static_universe(elements[1].node) {
+        if elements.len() >= 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
         }
         // A struct type: the kind is the standard marker pair, and a name table
         // rides in the payload's names slot.
-        if elements.len() == 2
+        if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             // SAFETY: `kind` is a value read from the live node `elements[1]`;
@@ -645,11 +648,11 @@ where
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
-        if elements.len() == 2
+        if elements.len() >= 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             && let kind = unsafe { kind.items() }
-            && kind.len() == 2
+            && kind.len() >= 2
             && self.is_static_universe(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
@@ -659,7 +662,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "{} -> {}",
@@ -678,7 +681,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "array{{{}, {}}}",
@@ -716,7 +719,7 @@ where
                         // SAFETY: `shape` is the payload of a value read from
                         // the live node `elements[0]`.
                         && let s = unsafe { shape.items() }
-                        && s.len() == 2
+                        && s.len() >= 2
                     {
                         return format!(
                             "table{{{}, {}}}",
@@ -819,7 +822,7 @@ where
             // SAFETY: `array` is the payload of the value read from the live
             // node `id`.
             let items = unsafe { array.items() };
-            if items.len() != 2
+            if items.len() < 2
                 || self.module.node_value(items[0].node) != Some(P::Value::type_marker())
             {
                 return false;
@@ -844,8 +847,23 @@ where
     }
 
     fn kind_is_struct_any(&self, kind_items: &[ArrayItem]) -> bool {
-        kind_items.len() == 2
+        kind_items.len() >= 2
             && self.is_universe_any(kind_items[1].node)
             && marker_is_struct(self.module, kind_items[0].node)
+    }
+}
+
+/// The number of *value* slots an array's payload states: an attribute region is
+/// not part of the value's structure.
+fn logical_width<P: HighProgram>(module: &Module<P>, node: NodeId, len: usize) -> usize
+where
+    P::Value: ValueType,
+{
+    match module
+        .node_value(AnyNodeId::Dynamic(node))
+        .and_then(|value| value.as_enum())
+    {
+        Some(LowValue::Array(array)) if array.layout() != 0 => shape::PAIR_ATTR_BASE.min(len),
+        _ => len,
     }
 }

@@ -278,7 +278,7 @@ where
     // SAFETY: `array` is the payload of the value read from the live node
     // `node`.
     let items = unsafe { array.items() };
-    if items.len() != 2 || module.node_value(items[0].node) != Some(P::Value::type_marker()) {
+    if items.len() < 2 || module.node_value(items[0].node) != Some(P::Value::type_marker()) {
         return false;
     }
     match items[1].node {
@@ -302,7 +302,7 @@ where
                     // SAFETY: `array` is a static payload read through `sref`,
                     // whose registered module pins the arena.
                     let items = unsafe { array.items() };
-                    items.len() == 2
+                    items.len() >= 2
                         && module.node_value(items[0].node) == Some(P::Value::type_marker())
                         && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
                 }
@@ -326,7 +326,7 @@ where
     };
     // SAFETY: `m` is the payload of the value read from the live node `marker`.
     let items = unsafe { m.items() };
-    items.len() == 2
+    items.len() >= 2
         && module.node_value(items[shape::STRUCT_MARKER_TAG_SLOT].node)
             == Some(P::Value::type_struct_marker())
 }
@@ -337,7 +337,7 @@ fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) 
 where
     P::Value: ValueType,
 {
-    kind_items.len() == 2
+    kind_items.len() >= 2
         && is_universe_any(module, kind_items[1].node)
         && marker_is_struct(module, kind_items[0].node)
 }
@@ -437,7 +437,7 @@ where
     // SAFETY: `ty_arr`, `shape` and `kind` come from live nodes of `module`,
     // whose `items()` calls this note covers.
     let tys = unsafe { ty_arr.items() };
-    if tys.len() != 2 {
+    if tys.len() < 2 {
         return None;
     }
     // The shape (the positional field-type list) gives the field count.
@@ -524,7 +524,7 @@ where
         return None;
     };
     let tys = unsafe { ty_arr.items() };
-    if tys.len() != 2 {
+    if tys.len() < 2 {
         return None;
     }
     let kind = module.node_value(tys[1].node)?.as_enum()?;

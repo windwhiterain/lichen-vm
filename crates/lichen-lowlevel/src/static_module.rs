@@ -81,7 +81,7 @@ impl<P: Program> Module<P> {
         self.static_module(function.module)
             .functions
             .get(function.index.0)
-            .map(|function| (function.parameter_marker, function.return_marker))
+            .map(|function| (None, function.return_marker))
             .unwrap_or((None, None))
     }
 

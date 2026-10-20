@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{
+    AnyFunctionId, AnyNodeId, ArrayItem, ArrayValue, LowOperator, LowValue, NodeId,
+};
 
 use crate::attr::{AttrSet, slot_value_node};
 use crate::diagnostic::DiagKind;
@@ -59,17 +61,18 @@ where
             (
                 value_cell,
                 type_cell,
-                self.array_node(return_block, &[value_cell, type_cell]),
+                self.slot_pair(return_block, value_cell, type_cell),
             )
         });
+        let mut parameter_attr_slot = None;
         let param = match attr_cell {
             Some((_, _, attr)) => {
                 self.state[parameter].attr = Some(attr);
                 let marker = self.ir.schema(parameter).tail[0];
-                let layout = self.layout_for_tail(&[marker]);
-                self.array_node_with_layout(return_block, &[value_cell, type_cell, attr], layout)
+                parameter_attr_slot = Some(attr);
+                self.attribute_pair(return_block, value_cell, type_cell, &marker, attr)
             }
-            None => self.array_node(return_block, &[value_cell, type_cell]),
+            None => self.slot_pair(return_block, value_cell, type_cell),
         };
         // Both entry points are already registered in this function's scope;
         // the clone walk requires `parameter` to be one.
@@ -85,15 +88,22 @@ where
         let pair = self.alloc_node(return_block, None, None);
         // One node, not a type node beside the pair: a distinct one collides
         // under the clone's topology re-establishment.
-        let items = [
+        let any = self.any();
+        let mut items = vec![
             ArrayItem::new(AnyNodeId::Dynamic(func_node)),
             ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
         ];
+        items.extend(std::iter::repeat_n(
+            ArrayItem::new(AnyNodeId::Dynamic(any)),
+            P::Attr::ORDER.len(),
+        ));
+        let layout = self.full_width_layout();
         self.module.write_node_value(
             pair,
-            Some(P::Value::from(LowValue::Array(
-                self.module.alloc_array(&items, return_block).into(),
-            ))),
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                self.module.alloc_array(&items, return_block),
+                layout,
+            )))),
         );
         self.state[e].term = Some(pair);
         self.state[e].val = Some(func_node);
@@ -124,8 +134,6 @@ where
         }
         // Invariant: the attribute cell stays undecided — a bound declared
         // value would be baked by the deep pass.
-        let mut parameter_requirement = None;
-        let mut parameter_marker = None;
         if let Some(parameter_attribute) = parameter_attribute {
             // The attribute is compiled in body scope, like the type, so `n` may
             // reference the parameter itself.
@@ -143,44 +151,36 @@ where
             if self.attribute_extension(&marker).is_none() {
                 self.no_attr_ext_guard(self.loc(e, 2));
             }
-            parameter_requirement = Some(declared);
-            parameter_marker = Some(marker.order_index() as u32);
+            // The pair states the requirement, as its type slot states its type.
+            let loc = self.loc(parameter_attribute, 0);
+            if let (Some(slot), Some(ext)) =
+                (parameter_attr_slot, self.attribute_extension(&marker))
+            {
+                ext.unify_slots(self, slot, declared, loc);
+            }
             // The body sees the parameter's **declared** slot: the check is for
             // every caller the requirement admits.
             self.state[parameter].attr = Some(declared);
         }
         let ret = self.check_expr(r#return);
-        // The requirement's own slot, and the canonical position of its marker:
-        // a body's annotation cannot overwrite either.
-        self.module.functions[function].parameter_requirement = parameter_requirement;
-        self.module.functions[function].parameter_marker = parameter_marker;
-        // The return's certificate and its attribute's canonical position, recorded
-        // for a call site (attributes.md).
-        if (self.state[r#return].attr.is_some() || self.attr_refs.contains_key(&r#return))
-            && self.merged_tails.contains_key(&r#return)
-        {
+        // Body facts: a call's attribute is unstated until the call runs.
+        if self.state[r#return].attr.is_some() && self.merged_tails.contains_key(&r#return) {
             let tail = self.schema_tail(r#return).to_vec();
-            let marker = tail
+            self.module.functions[function].return_marker = tail
                 .iter()
                 .rev()
                 .find(|marker| {
                     self.attribute_extension(*marker)
                         .is_some_and(|ext| !ext.is_label())
                 })
-                .copied();
-            if let Some(marker) = marker {
-                self.module.functions[function].return_marker = Some(marker.order_index() as u32);
-                self.module.functions[function].return_certificate = self.state[r#return].attr;
-                // A reference to a field names the position a call site resolves; a
-                // reference to the whole parameter leaves it empty.
-                if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
-                    && let Some(parameter_type) = self.state[parameter].ty
-                {
-                    let position =
-                        self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
-                    self.module.functions[function].return_field =
-                        position.map(|position| position as u32);
-                }
+                .map(|marker| marker.order_index() as u32);
+            self.module.functions[function].return_certificate = self.state[r#return].attr;
+            if let Some(Some(name)) = self.attr_refs.get(&r#return).map(|(_, field)| *field)
+                && let Some(parameter_type) = self.state[parameter].ty
+            {
+                let position = self.named_field_index_any(AnyNodeId::Dynamic(parameter_type), name);
+                self.module.functions[function].return_field =
+                    position.map(|position| position as u32);
             }
         }
         self.scopes.pop();
@@ -261,12 +261,12 @@ where
         // the wildcard is what an unstated value is.
         let parameter_value = self.fresh_cell();
         let parameter_type = self.fresh_cell();
-        let parameter = self.array_node(return_block, &[parameter_value, parameter_type]);
+        let parameter = self.slot_pair(return_block, parameter_value, parameter_type);
         // The domain is unified *into* the parameter's type slot, so a function
         // unified against it binds the two.
         self.module.unify(parameter_type, domain);
         let return_value = self.fresh_cell();
-        let body = self.array_node(return_block, &[return_value, codomain]);
+        let body = self.slot_pair(return_block, return_value, codomain);
         self.module.finish_function(function, body, parameter);
         self.module.functions[function].return_type = codomain;
         let func_node = self.alloc_node(return_block, None, None);
@@ -352,32 +352,39 @@ where
         // position is the marker.
         let function_ty = self.state[function].ty.unwrap();
         let callee = self.module.function_type_function(function_ty);
-        let parameter_marker = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => self
-                .module
-                .functions
-                .get(fid)
-                .and_then(|function| function.parameter_marker)
-                .and_then(|index| P::Attr::ORDER.get(index as usize))
-                .copied(),
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .static_function_markers(sref)
-                .0
-                .and_then(|index| P::Attr::ORDER.get(index as usize))
-                .copied(),
+        // The callee's **parameter pair** states its requirement: the same read as
+        // its type slot (`docs/notes/attributes.md`).
+        let parameter_pair = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => Some(self.module.functions[fid].parameter),
+            Some(AnyFunctionId::Static(sref)) => {
+                self.module
+                    .materialize_static_signature_pair(sref, false, self.current_block)
+            }
             None => None,
         };
-        let return_marker = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid]
-                .return_marker
-                .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .static_function_markers(sref)
-                .1
-                .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
-            None => None,
+        let (parameter_marker, requirement) = parameter_pair
+            .map(|pair| self.stated_attributes(pair))
+            .unwrap_or_default()
+            .first()
+            .map(|(attribute, value)| (Some(*attribute), Some(*value)))
+            .unwrap_or((None, None));
+        // The certificate and its marker are the recorded body facts.
+        let (return_marker, certificate) = match callee {
+            Some(AnyFunctionId::Dynamic(fid)) => (
+                self.module.functions[fid]
+                    .return_marker
+                    .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
+                self.module.functions[fid].return_certificate,
+            ),
+            Some(AnyFunctionId::Static(sref)) => (
+                self.module
+                    .static_function_markers(sref)
+                    .1
+                    .and_then(|index| P::Attr::ORDER.get(index as usize).copied()),
+                self.module
+                    .materialize_static_return_certificate(sref, self.current_block),
+            ),
+            None => (None, None),
         };
         // The positional unify compares slot to slot; attribute equality is
         // checked below, the clone resetting its own cells.
@@ -394,27 +401,24 @@ where
                 .map(|ext| self.provided_slot(argument, &marker, ext)),
             None => None,
         };
-        let argument_layout = parameter_marker
-            .as_ref()
-            .map(|marker| self.layout_for_tail(&[*marker]));
-        let value_argument_pair = match (argument_attr, argument_layout) {
-            (Some(attr), Some(layout)) => self.array_node_with_layout(
+        let value_argument_pair = match (parameter_marker, argument_attr) {
+            (Some(marker), Some(attr)) => self.attribute_pair(
                 self.current_block,
-                &[argument_value, argument_type, attr],
-                layout,
+                argument_value,
+                argument_type,
+                &marker,
+                attr,
             ),
-            _ => self.array_node(self.current_block, &[argument_value, argument_type]),
+            _ => self.slot_pair(self.current_block, argument_value, argument_type),
         };
         // The type side's argument: the same slots with an undecided value, so
         // its check never evaluates the argument's value.
         let type_value = self.fresh_cell();
-        let type_argument_pair = match (argument_attr, argument_layout) {
-            (Some(attr), Some(layout)) => self.array_node_with_layout(
-                self.current_block,
-                &[type_value, argument_type, attr],
-                layout,
-            ),
-            _ => self.array_node(self.current_block, &[type_value, argument_type]),
+        let type_argument_pair = match (parameter_marker, argument_attr) {
+            (Some(marker), Some(attr)) => {
+                self.attribute_pair(self.current_block, type_value, argument_type, &marker, attr)
+            }
+            _ => self.slot_pair(self.current_block, type_value, argument_type),
         };
         // The result's type cell rides in the apply's operand; the runtime apply
         // binds it to the return pair.
@@ -432,15 +436,8 @@ where
             let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
-        // The apply's attribute equality: the callee's requirement slot, source or
-        // frozen, against the argument's provided slot.
-        let requirement = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid].parameter_requirement,
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .materialize_static_parameter_requirement(sref, self.current_block),
-            None => None,
-        };
+        // The apply's attribute equality: the signature pair's stated requirement
+        // against the argument's provided slot.
         if let (Some(declared), Some(marker)) = (requirement, parameter_marker) {
             // `#_` states nothing (attributes.md); unifying would pin the template.
             let declared = crate::attr::slot_value_node(&*self, declared);
@@ -523,24 +520,11 @@ where
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
-        // **The callee's return certificate is the call's** (attributes.md), at the
-        // recorded position, decided once here.
-        let certificate = match callee {
-            Some(AnyFunctionId::Dynamic(fid)) => self.module.functions[fid]
-                .return_marker
-                .and_then(|index| Some((self.module.functions[fid].return_certificate?, index))),
-            Some(AnyFunctionId::Static(sref)) => self
-                .module
-                .static_function_markers(sref)
-                .1
-                .and_then(|index| {
-                    Some((
-                        self.module
-                            .materialize_static_return_certificate(sref, self.current_block)?,
-                        index,
-                    ))
-                }),
-            None => None,
+        // **The callee's return certificate is the call's** (attributes.md), decided
+        // once here.
+        let certificate = match (return_marker, certificate) {
+            (Some(marker), Some(slot)) => Some((slot, marker.order_index() as u32)),
+            _ => None,
         };
         // A return naming an argument field follows it per call: the output
         // buffer's perspective is the input buffer's.

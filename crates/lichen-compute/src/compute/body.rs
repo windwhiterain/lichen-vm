@@ -534,17 +534,17 @@ where
         }
         let mut offset = 0usize;
         let mut shape = match self.params.first() {
-            Some(slot) => slot.shape.clone(),
+            Some(slot) => Some(slot.shape.clone()),
             None => return Ok(None),
         };
         for position in &positions {
-            let lichen_lowlevel::LowShape::Tuple(items) = &shape else {
+            let Some(lichen_lowlevel::LowShape::Tuple(items)) = shape.as_ref() else {
                 return Ok(None);
             };
             let Some(element) = items.get(*position) else {
                 return Ok(None);
             };
-            for skipped in &items[..*position] {
+            for skipped in items[..*position].iter().flatten() {
                 offset += super::flat_arity(skipped);
             }
             shape = element.clone();

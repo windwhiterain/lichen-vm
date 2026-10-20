@@ -116,55 +116,27 @@ impl PartialEq for LowValue {
 ///
 /// # Invariant
 /// A low type belongs to the union-find class, read through its representative by
-/// [`Module::class_low_type`]. `None` is untraced scaffolding; `Some(Unknown)` traced
-/// but undecided, the lattice bottom. It is host metadata, never a lichen value, so
-/// "a type is just a value" (`Type : Type`) is untouched. See docs/notes/lowlevel-low-types.md.
+/// [`Module::class_low_type`]. A position nothing states is `None`, and that is the
+/// only "undecided": the shape itself has no `Unknown` variant. It is host
+/// metadata, never a lichen value, so "a type is just a value" (`Type : Type`) is
+/// untouched. See docs/notes/lowlevel-low-types.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LowShape {
-    /// Undecided: the class is traced but nothing has refined it; the lattice bottom.
-    Unknown,
     /// A machine scalar (`USize`; the kernel-safe scalar subset) — `i64` in
     /// the wasm backend.
     USize,
-    /// A machine float, a decided scalar; two different decided shapes join to `Unknown`.
+    /// A machine float, a decided scalar; two different decided shapes never
+    /// share a class.
     Float,
     /// A heterogeneous fixed-arity tuple.  A kernel whose domain is a tuple
     /// has shape `Tuple(..)` and arity = `self.len()`.
-    Tuple(Vec<LowShape>),
+    Tuple(Vec<Option<LowShape>>),
     /// A homogeneous fixed-length array: the element shape and the length.
-    Array(Box<LowShape>, usize),
+    Array(Box<Option<LowShape>>, usize),
     /// A function: parameter → result.
-    Function(Box<LowShape>, Box<LowShape>),
+    Function(Box<Option<LowShape>>, Box<Option<LowShape>>),
     /// A table: key → value.
-    Table(Box<LowShape>, Box<LowShape>),
-}
-
-impl LowShape {
-    /// The lattice join of two lower bounds of one class.
-    ///
-    /// # Invariant
-    /// `Unknown` is the bottom. A `Tuple` of arity `n` and an `Array(_, n)` are two views
-    /// of one value, so the tuple view wins. Two different decided shapes join to
-    /// `Unknown` deliberately, not as an assertion: a merge can put two never-compared
-    /// writers on one class. See docs/notes/lowlevel-low-types.md.
-    pub fn join(left: &LowShape, right: &LowShape) -> LowShape {
-        match (left, right) {
-            (LowShape::Unknown, other) | (other, LowShape::Unknown) => other.clone(),
-            (LowShape::Tuple(items), LowShape::Array(_, n)) if items.len() == *n => {
-                LowShape::Tuple(items.clone())
-            }
-            (LowShape::Array(_, n), LowShape::Tuple(items)) if items.len() == *n => {
-                LowShape::Tuple(items.clone())
-            }
-            _ if left == right => left.clone(),
-            _ => LowShape::Unknown,
-        }
-    }
-
-    /// Whether the shape is decided — anything but [`LowShape::Unknown`].
-    pub fn is_known(&self) -> bool {
-        !matches!(self, LowShape::Unknown)
-    }
+    Table(Box<Option<LowShape>>, Box<Option<LowShape>>),
 }
 
 /// One element of a structural array value: its node and its `shallow` marker.
@@ -540,7 +512,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     ///
     /// # Invariant
     /// `arguments` has one entry per operand element; `None` means untraced and
-    /// `Some(Unknown)` traced but undecided. Returning `None` means the operator declines and
+    /// A shape is stated once; returning `None` means the operator declines and
     /// a reader falls back conservatively.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         let _ = arguments;
@@ -823,31 +795,12 @@ pub struct Function {
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
-    /// The parameter's perspective requirement, as its source stated it.
-    ///
-    /// # Invariant
-    /// The requirement is the annotation's own `[value, type]` term, not the parameter
-    /// pair's tail cell: a body may bind that cell through its own annotation, and a
-    /// requirement a body can overwrite is not one.
-    pub parameter_requirement: Option<NodeId>,
-    /// The canonical position of the parameter requirement's attribute marker.
-    ///
-    /// # Invariant
-    /// The *position*, not the marker itself: it is the schema fact a frozen artifact
-    /// would otherwise lose, so the checker reads the requirement's attribute from the
-    /// position rather than guessing it from the slot's value.
-    pub parameter_marker: Option<u32>,
-    /// The canonical position of the return certificate's attribute marker.
-    pub return_marker: Option<u32>,
     /// The argument field a call's result follows, by position: set when the
     /// return names a parameter field.
     pub return_field: Option<u32>,
-    /// The return's certificate, as its source stated it: the annotation's
-    /// `[value, type]` term a call site copies.
-    ///
-    /// # Invariant
-    /// A slot, not the attribute's value: the call site rebuilds a decided copy of its
-    /// own, so no caller binds a callee's slot (`docs/notes/attributes.md`).
+    /// The return certificate's attribute marker position.
+    pub return_marker: Option<u32>,
+    /// The return's certificate: a body fact, copied at each call site.
     pub return_certificate: Option<NodeId>,
     /// The return expression's type cell; `r#return` itself may be an unevaluated operation.
     pub return_type: NodeId,
@@ -877,14 +830,10 @@ pub struct Function {
 
 pub struct StaticFunction {
     pub parameter: LocalNodeId,
-    /// The static mirror of [`Function::parameter_requirement`].
-    pub parameter_requirement: Option<LocalNodeId>,
-    /// The static mirror of [`Function::parameter_marker`].
-    pub parameter_marker: Option<u32>,
-    /// The static mirror of [`Function::return_marker`].
-    pub return_marker: Option<u32>,
     /// The static mirror of [`Function::return_field`].
     pub return_field: Option<u32>,
+    /// The static mirror of [`Function::return_marker`].
+    pub return_marker: Option<u32>,
     /// The static mirror of [`Function::return_certificate`].
     pub return_certificate: Option<LocalNodeId>,
     pub r#return: LocalNodeId,

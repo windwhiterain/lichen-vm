@@ -354,8 +354,6 @@ fn gc_moves_an_assert_condition_with_its_function() {
         r#return: ret,
         parameter: param,
         return_type: NodeId::default(),
-        parameter_requirement: None,
-        parameter_marker: None,
         return_marker: None,
         return_field: None,
         return_certificate: None,

@@ -22,7 +22,7 @@ where
         let value = self.array_node(self.current_block, &vals);
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let ty_node = self.slot_pair(self.current_block, shape, kind);
         let pair = self.pair_of(value, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
@@ -39,7 +39,7 @@ where
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.slot_pair(self.current_block, shape, kind);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);

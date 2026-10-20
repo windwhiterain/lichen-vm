@@ -93,7 +93,7 @@ where
         }
         // A kind `[marker, K]`: the value is a compound type — render its
         // shape in type syntax.
-        if tys.len() == 2
+        if tys.len() >= 2
             && self.printer.is_universe_any(tys[1].node)
             && let Some(out) = self.compound_type(value, tys[0].node)
         {
@@ -101,7 +101,7 @@ where
         }
         // A struct instance: the value reads against the kind's field-type
         // shape, whose kind slot is the struct marker.
-        if tys.len() == 2
+        if tys.len() >= 2
             && self.is_struct_kind_any(tys[1].node)
             && let Some(marker) = self.struct_marker_value(tys[1].node)
             && let Some(out) = self.instance(value, tys[0].node, marker)
@@ -110,11 +110,11 @@ where
         }
         // A term of a tuple/array/struct type `[shape, [marker, K]]`: the
         // value's elements read against the shape.
-        if tys.len() == 2
+        if tys.len() >= 2
             && let Some(kind) = self.module.node_value(tys[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             && let kind = unsafe { kind.items() }
-            && kind.len() == 2
+            && kind.len() >= 2
             && self.printer.is_universe_any(kind[1].node)
             && let Some(marker) = self.module.node_value(kind[0].node)
             && let Some(out) = self.instance(value, tys[0].node, marker)
@@ -137,7 +137,7 @@ where
     /// (`[Function(fid), ↺]`), every other class a type constant whose kind slot
     /// is the self-looping universe (`[Int, ↺]`, `[string, ↺]`, …).
     fn leaf_class(&mut self, value: P::Value, ty: AnyNodeId, tys: &[ArrayItem]) -> Option<String> {
-        if tys.len() != 2 {
+        if tys.len() < 2 {
             return None;
         }
         let class = self.module.node_value(tys[0].node)?;
@@ -426,7 +426,7 @@ where
         // SAFETY: `m` is the payload of a value read from the module being
         // rendered.
         let items = unsafe { m.items() };
-        items.len() == 2
+        items.len() >= 2
             && self
                 .module
                 .node_value(items[shape::STRUCT_MARKER_TAG_SLOT].node)

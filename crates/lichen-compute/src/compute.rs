@@ -12,10 +12,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
-use lichen_highlevel::shape::{
-    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, TypeRef, array_items as array_items_any,
-    field_list, field_names, field_type, low_type_of_slot, slot_type,
-};
+use lichen_highlevel::shape;
+use lichen_highlevel::shape::{low_type_of_slot, pair_type, pair_value};
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
     KernelMark, KernelRoles, KernelShape, LaneHeight, LaneWidth, ResidentId, ScalarClass,
@@ -23,9 +21,9 @@ use lichen_kernel_ir::{
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, ExtensionDiagnostic, FunctionId,
-    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
-    Release, StaticModule, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, ExtensionDiagnostic, LowOperator,
+    LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release,
+    StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -316,7 +314,7 @@ fn flatten_classes_into(shape: &LowShape, classes: &mut Vec<ScalarClass>) {
     match shape {
         LowShape::Float => classes.push(ScalarClass::Float),
         LowShape::Tuple(items) => {
-            for item in items {
+            for item in items.iter().flatten() {
                 flatten_classes_into(item, classes);
             }
         }
@@ -1349,11 +1347,19 @@ where
                             ))
                         }
                         Err(err) => {
-                            // An unresolved parameter annotation leaves the operator
-                            // undecided and silent — not an error: a later pass
-                            // compiles it.
+                            // A polymorphic template is not jittable (the superior's
+                            // verdict): refuse, never defer.
                             match err {
-                                RoleUnread::Undecided => return None,
+                                RoleUnread::Undecided => {
+                                    module.record_extension_diagnostic(
+                                        ExtensionDiagnostic::failure(
+                                            PARALLEL_DIAGNOSTIC,
+                                            None,
+                                            POLYMORPHIC_TEMPLATE.to_string(),
+                                        ),
+                                    );
+                                    return None;
+                                }
                                 RoleUnread::Refusal(why) => {
                                     module.record_extension_diagnostic(
                                         ExtensionDiagnostic::failure(
@@ -1957,7 +1963,7 @@ where
     /// argument exists yet, so they state honest scalars. `Jit`, `Parallel`,
     /// `Write` and `BufferCollect` decline. The pass does not consult this table
     /// — [`OperatorExt::low_type`]'s default answers — and a read's class comes
-    /// from the decided cell beside it ([`seed_template_term_low_types`]).
+    /// from the decided cell beside it ([`shape::prepare_template_low_types`]).
     fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             ComputeOperator::Launch
@@ -1993,17 +1999,6 @@ where
 /// one; which is the encoding's question, so both are asked and the decode
 /// decides ([`shape::TypeRef`]). The decode is the strong one — [`field_names`] —
 /// so every reader of the parameter's field list reads the same node.
-fn parameter_type_ref<P>(module: &Module<P>, slot: AnyNodeId) -> Option<TypeRef>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    [TypeRef::Term(slot), TypeRef::Slot(slot)]
-        .into_iter()
-        .find(|ty| field_names(module, *ty).is_some())
-}
-
 /// The named fields and field-type list of the type a **type slot** names.
 fn struct_fields_of_slot<P>(
     module: &Module<P>,
@@ -2014,88 +2009,15 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let ty = parameter_type_ref(module, slot)?;
-    let names = field_names(module, ty)?;
-    let shape = field_list(module, ty)?;
-    Some((names, shape))
+    shape::struct_fields(module, slot)
 }
 
-/// A field list's **entries**: a shape element is a slot, so a field's type is its
-/// type position.
-///
-/// # Invariant
-/// `None` is "the shape itself is undecided", never "no fields": a field list
-/// nobody can read is not a list of no fields. See
-/// `docs/notes/compound-element-slots.md`.
+/// A field list's **entries**: see [`shape::field_types`].
 fn field_types_of<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<Vec<AnyNodeId>>
 where
     P::Value: ValueType,
 {
-    // SAFETY: `shape` is a live node of `module`, resolved from the parameter's
-    // own type term; nothing released its block.
-    let items = unsafe { array_items_any(module, shape) }?;
-    Some(
-        items
-            .iter()
-            .map(|item| element_slot_type(module, item.node))
-            .collect(),
-    )
-}
-
-/// The type a field list's **element slot** names.
-///
-/// # Invariant
-/// A compound type's shape element is an element slot, so a field's type is its
-/// type position; an element that states none *is* the type. Both encodings are
-/// asked of every element, and the one that reads decides. See
-/// `docs/notes/compound-element-slots.md`.
-fn element_slot_type<P: Program>(module: &Module<P>, element: AnyNodeId) -> AnyNodeId
-where
-    P::Value: ValueType,
-{
-    slot_type(module, element).unwrap_or(element)
-}
-
-/// The type node of field `at` of `ty`.
-///
-/// # Invariant
-/// The field is read from the field list of `ty` itself, so this is the level
-/// below `ty` and not a depth counted from the parameter.
-fn field_type_at<P>(module: &Module<P>, ty: TypeRef, at: usize) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    // SAFETY: `field_list` resolved `shape` from `ty`'s own term just above.
-    let element = (unsafe { array_items_any(module, field_list(module, ty)?) })?
-        .get(at)?
-        .node;
-    Some(element_slot_type(module, element))
-}
-
-/// The type node at `path` inside `ty` — a leaf's own type, read at the leaf's own
-/// path.
-///
-/// # Invariant
-/// Every step but the last is resolved against **the field it selected**, so a
-/// path of any depth ends at the leaf's own type rather than at the type one
-/// level above it. `None` is "no type reads this path", never a wrong level's.
-fn type_node_at_path<P>(module: &Module<P>, ty: TypeRef, path: &[usize]) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let mut at_path = ty;
-    for (depth, &at) in path.iter().enumerate() {
-        let node = field_type_at(module, at_path, at)?;
-        if depth + 1 == path.len() {
-            return Some(node);
-        }
-        at_path = parameter_type_ref(module, node)?;
-    }
-    None
+    shape::field_types(module, shape)
 }
 
 /// The class of every scalar leaf of a parallel parameter, in signature order.
@@ -2115,14 +2037,12 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // SAFETY: `cfg_pair` is a live node of `module`.
-    let ty = unsafe { module.array_items(cfg_pair) }
-        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
-        .and_then(|slot| parameter_type_ref(module, slot));
+    let ty = pair_type(module, cfg_pair);
     // A scalar role is a leaf at its own path: `[field]`, or `[in, g, s]`.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
-        ty.and_then(|ty| type_node_at_path(module, ty, path))
-            .map(|leaf| scalar_class_of(&low_type_of_slot(module, leaf)))
+        ty.and_then(|slot| shape::field_type_at(module, slot, path))
+            .and_then(|leaf| low_type_of_slot(module, leaf))
+            .map(|shape| scalar_class_of(&shape))
             .unwrap_or(ScalarClass::Int)
     };
     let classes: Vec<ScalarClass> = roles
@@ -2186,11 +2106,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // SAFETY: `cfg_pair` is a live node of `module`.
-    let Some(items) = (unsafe { module.array_items(cfg_pair) }) else {
-        return Err(RoleUnread::Undecided);
-    };
-    let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
+    let Some(type_slot) = pair_type(module, cfg_pair) else {
         return Err(RoleUnread::Undecided);
     };
     // Undecided is not a mistake: a kernel compiled before its annotation
@@ -2270,10 +2186,10 @@ where
         if is_buf_shape(&names) {
             // **The parameter's `Buf T` states the element class**, not a body node; an
             // open cell states nothing.
-            let element = parameter_type_ref(module, field)
-                .and_then(|ty| field_type(module, ty, 1))
-                .map(|element| low_type_of_slot(module, element))
-                .filter(|shape| shape.is_known())
+            let element = struct_fields_of_slot(module, field)
+                .and_then(|(_, shape)| field_types_of(module, shape))
+                .and_then(|fields| fields.get(1).copied())
+                .and_then(|element| low_type_of_slot(module, element))
                 .map(|shape| scalar_class_of(&shape));
             // The path is the `Buf` field, as the checker resolves it for the
             // source's read; the payload is one step in.
@@ -2314,17 +2230,17 @@ where
             &format!("an output that is a {}", shape_name(&shape)),
         )),
         // The buffer the parameter declares here; see the invariant above.
-        (LeafRole::Input, LowShape::Unknown) => {
+        (LeafRole::Input, None) => {
             roles.inputs.push(path.to_vec());
             roles.input_classes.push(None);
             Ok(())
         }
         // A decided number is a scalar wherever it sits: `In1 = struct{.a Int}`.
-        (_, LowShape::USize | LowShape::Float) => {
+        (_, Some(LowShape::USize | LowShape::Float)) => {
             roles.scalars.push(path.to_vec());
             Ok(())
         }
-        (LeafRole::Scalar, LowShape::Unknown) => {
+        (LeafRole::Scalar, None) => {
             roles.scalars.push(path.to_vec());
             Ok(())
         }
@@ -2333,15 +2249,15 @@ where
 }
 
 /// The name a shape goes by in a refusal, so the refusal says what it met.
-fn shape_name(shape: &LowShape) -> &'static str {
+fn shape_name(shape: &Option<LowShape>) -> &'static str {
     match shape {
-        LowShape::USize => "runtime scalar",
-        LowShape::Float => "runtime float",
-        LowShape::Array(..) => "array",
-        LowShape::Tuple(_) => "tuple",
-        LowShape::Function(..) => "function",
-        LowShape::Table(..) => "table",
-        LowShape::Unknown => "leaf with no stated type",
+        None => "leaf with no stated type",
+        Some(LowShape::USize) => "runtime scalar",
+        Some(LowShape::Float) => "runtime float",
+        Some(LowShape::Array(..)) => "array",
+        Some(LowShape::Tuple(_)) => "tuple",
+        Some(LowShape::Function(..)) => "function",
+        Some(LowShape::Table(..)) => "table",
     }
 }
 
@@ -2449,34 +2365,20 @@ where
     // The parameter's two cells, read once before the pass needs the module.
 
     // SAFETY: `param_pair` is a live node of `module`; nothing here drops a block.
-    let (param_value, param_type) = match unsafe { module.array_items(param_pair) } {
-        Some(items) if !items.is_empty() => (
-            dyn_node(items[PAIR_VALUE_SLOT].node)?,
-            items.get(PAIR_TYPE_SLOT).map(|item| item.node),
-        ),
-        _ => return Err("parameter is not a [value, type] pair".into()),
+    let Some(param_value) = pair_value(module, param_pair) else {
+        return Err("parameter is not a [value, type] pair".into());
     };
+    let param_type = pair_type(module, param_pair);
 
-    // The class comes from the parameter's type alone; without one, `Unknown`,
-    // which the read refuses by name.
-    let seed = match param_type.map(|slot| low_type_of_slot(module, slot)) {
-        Some(shape) if shape.is_known() => shape,
-        _ => LowShape::Unknown,
-    };
-    // Whether the parameter states its domain, read before the seed and pass
-    // write anything.
-    module.seed_class_low_type(param_value, seed);
-    // 2. Pass.
-    module.infer_template_low_types(fid);
-    // 3. Read.
-    let Some(domain) = module.low_type_of_node(param_value) else {
-        return Err(UNDECIDED_DOMAIN.into());
-    };
+    // The domain is a **type read** through the interface, not a class read.
+    let domain = shape::kernel_parameter_domain(module, function);
+    // The body's operand classes are the interface's business, prepared once here.
+    shape::prepare_template_low_types(module, fid);
     // What the parameter's type states — the fact the domain check needs and the
     // decoded shape cannot supply.
     let statement = match param_type {
         Some(slot) if struct_fields_of_slot(module, slot).is_some() => DomainStatement::Struct,
-        Some(slot) if matches!(low_type_of_slot(module, slot), LowShape::Tuple(_)) => {
+        Some(slot) if matches!(low_type_of_slot(module, slot), Some(LowShape::Tuple(_))) => {
             DomainStatement::Shape
         }
         _ => DomainStatement::Absent,
@@ -2645,29 +2547,29 @@ where
     };
     // A named struct parameter carries the roles; the older tuple `cfg` does not.
 
-    // The role table is decoded from the parameter's type: `low_type_of`
-    // answers `Unknown` for every struct by design.
+    // The role table is decoded from the parameter's type, whose shape the low
+    // vocabulary reads as a tuple of its fields.
     let roles = parallel_roles(module, cfg_pair)?;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
     // The slot is seeded with the ABI's signature: the parameter's leaves then
     // the index, each leaf classed by its field.
-    let cfg_value = pair_value_half(module, cfg_pair)
+    let cfg_value = pair_value(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
-    // Each scalar leaf's class is the parameter field's, not an all-`Int` seed.
+    // Each scalar leaf's class is the parameter field's.
     let scalar_classes = scalar_leaf_classes(module, cfg_pair, &roles)?;
-    module.seed_class_low_type(
-        cfg_value,
-        LowShape::Tuple(scalar_classes.iter().copied().map(low_shape_of).collect()),
+    // The body's operand classes are the interface's business.
+    shape::prepare_template_low_types(module, fid);
+    // The domain is the **flattened scalar leaves**, not the struct's low shape
+    // (`docs/notes/lowlevel-low-types.md`).
+    let cfg_shape = LowShape::Tuple(
+        scalar_classes
+            .iter()
+            .copied()
+            .map(|class| Some(low_shape_of(class)))
+            .collect(),
     );
-    seed_template_term_low_types(module, fid);
-    module.infer_template_low_types(fid);
-    let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
-        return Err(UNDECIDED_DOMAIN.into());
-    };
-    // The parameter is the declared named struct: a leaf with no class is
-    // refused by name.
-    let cfg_shape = kernel_domain(cfg_shape, DomainStatement::Shape)?;
+    let cfg_shape = kernel_domain(Some(cfg_shape), DomainStatement::Shape)?;
     let params = vec![ParamSlot {
         pair: cfg_pair,
         value: cfg_value,
@@ -2788,43 +2690,6 @@ where
     })
 }
 
-/// Seed every class a template's own terms decide, from the type cell each term
-/// carries.
-///
-/// # Invariant
-/// A template is never evaluated, so nothing in the body is observed — but the
-/// checker wrote the decision into every term's type cell, and without this seed
-/// the whole body reads `Unknown` and every class falls back to `Int`. Both reads
-/// of a term are seeded, a cell nothing decides stays undecided, and a
-/// disagreement degrades to `Unknown`.
-fn seed_template_term_low_types<P>(module: &mut Module<P>, function: FunctionId)
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    for node in module.functions[function].nodes.clone() {
-        // A term is the node's value: the checker's `[value, type, attrs…]` array.
-
-        // SAFETY: `node` is a live node of `module`; nothing here drops a block.
-        let Some(items) = (unsafe { module.array_items(node) }) else {
-            continue;
-        };
-        if items.len() < PAIR_ATTR_BASE {
-            continue;
-        }
-        let shape = low_type_of_slot(module, items[PAIR_TYPE_SLOT].node);
-        if !shape.is_known() {
-            continue;
-        }
-        let Ok(value) = dyn_node(items[PAIR_VALUE_SLOT].node) else {
-            continue;
-        };
-        module.seed_class_low_type(value, shape.clone());
-        module.seed_class_low_type(node, LowShape::Tuple(vec![shape, LowShape::Unknown]));
-    }
-}
-
 /// The `compute.write` node a position reaches, if it reaches one.
 ///
 /// # Invariant
@@ -2841,7 +2706,7 @@ where
 {
     let mut node = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value_half(module, node))
+            .or_else(|| pair_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -2998,10 +2863,14 @@ const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when
 compiled: a kernel is lowered for one class, so the function must state it — annotate the \
 parameter (for example `p : tuple{Int, Int}` for a tuple domain, or `y : Int` for a scalar one)";
 
+/// Why a **polymorphic template** cannot be jitted:
+/// a template's parameter has no domain before an apply binds it.
+const POLYMORPHIC_TEMPLATE: &str = "a polymorphic template cannot be jitted: the kernel parameter's domain is not decided when the kernel is compiled, and a template's parameter has no domain before an apply binds it — annotate the parameter (for example `k : Par` for a named struct, or `p : tuple{Int, Int}` for a tuple)";
+
 /// The other facts [`UNDECIDED_DOMAIN`] used to cover.
 ///
 /// # Invariant
-/// A struct's low shape is `Unknown` by design, so the old single refusal told an
+/// A struct reads as a tuple now, so the old single refusal would have told an
 /// author to annotate a parameter that already is annotated.
 const DOMAIN_IS_A_STRUCT: &str = "the kernel parameter's domain is a struct type, and a kernel \
 domain must be a scalar or a tuple of scalars (a nominal struct type has no low shape at all)";
@@ -3034,11 +2903,11 @@ enum DomainStatement {
 /// A kernel domain must be a decided scalar or a tuple of decided positions —
 /// every other shape is a refusal that names its own cause. A float is a decided
 /// position and is accepted at every position the walk reaches.
-fn kernel_domain(domain: LowShape, statement: DomainStatement) -> Result<LowShape, String> {
+fn kernel_domain(domain: Option<LowShape>, statement: DomainStatement) -> Result<LowShape, String> {
     if !domain_is_known(&domain) {
         return Err(match statement {
             DomainStatement::Struct => DOMAIN_IS_A_STRUCT.into(),
-            DomainStatement::Shape => match first_unreadable_position(&domain) {
+            DomainStatement::Shape => match domain.as_ref().and_then(first_unreadable_position) {
                 Some(position) => format!(
                     "the kernel parameter's domain has a position with no class: position {} of \
                      it is not a class this lowering can read, and a kernel domain must be a \
@@ -3054,23 +2923,28 @@ fn kernel_domain(domain: LowShape, statement: DomainStatement) -> Result<LowShap
             DomainStatement::Absent => UNDECIDED_DOMAIN.into(),
         });
     }
-    match &domain {
-        LowShape::USize | LowShape::Float | LowShape::Tuple(_) => Ok(domain),
-        _ => Err("kernel domain must be a scalar or a tuple of scalars".into()),
+    match domain {
+        Some(domain @ (LowShape::USize | LowShape::Float | LowShape::Tuple(_))) => Ok(domain),
+        Some(_) => Err("kernel domain must be a scalar or a tuple of scalars".into()),
+        // `domain_is_known` above refuses a `None` first.
+        None => Err(DOMAIN_STATED.into()),
     }
 }
 
 /// The first position of a tuple domain the lowering cannot read, as a path.
 ///
 /// # Invariant
-/// `None` when there is no position to name (a domain that is `Unknown`, or a
-/// non-tuple structure); nested only where the domain nests.
+/// `None` when there is no position to name (a domain that is not a tuple);
+/// nested only where the domain nests.
 fn first_unreadable_position(domain: &LowShape) -> Option<Vec<usize>> {
     let LowShape::Tuple(items) = domain else {
         return None;
     };
     items.iter().enumerate().find_map(|(at, item)| {
-        if domain_is_known(item) {
+        let Some(item) = item else {
+            return Some(vec![at]);
+        };
+        if known_shape(item) {
             return None;
         }
         Some(match first_unreadable_position(item) {
@@ -3093,26 +2967,43 @@ fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {
         LowShape::USize => KernelShape::Scalar(ScalarClass::Int),
         LowShape::Float => KernelShape::Scalar(ScalarClass::Float),
-        LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
-        LowShape::Array(element, _) => KernelShape::Scalar(scalar_class_of(element)),
-        // A function, a table or an unknown leaf has no scalar element: the
-        // filler's integer local is the answer.
-        LowShape::Function(..) | LowShape::Table(..) | LowShape::Unknown => {
-            KernelShape::Scalar(ScalarClass::Int)
-        }
+        LowShape::Tuple(items) => KernelShape::Tuple(
+            items
+                .iter()
+                .map(|item| {
+                    item.as_ref()
+                        .map_or(KernelShape::Scalar(ScalarClass::Int), kernel_shape)
+                })
+                .collect(),
+        ),
+        LowShape::Array(element, _) => KernelShape::Scalar(
+            element
+                .as_ref()
+                .as_ref()
+                .map_or(ScalarClass::Int, scalar_class_of_shape),
+        ),
+        // A function and a table have no scalar element: the filler's integer
+        // local is the answer.
+        LowShape::Function(..) | LowShape::Table(..) => KernelShape::Scalar(ScalarClass::Int),
     }
+}
+
+/// [`scalar_class_of`] on a position the walk has not unwrapped.
+fn scalar_class_of_shape(shape: &LowShape) -> ScalarClass {
+    scalar_class_of(shape)
 }
 
 /// The class a single local takes for a position of `shape`.
 fn scalar_class_of(shape: &LowShape) -> ScalarClass {
     match shape {
         LowShape::Float => ScalarClass::Float,
-        LowShape::Array(element, _) => scalar_class_of(element),
-        LowShape::USize
-        | LowShape::Tuple(_)
-        | LowShape::Function(..)
-        | LowShape::Table(..)
-        | LowShape::Unknown => ScalarClass::Int,
+        LowShape::Array(element, _) => element
+            .as_ref()
+            .as_ref()
+            .map_or(ScalarClass::Int, scalar_class_of_shape),
+        LowShape::USize | LowShape::Tuple(_) | LowShape::Function(..) | LowShape::Table(..) => {
+            ScalarClass::Int
+        }
     }
 }
 
@@ -3132,13 +3023,17 @@ fn low_shape_of(class: ScalarClass) -> LowShape {
 /// Whether every position in a shape is one the kernel ABI can lower to a local.
 ///
 /// # Invariant
-/// It recurses through every position, because asking a compound shape's own
-/// `is_known` answers `true` for `Array(Float, _)`. A function's codomain and a
-/// table's value are walked too, since a declared `Int -> Float` puts a float in
-/// exactly that position.
-fn domain_is_known(shape: &LowShape) -> bool {
+/// It recurses through every position, because a compound shape's own
+/// `Some` says nothing about its elements. A function's codomain and a table's
+/// value are walked too, since a declared `Int -> Float` puts a float in exactly
+/// that position.
+fn domain_is_known(shape: &Option<LowShape>) -> bool {
+    shape.as_ref().is_some_and(known_shape)
+}
+
+/// [`domain_is_known`] on a shape the walk already unwrapped.
+fn known_shape(shape: &LowShape) -> bool {
     match shape {
-        LowShape::Unknown => false,
         LowShape::USize | LowShape::Float => true,
         LowShape::Tuple(items) => items.iter().all(domain_is_known),
         LowShape::Array(element, _) => domain_is_known(element),
@@ -3161,24 +3056,15 @@ fn flat_arity(shape: &LowShape) -> usize {
         LowShape::USize => 1,
         // One leaf — the layout answer, consistent with `kernel_shape`.
         LowShape::Float => 1,
-        LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
+        LowShape::Tuple(items) => items.iter().map(flat_arity_slot).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
-        LowShape::Unknown => 1,
     }
 }
 
-/// The disjoint-set representative of `node`, walked without path compression.
-fn equality_rep<P>(module: &Module<P>, node: NodeId) -> NodeId
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let mut root = node;
-    while let Some(parent) = module.node_equality(root).parent() {
-        root = parent;
-    }
-    root
+/// [`flat_arity`] of a position nothing states: it still occupies one local, so
+/// the ABI's count is fixed.
+fn flat_arity_slot(shape: &Option<LowShape>) -> usize {
+    shape.as_ref().map_or(1, flat_arity)
 }
 
 /// How deep a parameter's field nesting a named read's resolution follows.
@@ -3697,7 +3583,11 @@ where
     // equality class is a whole-parameter read.
     if module.node_operation(dynamic).is_none() {
         for slot in params {
-            if equality_rep(module, dynamic) == equality_rep(module, slot.value) {
+            if shape::is_same_value(
+                module,
+                AnyNodeId::Dynamic(dynamic),
+                AnyNodeId::Dynamic(slot.value),
+            ) {
                 return scalar_class_of(&slot.shape);
             }
         }
@@ -3744,7 +3634,7 @@ fn class_at(shape: &LowShape, index: usize) -> ScalarClass {
         return scalar_class_of(shape);
     };
     let mut remaining = index;
-    for item in items {
+    for item in items.iter().flatten() {
         let arity = flat_arity(item);
         if remaining < arity {
             return class_at(item, remaining);
@@ -3764,7 +3654,7 @@ fn class_at(shape: &LowShape, index: usize) -> ScalarClass {
 fn node_class<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> ScalarClass
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let node = node.into();
@@ -3787,10 +3677,7 @@ where
             _ => {}
         }
     }
-    value
-        .dynamic()
-        .and_then(|node| module.low_type_of_node(node))
-        .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
+    shape::value_low_shape(module, value).map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
 }
 
 /// The node whose value or low type states a term's class.
@@ -3814,7 +3701,7 @@ where
     };
     let mut value = AnyNodeId::Dynamic(
         value_of_node(module, node)
-            .or_else(|| pair_value_half(module, node))
+            .or_else(|| pair_value(module, node))
             .unwrap_or(node),
     );
     for _ in 0..8 {
@@ -4004,8 +3891,11 @@ where
     let Some(tt) = tt.dynamic() else {
         return Ok(None);
     };
-    if equality_rep(module, tt) != equality_rep(module, cfg_value)
-        || usize_value(module, ti) != Some(1)
+    if !shape::is_same_value(
+        module,
+        AnyNodeId::Dynamic(tt),
+        AnyNodeId::Dynamic(cfg_value),
+    ) || usize_value(module, ti) != Some(1)
     {
         return Ok(None);
     }
@@ -4155,7 +4045,7 @@ fn param_value_of<P>(module: &Module<P>, pair: NodeId) -> Result<NodeId, String>
 where
     P: Program,
 {
-    Ok(module.pair_value_half(pair).unwrap_or(pair))
+    Ok(pair_value(module, pair).unwrap_or(pair))
 }
 
 /// The name a struct field read selects: the compile-time constant a named read
@@ -4260,7 +4150,7 @@ where
         if target == AnyNodeId::Dynamic(param_pair) {
             // The pair's value half is the parameter itself, not a field, so the
             // peel contributes no step.
-            match pair_value_half(module, param_pair) {
+            match pair_value(module, param_pair) {
                 Some(value) => {
                     current = value;
                     continue;
@@ -4306,9 +4196,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(type_slot) = (unsafe { module.array_items(param_pair) })
-        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
-    else {
+    let Some(type_slot) = pair_type(module, param_pair) else {
         // A scalar parameter has no field list and a read of it is the value: the
         // empty path.
         return resolve_without_type(steps);
@@ -4316,14 +4204,16 @@ where
     // One level per step, each named by the type the step before it selected.
 
     // A name is looked for in that type's own name table.
-    let mut ty = parameter_type_ref(module, type_slot);
+    let mut ty = Some(type_slot);
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
         let at = match step {
             // A position is its own answer, so it is taken where no type reads.
             IndexStep::Position(position) => *position,
             IndexStep::Named(name) => {
-                let names = ty.and_then(|ty| field_names(module, ty));
+                let names = ty
+                    .and_then(|slot| shape::struct_fields(module, slot))
+                    .map(|(names, _)| names);
                 match names
                     .as_ref()
                     .and_then(|names| names.iter().position(|field| *field == Some(*name)))
@@ -4339,9 +4229,7 @@ where
             }
         };
         path.push(at);
-        ty = ty
-            .and_then(|ty| field_type_at(module, ty, at))
-            .and_then(|node| parameter_type_ref(module, node));
+        ty = ty.and_then(|slot| shape::field_type_at(module, slot, &[at]));
     }
     Ok(Some(path))
 }
@@ -4491,17 +4379,6 @@ where
 /// The checker stores some argument values as such pairs, where [`value_of_node`]
 /// handles the `Index(pair, 0)` form; the JIT must look through to the value before
 /// emitting.
-fn pair_value_half<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    // SAFETY: `node` is a live node of `module`.
-    let items = unsafe { module.array_items(node) }?;
-    dyn_node(items.first()?.node).ok()
-}
-
 /// Flatten a parameter index `path` to a wasm local index, using the domain
 /// `shape`.
 fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
@@ -4513,10 +4390,10 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
                 if i >= items.len() {
                     return Err(format!("parameter index {i} out of bounds"));
                 }
-                for item in &items[..i] {
+                for item in items[..i].iter().flatten() {
                     offset += flat_arity(item);
                 }
-                cur = &items[i];
+                cur = items[i].as_ref().unwrap_or(domain);
             }
             LowShape::USize => {
                 // Descending into a scalar is a type error the checker should have
@@ -5493,12 +5370,23 @@ where
                 ));
                 return None;
             }
-            // A "not yet", and only that: the flat tuple below is the honest reading.
-            Err(RoleUnread::Undecided) => {}
+            // A type that states no domain is a polymorphic template: refuse it.
+            Err(RoleUnread::Undecided) => {
+                if shape::kernel_parameter_domain(module, function).is_none() {
+                    let at = match function_node {
+                        AnyNodeId::Dynamic(node) => Some(node),
+                        AnyNodeId::Static(_) => None,
+                    };
+                    module.record_extension_diagnostic(ExtensionDiagnostic::failure(
+                        GRAPH_DIAGNOSTIC,
+                        at,
+                        POLYMORPHIC_TEMPLATE.to_string(),
+                    ));
+                    return None;
+                }
+            }
         }
-        // SAFETY: `parameter` is a live node of `module`.
-        parameter_slot = unsafe { module.array_items(parameter) }
-            .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node));
+        parameter_slot = pair_type(module, parameter);
     }
     // The ceiling a positional body's tuple is built at, and the number the
     // undecided-apply refusal names.
