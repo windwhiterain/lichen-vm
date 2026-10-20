@@ -558,3 +558,12 @@ with a temporary print and reverted:
 
 `compute::jit_*` is 30/40 overall (all non-graph tests pass); the remaining ten are
 this walk.
+
+**Two more negatives (round five, same ten).** Disabling `materialize_static_return_apply`
+— the applied-pair clone the certificate work added — leaves the ten red, so the clone is
+not their cause. A whole-module scan for the write call (every block, every apply, the
+argument's type through `struct_fields`) also finds nothing: the argument's type cell does
+not resolve to field names at check time (`names=None` for every apply that is not a
+`.I/.O` struct), so the write's struct is not identifiable that way. The frozen write
+body's reachable graph has **no operators at all** (`op=None` at every node), so the write
+is not recoverable from the artifact's nodes either.
