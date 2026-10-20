@@ -42,6 +42,17 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The graph block's root is narrowed, not fixed.** Probes on a `compute.graph` body with
+two `plrun`s: the body's apply decides to a real `Buf`, `returned_value_ids` misses it,
+and **no refusal is recorded** — and `ComputeOperator::ParLaunch`'s `run` arm never
+executes (a print there never fires), neither inside nor outside the recording window.
+So the launches are executed (or already decided) without the operator path the recorder
+intercepts: the two suspects are the checker's forced evaluation deciding the body's
+nodes before the graph build, and the fuse pass rewriting the launches. The leaf-fix
+patch below is unrelated to this family (the graph tests fail with and without it).
+That family is 9 `graph_jit` + 10 `fuse_licence` + the fused-region tests, so it is the
+next keystone.
+
 **The cfg leaf walk is the next compute seam** (measured, not landed). `value_at_path`
 (job of the role walk in `compute.rs`) takes the element node where the value is: since
 the compound encoding, `items_of` over a compound returns **slots**, so a scalar leaf
