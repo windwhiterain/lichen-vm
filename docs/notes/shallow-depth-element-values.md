@@ -440,3 +440,28 @@ longer:** whether the held test should be strengthened, and whether the depth fo
 element shape should change. The first was the user's decision and is taken (§4); the
 second was declined, because §4 measures that changing it would break
 `an_at_shallow_depth_marks_value_slots_shallow`.
+
+## 9. The slot encoding's reading of the two held tests (round eleven)
+
+Measured with temporary prints, then removed; the tree is unchanged by this section.
+
+- **`@shallow(2)`** — `l(1)(0)` fails at check with an **attribute read past a narrow
+  pair**: the checker's `element_pair` builds `Index(element, 2..4)` projections, and
+  the element's runtime value is a two-item array (the tuple's own value), so the read
+  is out of bounds. The projections are built while the element's value is still
+  undecided, which is why a static guard in `element_pair` cannot see it.
+- **`@shallow(1)`** — `step2(1)` reads a non-container: the lazy-region read of
+  `step1(0)` is *not* recognized, so the read takes the normal slot path and yields a
+  scalar; the chain then applies `(1)` to it. The recognition fails at check because
+  the container's value is a clone that states no value, and the template walk
+  (`first_position`/`masked_pair` through `node_origin`) does not yet reach the mask
+  across that clone.
+- The wrapper is now a **full-width slot** (`array_node_masked_slot`), which removes
+  the out-of-bounds class for reads that reach *it*; the two failures above are one
+  level outside it.
+
+**The block-local recursion** (`a_recursive_binding_inside_a_block_recurses`) is a
+separate reading: the conflict is a bare value `3` against a slot *dereference* whose
+value is `2`, at the unify's root. The parameter pairs themselves are fresh per
+instantiation (measured: `282` then `319` for one apply), so the sharing is one level
+in — the dereference node, not the pair.
