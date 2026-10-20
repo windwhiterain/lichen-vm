@@ -42,6 +42,16 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The refusing read's chain, measured.** For `pack_placement`'s reduction, the node the
+conversion refuses reads `Index(Index(Index(parameter, 0), 0), 4)`:
+`Index(parameter, 0)` is the parameter **pair's** value, the next `0` is the state
+**tuple's element 0** (the element *slot*), and the `4` is that slot's **attribute 4** —
+the pair's attribute tail, not a state position. `parameter_value_path` treats the last
+Index on the pair as the peel and returns `[4]`, so an attribute read is validated as
+state element 4 against arity 2. Guarding on the value's layout does not work: at
+conversion time the values are undecided (`None`), so the walk needs the slot/attribute
+split from the **type** side, not the value side. That is the next fix.
+
 **One conversion mismatch is fixed, one measured.** `parameter_value_path`'s two
 "chain ends at the parameter" branches now strip the pair's value position the same way
 (`loop_conversion.rs`), so a state read no longer surfaces as a spurious `[0, …]` prefix
