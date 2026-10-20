@@ -47,9 +47,12 @@ Cargo links a binary per `tests/*.rs` and per `tests/<dir>/main.rs`, and each on
 statically links the whole stack.
 [The note](docs/notes/test-binary-layout.md) is the prose form, with the census.
 
-- **The bound is a test, not a reading**: `cargo test -p lichen-tools --test layout`
-  runs `cargo metadata --no-deps` and fails on any package above one target of kind
-  `test`, naming the crate and the binaries it carries.
+- **The bound is a check, not a reading**: `test-layout-check --config
+  test-layout.toml` reads `cargo metadata --no-deps` and fails on any package
+  above one target of kind `test`, naming the crate and the binaries it carries.
+  The checker is a crate of its own
+  ([test-layout](https://github.com/windwhiterain/test-layout)), installed the
+  way `comments-check` is, and CI runs it.
 - **Run one test with an argument, not with a second file**: libtest's own free
   filter is what selects it (`cargo test -p <crate> --test <name> <module>`,
   `-- --exact <module>::<test>`, `-- --list`). An external binary's names carry no

@@ -36,6 +36,16 @@ jobs:
           comments-check --locked
       - name: Check comment compliance
         run: comments-check --config comments-test.toml
+      # The test layout is `test-layout.toml`, which states the rule and the
+      # number in one place. The checker's revision is pinned for the same
+      # reason the comment checker's is.
+      - name: Install the test layout checker
+        run: >-
+          cargo install --git https://github.com/windwhiterain/test-layout.git
+          --rev b4647906f2571a7c716cbbf4e1b3d534ba81384b
+          test-layout-check --locked
+      - name: Check the test layout
+        run: test-layout-check --config test-layout.toml
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint

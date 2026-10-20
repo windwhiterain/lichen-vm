@@ -1,0 +1,22 @@
+# The test layout this repository is held to.
+#
+# A crate carries at most two test binaries: the lib's own inline one, and one
+# external binary holding every integration area. An area is a module under
+# `tests/<name>/`, never a second top-level file, because Cargo links a binary
+# per `tests/*.rs` and per `tests/<dir>/main.rs` and each one statically links
+# the whole stack the crate depends on.
+#
+# The checker is `test-layout-check`, and the rule and the reason for it are in
+# `docs/notes/test-binary-layout.md`.
+
+[layout]
+# The external test binaries one crate may carry.
+max_external_test_binaries = 1
+
+# Paths this rule does not govern, as `/`-separated patterns where `*` stays
+# inside a path segment and `**` crosses one.
+#
+# `lichen-language-zed/grammars/lichen` is a nested clone of this repository
+# with its own `.git`: its crates carry this project's names, so the exemption
+# has to be by place and not by name.
+exempt = ["lichen-language-zed/grammars/lichen/**"]

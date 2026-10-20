@@ -170,7 +170,7 @@ authority, and this table only names the state.
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the live open queue and the design decisions |
 | [Serving Qwen3-1.7B through an OpenAI surface](../crates/lichen-serve/README.md) | `crates/lichen-serve` (`qwen.rs`, `bin/qwen-serve.rs`) | current — how to build it, what it answers, and what it has not got; the measurements behind it are in [qwen-inference](notes/qwen-inference.md) |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule enforced in CI by `comments-check` |
-| [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current — the lib binary and one external binary, the `#[path]` root that names its modules, and the argument that selects a single test |
+| [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current — the lib binary and one external binary, the `#[path]` root that names its modules, and the argument that selects a single test; the bound is enforced in CI by `test-layout-check` |
 
 ## The book
 

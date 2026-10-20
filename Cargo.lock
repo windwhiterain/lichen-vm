@@ -1295,7 +1295,6 @@ version = "0.1.0"
 dependencies = [
  "lichen-compute",
  "lichen-language",
- "serde_json",
 ]
 
 [[package]]

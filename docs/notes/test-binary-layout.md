@@ -115,15 +115,22 @@ Every package must report **one** target of kind `test` (the external binary) af
 its lib. A crate with no integration area reports none, which is also allowed: zero
 external and one inline is under the bound, not over it.
 
-**The bound is a test, not a reading.** `lichen-tools`' `layout` test runs the census
-and fails on any package above one external binary, naming the crate and the binaries
+**The bound is a check, not a reading.** `test-layout-check` runs the census and
+fails on any package above one external binary, naming the crate and the binaries
 it carries:
 
 ```
-cargo test -p lichen-tools --test layout
+test-layout-check --config test-layout.toml
 ```
 
-It reads the census rather than the working tree, so it catches both ways Cargo makes
-a binary — a second `tests/*.rs`, and a `tests/<dir>/main.rs` — because both appear
-as a target of kind `test`.
+The checker is a crate of its own — [test-layout](https://github.com/windwhiterain/test-layout) —
+installed the way `comments-check` is and run by CI, so the rule is enforced
+rather than stated. It reads the census rather than the working tree, so it
+catches both ways Cargo makes a binary — a second `tests/*.rs`, and a
+`tests/<dir>/main.rs` — because both appear as a target of kind `test`.
+
+The policy file `test-layout.toml` states the bound and the exemptions. The
+exemptions are **path patterns, not package names**: a nested checkout of the
+same repository carries this project's crate names, so it is exempt by its place
+and not by its name.
 
