@@ -33,27 +33,20 @@ the encoding's value reads, `assemble_parameter` builds a structure of slots, an
 `place_of_node` walks through type cells. Graph JIT is **1/10** (was 0/10); the whole
 compute suite is **97 passed** (was 81 at `7ac3e639`'s predecessor measurement).
 
-**The reference is definition-time shape data again** (`195600fa`): `5146f747` deleted
-`return_field`/`return_marker` (their static mirrors and artifact fields), and the
-applied-pair design cannot carry the reference for a frozen callee — the clone's return
-pair does hold the reference slot, but its first item is a static ref that cannot be
-rebound per call, so the certificate reads a hole. Measured, the frozen return pair's
-attribute *is* the reference (`StaticFunctionId(28)`), which is why restoring the shape
-works: the marker and the parameter field are recorded on the function (artifact format
-20), the checker's `attribute_reference` analysis fills them, and the call site resolves
-`argument_field` and takes that field's own provided attribute. `a_write_returns_the_
-input_buffer_perspective` is green; compute is **99 passed** (was 97).
+**Both perspective shapes are green now.** `195600fa` restored the definition-time
+record (`return_marker`/`return_field`: the marker and the parameter field a body's
+reference follows), which carries the *field* reference (`write`'s `perspective_of
+x.to`); `02770d31` materializes the frozen return pair through the **signature's** remap,
+so its attribute graph references the parameter clone the type-side check binds and the
+*whole-parameter* reference (`read`'s `perspective_of x`) decides per call site. Measured:
+`perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
+lowlevel 164 (1 ignored), graph JIT 1/10.
 
-Also reverted: `640b2705`'s type-first provided slot. A **type** states the *declared*
-requirement, not the provided value — the read test's lane-varying index proved it: the
-whole-argument combine must keep reading the field expressions.
-
-What stays open is the **whole-parameter reference** (`perspective_of x`, `read`'s
-return): its call site falls back to `provided_slot(argument)`, whose combine walks an
-instantiation's `[type, value]` children and then only the record's value expression, so
-a struct's field perspectives are never met and a lane-varying index stays warp-uniform
-(`a_read_takes_its_perspective_from_the_buffer_and_the_index`). The follow-up is the
-combine's field walk — the same one `provided_slot` needs for any compound argument.
+The isomorphism is not complete yet: with the record path disabled the *write* case stays
+red (the certificate decides nothing — the field read's attribute provider inside the
+materialized clone is still a static node), so the field reference still rides the record
+while the whole-parameter reference rides the materialization. Closing it means making
+that provider decide under the clone — then the record can go.
 
 ## 2. Nothing else
 
