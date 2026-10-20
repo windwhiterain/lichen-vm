@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The loop conversion's refusal still masks the opaque.** Re-tested the alias retry on
+the 117 tree: 114 (−3, the same `plan_staging`/`tiled_reduction` three). With the
+conversion succeeding, `tiled_reduction`'s kernel compilation reaches the **opaque**
+(`a kernel body reached a node with neither a value nor an operation`) — so those three
+were passing only because the conversion refused, and fixing the conversion alone exposes
+the opaque. `defining_member` now prefers a class's **Apply** member (a call defines the
+value it produces; its expanded body is the implementation), measured neutral (117) — the
+write's value class holds no Apply for the pack program.
+
 **Nested tuple domains work (+2).** Two changes make `tuple{tuple{Int, Int}, Int}`
 compile and run: the transfer's `Index` now states the **element slot pair** for a
 compound *value*'s read (the policy `docs/notes/lowlevel-low-types.md` already states —

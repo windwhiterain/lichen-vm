@@ -151,17 +151,27 @@ impl<P: Program> Module<P> {
     /// walk is the class's own member list, not the module's node table.
     pub fn defining_member(&self, node: NodeId) -> Option<NodeId> {
         let root = self.class_root(node);
-        for member in disjoint::members(&self.nodes, root) {
-            if let Some(operation) = self.node_operation(member)
-                && !matches!(
+        let members: Vec<NodeId> = disjoint::members(&self.nodes, root).collect();
+        // A call defines the value it produces; its expanded body is the
+        // implementation (`docs/notes/lowlevel-low-types.md`).
+        if let Some(call) = members.iter().copied().find(|member| {
+            self.node_operation(*member).is_some_and(|operation| {
+                matches!(
+                    AsEnum::<LowOperator>::as_enum(&operation.operator),
+                    Some(LowOperator::Apply)
+                )
+            })
+        }) {
+            return Some(call);
+        }
+        members.into_iter().find(|member| {
+            self.node_operation(*member).is_some_and(|operation| {
+                !matches!(
                     AsEnum::<LowOperator>::as_enum(&operation.operator),
                     Some(LowOperator::Index)
                 )
-            {
-                return Some(member);
-            }
-        }
-        None
+            })
+        })
     }
 
     /// The leaves of `function`'s **parameter domain** — the pair's value
