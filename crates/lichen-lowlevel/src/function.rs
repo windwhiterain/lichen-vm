@@ -74,6 +74,9 @@ struct ApplyCtx<'a> {
     parameter: NodeId,
     /// The parameter pair's value slot: re-minted per call, and never carried into.
     parameter_slot: Option<NodeId>,
+    /// Template keys a minted walk inserted; the enclosing pass drops them with the
+    /// mint, so it groups only its own clones.
+    minted_keys: Option<&'a mut Vec<NodeId>>,
     /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
     /// a closure's fresh id.
     tag: Option<FunctionId>,
@@ -318,6 +321,7 @@ impl<P: Program> Module<P> {
             applied: function,
             parameter,
             parameter_slot,
+            minted_keys: None,
             tag: self.nodes[node].function,
             remap: &mut remap,
             minted: &mut minted,
@@ -494,9 +498,11 @@ impl<P: Program> Module<P> {
             let source = &self.nodes[node];
             (source.value, source.operation, source.evaluated_deep)
         };
-        // A value holding a foreign closure is cloned too. A computation is never
-        // proven: its value may depend on the call.
-        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided) && operation.is_none();
+        // A foreign closure, a computation, or a structure with open slots is not
+        // proven: each may still decide per call.
+        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided)
+            && operation.is_none()
+            && value.is_none_or(|value| !self.answer_elements_are_undecided(value));
         // A scope's content is this call's: sharing it would collect the
         // template.
         let scoped = self.blocks[self.nodes[node].block].parent.is_some();
@@ -529,6 +535,9 @@ impl<P: Program> Module<P> {
             None => ctx.tag,
         };
         ctx.remap.insert(node, clone);
+        if let Some(keys) = ctx.minted_keys.as_deref_mut() {
+            keys.push(node);
+        }
         // The run stamp is whether the operator runs; `evaluated_deep` is the other axis
         // (`apply-clone-ownership.md`).
         let operation = operation.map(|operation| Operation {
@@ -667,6 +676,10 @@ impl<P: Program> Module<P> {
                 let parameter_slot = unsafe { self.array_items_of(AnyNodeId::Dynamic(parameter)) }
                     .and_then(|items| items.first().map(|item| item.node))
                     .and_then(|node| node.dynamic());
+                // The minted template owns its parameter, not the enclosing call's clone.
+                let template_parameter = parameter;
+                let saved_parameter = ctx.remap.remove(&template_parameter);
+                let mut minted_keys = Vec::new();
                 let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
                     target,
@@ -677,6 +690,7 @@ impl<P: Program> Module<P> {
                     applied: function,
                     parameter,
                     parameter_slot,
+                    minted_keys: Some(&mut minted_keys),
                     tag: Some(fresh),
                     remap: ctx.remap,
                     minted,
@@ -686,7 +700,9 @@ impl<P: Program> Module<P> {
                     .map(|&id| self.node_apply(id, &mut inner))
                     .collect();
                 let r#return = self.node_apply(r#return, &mut inner);
-                let parameter = self.node_apply(parameter, &mut inner);
+                let parameter = self.node_apply(template_parameter, &mut inner);
+                // The enclosing pass clones its own parameter when it reaches it.
+                inner.remap.remove(&template_parameter);
                 // A hand-built function (a lowlevel test) may leave
                 // `return_type` unset — clone it only when it names a node.
                 let return_type = if self.nodes.contains_key(return_type) {
@@ -706,6 +722,20 @@ impl<P: Program> Module<P> {
                         });
                     }
                     fresh_asserts.push(instantiated);
+                }
+                drop(inner);
+                // The mint keeps its scope's clones; a capture stays shared with the
+                // enclosing pass so both walks name one outer clone.
+                let scope_members: std::collections::HashSet<NodeId> =
+                    scope.iter().copied().collect();
+                for key in minted_keys {
+                    if scope_members.contains(&key) {
+                        ctx.remap.remove(&key);
+                    }
+                }
+                // The enclosing pass's own parameter clone, when it made one before the mint.
+                if let Some(saved) = saved_parameter {
+                    ctx.remap.insert(template_parameter, saved);
                 }
                 // Nodes cloned into the target are re-stamped to the fresh id, so the fresh template
                 // re-instantiates per call.
