@@ -169,11 +169,6 @@ where
     ) -> (NodeId, NodeId, NodeId) {
         // A lazy region's pair is narrower than a slot: the element is its value.
         let lazy = self.lazy_region(container_value);
-        if std::env::var("DBG_LZ").is_ok() {
-            eprintln!(
-                "DBG lz: value={container_value:?} lazy={lazy} position={position:?} ty={container_ty:?}"
-            );
-        }
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let element = self.op_node(
             self.current_block,
