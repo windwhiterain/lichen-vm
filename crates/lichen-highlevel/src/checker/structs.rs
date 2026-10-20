@@ -54,7 +54,6 @@ where
         let container_value = self.value_of(container);
         // A lazy region's read states no type requirement: its pair is open.
         let lazy = self.lazy_region(container_value);
-
         // The requirement names the container's **kind**, never its type.
         if lazy {
         } else if self.type_is_concrete(container_ty) {
@@ -166,6 +165,16 @@ where
         position.is_some_and(|node| self.masked_pair(node))
     }
 
+    /// The pair a call instantiates: the callee function's template return pair.
+    ///
+    /// # Invariant
+    /// A call's own value is decided at evaluation, which a check may not force; the
+    /// template's return pair is the pair the call instantiates.
+    fn return_pair(&self, node: NodeId) -> Option<NodeId> {
+        let function = self.module.callee_function(node)?;
+        Some(self.module.functions[function].r#return)
+    }
+
     /// The array item a constant read selects: `[v0, v1][k]` is `vk`.
     ///
     /// # Invariant
@@ -189,7 +198,17 @@ where
             .and_then(|node| node.dynamic())?;
         let key = items.get(1)?.node.dynamic()?;
         let position = self.module.usize_value(key)?;
-        let values = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(container)) }?;
+        // The container's array is the node itself, the array a constant read of it
+        // selects, or the pair a call instantiates.
+        let array = match unsafe { self.module.array_items_of(AnyNodeId::Dynamic(container)) } {
+            Some(_) => container,
+            None => match self.selected_item(container) {
+                Some(node) => node,
+                // A call's pair is its function's return pair.
+                None => self.return_pair(container)?,
+            },
+        };
+        let values = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(array)) }?;
         values
             .get(position as usize)
             .map(|item| item.node)
