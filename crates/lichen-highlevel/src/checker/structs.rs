@@ -54,6 +54,7 @@ where
         let container_value = self.value_of(container);
         // A lazy region's read states no type requirement: its pair is open.
         let lazy = self.lazy_region(container_value);
+
         // The requirement names the container's **kind**, never its type.
         if lazy {
         } else if self.type_is_concrete(container_ty) {
@@ -95,19 +96,27 @@ where
     }
 
     /// Whether a node holds a shallow mark's pair: two items, the first lazy.
+    ///
+    /// # Invariant
+    /// A clone states no value at check time, so the walk follows
+    /// [`Module::node_origin`] back to the template that holds the pair.
     fn masked_pair(&self, node: NodeId) -> bool {
-        let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) else {
-            return false;
-        };
-        let Some(value) = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value) else {
-            return false;
-        };
-        // SAFETY: the array is the value of a live node of this module.
-        let LowValue::Array(array) = value else {
-            return false;
-        };
-        let items = unsafe { array.items() };
-        items.len() == 2 && items[0].shallow
+        let mut current = Some(node);
+        while let Some(node) = current {
+            if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) {
+                let Some(value) = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value) else {
+                    return false;
+                };
+                // SAFETY: the array is the value of a live node of this module.
+                let LowValue::Array(array) = value else {
+                    return false;
+                };
+                let items = unsafe { array.items() };
+                return items.len() == 2 && items[0].shallow;
+            }
+            current = self.module.node_origin(node);
+        }
+        false
     }
 
     /// A lazy region's own pair: the read addresses the pair, not a slot's value.
@@ -127,6 +136,7 @@ where
         let Some(operand) = operation.operand else {
             return false;
         };
+
         // SAFETY: a payload of a value of this module; a stale node answers `None`.
         let Some(items) = (unsafe { self.module.array_items_of(AnyNodeId::Dynamic(operand)) })
         else {
@@ -144,6 +154,7 @@ where
         else {
             return false;
         };
+
         slot_items
             .first()
             .map(|item| item.node)

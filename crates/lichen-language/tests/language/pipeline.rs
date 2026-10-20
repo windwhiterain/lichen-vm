@@ -1823,7 +1823,9 @@ fn a_bare_expression_in_a_block_is_a_statement_not_a_field() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2, "the record and the read of its field");
-    let fields = array_ids(module.evaluate_node_deep(ids[0], None).unwrap());
+    // An element is a complete slot: the record is its value position.
+    let record = element_value(&mut module, ids[0]).expect("a decided record");
+    let fields = array_ids(record);
     assert_eq!(fields.len(), 1, "only the binding is a field");
     assert_eq!(
         usize_of_node(&mut module, fields[0]),
