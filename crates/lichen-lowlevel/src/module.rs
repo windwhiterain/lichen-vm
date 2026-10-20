@@ -118,6 +118,15 @@ impl<P: Program> Module<P> {
         id
     }
 
+    /// The id of the layout listing exactly `indices`, when one was registered.
+    ///
+    /// # Invariant
+    /// The empty layout is entry `0`, and an unregistered list answers `None` rather than
+    /// minting an id.
+    pub fn layout_with_indices(&self, indices: &[u32]) -> Option<u32> {
+        self.attribute_layout_ids.get(indices).copied()
+    }
+
     /// The layout registered under `id`, or the empty layout for an id none holds.
     ///
     /// # Invariant

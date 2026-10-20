@@ -21,9 +21,9 @@ use lichen_kernel_ir::{
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, ExtensionDiagnostic, LowOperator,
-    LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release,
-    StaticModule, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic,
+    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
+    Release, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -2816,7 +2816,8 @@ where
     };
     let mut nodes = Vec::with_capacity(items.len());
     for item in items {
-        match dyn_node(item.node) {
+        // An element is a complete slot: the output is its value position.
+        match dyn_node(module.element_value_node(item.node).unwrap_or(item.node)) {
             Ok(node) => nodes.push(node),
             // A static element is not a kernel body: keep it as the single output
             // so the position is named.
@@ -3433,6 +3434,44 @@ where
     ))
 }
 
+/// A compound element's slot: the value, an undecided type, the wildcards.
+///
+/// # Invariant
+/// The read's type comes from the declared compound, and the layout is the
+/// module's full-width one.
+fn element_slot<P>(module: &mut Module<P>, block: BlockId, value: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    // SAFETY: the default attributes are a live array of this module.
+    let width = unsafe { module.default_attributes()?.items() }.len();
+    // The array is `[value, type, attrs…]` wide.
+    let attributes = width.checked_sub(2)?;
+    let indices: Vec<u32> = (0..attributes as u32).collect();
+    let layout = module.layout_with_indices(&indices)?;
+    let mut items = vec![ArrayItem::new(AnyNodeId::Dynamic(value))];
+    items.push(ArrayItem::new(AnyNodeId::Dynamic(
+        module.add_node(block, None, None),
+    )));
+    for _ in 0..attributes {
+        let any = module.add_node(
+            block,
+            None,
+            Some(<P::Value as From<LowValue>>::from(LowValue::Any)),
+        );
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(any)));
+    }
+    let handle = module.alloc_array(&items, block);
+    Some(module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+            ArrayValue::with_layout(handle, layout),
+        ))),
+    ))
+}
+
 /// Assemble one level of a result structure, driven by the result paths.
 ///
 /// # Invariant
@@ -3461,14 +3500,16 @@ where
         let leaf = outputs
             .iter()
             .find(|(path, _)| under(path) && path.len() == depth + 1 && path[depth] == at);
-        let node = match leaf {
-            Some((_, value)) => AnyNodeId::Dynamic(*value),
+        let value = match leaf {
+            Some((_, value)) => *value,
             None => {
                 let mut nested = prefix.to_vec();
                 nested.push(at);
-                AnyNodeId::Dynamic(assemble_result(module, block, outputs, &nested, depth + 1)?)
+                assemble_result(module, block, outputs, &nested, depth + 1)?
             }
         };
+        // An element is a complete slot: its value, an undecided type, the wildcards.
+        let node = AnyNodeId::Dynamic(element_slot(module, block, value)?);
         items.push(ArrayItem::new(node));
     }
     let handle = module.alloc_array(&items, block);
@@ -4915,13 +4956,13 @@ where
         // The single-result form is the bare scalar, exactly what it always was.
         return Some(scalar(first));
     }
-    let items: Vec<ArrayItem> = results
-        .iter()
-        .map(|value| {
-            let node = module.add_node(block, None, Some(scalar(value)));
-            ArrayItem::new(AnyNodeId::Dynamic(node))
-        })
-        .collect();
+    let mut items: Vec<ArrayItem> = Vec::with_capacity(results.len());
+    for value in &results {
+        let node = module.add_node(block, None, Some(scalar(value)));
+        // An element is a complete slot: its value, an undecided type, the wildcards.
+        let slot = element_slot(module, block, node)?;
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(slot)));
+    }
     let handle = module.alloc_array(&items, block);
     Some(<P::Value as From<LowValue>>::from(LowValue::Array(
         handle.into(),
