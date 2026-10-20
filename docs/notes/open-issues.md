@@ -51,6 +51,18 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The alias retry fixes the conversion and flips nothing.** `562` (`Index(parameter, 0)`)
+is joined to the state's value cell `548` by `alias_read` when that read is *evaluated*
+(`evaluate_node_operation` → `alias_read` → `unify`), which is why later runs convert. A
+retry in `function_apply` that joins the peel to the value before re-converting makes the
+apply-time conversion succeed (3 of 5 runs flip to `tuple: true`), and **no test flips:
+compute stays 115, and the same three plan/tiled tests regress (112)**. So the conversion's
+verdict is not what those tests need; with the loop path taken, their runtime answers
+differ. Hypothesis worth testing next: the failed apply-time conversion forces the
+**unroll** path, and that unroll is what inlines the marked body into the caller (the
+write's value reaching the `if`, round 18) — measured only as "the retry changes nothing",
+not yet as "the inlining stops".
+
 **The loop conversion's false refusal is measured, and three repairs were tried.** The
 emitter's first `loop_conversion` runs before the parameter's value cell is unified with
 the pair peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
