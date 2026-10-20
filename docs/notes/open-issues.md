@@ -51,6 +51,20 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The loop conversion's false refusal is measured, and three repairs were tried.** The
+emitter's first `loop_conversion` runs before the parameter's value cell is unified with
+the pair peel `Index(parameter, 0)`: the walk follows the chain to the parameter, finds no
+read, and `state()` refuses a conversion whose later runs (3 of 5) succeed. Three repairs
+were measured against the 115 baseline, and **all three regress the same three tests**
+(`plan_staging::a_declared_plan_stages_the_reduction_and_answers_the_closed_form`,
+`plan_staging::a_plan_the_fragment_refutes_is_refused_by_name`,
+`tiled_reduction::a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop`):
+following the chain to the parameter and popping the pair peel (correct classification,
+112), accepting the positional state when `arity > 1` (112), and both together. Those
+conversions must stay **refused**, so the fix is not the verdict but the unification: the
+state's value cell must be unified with the pair peel *before* the emitter's first
+conversion. The next step is to find which later evaluation performs that unification.
+
 **The parameter's type slot is a type pair, and the domain reader fixed 16.** A type
 expression is encoded as a **term pair** whose value position is its shape and whose type
 position is its kind (`TypeValue(TypeTuple)` …), so `kernel_parameter_domain` decoded the
