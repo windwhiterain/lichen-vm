@@ -155,21 +155,22 @@ impl<P: Program> Module<P> {
     /// whole value, `[k]` element `k` of a tuple.
     ///
     /// # Invariant
-    ///
-    /// Only constant positions are read, collected along the peel chain
-    /// (`s(0)(1)` is `[0, 1]`); a named (`.field`) step ends the match, since
-    /// the field list is the encoding's fact, not the graph's.
+    /// Read from the **value side**: the chain alternates element positions with the
+    /// slot's value position (`0`), so the pair peel and every slot peel are dropped
+    /// and a pair's type or attribute position ends the match rather than naming a
+    /// state element (`docs/notes/compound-element-slots.md`).
     pub fn parameter_value_path(&self, function: FunctionId, node: NodeId) -> Option<Vec<usize>> {
         let parameter = self.functions[function].parameter;
         let value_cell = self.pair_value_half(parameter).unwrap_or(parameter);
         let value_class = self.class_root(value_cell);
-        // A bare reference to the value cell is the whole-value read.
-        if self.class_root(node) == value_class {
-            return Some(Vec::new());
-        }
         let mut path = Vec::new();
         let mut current = node;
         for _ in 0..16 {
+            if self.class_root(current) == value_class {
+                // The chain reached the state's value: what was collected reads
+                // outermost-first.
+                return Self::state_path(path);
+            }
             let operation = self.node_operation(current)?;
             if !matches!(
                 AsEnum::<LowOperator>::as_enum(&operation.operator),
@@ -180,29 +181,32 @@ impl<P: Program> Module<P> {
             let operands = self.operands_of(current).ok()?;
             let (target, selector) = (*operands.first()?, *operands.get(1)?);
             let position = self.usize_value(selector)?;
-            if self.class_root(target) == value_class {
-                // The chain ends at the parameter's value cell. The outermost step
-                // is the slot's value position, not a state position.
-                if path.len() >= 2 && path[0] == 0 {
-                    path.remove(0);
-                }
-                // The pair peel — the chain's root. The path collected so far
-                // is outernmost-first; it reads outermost-first.
-                path.reverse();
-                return Some(path);
-            }
-            if target == parameter && position == 0 {
-                // The pair peel — the chain's root, stripped as the class branch does.
-                if path.len() >= 2 && path[0] == 0 {
-                    path.remove(0);
-                }
-                path.reverse();
-                return Some(path);
-            }
             path.push(position);
             current = target;
         }
         None
+    }
+
+    /// The state positions a collected peel chain names, or [`None`] for a slot's
+    /// type or attribute read.
+    ///
+    /// # Invariant
+    /// The collected positions are outermost-first: an element, then the element
+    /// slot's value position (`0`), then the next element. A non-zero position where
+    /// the slot peel belongs is a type (`1`) or an attribute (`2+`).
+    fn state_path(mut collected: Vec<usize>) -> Option<Vec<usize>> {
+        collected.reverse();
+        let mut path = Vec::with_capacity(collected.len());
+        for (index, position) in collected.into_iter().enumerate() {
+            if index % 2 == 1 {
+                if position != 0 {
+                    return None;
+                }
+            } else {
+                path.push(position);
+            }
+        }
+        Some(path)
     }
 
     /// The function `node` applies, when it is an `Apply` whose callee's
@@ -360,7 +364,8 @@ impl<P: Program> Spine<'_, P> {
             .map_err(|_| LoopRefusal::StateShape)?;
         let (arms, condition) = (operands[0], operands[1]);
         // SAFETY: `arms` is a live node of the module.
-        let arms = unsafe { self.module.array_items(arms) }.ok_or(LoopRefusal::StateShape)?;
+        let arms =
+            unsafe { self.module.array_items(arms) }.ok_or_else(|| LoopRefusal::StateShape)?;
         if arms.len() != 2 {
             return Err(LoopRefusal::StateShape);
         }
@@ -582,15 +587,15 @@ impl<P: Program> Module<P> {
         tuple: &mut bool,
     ) -> Result<(), LoopRefusal> {
         let mut seen = HashSet::new();
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
+        let mut stack = vec![(root, false)];
+        while let Some((node, structural)) = stack.pop() {
             if !seen.insert(node) {
                 continue;
             }
             if let Some(path) = self.parameter_value_path(function, node) {
                 match path.as_slice() {
                     [] => {
-                        if *tuple || arity != 1 {
+                        if !structural && (*tuple || arity != 1) {
                             // The whole tuple as a value cannot be carried
                             // as flat scalars — and the two addressings may
                             // not mix in one loop.
@@ -610,11 +615,17 @@ impl<P: Program> Module<P> {
                 continue;
             }
             if let Ok(operands) = self.operands_of(node) {
-                stack.extend(operands);
+                stack.extend(operands.into_iter().map(|operand| (operand, false)));
             }
+            // A value's own items are its encoding, not a use of the state.
             // SAFETY: `node` is a live node of `self`.
             if let Some(items) = unsafe { self.array_items(node) } {
-                stack.extend(items.iter().filter_map(|item| item.node.dynamic()));
+                stack.extend(
+                    items
+                        .iter()
+                        .filter_map(|item| item.node.dynamic())
+                        .map(|item| (item, true)),
+                );
             }
         }
         Ok(())

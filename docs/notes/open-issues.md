@@ -42,6 +42,16 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The path walk is rewritten, and the blockers moved.** `parameter_value_path` now reads
+the chain from the value side (`state_path`): element positions alternate with the slot's
+value position, so a pair peel and every slot peel are dropped and a pair's type or
+attribute position ends the match. `check_reads` also distinguishes a **use** (an operand)
+from a value's own **items** (the encoding), so a record's value cell is no longer refused
+as a whole-state read. Measured: no test flips, all suites green; the attribute read that
+used to refuse (slot four) is gone, and the refusal site moved to `state()`'s "a
+tuple-valued state never read by element" for a conversion whose element reads are not
+classified — the next thing to identify (it is a different recursion than `fold`'s).
+
 **The refusing read's chain, measured.** For `pack_placement`'s reduction, the node the
 conversion refuses reads `Index(Index(Index(parameter, 0), 0), 4)`:
 `Index(parameter, 0)` is the parameter **pair's** value, the next `0` is the state
