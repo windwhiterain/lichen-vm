@@ -465,3 +465,13 @@ separate reading: the conflict is a bare value `3` against a slot *dereference* 
 value is `2`, at the unify's root. The parameter pairs themselves are fresh per
 instantiation (measured: `282` then `319` for one apply), so the sharing is one level
 in — the dereference node, not the pair.
+
+## 10. The lazy peel's resolution (round sixteen)
+
+The one-depth chain (`f = x => [x, @shallow(1) f (x + 1)]`) is now read as a sequence
+of **constant selections through reads**: `selected_item` resolves `[v0, v1][k]`
+through a container that is itself a read, and a call's pair resolves to the callee's
+template return pair. Measured verdicts, in chain order: `inf(1)` — not a region (a
+plain tuple); `step1(0)` — a region; `step2(1)` — a region; `step3(0)` — **not**, and
+the peel's selected node there is a wrapper *value cell* rather than the wrapper, so
+the mask is one level further out than the peel currently looks.
