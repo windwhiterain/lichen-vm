@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**No apply in the finished module has a wildcard callee, and node ids do not carry
+across runs.** A full scan of every function's `Apply` nodes prints **nothing** whose
+callee operand holds the shared wildcard, and `check_app`'s per-apply probe shows every
+checker-built apply naming a real function. The empty callee is therefore **not** in the
+finished graph as a wildcard: the wildcard exists only in the *template* array from which
+the clone walk mints an empty cell, and the mint's clone is what the apply's operand array
+holds. Also measured: node ids shift between runs (the round-35 id-based backtrace matched
+its own run only), so identification must be structural — the next probe must name the
+template array by its *owner and shape*, not by an id.
+
 **The wildcard mints are the `_` arguments, and the apply's array stays four elements.**
 Probing the clone walk's wildcard mints shows them at index 0/2/3/4 of 5-item `layout 1`
 arrays — **pairs** whose value is the shared wildcard, i.e. the `_` wildcard arguments of
