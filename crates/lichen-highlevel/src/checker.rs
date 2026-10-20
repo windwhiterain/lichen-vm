@@ -190,6 +190,13 @@ where
     type_applies: HashMap<ExprId, NodeId>,
     /// Each bare `@shallow` position's `(type application, result type cell)`.
     shallow_types: Vec<(NodeId, NodeId)>,
+    /// The wrapper nodes this checker builds for `@shallow(n)` elements.
+    ///
+    /// # Invariant
+    /// The set is a construction fact, like [`Self::arrows`]: a reader asks whether a
+    /// node *is* a wrapper without reading a value, so the answer is the same before
+    /// and after the values are decided.
+    shallow_regions: HashSet<NodeId>,
     /// A node a runtime failure references, mapped to its location.
     ///
     /// # Invariant
@@ -556,6 +563,7 @@ where
             apply_edges: HashMap::new(),
             type_applies: HashMap::new(),
             shallow_types: Vec::new(),
+            shallow_regions: HashSet::new(),
             node_edges: HashMap::new(),
             read_site: None,
             user_asserts: HashSet::new(),
@@ -1102,13 +1110,15 @@ where
         ));
         let layout = self.full_width_layout();
         let array = self.module.alloc_array(&items, block);
-        self.alloc_node(
+        let node = self.alloc_node(
             block,
             None,
             Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
                 array, layout,
             )))),
-        )
+        );
+        self.shallow_regions.insert(node);
+        node
     }
 
     pub fn op_node(

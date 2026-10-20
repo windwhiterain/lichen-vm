@@ -122,9 +122,24 @@ where
         // The container's value *is* the region when it is the wrapper; a read's
         // value is the array that read resolves to.
         match self.array_of(value) {
-            Some(array) => self.masked_pair(array),
-            None => self.masked_pair(value),
+            Some(array) => self.is_region(array) || self.masked_pair(array),
+            None => self.is_region(value) || self.masked_pair(value),
         }
+    }
+
+    /// Whether a node is a wrapper this check built, through its origin chain.
+    ///
+    /// # Invariant
+    /// A clone instantiates the template's wrapper, so the origin chain answers for it.
+    fn is_region(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            if self.shallow_regions.contains(&node) {
+                return true;
+            }
+            current = self.module.node_origin(node);
+        }
+        false
     }
 
     /// The array a node's evaluated value *is*.
