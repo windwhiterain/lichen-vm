@@ -169,6 +169,7 @@ authority, and this table only names the state.
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language`, `lichen-lowlevel`, external `whiting-definition` | proposed |
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the live open queue and the design decisions |
 | [Serving Qwen3-1.7B through an OpenAI surface](../crates/lichen-serve/README.md) | `crates/lichen-serve` (`qwen.rs`, `bin/qwen-serve.rs`) | current — how to build it, what it answers, and what it has not got; the measurements behind it are in [qwen-inference](notes/qwen-inference.md) |
+| [Open issues after the slot isomorphism](notes/open-issues.md) | `lichen-lowlevel` (`function.rs`'s clone rule), `lichen-compute` (the recording pass) | current — the slot isomorphism's evidence (highlevel 136/136, language 274/275, lowlevel 164) and the two things left open: the block-local recursion's stale carried value (with the rounds' measurements indexed) and the compute graph block's checker hand-off |
 | [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule enforced in CI by `comments-check` |
 | [One test binary per crate](notes/test-binary-layout.md) | — (all crates) | current — the lib binary and one external binary, the `#[path]` root that names its modules, and the argument that selects a single test; the bound is enforced in CI by `test-layout-check` |
 
