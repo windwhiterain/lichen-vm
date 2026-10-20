@@ -1044,6 +1044,23 @@ where
     }
 
     /// Canonical attribute `canonical` of `node`, through its layout and the default.
+    /// The element slot a read states its attributes with, when it states any.
+    ///
+    /// # Invariant
+    /// A slot whose attribute positions are all the wildcard states nothing, and an
+    /// unstated attribute is the missing slot, not a wildcard pair (`crate::attr`).
+    pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
+        P::Attr::ORDER
+            .iter()
+            .any(|marker| {
+                self.slot_attribute(slot, marker.order_index() as u32)
+                    .and_then(|node| self.module.node_value(node))
+                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+                    .is_none_or(|value| value != LowValue::Any)
+            })
+            .then_some(slot)
+    }
+
     pub(super) fn slot_attribute(&self, node: NodeId, canonical: u32) -> Option<AnyNodeId> {
         // SAFETY: `node` is a live node of this module; its value is the payload.
         let value = self.module.node_value(AnyNodeId::Dynamic(node))?;

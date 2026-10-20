@@ -14,9 +14,11 @@ where
         let mut slots = Vec::new();
         for &el in &elements {
             self.check_expr(el);
-            vals.push(self.value_of(el));
+            // An element is a complete slot: the term is the value pair.
+            vals.push(self.state[el].term.expect("an element is compiled"));
             let ty = self.state[el].ty;
-            slots.push(self.element_slot(None, ty, None));
+            let attrs = self.element_attr_slots(el);
+            slots.push(self.element_slot(None, ty, Some(attrs)));
         }
         // A tuple: `[values, [[slot…], [TupleType, Type]]]`.
         let value = self.array_node(self.current_block, &vals);
@@ -105,7 +107,7 @@ where
     /// The term's tail is in the canonical order, so tail slot `i` sits at
     /// [`shape::attr_slot`]`(i)` of the term and belongs at its marker's
     /// `order_index`.
-    fn element_attr_slots(&mut self, el: ExprId) -> Vec<NodeId> {
+    pub(super) fn element_attr_slots(&mut self, el: ExprId) -> Vec<NodeId> {
         let any = self.any();
         let mut slots = vec![any; P::Attr::ORDER.len()];
         let tail = self.schema_tail(el).to_vec();

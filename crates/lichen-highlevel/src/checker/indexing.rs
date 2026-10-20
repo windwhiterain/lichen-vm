@@ -80,12 +80,9 @@ where
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
+        let (element, value_node, element_ty) =
+            self.slot_read(array_ty, array_value, index_value, None);
+        let _ = (elem_cell, element_ty);
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,
@@ -99,10 +96,13 @@ where
             Some(in_range_ops),
         );
         self.register_assert(in_range, self.loc(e, 0), false, AssertSpelling::Condition);
+        let _ = element_ty;
         let pair = self.pair_of(value_node, elem_cell);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(elem_cell);
+        // The element's attributes are the read's: the slot is the field's own.
+        self.state[e].attr = self.stated_element_slot(element);
         pair
     }
 
@@ -256,7 +256,8 @@ where
         let element_ty = self.fresh_cell();
         for &el in &elements {
             self.check_expr(el);
-            vals.push(self.value_of(el));
+            // An element is a complete slot: the term is the value pair.
+            vals.push(self.state[el].term.expect("an element is compiled"));
             // Found = the element's type, expected = the shared cell: the first
             // binds it, a later one that differs conflicts.
             self.check_unify(
@@ -296,7 +297,8 @@ where
         let element_ty = self.fresh_cell();
         for &member in &members {
             self.check_expr(member);
-            vals.push(self.value_of(member));
+            // An element is a complete slot: the term is the value pair.
+            vals.push(self.state[member].term.expect("a member is compiled"));
             // Found = the member's type, expected = the shared cell: a set is
             // homogeneous, exactly like an array.
             self.check_unify(

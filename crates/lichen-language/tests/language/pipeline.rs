@@ -84,7 +84,7 @@ fn usize_of(value: &LangValue) -> usize {
         LangValue::LowValue(LowValue::Array(slot)) if slot.layout() != 0 => {
             // SAFETY: a slot of a value the module just produced.
             let first = unsafe { slot.items() }.first().map(|item| item.node);
-            panic!("expected a usize value, got a slot with first {first:?}");
+            panic!("expected a usize value, got a slot {value:?} with first {first:?}");
         }
         LangValue::LowValue(LowValue::USize(n)) => *n,
         _ => panic!("expected a usize value, got {value:?}"),

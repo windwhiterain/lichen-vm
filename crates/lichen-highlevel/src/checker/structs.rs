@@ -75,12 +75,14 @@ where
         // The field's position, when the key is a literal: `slot_read` reads
         // the field's type out of the field list.
         let position = self.constant_position(key);
-        let (value_node, ty_node) =
+        let (element, value_node, ty_node) =
             self.slot_read(container_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
+        // The element's attributes are the read's: the slot is the field's own.
+        self.state[e].attr = self.stated_element_slot(element);
         pair
     }
 
@@ -93,13 +95,13 @@ where
     /// see through where an unevaluated `Index` it cannot. A **frozen** field type
     /// is materialized as a leaf of this table, so a frozen field is decided the
     /// same way; an undecided container keeps the lazy form, resolved at the apply.
-    fn slot_read(
+    pub(super) fn slot_read(
         &mut self,
         container_ty: NodeId,
         container_value: NodeId,
         key: NodeId,
         position: Option<usize>,
-    ) -> (NodeId, NodeId) {
+    ) -> (NodeId, NodeId, NodeId) {
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let element = self.op_node(
             self.current_block,
@@ -107,22 +109,13 @@ where
             Some(value_ops),
         );
         self.stamp_read_node(element);
-        // A struct's fields are slots: the value is the slot's first position.
-        let is_struct = shape::is_struct_type_any(
-            &mut self.module,
-            self.type_expr,
-            AnyNodeId::Dynamic(container_ty),
+        // A compound's elements are complete slots: the value is the first position.
+        let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
+        let value_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(value_ops),
         );
-        let value_node = if is_struct {
-            let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
-            self.op_node(
-                self.current_block,
-                P::Operator::from(LowOperator::Index),
-                Some(value_ops),
-            )
-        } else {
-            element
-        };
         self.stamp_read_node(value_node);
         // A field type is a node of this table: a frozen one is materialized as its own leaf.
         let resolved = position
@@ -159,7 +152,7 @@ where
                 )
             }
         };
-        (value_node, ty_node)
+        (element, value_node, ty_node)
     }
 
     /// A **named** type access `X::a` — see `docs/notes/type-access.md`.
@@ -364,11 +357,13 @@ where
         } else {
             ty_source
         };
-        let (value_node, ty_node) = self.slot_read(ty_root, container_value, key, position);
+        let (element, value_node, ty_node) = self.slot_read(ty_root, container_value, key, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
+        // The element's attributes are the read's: the slot is the field's own.
+        self.state[e].attr = self.stated_element_slot(element);
         pair
     }
 
@@ -442,7 +437,9 @@ where
                 continue;
             };
             vals.push(self.state[el].term.expect("a field expression is compiled"));
-            tys.push(self.element_slot(None, Some(self.state[el].ty.unwrap()), None));
+            let ty = self.state[el].ty.unwrap();
+            let attrs = self.element_attr_slots(el);
+            tys.push(self.element_slot(None, Some(ty), Some(attrs)));
             names.push(Some(name));
         }
         let id = self.fresh_nominal_id(e);
