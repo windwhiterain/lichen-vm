@@ -38,9 +38,6 @@ pub enum Mode {
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::{PAIR_ATTR_BASE, for_each_kind_marker, slot_width};
 
-/// The attribute dispatch's depth cap (`docs/notes/attributes.md`).
-const MAX_ATTRIBUTE_DEPTH: usize = 64;
-
 mod annotations;
 mod asserts;
 mod diagnostics;
@@ -1573,74 +1570,6 @@ where
             .expect("unresolved parameter (frontend bug)")
     }
 
-    /// Dispatch every attribute slot either side states to its own `unify_slots`
-    /// (`docs/notes/attributes.md`).
-    fn dispatch_attribute_slots(&mut self, a: NodeId, b: NodeId, loc: &Loc, depth: usize) {
-        if depth >= MAX_ATTRIBUTE_DEPTH {
-            return;
-        }
-        let Some(LowValue::Array(array_a)) = self
-            .module
-            .node_value(AnyNodeId::Dynamic(a))
-            .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
-        else {
-            return;
-        };
-        let Some(LowValue::Array(array_b)) = self
-            .module
-            .node_value(AnyNodeId::Dynamic(b))
-            .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
-        else {
-            return;
-        };
-        let stated_a = self.stated_attributes(a);
-        let stated_b = self.stated_attributes(b);
-        let mut seen: Vec<P::Attr> = Vec::new();
-        for (attribute, slot_a) in &stated_a {
-            if seen.contains(attribute) {
-                continue;
-            }
-            seen.push(*attribute);
-            let Some(ext) = self.attribute_extension(attribute) else {
-                continue;
-            };
-            let found = match stated_b.iter().find(|(other, _)| other == attribute) {
-                Some((_, slot_b)) => *slot_b,
-                None => self.missing_slot_of(attribute, loc.clone()),
-            };
-            ext.unify_slots(self, *slot_a, found, loc.clone());
-        }
-        for (attribute, slot_b) in &stated_b {
-            if seen.contains(attribute) {
-                continue;
-            }
-            seen.push(*attribute);
-            let Some(ext) = self.attribute_extension(attribute) else {
-                continue;
-            };
-            let found = self.missing_slot_of(attribute, loc.clone());
-            ext.unify_slots(self, found, *slot_b, loc.clone());
-        }
-        // SAFETY: both payloads are values of this module, alive for this borrow.
-        let (items_a, items_b) = (unsafe { array_a.items() }, unsafe { array_b.items() });
-        let attributes = PAIR_ATTR_BASE;
-        for (left, right) in
-            items_a
-                .iter()
-                .zip(items_b.iter())
-                .enumerate()
-                .filter_map(|(index, (left, right))| {
-                    let pair = array_a.layout() != 0 && index >= attributes;
-                    match (pair, left.node.dynamic(), right.node.dynamic()) {
-                        (false, Some(left), Some(right)) => Some((left, right)),
-                        _ => None,
-                    }
-                })
-        {
-            self.dispatch_attribute_slots(left, right, loc, depth + 1);
-        }
-    }
-
     /// The attributes a pair states, one node per canonical slot.
     fn stated_attributes(&self, pair: NodeId) -> Vec<(P::Attr, NodeId)> {
         let Some(LowValue::Array(array)) = self
@@ -1734,8 +1663,6 @@ where
     for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
-        // A pair's attribute slots are checked by their attributes, not structurally.
-        self.dispatch_attribute_slots(a, b, &loc, 0);
         // The seam's contract is the check itself.
         Checker::check_unify(self, a, b, loc, kind);
     }
@@ -1748,7 +1675,6 @@ where
         kind: DiagKind,
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
-        self.dispatch_attribute_slots(a, b, &loc, 0);
         Checker::check_unify_relaxed(self, a, b, loc, kind, is_subtype);
     }
 

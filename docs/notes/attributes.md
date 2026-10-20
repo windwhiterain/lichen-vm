@@ -171,13 +171,15 @@ a call site copies the decided certificate onto the call (`Checker::check_app`,
 `Module::materialize_static_return_certificate`). So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
 
-**Attribute slots are never structural.** The superior's verdict: if an attribute is
-right in the type slot it must be right in *any* attribute slot, so no pair's unify
-compares or binds its attribute positions — the lowlevel pair unify skips them, and the
-checker dispatches every stated attribute slot of either side to that attribute's own
-`AttrExt::unify_slots` (`Checker::dispatch_attribute_slots`): one mechanism for a type
-field's `# n`, a parameter's requirement and a return's certificate alike. A wildcard
-states nothing and is never dispatched.
+**An attribute slot is unified like any other slot.** The superior's verdict: if an
+attribute is right in the type slot it is right in *any* attribute slot, so a pair's
+unify descends the attribute positions exactly as it descends the type slot — no skip,
+no second dispatch. What differs is the *rule* at that position: a type must be equal,
+an attribute is a refinement, so the call's requirement is checked by the attribute's
+own `AttrExt::unify_slots` — and its failure is suppressed when the attribute's
+`is_subtype` holds (the highlevel filtering a lowlevel unify error). One mechanism for
+a type field's `# n`, a parameter's requirement and a return's certificate alike; a
+wildcard states nothing.
 
 Two readings changed with it, and both are the same statement — **a type is not a
 uniformity requirement**:

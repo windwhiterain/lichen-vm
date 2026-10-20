@@ -690,8 +690,18 @@ impl<P: Program> Module<P> {
                 return false;
             }
         }
-        // Attribute positions are not structural (`docs/notes/attributes.md`).
-        let _ = (canonicals, array_attribute_slot);
+        for canonical in canonicals {
+            let Some(na) = array_attribute_slot(left, &layout_a, canonical) else {
+                continue;
+            };
+            let Some(nb) = array_attribute_slot(right, &layout_b, canonical) else {
+                continue;
+            };
+            descend(self, PAIR_ATTR_BASE + canonical as usize, na, nb, &mut ok);
+            if !ok {
+                return false;
+            }
+        }
         ok
     }
 
