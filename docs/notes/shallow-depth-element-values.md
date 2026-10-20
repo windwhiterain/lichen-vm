@@ -576,3 +576,21 @@ So the levels are not independent: the walk hands an earlier instantiation's clo
 the next instantiation. The next measurement is *who references `252` in the template
 graph* — the walk's source, which decides whether the fix belongs in the clone rule's
 reference-in-place decision or in what the block's record field holds.
+
+## 18. The mint shares the enclosing instantiation's remap (round twenty-four, after 查)
+
+Measured with temporary prints, then removed. The closure mint walk
+(`value_apply`'s function arm) reuses the enclosing pass's `remap`, so:
+
+- when the block's `g` value is cloned during a call of `g`, the *minted* closure's
+  template parameter is **the same clone node** as the enclosing instantiation's
+  parameter pair (`template_parameter 257 → cloned 442` for both);
+- that node is then bound by the enclosing call (measured: a `DBG u440` unify from
+  `apply_parameter_check`, `440` against a class holding `USize(3)`);
+- the next mint clones the bound node and carries `3` into the fresh template, where
+  the inner level's argument (`2`) meets it.
+
+So the fix belongs at the mint: a minted closure's parameter must be **its own clone**
+in its own template image, not the enclosing call's bound clone. The remap is shared so
+captures rewrite to the fresh clones; the parameter is the one node that must not be
+shared.
