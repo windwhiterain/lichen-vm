@@ -189,6 +189,8 @@ impl<P: Program> Module<P> {
         // The clone's return pair: the applied call's own pair, which states the
         // attribute as the source return does.
         self.applied_pairs.insert(node, applied);
+        let parameter = instantiation.node_of(self.functions[function].parameter);
+        self.applied_parameters.insert(node, parameter);
         // Only a clone whose pair is absent is evaluated; forcing one that answers costs an
         // apply the deep budget counts.
         if self.pair_type_item(applied).is_none() {
@@ -246,7 +248,7 @@ impl<P: Program> Module<P> {
             AnyFunctionId::Static(function) => {
                 // Nothing reports here, but the applied return graph still records the
                 // call's own attribute state.
-                self.materialize_static_return_apply(function, argument, block, node);
+                self.materialize_static_return_apply(function, block, node);
                 false
             }
         }

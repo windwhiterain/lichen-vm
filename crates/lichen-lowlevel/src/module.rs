@@ -65,6 +65,7 @@ impl<P: Program> Module<P> {
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
             applied_pairs: HashMap::new(),
+            applied_parameters: HashMap::new(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),

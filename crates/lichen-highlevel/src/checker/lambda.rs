@@ -276,6 +276,49 @@ where
         (pair, func_node)
     }
 
+    /// The argument's field a computed certificate names: an `Index` of the bound
+    /// parameter clone carries the field position.
+    fn certificate_field(
+        &mut self,
+        certificate: NodeId,
+        parameter_clone: NodeId,
+        argument: ExprId,
+    ) -> Option<ExprId> {
+        let operation = self.module.node_operation(certificate)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let operand = operation.operand?;
+        // SAFETY: `operand` is a live node of this module.
+        let items = unsafe { self.module.array_items(operand) }?;
+        let container = items.first()?.node.dynamic()?;
+        // The clone's index container is the parameter: bound, or still an
+        // undecided clone of it.
+        let parameter_value = unsafe { self.module.array_items(parameter_clone) }
+            .and_then(|items| items.first().map(|item| item.node))
+            .and_then(|node| node.dynamic());
+        let class = self.module.equality_representative(container);
+        let argument_value = self.value_of(argument);
+        let kindred = [Some(parameter_clone), parameter_value, Some(argument_value)]
+            .iter()
+            .flatten()
+            .any(|node| self.module.equality_representative(*node) == class);
+        let undecided =
+            self.node_value(container).is_none() && self.module.node_operation(container).is_none();
+        if !kindred && !undecided {
+            return None;
+        }
+        let position = items.get(1)?.node.dynamic()?;
+        let value = self.module.node_value(AnyNodeId::Dynamic(position))?;
+        let LowValue::USize(position) = AsEnum::<LowValue>::as_enum(&value)? else {
+            return None;
+        };
+        self.argument_field(argument, position)
+    }
+
     /// The argument's field at `position` of its struct type's order, following
     /// the written names when they reorder.
     fn argument_field(&mut self, argument: ExprId, position: usize) -> Option<ExprId> {
@@ -517,9 +560,25 @@ where
                 .flatten()
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
             match decided {
-                // A hole: the result follows the argument, per call.
+                // A hole: the result follows a field the clone's reference names, or
+                // the argument's whole provided slot.
                 None => {
-                    let provided = self.provided_slot(argument, &marker, ext);
+                    if std::env::var("DBG_FLD").is_ok() {
+                        eprintln!(
+                            "DBG cert: apply={type_apply:?} parameter={:?} value={value:?}",
+                            self.module.applied_parameters.get(&type_apply).copied()
+                        );
+                    }
+                    let field = self
+                        .module
+                        .applied_parameters
+                        .get(&type_apply)
+                        .copied()
+                        .and_then(|parameter| self.certificate_field(value, parameter, argument));
+                    let provided = match field {
+                        Some(field) => self.provided_slot(field, &marker, ext),
+                        None => self.provided_slot(argument, &marker, ext),
+                    };
                     self.state[e].attr = Some(provided);
                     self.merged_tails.insert(e, vec![marker]);
                 }

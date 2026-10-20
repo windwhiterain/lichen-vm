@@ -948,6 +948,8 @@ pub struct Module<P: Program> {
     pub functions: SlotMap<FunctionId, Function>,
     /// The clone's return pair of each type-side apply, keyed by the apply node.
     pub applied_pairs: HashMap<NodeId, NodeId>,
+    /// The clone's parameter of each type-side apply, keyed by the apply node.
+    pub applied_parameters: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant

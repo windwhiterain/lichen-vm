@@ -613,16 +613,6 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
-                // A value computed from a part of the enclosing parameter is a
-                // **reference**: the call site resolves it.
-                if let Some(field) = self.attribute_reference(pe) {
-                    self.attr_refs.insert(e, (*marker, field));
-                    // The reference's slot is a hole: the call site resolves it.
-                    let cell = self.fresh_cell();
-                    constraint_slot = Some(cell);
-                    slots.push(cell);
-                    continue;
-                }
                 // The slot is the annotation value's `[value, type]` term pair, the
                 // one shape every attribute shares.
                 let slot = self.annotation_value_slot(pe);
