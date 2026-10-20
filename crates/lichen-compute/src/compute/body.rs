@@ -328,10 +328,15 @@ where
                         self.publish_mark(definition, value);
                         value
                     }
-                    // An empty clone is emitted from its template
+                    // A clone of another function's node is that body, not this one's
                     // (`docs/notes/loop-conversion.md`).
                     Define::Opaque => match self.module.node_origin(node) {
-                        Some(origin) if origin != node => self.value(origin)?,
+                        Some(origin)
+                            if origin != node
+                                && self.module.node_function(origin) == Some(self.function) =>
+                        {
+                            self.value(origin)?
+                        }
                         _ => self.opaque(node)?,
                     },
                 },

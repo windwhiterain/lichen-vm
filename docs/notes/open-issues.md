@@ -42,6 +42,16 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The empty clone is a leak across functions, measured.** Followed with a minimal
+`@loop` kernel: the kernel's body walks `VALUE 3712` (an empty clone, owner the kernel,
+origin `665`) into `VALUE 665`, a node of the **marked function's** template, and then
+lowers its `Index(562, 1)` (`s(1)`) with no nest active — the index placement refuses.
+So the checker's undecided evaluation leaves a kernel-body clone whose origin is another
+function's node, and the template walk follows it. Emitting such a clone from its origin
+was wrong (it re-emits the marked function's body unbound); the emitter now honours the
+origin only inside the body's own function and refuses a foreign one by name. The real
+fix is upstream: the checker's evaluation must not leave that clone in the kernel's body.
+
 **The emitter's empty clone is fixed, and the next blocker is measured.** A kernel body
 holds clone nodes the checker's own undecided apply left behind (owner the body function,
 origin a template node, no value and no operation); the emitter refused them as opaque.
