@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The empty callee is a wildcard minted by the clone walk.** A backtrace on the 383rd
+empty node names `node_apply`'s **wildcard branch** inside `value_apply`: the template
+apply's operand array holds a **wildcard** (`Any`) at that position, and the clone walk
+mints a fresh empty cell for it (the invariant: "each reach mints its own undecided cell").
+So the callee the loop body carries is not a materialized static leaf but a wildcard's
+clone — the template's apply has a wildcard where the frozen `compute.read` value should
+be. `materialize_leaf` and `check_app`'s wildcard-callee probe both fire nowhere, so the
+wildcard enters the template operand by another path — that path is the next thing to
+find.
+
 **The empty callee is owned by the marked function and has no origin.** Probed:
 `693`'s owner is the fold, `origin` is `None`, block 3 — a **fresh** node created while
 checking the fold's template, not a clone and not a `materialize_leaf` (those carry the
