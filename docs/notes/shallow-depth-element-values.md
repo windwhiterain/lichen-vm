@@ -640,3 +640,21 @@ captures — the nested function's scope list *holds* the captures (`a`, `b`, `x
 `a_closure_released_from_a_scope_is_still_callable` fail. A capture is therefore not
 distinguishable from the scope's own by the scope list, the function tag, or the block
 chain (all three tried and measured). The next seam is that distinction.
+
+## 21. Why the carry gate cannot be scoped (round twenty-seven)
+
+The gate's failure was traced further:
+
+- The block recursion's instantiation **succeeds** with the gate in place; it is the
+  *result* that comes back empty — the applied body's array elements lose their decided
+  copies, and the root's deep evaluation is undecided (the capture test's `unwrap`).
+- The capture probe shows the nested function's scope list carries **both** node
+  families: the captures as the enclosing function's nodes (`tag = f1`, `in_anchor =
+  true`) **and** decided copies under the nested function's own tag (`tag = f2`,
+  `in_anchor = false`). Suppressing the carry for the latter removes the values the
+  applied body needs, so even the anchor-based exclusion cannot separate "stale
+  recursion value" from "captured fact".
+
+The next distinction must be a *value-level* one — the recursion's stale value is a
+slot's answer produced by a previous *call*, while a capture is a fact the enclosing
+call holds — not a scope/tag/block property.
