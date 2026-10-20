@@ -42,7 +42,7 @@ jobs:
       - name: Install the test layout checker
         run: >-
           cargo install --git https://github.com/windwhiterain/test-layout.git
-          --rev b4647906f2571a7c716cbbf4e1b3d534ba81384b
+          --rev 740a475606eee919f1a88d965a911a85508e571d
           test-layout-check --locked
       - name: Check the test layout
         run: test-layout-check --config test-layout.toml
