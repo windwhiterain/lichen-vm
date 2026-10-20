@@ -163,9 +163,26 @@ where
     unsafe { array.items() }
         .iter()
         .map(|item| match item.node {
-            AnyNodeId::Dynamic(node) => module
-                .node_value(AnyNodeId::Dynamic(node))
-                .expect("an array element has a value"),
+            AnyNodeId::Dynamic(node) => {
+                let value = module
+                    .node_value(AnyNodeId::Dynamic(node))
+                    .expect("an array element has a value");
+                // An element slot is a `[value, type, attrs]` array; its value is
+                // the first position.
+                match AsEnum::<LowValue>::as_enum(&value) {
+                    Some(LowValue::Array(slot)) if slot.layout() != 0 => {
+                        // SAFETY: `slot` is the payload of a value of `module`.
+                        let first = unsafe { slot.items() }.first().map(|item| item.node);
+                        match first {
+                            Some(AnyNodeId::Dynamic(node)) => module
+                                .node_value(AnyNodeId::Dynamic(node))
+                                .expect("an element slot has a value"),
+                            _ => panic!("a slot without a value position"),
+                        }
+                    }
+                    _ => value,
+                }
+            }
             AnyNodeId::Static(_) => panic!("language arrays are dynamic"),
         })
         .collect()

@@ -101,11 +101,29 @@ where
         position: Option<usize>,
     ) -> (NodeId, NodeId) {
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
-        let value_node = self.op_node(
+        let element = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
+        self.stamp_read_node(element);
+        // A struct's fields are slots: the element is the field's
+        // `[value, type, attrs]` pair, so the value is its first position.
+        let is_struct = shape::is_struct_type_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(container_ty),
+        );
+        let value_node = if is_struct {
+            let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
+            self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(value_ops),
+            )
+        } else {
+            element
+        };
         self.stamp_read_node(value_node);
         // A field type is a node of this table: a frozen one is materialized as its own leaf.
         let resolved = position
@@ -424,7 +442,7 @@ where
                 // discarded, so it is not evaluated either.
                 continue;
             };
-            vals.push(self.value_of(el));
+            vals.push(self.state[el].term.expect("a field expression is compiled"));
             tys.push(self.element_slot(None, Some(self.state[el].ty.unwrap()), None));
             names.push(Some(name));
         }
@@ -614,7 +632,14 @@ where
                 .iter()
                 .map(|&a| self.state[a].ty)
                 .collect();
-            (self.value_of(value), value_shape, structural, types)
+            let fields: Vec<NodeId> = self
+                .compound_children(value)
+                .unwrap_or_default()
+                .iter()
+                .map(|&a| self.state[a].term.expect("an argument is compiled"))
+                .collect();
+            let fields = self.array_node(self.current_block, &fields);
+            (fields, value_shape, structural, types)
         };
         if valid {
             let fields_match =
@@ -828,7 +853,10 @@ where
     ) -> NamedInstance {
         // The value's elements are the arguments in call order.
         let elem_ids = self.range_children(value);
-        let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
+        let vals: Vec<NodeId> = elem_ids
+            .iter()
+            .map(|&a| self.state[a].term.expect("an argument is compiled"))
+            .collect();
         let tys: Vec<NodeId> = elem_ids
             .iter()
             .map(|&a| self.state[a].ty.unwrap())
