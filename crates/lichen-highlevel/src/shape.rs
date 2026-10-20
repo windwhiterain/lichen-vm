@@ -964,7 +964,7 @@ where
             elements
                 .iter()
                 .map(|element| {
-                    slot_type(module, element.node).and_then(|ty| low_type_of(module, ty))
+                    slot_type(module, element.node).and_then(|ty| low_type_of_slot(module, ty))
                 })
                 .collect(),
         ));
@@ -984,7 +984,8 @@ where
         // SAFETY: `shape` is a live node of `module`; nothing in this crate
         // calls `Module::drop_block`.
         let halves = (unsafe { array_items(module, shape) })?;
-        let half = |node: AnyNodeId| slot_type(module, node).and_then(|ty| low_type_of(module, ty));
+        let half =
+            |node: AnyNodeId| slot_type(module, node).and_then(|ty| low_type_of_slot(module, ty));
         return Some(LowShape::Table(
             Box::new(half(halves[TABLE_TYPE_KEY_SLOT].node)),
             Box::new(half(halves[TABLE_TYPE_VALUE_SLOT].node)),
@@ -1068,7 +1069,7 @@ where
     // An array's element position is a **slot**, so the element type is its type
     // position.
     let element = slot_type(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node)
-        .and_then(|ty| low_type_of(module, ty));
+        .and_then(|ty| low_type_of_slot(module, ty));
     let LowValue::USize(length) = module
         .node_value(parts[ARRAY_TYPE_LENGTH_SLOT].node)?
         .as_enum()?
