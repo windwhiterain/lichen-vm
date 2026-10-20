@@ -246,6 +246,12 @@ where
         if self.state[argument].attr.is_some() {
             return self.attr_or_missing(argument, marker);
         }
+        // A type states its elements' attributes (`compound-element-slots.md`).
+        if let Some(ty) = self.state[argument].ty
+            && let Some(slots) = self.element_attribute_slots(ty, marker)
+        {
+            return ext.combine(self, &slots);
+        }
         let children = self.persp_combine_children(argument);
         if children.is_empty() {
             return self.attr_or_missing(argument, marker);
@@ -255,6 +261,29 @@ where
             .map(|&child| self.provided_slot(child, marker, ext))
             .collect();
         ext.combine(self, &attrs)
+    }
+
+    /// The attribute slots a compound **type** states, one per element.
+    ///
+    /// # Invariant
+    /// The type's element list is the field list; an element that spells no
+    /// attribute contributes nothing, and an empty answer falls back to the
+    /// value's own components.
+    fn element_attribute_slots(&mut self, ty: NodeId, marker: &P::Attr) -> Option<Vec<NodeId>> {
+        if self.node_value(ty).is_none() {
+            self.module.evaluate_node_deep(ty, None);
+        }
+        let pair = unsafe { self.module.array_items(ty) }?;
+        let shape = pair.first()?.node.dynamic()?;
+        let fields = unsafe { self.module.array_items(shape) }?;
+        let index = marker.order_index() as u32;
+        let attrs: Vec<NodeId> = fields
+            .iter()
+            .filter_map(|item| item.node.dynamic())
+            .filter_map(|slot| self.slot_attribute(slot, index))
+            .filter_map(|node| node.dynamic())
+            .collect();
+        (!attrs.is_empty()).then_some(attrs)
     }
 
     /// The provided slot against a declared value: one attribute requirement,
