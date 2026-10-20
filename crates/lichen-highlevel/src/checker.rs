@@ -1056,17 +1056,25 @@ where
         self.module.array_attribute(&value, canonical)
     }
 
-    /// The element slot a read states its attributes with, when it states any.
+    /// The attribute slot a read states, when it states one.
+    ///
+    /// # Invariant
+    /// The slot is the element's **attribute pair**, not the element: a reader of
+    /// the slot compares its value position, so returning the element would put the
+    /// term's value where a perspective belongs.
     pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
-        P::Attr::ORDER
-            .iter()
-            .any(|marker| {
-                self.slot_attribute(slot, marker.order_index() as u32)
-                    .and_then(|node| self.module.node_value(node))
-                    .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
-                    .is_none_or(|value| value != LowValue::Any)
-            })
-            .then_some(slot)
+        P::Attr::ORDER.iter().find_map(|marker| {
+            let node = self.slot_attribute(slot, marker.order_index() as u32)?;
+            let stated = self
+                .module
+                .node_value(node)
+                .and_then(|value| lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value))
+                .is_none_or(|value| value != LowValue::Any);
+            if !stated {
+                return None;
+            }
+            node.dynamic()
+        })
     }
 
     /// [`Self::array_node`] with the per-position `~` markers of a shallow
