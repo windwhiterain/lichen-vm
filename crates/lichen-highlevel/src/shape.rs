@@ -1029,6 +1029,26 @@ where
     )
 }
 
+/// Whether `node` holds a **kind marker** — the type position of a type pair.
+fn is_a_kind_marker<P: Program>(module: &Module<P>, node: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(kind) = (unsafe { array_items(module, node) }) else {
+        return false;
+    };
+    let Some(marker) = kind.first().and_then(|item| module.node_value(item.node)) else {
+        return false;
+    };
+    marker == P::Value::tuple_type_marker()
+        || marker == P::Value::array_type_marker()
+        || marker == P::Value::table_type_marker()
+        || marker == P::Value::function_type_marker()
+        || is_struct_marker_any(module, kind[0].node)
+}
+
 /// The low type an expression's **type slot** names: a backend's seed for a
 /// template's parameter domain.
 ///
@@ -1041,6 +1061,16 @@ pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> Opti
 where
     P::Value: ValueType,
 {
+    // A type pair's kind position holds a kind marker
+    // (`docs/notes/compound-element-slots.md`).
+    if let AnyNodeId::Dynamic(node) = slot
+        && module
+            .pair_type_item(node)
+            .is_some_and(|kind| is_a_kind_marker(module, kind))
+        && let Some(shape) = low_type_of(module, slot)
+    {
+        return Some(shape);
+    }
     // A pair holds its type value at the value position; a type value is the
     // `[shape, kind]` array itself.
     let mut slot = slot;

@@ -82,12 +82,23 @@ impl<P: Program> Module<P> {
             LowOperator::Index => {
                 let container = self.low_type_of_node(self.operand_at(node, 0)?)?;
                 let index = self.constant_index(self.operand_at(node, 1)?)?;
-                match container {
+                let element = match &container {
                     // A class states its node's value variant, so the item is as stored.
-                    LowShape::Tuple(items) => items.get(index)?.clone(),
-                    LowShape::Array(element, length) if index < length => (*element).clone(),
+                    LowShape::Tuple(items) => items.get(index)?.clone()?,
+                    LowShape::Array(element, length) if index < *length => (**element).clone()?,
                     _ => return None,
-                }
+                };
+                // A compound value's read states the element slot pair
+                // (`docs/notes/lowlevel-low-types.md`).
+                let slot = matches!(
+                    &container,
+                    LowShape::Tuple(items) if items.len() == 2 && items[1].is_none()
+                );
+                Some(if slot {
+                    element
+                } else {
+                    LowShape::Tuple(vec![Some(element), None])
+                })
             }
             // `Apply(callee, _)` yields the callee's codomain.
             LowOperator::Apply => {

@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**Nested tuple domains work (+2).** Two changes make `tuple{tuple{Int, Int}, Int}`
+compile and run: the transfer's `Index` now states the **element slot pair** for a
+compound *value*'s read (the policy `docs/notes/lowlevel-low-types.md` already states —
+"A compound's elements are complete slots … `Index(compound, k)`'s transfer states
+`Tuple([element, Unknown])`" — and the code indexed the slot as if it were the tuple), and
+`low_type_of_slot` decodes a **type pair** by the kind marker its type position holds.
+compute went **115 → 117** (136 failed), and the language 275 / highlevel 136 / lowlevel
+164 suites stay green.
+
 **The array read's typing is fixed for structured containers.** `check_index` now types
 its result by the **container's kind**: a tuple or struct element states its own type cell
 (`slot_read`'s `element_ty`), an array keeps the array element type. Measured: no test
