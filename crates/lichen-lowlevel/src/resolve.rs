@@ -383,6 +383,22 @@ impl<P: Program> Module<P> {
         Some(items[1].node)
     }
 
+    /// The value an element slot states: its first position, or the node itself.
+    pub fn element_value_node(&self, node: AnyNodeId) -> Option<AnyNodeId> {
+        let Some(value) = self.node_value(node) else {
+            return Some(node);
+        };
+        match AsEnum::<LowValue>::as_enum(&value) {
+            Some(LowValue::Array(array)) if array.layout() != 0 => {
+                // SAFETY: `array` is the payload of a value of this module, whose
+                // block has not been dropped.
+                let items = unsafe { array.items() };
+                items.first().map(|item| item.node)
+            }
+            _ => Some(node),
+        }
+    }
+
     /// The structural value `node` holds, when it holds one — what a consumer
     /// reads for a literal rather than an operator.
     pub fn structural_value(&self, node: NodeId) -> Option<LowValue> {

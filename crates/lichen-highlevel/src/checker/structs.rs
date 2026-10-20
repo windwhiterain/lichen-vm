@@ -77,7 +77,7 @@ where
         let position = self.constant_position(key);
         let (element, value_node, ty_node) =
             self.slot_read(container_ty, container_value, key_value, position);
-        let pair = self.pair_of(value_node, ty_node);
+        let pair = self.element_pair(value_node, ty_node, element);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);
@@ -357,8 +357,9 @@ where
         } else {
             ty_source
         };
-        let (element, value_node, ty_node) = self.slot_read(ty_root, container_value, key, position);
-        let pair = self.pair_of(value_node, ty_node);
+        let (element, value_node, ty_node) =
+            self.slot_read(ty_root, container_value, key, position);
+        let pair = self.element_pair(value_node, ty_node, element);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(ty_node);

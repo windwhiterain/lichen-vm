@@ -4689,8 +4689,12 @@ where
     let mut class: Option<ScalarClass> = None;
     let mut words = Vec::with_capacity(elements.len());
     for (position, item) in elements.iter().enumerate() {
+        // An element is a complete slot: its value is the position read.
+        let Some(item) = module.element_value_node(item.node) else {
+            return None;
+        };
         let Some(value) = module
-            .node_value(item.node)
+            .node_value(item)
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
         else {
             module.record_extension_diagnostic(ExtensionDiagnostic::failure(

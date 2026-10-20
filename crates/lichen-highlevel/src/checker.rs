@@ -1044,11 +1044,14 @@ where
     }
 
     /// Canonical attribute `canonical` of `node`, through its layout and the default.
+    pub(super) fn slot_attribute(&self, node: NodeId, canonical: u32) -> Option<AnyNodeId> {
+        // SAFETY: `node` is a live node of this module; its value is the payload.
+        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
+        let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
+        self.module.array_attribute(&value, canonical)
+    }
+
     /// The element slot a read states its attributes with, when it states any.
-    ///
-    /// # Invariant
-    /// A slot whose attribute positions are all the wildcard states nothing, and an
-    /// unstated attribute is the missing slot, not a wildcard pair (`crate::attr`).
     pub(super) fn stated_element_slot(&self, slot: NodeId) -> Option<NodeId> {
         P::Attr::ORDER
             .iter()
@@ -1059,13 +1062,6 @@ where
                     .is_none_or(|value| value != LowValue::Any)
             })
             .then_some(slot)
-    }
-
-    pub(super) fn slot_attribute(&self, node: NodeId, canonical: u32) -> Option<AnyNodeId> {
-        // SAFETY: `node` is a live node of this module; its value is the payload.
-        let value = self.module.node_value(AnyNodeId::Dynamic(node))?;
-        let value = lichen_utils::extend::AsEnum::<LowValue>::as_enum(&value)?;
-        self.module.array_attribute(&value, canonical)
     }
 
     /// [`Self::array_node`] with the per-position `~` markers of a shallow
@@ -1140,6 +1136,38 @@ where
         }
         let layout = self.full_width_layout();
         self.array_node_with_layout(block, &items, layout)
+    }
+
+    /// A pair carrying the element slot's attributes at their canonical positions.
+    fn element_pair(&mut self, value: NodeId, ty: NodeId, element: NodeId) -> NodeId {
+        let mut items = vec![value, ty];
+        for index in 0..P::Attr::ORDER.len() {
+            // An undecided element's attribute is a lazy read of it.
+            let slot = match self
+                .slot_attribute(element, index as u32)
+                .and_then(|node| node.dynamic())
+            {
+                Some(slot) => slot,
+                None => {
+                    let attribute = self.alloc_node(
+                        self.current_block,
+                        None,
+                        Some(P::Value::from(LowValue::USize(crate::shape::attr_slot(
+                            index,
+                        )))),
+                    );
+                    let ops = self.array_node(self.current_block, &[element, attribute]);
+                    self.op_node(
+                        self.current_block,
+                        P::Operator::from(LowOperator::Index),
+                        Some(ops),
+                    )
+                }
+            };
+            items.push(slot);
+        }
+        let layout = self.full_width_layout();
+        self.array_node_with_layout(self.current_block, &items, layout)
     }
 
     /// The kind expression of a compound type: `[marker, Type]`, where `marker`

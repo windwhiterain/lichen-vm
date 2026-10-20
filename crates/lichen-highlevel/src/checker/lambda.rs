@@ -552,23 +552,15 @@ where
             let value = slot_value_node(&*self, slot);
             // A decidable certificate is decided here; an undecided one is a hole.
             self.module.evaluate_node_deep(value, None);
+            // A decided value is the slot's own, whether the node is a literal or
+            // an operation the evaluation settled.
             let decided = self
-                .module
-                .node_operation(value)
-                .is_none()
-                .then(|| self.node_value(value))
-                .flatten()
+                .node_value(value)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
             match decided {
                 // A hole: the result follows a field the clone's reference names, or
                 // the argument's whole provided slot.
                 None => {
-                    if std::env::var("DBG_FLD").is_ok() {
-                        eprintln!(
-                            "DBG cert: apply={type_apply:?} parameter={:?} value={value:?}",
-                            self.module.applied_parameters.get(&type_apply).copied()
-                        );
-                    }
                     let field = self
                         .module
                         .applied_parameters

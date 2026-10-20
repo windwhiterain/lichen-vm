@@ -97,7 +97,7 @@ where
         );
         self.register_assert(in_range, self.loc(e, 0), false, AssertSpelling::Condition);
         let _ = element_ty;
-        let pair = self.pair_of(value_node, elem_cell);
+        let pair = self.element_pair(value_node, elem_cell, element);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
         self.state[e].ty = Some(elem_cell);
