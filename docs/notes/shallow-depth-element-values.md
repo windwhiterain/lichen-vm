@@ -475,3 +475,16 @@ template return pair. Measured verdicts, in chain order: `inf(1)` — not a regi
 plain tuple); `step1(0)` — a region; `step2(1)` — a region; `step3(0)` — **not**, and
 the peel's selected node there is a wrapper *value cell* rather than the wrapper, so
 the mask is one level further out than the peel currently looks.
+
+## 11. The block recursion's conflict (round seventeen)
+
+Measured on `a_recursive_binding_inside_a_block_recurses`, prints since removed:
+
+- The parameter checks are **fresh per instantiation**: the same apply node sees distinct
+  parameter pairs (`282`, `319`; `476`, `513`) with five unmarked items, so the
+  parameter pair is not what is shared.
+- The failing unify compares two **clone chains**: one holds a bare `USize(3)`
+  (clones of a value node ending at a node of function 6), the other an `Index` whose
+  value is `USize(2)` (clones ending at a node of function 4). So the conflict is
+  between a *value clone* and a *read clone*, one function apart — the pair unify is
+  comparing a slot value against a dereference, not two values of one call.
