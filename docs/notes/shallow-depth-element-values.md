@@ -542,3 +542,18 @@ Dumped with temporary prints, then removed:
   that already holds the first call's values. A computation's clone must not carry a
   previous call's value; the `proven concrete` rule now excludes computations, which is
   necessary but was not sufficient for this case.
+
+## 16. The block recursion's unify site, and one negative (round twenty-two)
+
+- The 3-against-2 conflict is recorded inside **`apply_parameter_check`**, called from
+  `instantiate_stamped` on the **type side** (`apply_type_with` → `instantiate`). The
+  parameter and argument pairs are both full width there (measured 5/5), so the pair
+  branch, not the whole-value branch, does the unify.
+- **Negative:** skipping the *value* slot on the type side (unifying types only) breaks
+  four highlevel refinement tests (`in_function_assert_*`, `a_body_index_on_a_literal_*`,
+  `an_in_function_bounds_constraint_*`): the type side's value merge is what reports a
+  refinement mismatch. That change is therefore wrong and was reverted.
+- Both pairs are per-instantiation yet the same call site's *argument pair node* is a
+  template node shared by every level; the type side's value merge is what joins the
+  levels' parameter cells, so the fix has to keep the reporting merge while making it
+  per-evaluation — not remove it.
