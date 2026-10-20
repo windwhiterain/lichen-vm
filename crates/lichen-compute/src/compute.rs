@@ -2553,6 +2553,7 @@ where
     let roles = parallel_roles(module, cfg_pair)?;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
+
     // The slot is seeded with the ABI's signature: the parameter's leaves then
     // the index, each leaf classed by its field.
     let cfg_value = pair_value(module, cfg_pair)

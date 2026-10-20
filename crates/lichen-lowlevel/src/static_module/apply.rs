@@ -288,7 +288,14 @@ impl<P: Program> Module<P> {
                 for item in items {
                     let node = match item.node {
                         AnyNodeId::Static(sref) if sref.module == module.key => {
-                            Dyn(self.clone_static_signature_node(module, sref.index, block, remap))
+                            // A node with no value is an operation: it keeps its frozen
+                            // reference, which the reader resolves in that module.
+                            if module.read(sref.index).is_some() {
+                                Dyn(self
+                                    .clone_static_signature_node(module, sref.index, block, remap))
+                            } else {
+                                item.node
+                            }
                         }
                         node => node,
                     };
