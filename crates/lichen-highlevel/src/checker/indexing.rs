@@ -481,7 +481,9 @@ where
         let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
         let mut current = self.state[e].term.unwrap();
         if self.module.node_operation(current).is_some() {
-            levels.push((self.value_of(e), self.state[e].ty.unwrap()));
+            // A call's pair is the apply node, so the wrapper's first item is the
+            // pair a read dereferences.
+            levels.push((current, self.state[e].ty.unwrap()));
         } else {
             while levels.len() < depth {
                 // SAFETY: `current` is a live node of this module (a checked
