@@ -51,6 +51,14 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The parameter's type slot is a type pair, and the domain reader fixed 16.** A type
+expression is encoded as a **term pair** whose value position is its shape and whose type
+position is its kind (`TypeValue(TypeTuple)` …), so `kernel_parameter_domain` decoded the
+value position alone and answered `None` for every annotated parameter — the jit family's
+"parameter's class is not decided". Decoding the *slot itself* first
+(`low_type_of(...).or_else(|| low_type_of_slot(...))`) fixes it: compute went **99 → 115
+passed** (154 → 138 failed), the other suites unchanged.
+
 **The failure groups, measured** (`--nocapture`, first diagnostic per failing test):
 
 | first diagnostic | tests |

@@ -768,7 +768,9 @@ where
     };
     let pair = module.functions.get(function)?.parameter;
     let type_slot = module.pair_type_item(pair)?;
-    low_type_of_slot(module, type_slot)
+    // A type pair's value position is the shape and its type position the kind
+    // (`docs/notes/compound-element-slots.md`).
+    low_type_of(module, type_slot).or_else(|| low_type_of_slot(module, type_slot))
 }
 
 /// Prepare a template's low types for a lowering: seed each term's type cell and
