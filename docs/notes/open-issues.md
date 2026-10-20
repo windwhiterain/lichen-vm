@@ -42,6 +42,18 @@ so its attribute graph references the parameter clone the type-side check binds 
 `perspective_requirements` **4/4**, compute **99 passed**, language 275, highlevel 136,
 lowlevel 164 (1 ignored), graph JIT 1/10.
 
+**The cfg leaf walk is the next compute seam** (measured, not landed). `value_at_path`
+(job of the role walk in `compute.rs`) takes the element node where the value is: since
+the compound encoding, `items_of` over a compound returns **slots**, so a scalar leaf
+reads a slot pair instead of its value. Peeling a slot (a `layout != 0` pair's first
+item) turns `a_body_reads_a_scalar_leaf_of_its_input_struct` green and lets the
+cross-kernel programs read `(1, 2, 8, …)`, but two cross-kernel tests then **overflow
+their test thread's stack** (`a_cross_kernel_call_agrees_across_the_two_backends`,
+`a_body_may_compute_in_one_class_and_cross`) while a standalone probe of the same program
+runs fine even on a 2 MiB thread — so the peel exposes a recursion the recording reaches
+only once the launch's extent and leaves are correct. The patch is kept at
+`.scratch-core/leaf-fix.patch`; the next step is that recursion, not another reader.
+
 The isomorphism is not complete yet: with the record path disabled the *write* case stays
 red (the certificate decides nothing — the field read's attribute provider inside the
 materialized clone is still a static node), so the field reference still rides the record
