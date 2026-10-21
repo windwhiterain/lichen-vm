@@ -82,6 +82,24 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The accounting, measured: the seed fixes two tests and carries five.** Running the whole
+suite twice and diffing the failure lists: with the value seed **225 passed / 29 failed**,
+without it **222 / 32**. Removing the seed **fixes** two —
+`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` (the class-shape assertion)
+and `zz_plain_leg_probe::probe_the_plain_leg` — and **breaks five**, all nested shapes:
+`compute::jit_cross_kernel_passes_a_sub_tuple_through`, `compute::jit_nested_tuple_domain`,
+`mixed_group::a_mixed_group_answers_what_the_flat_control_answers`,
+`nested_config::a_nested_config_records_each_leaf_for_what_it_is`,
+`nested_config::a_nested_config_runs_on_the_device_through_the_graph`. Their shared refusal is
+"a kernel body's index cannot be placed: its target is a computation and its index is the
+constant 1" — the body's dereference detector reads the **class** shape
+(`Tuple([None, None])`) to recognise a pair's value, and a computation's class has no shape
+without the seed. A structural replacement for that detector (the node's value is an array
+with a layout) was measured **neutral** (222), so the shape the detector wants must come from
+the **pair's type slot**, which is what the seed copies into the class
+(`shape::low_type_of_slot` at the parameter's pair). That is the next change, on the read
+side, where the verdict points.
+
 **The two statements are both the provider's: the seed and the inference.** A backtrace at the
 conflict names the caller chain `refine ← seed ← prepare_template_low_types` for the first
 conflict, and after a last-seed-wins variant the second names
