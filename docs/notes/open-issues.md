@@ -61,6 +61,13 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The peel's overflow is not the lowering's guarded path.** With the peel and the
+`value()` cycle guard both in place, the guard **never fires**: its path shrinks between
+calls (`4 → 3 → 0`) because each `value` call *completes*, and the process still overflows
+after the last print — so the unbounded recursion lies outside the lowering's definition
+walk, in the phase that follows it (the graph's own evaluation, whose operand/definition
+edges the peel can close into a cycle). That is why bounding the lowering did not stop it.
+
 **The cfg leaf peel is measured again and kept out: it exposes a definition cycle.**
 Applying `.scratch-core/leaf-fix.patch` (the peel at `value_at_path`) makes
 `a_body_reads_a_scalar_leaf_of_its_input_struct` pass, as recorded before, and again makes
