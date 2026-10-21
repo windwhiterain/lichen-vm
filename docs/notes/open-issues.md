@@ -61,6 +61,16 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The graph family's root: the body's launches are decided before the recording.** Probes
+on `graph_jit::a_graph_recorded_for_one_backend_runs_on_another` with the recording in
+place: the recording's own apply is fresh (`value-before None`, `recording true`), its deep
+evaluation **succeeds** (`result Some(Array)`), yet the `ParLaunch` arm is **never entered**
+and `recorded` is `None`. The body's launches were already decided by the check's definition
+pass (every function's return is deep-evaluated there), so the apply's clone **bakes those
+values** (`value_apply`'s baked rule) and the launches never re-run inside the recording —
+`record_launch` cannot place a `GraphValue`. The parameter's buffer classes are now the
+declared ones (`f6132eb5`), which did not change the family, consistent with this reading.
+
 **A recorded body's return names a `ParLaunch` residual clone with no value.** The graph
 recording reaches `returned_value_ids` with a block whose first item peels to a node whose
 operator is `ComputeOperator(ParLaunch)` and whose `origin` is another residual — and
