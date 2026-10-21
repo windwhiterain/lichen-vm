@@ -82,6 +82,16 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The faithful probe passes, so the abort is layout-dependent.** Extended to the failing
+test's exact sequence — the `jit`/`launch` program first, then the parallel program on `cpu`,
+`install_default`, the same program on `gpu`, `uninstall`, then six registration-and-drop
+rounds — the probe **completes with the peel** (`first program dropped → cpu done → gpu
+installed → … → gpu module dropped`), while the same work inside the test's own body
+overflows. So the abort does **not** belong to a fixed step of that sequence: it follows the
+**stack's layout and depth** at the moment it is reached, i.e. a deep-but-near-the-limit
+recursion that the peel deepens. The probe is kept
+(`tests/lichen_compute/zz_store_loop_probe.rs`) as the harness for that reading.
+
 **A minimal probe narrows the crash to the *second* backend's run.** A probe
 (`tests/lichen_compute/zz_store_loop_probe.rs`) repeats six
 `new_store(None)` registrations plus a compile-and-drop of the `jit`/`launch` program, and it
