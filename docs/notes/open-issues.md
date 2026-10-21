@@ -61,6 +61,18 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The out-of-suite overflow does not reproduce, and the remaining blocker is cross-test
+state.** Re-measured with a build confirmed fresh (the test binary relinked before the run):
+with the peel in place `a_graph_runs_at_whichever_extent_its_argument_names` **fails on the
+extent diagnostic, it does not overflow**, and the whole suite runs to completion. So the
+earlier abort was a stale-binary reading. What stands is a **cross-test interaction**: the
+six tests that pass **individually** reach only **1/10 in the family run** (`graph_jit`), so
+another test in the same binary leaves process-global state behind — the suite has one
+binary and the stub/kernel registry is global. That interaction, not the mechanism, is now
+what keeps the peel out: fix the shared-state isolation first, then the peel's six tests can
+land. The four failures in every mode are the **extent** read ("a dispatch's count is a
+tuple or a struct value"), which `value_at_path`'s peel did not reach.
+
 **With the gate lifted, the peel takes graph_jit from 1/10 to 6/10.** Measured test by
 test with `.scratch-core/leaf-fix.patch` on top of `4fdc2bf2`: six tests pass
 (`a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`,
