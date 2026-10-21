@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use lichen_compute::language::{LangProgram, LangValue, new_store};
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarData,
+    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarClass, ScalarData,
     install_parallel_backend,
 };
 use lichen_lowlevel::{Module, NodeId};
@@ -127,6 +127,11 @@ pub fn check(source: &str) -> lichen_language::Report<LangProgram> {
 /// own subject.
 pub struct Stub {
     calls: Mutex<Vec<Call>>,
+    /// The class each resident was issued as, so a fetch answers the buffer it was
+    /// given and not one class for every buffer.
+    residents: Mutex<std::collections::HashMap<u64, ScalarClass>>,
+    /// The next resident id, so two dispatches are two residents.
+    next: Mutex<u64>,
 }
 
 /// One dispatch the stub was handed.
@@ -157,14 +162,50 @@ impl ParallelBackend for Stub {
                 fragment: root.clone(),
                 count,
             });
-        Ok(vec![ResidentId(41); root.outputs])
+        let mut next = self
+            .next
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut residents = self
+            .residents
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ids = (0..root.outputs)
+            .map(|position| {
+                let id = ResidentId(*next);
+                *next += 1;
+                let class = root
+                    .output_classes
+                    .get(position)
+                    .copied()
+                    .unwrap_or(ScalarClass::Int);
+                residents.insert(id.0, class);
+                id
+            })
+            .collect();
+        Ok(ids)
     }
 
-    fn fetch(&self, _id: ResidentId, count: usize) -> Result<ScalarData, String> {
-        Ok(ScalarData::Float(vec![0.0; count]))
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
+        let class = self
+            .residents
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&id.0)
+            .copied()
+            .unwrap_or(ScalarClass::Int);
+        Ok(match class {
+            ScalarClass::Int => ScalarData::Int(vec![0; count]),
+            ScalarClass::Float | ScalarClass::BFloat16 => ScalarData::Float(vec![0.0; count]),
+        })
     }
 
-    fn release(&self, _id: ResidentId) {}
+    fn release(&self, id: ResidentId) {
+        self.residents
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id.0);
+    }
 }
 
 /// The slot the installed backend lives in, which is the process's.
@@ -197,6 +238,8 @@ pub fn stub() -> (Arc<Stub>, MutexGuard<'static, ()>) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let stub = Arc::new(Stub {
         calls: Mutex::new(Vec::new()),
+        residents: Mutex::new(std::collections::HashMap::new()),
+        next: Mutex::new(1),
     });
     install_parallel_backend(stub.clone());
     (stub, guard)
