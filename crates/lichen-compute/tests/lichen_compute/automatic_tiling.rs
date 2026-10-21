@@ -3,14 +3,13 @@
 
 use super::common;
 
-
+use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{GraphPass, LaunchExtent, clear_graph_pass, set_graph_pass};
 use lichen_compute::floor::{floor_pass_with_packs, install_floor};
 use lichen_compute::fusion_claim::{claim_of, kernel_id};
 use lichen_compute::kernel_fragment;
 use lichen_compute::language::{LangProgram, LangValue};
-use super::common::LANES;
 use lichen_fusion::BinaryOp;
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
@@ -30,7 +29,6 @@ const PER_LANE: f32 = 1.0;
 
 /// The seed the counterfactual puts under the tiled fold, and what one occurrence adds.
 const RAISED: f32 = 7.0;
-
 
 /// How many times the tiled fold carries the reduction's identity into `out[0]`.
 ///

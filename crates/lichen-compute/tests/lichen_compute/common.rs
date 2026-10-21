@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use lichen_compute::language::{LangProgram, LangValue, new_store};
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarData, install_parallel_backend,
+    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarData,
+    install_parallel_backend,
 };
 use lichen_lowlevel::{Module, NodeId};
 

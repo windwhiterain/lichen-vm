@@ -133,12 +133,12 @@ fn conversions(fragment: &KernelFragment) -> Vec<String> {
 /// The pass's own line for one denominator, and whether the region merged.
 fn verdict(denominator: &str) -> (String, bool) {
     let build = common::check(&program(denominator))
-    .build
-    .expect("the program checks");
-let module = build.module;
-let value = module
-    .node_value(AnyNodeId::Dynamic(build.root_val))
-    .expect("the root is decided");
+        .build
+        .expect("the program checks");
+    let module = build.module;
+    let value = module
+        .node_value(AnyNodeId::Dynamic(build.root_val))
+        .expect("the root is decided");
     let found = instances(&module, &value);
     for (name, instance) in ["producer", "consumer"].into_iter().zip(&found) {
         println!(

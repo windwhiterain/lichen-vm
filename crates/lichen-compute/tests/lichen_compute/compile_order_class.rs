@@ -120,10 +120,10 @@ fn compiled(extra: &str) -> Vec<String> {
     ))
     .build
     .expect("the program checks");
-let module = build.module;
-let _value = module
-    .node_value(AnyNodeId::Dynamic(build.root_val))
-    .expect("the root is decided");
+    let module = build.module;
+    let _value = module
+        .node_value(AnyNodeId::Dynamic(build.root_val))
+        .expect("the root is decided");
     classes(&module)
 }
 
@@ -169,10 +169,10 @@ fn the_recorded_consumer_carries_the_programs_float_class() {
     ))
     .build
     .expect("the program checks");
-let module = build.module;
-let value = module
-    .node_value(AnyNodeId::Dynamic(build.root_val))
-    .expect("the root is decided");
+    let module = build.module;
+    let value = module
+        .node_value(AnyNodeId::Dynamic(build.root_val))
+        .expect("the root is decided");
     assert!(
         module
             .extension_diagnostics

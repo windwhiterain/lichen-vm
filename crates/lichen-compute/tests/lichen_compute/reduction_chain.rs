@@ -3,12 +3,12 @@
 
 use super::common;
 
+use super::common::LANES;
 use lichen_compute::compute::{
     FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, write_fused_kernel,
 };
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id, marked_value};
 use lichen_compute::language::LangProgram;
-use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Reduction};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
@@ -143,7 +143,6 @@ fn closed_form(count: u64) -> f32 {
     (count * (count + 1) / 2) as f32
 }
 
-
 /// The fragment a folded body is dispatched as.
 ///
 /// # Invariant
@@ -200,7 +199,6 @@ fn pack(elements: &[f32]) -> Vec<u8> {
         .flat_map(|element| element.to_le_bytes())
         .collect()
 }
-
 
 /// The plan the tiled body is checked against.
 ///
@@ -268,9 +266,9 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
         ScalarClass::Float,
     )
     .unwrap_or_else(|refusal| panic!("the derived declaration tiles: {refusal}"));
-    let tiled = folding.tiled(LANES, 0).unwrap_or_else(|refusal| {
-        panic!("the derived declaration tiles at {LANES}: {refusal}")
-    });
+    let tiled = folding
+        .tiled(LANES, 0)
+        .unwrap_or_else(|refusal| panic!("the derived declaration tiles at {LANES}: {refusal}"));
     tiled
         .body()
         .validate()
@@ -309,9 +307,8 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
     });
 
     // **One tiled body, three launches**: the third pads a logical count to the whole tile.
-    let padded = tiled_count(PADDED_COUNT, LANES).unwrap_or_else(|refusal| {
-        panic!("{PADDED_COUNT} element(s) tile at {LANES}: {refusal}")
-    });
+    let padded = tiled_count(PADDED_COUNT, LANES)
+        .unwrap_or_else(|refusal| panic!("{PADDED_COUNT} element(s) tile at {LANES}: {refusal}"));
     assert_eq!(
         (
             padded,
@@ -322,5 +319,4 @@ fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
         "the tile `tiled_count` answers is the smallest whole number of {LANES}-wide tiles \
          at or above the caller's count, and `tail` is the padding it adds"
     );
-
 }

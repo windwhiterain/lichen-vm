@@ -143,5 +143,3 @@ compute.collect out.v : array{{Float, {}}}
 fn ulps(got: f32, want: f32) -> i64 {
     (i64::from(got.to_bits()) - i64::from(want.to_bits())).abs()
 }
-
-

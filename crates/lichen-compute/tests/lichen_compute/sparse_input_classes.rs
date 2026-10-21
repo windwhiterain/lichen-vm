@@ -78,8 +78,6 @@ fn the_consumer_declares_a_float_for_each_of_its_two_inputs() {
         "the position the producer's output feeds is the one the body reads, so its own class is \
          the class the read declares"
     );
-
-
 }
 
 /// The answer `e[i] = d[i] * 2` and a sum over every `e` fold to.
@@ -90,7 +88,6 @@ fn the_consumer_declares_a_float_for_each_of_its_two_inputs() {
 fn closed_form(count: usize) -> f32 {
     (count * (count + 1)) as f32
 }
-
 
 /// The chain's two fragments, the consumer first: the one that declares two input buffers.
 fn instances(module: &Module<LangProgram>) -> (KernelFragment, KernelFragment) {
@@ -126,4 +123,3 @@ fn recorded(module: &Module<LangProgram>) -> lichen_graph_ir::Graph {
         })
         .expect("the program recorded a graph")
 }
-

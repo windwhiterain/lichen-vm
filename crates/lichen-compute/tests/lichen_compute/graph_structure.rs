@@ -423,4 +423,3 @@ fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
         .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
         .collect()
 }
-

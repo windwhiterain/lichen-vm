@@ -82,8 +82,6 @@ fn the_composed_chain_records_the_merged_body() {
         read.fragment.body, merged.body,
         "the artifact holds the merged body element for element"
     );
-
-
 }
 
 /// How many instructions of `body` are buffer writes.
@@ -168,7 +166,6 @@ fn merged_graph(fragment: &KernelFragment, extent: usize) -> Graph {
         .expect("a value the graph defines");
     graph
 }
-
 
 /// Element-for-element equality, naming the position the two first disagreed at.
 fn compare(what: &str, found: &[f32], against: &str, expected: &[f32]) {

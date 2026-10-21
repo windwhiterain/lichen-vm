@@ -17,7 +17,6 @@ use lichen_lowlevel::Module;
 /// The combine a reduction's `combine` role declares.
 const COMBINE: &str = "combine";
 
-
 /// The length of every buffer the case drives.
 ///
 /// # Invariant
@@ -59,7 +58,6 @@ fn dispatched(module: &Module<LangProgram>) -> Result<(String, KernelFragment), 
     let fragment = fragment_of(id).map_err(|refusal| refusal.message())?;
     Ok((claim.interface, fragment))
 }
-
 
 /// The packed bytes of `elements`, one `i64` each.
 fn pack(elements: &[i64]) -> Vec<u8> {
@@ -119,7 +117,6 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
         marks: Vec::new(),
     }
 }
-
 
 /// The source whose reduction the acceptance case folds: one kernel, one claim, one loop.
 ///
@@ -226,8 +223,6 @@ fn a_tiled_reduction_tiles_the_declared_sum() {
         .body
         .validate()
         .unwrap_or_else(|broken| panic!("the per-lane body is well formed: {broken}"));
-
-
 }
 
 /// The same tiling path folds a maximum and a product, because the licence is the declaration's.

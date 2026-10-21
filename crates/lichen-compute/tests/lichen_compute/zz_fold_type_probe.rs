@@ -73,4 +73,3 @@ fn rendered(body: &str) -> String {
         ),
     }
 }
-

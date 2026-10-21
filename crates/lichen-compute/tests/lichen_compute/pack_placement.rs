@@ -3,14 +3,13 @@
 
 use super::common;
 
-
+use super::common::LANES;
 use lichen_compute::automatic_tiling::{install_tiling, install_tiling_with_packs};
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{RoleProjection, SchemaHash, SchemaNode, kernel_id};
 use lichen_compute::kernel_fragment;
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_compute::placement_pack::{PackRefusal, read_placement_pack};
-use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Variable};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{KernelFragment, ScalarClass, Slice, Space, fragment_digest};
@@ -322,14 +321,8 @@ fn a_pack_whose_constraints_do_not_hold_is_inert() {
     let schema = reported_schema(&pass_report(&floor_module));
 
     // The hash is the node's and the constraint is not: the node's first input is a `Float`.
-    let pack = read_placement_pack(&pack_text(
-        &schema,
-        "sum-in-shared",
-        "int",
-        "shared",
-        LANES,
-    ))
-    .expect("the pack is well formed; it is its constraint that does not hold");
+    let pack = read_placement_pack(&pack_text(&schema, "sum-in-shared", "int", "shared", LANES))
+        .expect("the pack is well formed; it is its constraint that does not hold");
 
     install_tiling_with_packs(&module, &[pack]);
     let (inert_module, inert_value, _root) = common::run(&source);
@@ -368,10 +361,7 @@ fn a_pack_asking_for_a_width_the_target_lacks_is_refused() {
 
     // Half a workgroup is not a group this target has.
     let narrow = LANES / 2;
-    assert_ne!(
-        narrow, LANES,
-        "the width asked for is not the target's"
-    );
+    assert_ne!(narrow, LANES, "the width asked for is not the target's");
     let pack = read_placement_pack(&pack_text(
         &schema,
         "sum-in-a-narrow-group",
@@ -524,14 +514,8 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
     install_tiling(&module);
     let (floor_module, _value, _root) = common::run(&source);
     let schema = reported_schema(&pass_report(&floor_module));
-    let pack = read_placement_pack(&pack_text(
-        &schema,
-        "narrow",
-        "bfloat16",
-        "shared",
-        LANES,
-    ))
-    .expect("the pack reads");
+    let pack = read_placement_pack(&pack_text(&schema, "narrow", "bfloat16", "shared", LANES))
+        .expect("the pack reads");
     install_tiling_with_packs(&module, &[pack]);
     let (landed_fragment, _lines) = landed(&recorded, COUNT);
     assert_eq!(
@@ -568,4 +552,3 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
         "every buffer access the landed body makes is at the class the pack states"
     );
 }
-

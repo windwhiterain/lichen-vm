@@ -57,7 +57,6 @@ compute.collect out.w
     )
 }
 
-
 /// The scalar the grouped leaf is pushed as, and the answer it answers with.
 ///
 /// # Invariant
@@ -65,4 +64,3 @@ compute.collect out.w
 /// every lane; the flat field beside it is the control that says the class, not
 /// the depth, is what the launch reads.
 const LEAF: f32 = 7.0;
-

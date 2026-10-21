@@ -54,5 +54,4 @@ out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
     mark("cpu start");
     let (cpu_module, cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
     mark("cpu done");
-
 }

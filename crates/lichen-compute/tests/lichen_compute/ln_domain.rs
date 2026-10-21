@@ -86,4 +86,3 @@ compute.collect out.v : array{{Float, {}}}
     assert_eq!(answers.len(), operands.len(), "every lane wrote its answer");
     answers
 }
-

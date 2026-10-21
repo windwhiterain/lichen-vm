@@ -2,11 +2,10 @@
 
 use super::common;
 
-
+use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use super::common::LANES;
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.

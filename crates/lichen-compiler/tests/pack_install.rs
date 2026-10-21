@@ -114,7 +114,6 @@ fn pack_text(schema: &str) -> String {
 /// first runs leaves the first's buffers belonging to a device that is no longer installed: the
 /// tests here run one at a time.
 
-
 /// What the CLI itself does with a program's packs: install the floor, compile, and run it.
 ///
 /// # Invariant
@@ -226,9 +225,6 @@ fn stage_line<'a>(stderr: &'a str, needle: &str) -> &'a str {
         .unwrap_or_else(|| panic!("a stage line names {needle:?}: {stderr}"))
 }
 
-
-
-
 /// A pack whose text is not a pack is a named refusal, and the run does not happen.
 ///
 /// # Invariant
@@ -323,6 +319,3 @@ fn a_pack_that_is_not_one_is_refused_and_nothing_runs() {
         );
     }
 }
-
-
-

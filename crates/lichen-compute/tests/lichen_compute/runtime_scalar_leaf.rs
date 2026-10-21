@@ -2,7 +2,6 @@
 
 use super::common;
 
-
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
     GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, graph, set_graph_pass,

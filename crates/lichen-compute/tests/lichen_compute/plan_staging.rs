@@ -3,9 +3,9 @@
 
 use super::common;
 
+use super::common::LANES;
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
-use super::common::LANES;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
@@ -17,7 +17,6 @@ use lichen_lowlevel::Module;
 
 /// The mark the logic publishes and the plan names.
 const COMBINE: &str = "combine";
-
 
 /// The length of every buffer the case drives.
 ///
@@ -256,9 +255,7 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
         ScalarClass::Int,
     )
     .expect("the declared sum is associative and integer");
-    let tiled = folding
-        .tiled(LANES, 0)
-        .expect("the declared sum tiles");
+    let tiled = folding.tiled(LANES, 0).expect("the declared sum tiles");
     let declared = plan(&staged_name, Space::Shared, LANES);
 
     // A group narrower than the workgroup is not a width this target has.

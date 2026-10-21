@@ -57,4 +57,3 @@ fn compile(
     );
     rendered(&session.compile())
 }
-

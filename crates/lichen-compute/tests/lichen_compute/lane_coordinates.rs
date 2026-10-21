@@ -66,7 +66,6 @@ fn attempt(program: &str) -> Result<String, Vec<String>> {
         .map_err(|diags| diags.into_iter().map(|diag| diag.message).collect())
 }
 
-
 /// A configuration with one extent has no row or column to take, and says so.
 ///
 /// # Invariant

@@ -3,12 +3,11 @@
 
 use super::common;
 
-
+use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::{LangProgram, LangValue};
-use super::common::LANES;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{KernelFragment, fragment_digest};
 use lichen_lowlevel::Module;

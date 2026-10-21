@@ -1475,7 +1475,6 @@ const BACKEND: &str = "BACKEND";
 /// neighbour rather than failing.
 const ELEMENT_COUNT: usize = common::LANES as usize + 5;
 
-
 /// **The `0.0` anchors the class**: a body with no concrete `Float` operand is
 /// lowered as an `Int` fragment.
 
@@ -1574,12 +1573,6 @@ compute.launch k 3.0
         }
     }
 }
-
-
-
-
-
-
 
 /// A write that names another output than the codomain position it sits at is refused.
 ///

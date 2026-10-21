@@ -2,11 +2,10 @@
 
 use super::common;
 
-
+use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Reduction, Variable};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::ScalarClass;
@@ -128,9 +127,7 @@ fn a_datum_that_is_the_bare_slot_builds_the_raw_buffers_body() {
     )
     .expect("a sum over the datum itself is the same fold");
     assert_eq!(
-        carried
-            .tiled(LANES, 0)
-            .map(|tiled| tiled.into_body()),
+        carried.tiled(LANES, 0).map(|tiled| tiled.into_body()),
         raw.tiled(LANES, 0).map(|tiled| tiled.into_body()),
         "the two elements build the same tiled body, value for value"
     );
