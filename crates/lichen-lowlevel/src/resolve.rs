@@ -329,22 +329,8 @@ impl<P: Program> Module<P> {
     /// `k`, and element `k` is a frozen function — a binding nothing evaluated
     /// still names the function it is (`docs/notes/loop-conversion.md` §8.5).
     pub fn static_function_of_callee(&self, callee: NodeId) -> Option<StaticFunctionRef> {
-        let operation = self.node_operation(callee)?;
-        if !matches!(
-            AsEnum::<LowOperator>::as_enum(&operation.operator),
-            Some(LowOperator::Index)
-        ) {
-            return None;
-        }
-        let operands = self.operand_items(operation.operand?).ok()?;
-        let (Some(target), Some(index)) = (operands.first(), operands.get(1)) else {
-            return None;
-        };
-        let position = self.usize_value(index.node)?;
-        // SAFETY: the target is live, and a frozen array's element is read
-        // through a module the reference outlives.
-        let items = unsafe { self.array_items_of(target.node) }?;
-        match items.get(position)?.node {
+        let item = self.resolve_read(callee, 0)?;
+        match item {
             // A frozen element: its value is read through the reference.
             AnyNodeId::Static(function) => match self
                 .static_read(function)
@@ -361,6 +347,47 @@ impl<P: Program> Module<P> {
                 Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
                 _ => None,
             },
+        }
+    }
+
+    /// The node a read chain names (`docs/notes/compound-element-slots.md`).
+    fn resolve_read(&self, node: NodeId, depth: u32) -> Option<AnyNodeId> {
+        if depth > 8 {
+            return None;
+        }
+        let Some(operation) = self.node_operation(node) else {
+            return Some(AnyNodeId::Dynamic(node));
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return Some(AnyNodeId::Dynamic(node));
+        }
+        let operands = self.operand_items(operation.operand?).ok()?;
+        let position = self.usize_value(operands.get(1)?.node)?;
+        let items = self.read_items(operands.first()?.node, depth + 1)?;
+        Some(items.get(position)?.node)
+    }
+
+    /// An `Index`'s target items, frozen or stated.
+    fn read_items(&self, target: AnyNodeId, depth: u32) -> Option<&'static [ArrayItem]> {
+        if depth > 8 {
+            return None;
+        }
+        match target {
+            AnyNodeId::Static(sref) => match self.static_read(sref)?.as_enum()? {
+                LowValue::Array(array) => Some(unsafe { array.items() }),
+                _ => None,
+            },
+            AnyNodeId::Dynamic(node) => {
+                if self.node_operation(node).is_some() {
+                    let item = self.resolve_read(node, depth + 1)?;
+                    return self.read_items(item, depth + 1);
+                }
+                // SAFETY: the node's stated array is the payload of a live node.
+                unsafe { self.array_items_of(AnyNodeId::Dynamic(node)) }
+            }
         }
     }
 
