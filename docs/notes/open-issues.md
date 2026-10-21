@@ -61,14 +61,21 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The recording clones the launches and never evaluates them.** Probes on
+`graph_jit::a_graph_recorded_for_one_backend_runs_on_another`: every apply **instantiates**
+(`APPLY fn … instantiated true`, including the graph body's apply); after the recording's
+apply the module holds **four launch nodes owned by no function** (`6113`, `6188`, `6414`,
+`6478`) — the recording's **clones** — and every one has an empty value; the returned pair's
+items are all `shallow false`; and instrumenting `evaluate_node_deep_inner` shows the deep
+walk **never visits a `ParLaunch` node** (zero hits). So the clone exists and the deep pass
+does not reach it: the next probe is the value read the pair's item 0 names
+(`Index(5732)`), whose evaluation gates the descent.
+
 **Corrected: no launch ever has a value, and the recording's apply creates none.** The
 user's objection is right — a function that never ran returns nothing decided. Measured: the
 module holds **only the templates' launch nodes** (owners `9/10/11/14/22`), **every one with
 an empty value**, and after the recording's apply the module still holds no launch node with
-a value; forcing the value the returned pair carries (`d53b07e1`) does not change that. So
-the body's application neither runs nor clones a launch inside the recording window. The
-next probe is `function_apply` for the graph body itself: whether it clones the body at all,
-and whether its parameter check passes.
+a value; forcing the value the returned pair carries (`d53b07e1`) does not change that. 
 
 **The graph family's root: the body's launches are decided before the recording.** Probes
 on `graph_jit::a_graph_recorded_for_one_backend_runs_on_another` with the recording in
