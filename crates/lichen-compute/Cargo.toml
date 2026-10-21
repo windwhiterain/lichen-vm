@@ -37,3 +37,43 @@ wasmi.workspace = true
 # runtime reads, so the edge costs nothing to link.
 lichen-fusion.workspace = true
 lichen-fusion-bridge.workspace = true
+# The device backend and the README generator, both optional: the examples that
+# dispatch a kernel to a device need them and nothing in the library does, so a
+# build that never dispatches never links a GPU loader and never reads the
+# example programs. The `device` feature turns them on for those examples alone.
+lichen-compute-gpu = { workspace = true, optional = true }
+
+[features]
+device = ["lichen-compute-gpu"]
+
+[[example]]
+name = "algorithms"
+required-features = ["device"]
+
+[[example]]
+name = "bench"
+required-features = ["device"]
+
+[[example]]
+name = "cache_pipeline"
+required-features = ["device"]
+
+[[example]]
+name = "crossbackend"
+required-features = ["device"]
+
+[[example]]
+name = "graph_leg_probe"
+required-features = ["device"]
+
+[[example]]
+name = "histogram_atomic_gpu"
+required-features = ["device"]
+
+[[example]]
+name = "math_operators"
+required-features = ["device"]
+
+[[example]]
+name = "recursion"
+required-features = ["device"]

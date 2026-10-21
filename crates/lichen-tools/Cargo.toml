@@ -17,3 +17,13 @@ path = "src/bin/sync-readme.rs"
 # sub-language rather than the bare language the composer alone composes.
 lichen-compute.workspace = true
 lichen-language.workspace = true
+# The device backend, optional: the example that dispatches each example program to a
+# device needs it and nothing in the library does.
+lichen-compute-gpu = { workspace = true, optional = true }
+
+[features]
+device = ["lichen-compute-gpu"]
+
+[[example]]
+name = "operators_on_device"
+required-features = ["device"]
