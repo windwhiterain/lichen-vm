@@ -61,6 +61,17 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Measured again, the interference is deterministic and not the recording flag.** With the
+peel in place: `a_graph_recorded_for_one_backend_runs_on_another` **passes alone** and
+**fails in the family run**, and `a_graph_runs_at_whichever_extent_its_argument_names`
+fails alone (extent refusal) but **overflows** when it runs after another test — with
+`--test-threads=1` too, so it is cumulative global state rather than a race. The recording
+flag is *not* stale: `graph::is_recording()` reads `false` at `build_graph`'s entry in every
+case (probed), so the recorder is closed. The interference therefore lives in another
+process-global store — the stub/`kernels()` registry or the installed backend — and is the
+next probe. Until it is understood the family's count (1/10) under-reports the mechanics
+(6/10 alone).
+
 **The out-of-suite overflow does not reproduce, and the remaining blocker is cross-test
 state.** Re-measured with a build confirmed fresh (the test binary relinked before the run):
 with the peel in place `a_graph_runs_at_whichever_extent_its_argument_names` **fails on the
