@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**A recorded body's return names a `ParLaunch` residual clone with no value.** The graph
+recording reaches `returned_value_ids` with a block whose first item peels to a node whose
+operator is `ComputeOperator(ParLaunch)` and whose `origin` is another residual — and
+**neither the node nor its origin carries a value** (measured on
+`graph_jit::a_graph_recorded_for_one_backend_runs_on_another`). So the recording's value
+table does not name the node the body returns; reading the origin (landed,
+`c8e7907f`) is not enough. The next probe is the node `record_launch`'s `GraphValue` is
+placed on, and why the body's return is a *different* residual clone.
+
 **The chain is created by the clone walk, and two sites overflow across runs.** With the
 peel in place the chain's node-creation backtrace is `check_lam → check_term → … →
 value_apply → node_apply → add_node`, i.e. the **clone walk** creates the contiguous ids,
