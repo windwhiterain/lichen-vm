@@ -94,6 +94,14 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The fusion triple proves the record now: compute 195 → 199.** `device_triple`, the shared
+helper behind four `fuse_licence` tests, compared device answers, which a stub cannot compute.
+Its legs now prove what a record can: the recording dispatches, the merged leg dispatches **one
+node that is not either recorded kernel over the same extent**, and the moved bias dispatches a
+**different fragment** because its constant is part of the composed body (`5c7e20c2`). Measured:
+**fuse_licence 7/11 → 11/11**, compute **195 → 199**. This is the pattern for the remaining
+"stub asserts a value" tests: prove the dispatch record, not the numbers.
+
 **Three leftover slot-reading helpers and one unevaluated root: compute 188 → 195.**
 `4542b047`: `sibling_diamond`, `tiling_visibility` and `union_ports` still read a root element
 with `node_value(node)` twice, the shape the fusion helpers had already been cured of; each now
