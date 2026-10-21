@@ -4062,7 +4062,9 @@ where
         let Some(item) = items.get(k) else { break };
         value = item.node;
     }
-    Ok(value)
+    // An element is a complete slot: what the read names is its value position
+    // (`docs/notes/compound-element-slots.md`).
+    Ok(module.element_value_node(value).unwrap_or(value))
 }
 
 /// The constant `USize` value behind `node`, if it is one.
