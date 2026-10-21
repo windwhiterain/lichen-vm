@@ -488,10 +488,22 @@ impl<P: Program> Module<P> {
     /// A class holds one value, so a merged value node answers its class's statement;
     /// a node that states none answers [`None`].
     pub fn element_type_of(&self, node: NodeId) -> Option<AnyNodeId> {
-        self.element_types
-            .get(&node)
-            .or_else(|| self.element_types.get(&self.class_root(node)))
-            .copied()
+        let mut cursor = node;
+        // A read is defined by its template node, so the statement is read there too.
+        for _ in 0..ELEMENT_TYPE_DEPTH {
+            if let Some(r#type) = self
+                .element_types
+                .get(&cursor)
+                .or_else(|| self.element_types.get(&self.class_root(cursor)))
+            {
+                return Some(*r#type);
+            }
+            let Some(origin) = self.node_origin(cursor) else {
+                return None;
+            };
+            cursor = origin;
+        }
+        None
     }
 
     /// The structural value `node` holds, when it holds one — what a consumer
@@ -511,3 +523,6 @@ impl<P: Program> Module<P> {
         }
     }
 }
+
+/// The deepest origin chain an element type is looked up along.
+const ELEMENT_TYPE_DEPTH: usize = 8;

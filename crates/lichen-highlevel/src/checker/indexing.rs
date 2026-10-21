@@ -82,7 +82,15 @@ where
         self.node_edges.insert(index_value, self.loc(index, 0));
         let (element, value_node, element_ty) =
             self.slot_read(array_ty, array_value, index_value, None);
-        let _ = (elem_cell, element_ty);
+        // A read states its value's type node
+        // (`docs/notes/compound-element-slots.md`).
+        for node in [element, value_node] {
+            if node != element_ty {
+                self.module
+                    .record_element_type(node, AnyNodeId::Dynamic(element_ty));
+            }
+        }
+        let _ = elem_cell;
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,

@@ -629,9 +629,17 @@ where
         let on_a_slot = self.params.iter().any(|slot| {
             root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
         });
-        // The domain's leaves, or a class the parameter's type tree names
+        // The domain's leaves, or a class the type tree names
         // (`docs/notes/compound-element-slots.md`).
         let on_a_leaf = self.type_classes.contains(&root)
+            || self
+                .module
+                .element_type_of(cursor)
+                .and_then(|node| node.dynamic())
+                .is_some_and(|type_node| {
+                    self.type_classes
+                        .contains(&self.module.class_root(type_node))
+                })
             || self
                 .domain_leaves()
                 .map(|leaves| {
