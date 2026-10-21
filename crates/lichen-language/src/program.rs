@@ -313,6 +313,31 @@ macro_rules! lang_compose_vocabulary {
                     $( LangOperator::$extra_op_name(op) => op.run(operand, block, module), )*
                 }
             }
+            /// The deferred form dispatches to the leaf too.
+            fn run_deferred(
+                &self,
+                operand: Option<::lichen_lowlevel::NodeId>,
+                block: ::lichen_lowlevel::BlockId,
+                module: &mut ::lichen_lowlevel::Module<LangProgram>,
+            ) -> Option<<LangProgram as ::lichen_lowlevel::Program>::Value> {
+                match self {
+                    LangOperator::$lowop_name(op) => {
+                        <$lowop as ::lichen_lowlevel::OperatorExt<LangProgram>>::run_deferred(
+                            op, operand, block, module,
+                        )
+                    }
+                    LangOperator::$tyop_name(op) => {
+                        <$tyop as ::lichen_lowlevel::OperatorExt<LangProgram>>::run_deferred(
+                            op, operand, block, module,
+                        )
+                    }
+                    $( LangOperator::$extra_op_name(op) => {
+                        <$extra_op as ::lichen_lowlevel::OperatorExt<LangProgram>>::run_deferred(
+                            op, operand, block, module,
+                        )
+                    } )*
+                }
+            }
             fn low_type(
                 &self,
                 arguments: &[Option<::lichen_lowlevel::LowShape>],

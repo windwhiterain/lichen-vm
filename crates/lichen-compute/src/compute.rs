@@ -1169,6 +1169,36 @@ where
         }
     }
 
+    /// A recording does not consult its operand's verdict
+    /// (`docs/notes/graph-recording-rounds.md`).
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: BlockId,
+        module: &mut Module<P>,
+    ) -> Option<P::Value> {
+        if graph::is_recording() {
+            // A recorded operand carries open type positions by design
+            // (`docs/notes/graph-recording-rounds.md`).
+            let value = match operand {
+                Some(node) => module.evaluate_node_deep(node, Some(block))?,
+                None => P::Value::from(LowValue::Error),
+            };
+            return self.run(value, block, module);
+        }
+        let value = match operand {
+            Some(node) => {
+                let value = module.evaluate_node_deep(node, Some(block));
+                if module.node_is_undecided(node) {
+                    return None;
+                }
+                value?
+            }
+            None => P::Value::from(LowValue::Error),
+        };
+        self.run(value, block, module)
+    }
+
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
         // An operator that cannot decide yet answers `None`, the trait's own
         // spelling of "undecided".

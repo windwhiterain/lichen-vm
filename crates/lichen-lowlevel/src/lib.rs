@@ -478,10 +478,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
             Some(node) => {
                 let value = module.evaluate_node_deep(node, Some(block));
                 // An absent node or unset `evaluated_deep` means concreteness unknown, never concrete.
-                let undecided = module
-                    .nodes
-                    .get(node)
-                    .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.undecided));
+                let undecided = module.node_is_undecided(node);
                 if undecided {
                     return None;
                 }

@@ -545,6 +545,14 @@ impl<P: Program> Module<P> {
         self.nodes.get(node).is_some_and(|node| node.runned != 0)
     }
 
+    /// Whether a node's deep pass left it undecided
+    /// (`Module::evaluate_node_deep`).
+    pub fn node_is_undecided(&self, node: NodeId) -> bool {
+        self.nodes
+            .get(node)
+            .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.undecided))
+    }
+
     /// Re-open every operator under `block` that ran and could not decide.
     ///
     /// # Invariant
