@@ -94,6 +94,17 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The stub was the class refusal, and what it leaves is a value assertion a stub cannot meet.**
+Fixed with the superior's approval (`e9ccea68`): the stub minted one resident id for every
+output and answered `Float` zeros for every fetch, so an `Int` buffer came back `Float` and the
+run refused it. It now mints distinct ids and records the class each fragment states. Measured:
+**186/44 unchanged**, but the two nested-config tests no longer hit the class refusal — they
+reach their own assertion (`the direct launch answers a * cols + b`, `[0,0,0,0,0,0]` against
+`[103,106,109,112,115,118]`), and a stub computes nothing by design. So that group is not a bug
+to fix in code: it is a test that asserts a **computed value** while the suite now installs a
+**stub**. The update's own direction ("the suite asserts the record, not a run") says those
+assertions should read the record; that is a test rewrite, which needs the superior's word.
+
 **The new baseline's 44 failures cluster by refusal site.** Running each alone and taking its
 first panic line: `testing.rs:70` (a check refusal) ×6, `sibling_diamond.rs:68` ×4,
 `fuse_licence.rs:596` ×4, **`equality.rs:196` ×2** (the class-shape assertion — the seed
