@@ -82,6 +82,16 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The fusion tests that fail on an undecided root stop at the collect.** Instrumenting the
+extension dispatch's silent `None`s on
+`fuse_licence::a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves`
+shows the *last* one is `ComputeOperator(BufferCollect)`, after `GraphRun` twice — so the graph
+runs and the *collect* answers nothing, which is what leaves the program's root undecided with
+no diagnostic. The collect's arm read the buffer from the element node itself (an array under
+the slot encoding), so it now peels the slot first (`bf4d5b7`); that is measured **neutral
+(177)** on its own, so the refusal is deeper inside the collect — the next probe is
+`buf_payload`/`fetch_resident` at that node.
+
 **The same helper shape swept the fusion tests: compute 158 → 177.** Eight more test helpers
 read a root element with `node_value(node).or_else(|| node_value(node))`, which cannot see
 past the slot a compound's element is; each now reads the slot's value position first
