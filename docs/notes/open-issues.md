@@ -82,6 +82,18 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The five are refused where the body tells a pair from a tuple.** Reading `parameter_path`: the
+outer read `p(0)(1)` walks its target (the inner `Index`), sees `step == 1`, takes the
+*dereference* branch because the class shape says "a two-position tuple with an open second
+position", and returns `Ok(None)` — "a pair's type (1) is not a value this body emits". But
+`p(0)` is the **tuple read** whose *value* is the inner tuple `(Int, Int)`, so its step 1 is the
+tuple's **second element slot**, not a pair's type. A pair and a tuple are both arrays with a
+layout, and the class shape `Tuple([None, None])` is precisely the pair *and* a two-element
+tuple, so the detector cannot tell them apart: that ambiguity is the defect, and the
+discriminator is the **second position's own kind** (a pair's second position is a type, a
+tuple's elements are slots). Trying the node's own value or the class's value for the detector
+was measured **neutral** (222) in both forms, because the walk reaches the same ambiguity.
+
 **The accounting, measured: the seed fixes two tests and carries five.** Running the whole
 suite twice and diffing the failure lists: with the value seed **225 passed / 29 failed**,
 without it **222 / 32**. Removing the seed **fixes** two —
