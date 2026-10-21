@@ -61,6 +61,14 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The loop is the checker's `check_term` walking an index.** Attributing every thousandth
+node creation to its caller (peel in place): the loop is built by the **checker**, and the
+deeper frames are `check_term → check_index → slot_read → array_node → array_node_with_layout`.
+`check_term` is the checker's type pass, so the peel makes some type read stay unstable and
+the pass re-walks its work list thousands of times — the stack stays shallow (its own walk
+is iterative), which is why a depth guard never saw it. The next probe is the stability test
+`check_term` uses to stop re-visiting a node, and which read the peel keeps changing.
+
 **The frozen overflow is a node loop, not a deep recursion.** Instrumenting `add_node` with
 a backtrace every 2000 creations (peel in place): at 2 000 nodes the stack is **27 frames**
 and names no clone walk; by 18 000–26 000 it is 50–90 frames and its top frames are
