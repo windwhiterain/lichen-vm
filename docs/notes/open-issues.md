@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Baseline moved: the suite no longer runs a device, and compute dropped from ~140 s to 79 s.**
+`dev` is at `01d8297e` in this checkout (the update was local, not pushed). The suite is
+**231 tests**: `test result: FAILED. 186 passed; 44 failed; 1 ignored` in **79.38 s**, from
+~140 s before. The failure list is a *different set*, so the old counts are not comparable: the
+nested-tuple domain test and the class-shape test
+(`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`) now **pass**, while other
+device-backed tests that used to be reached by a run are now asserted on the record. The seed
+work recorded above is therefore **partly obsolete**: the two tests it was aimed at are green,
+and the remaining 44 are the new list.
+
 **The method needs a correspondence the checker does not build: the type tree and the value
 tree are separate classes.** Implementing the verdict's direction faithfully — readers take
 the shape from the **type node**, the highlevel seeds nothing for a node that has one — was
