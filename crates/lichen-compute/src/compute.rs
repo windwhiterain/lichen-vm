@@ -5745,7 +5745,8 @@ fn evaluate_until_the_return_is_nameable<P>(
 ) -> (Option<P::Value>, Option<Vec<Placed>>)
 where
     P: Program,
-    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType + From<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut result = module.evaluate_node_deep(apply, Some(block));
     let mut recorded = result
@@ -5780,7 +5781,8 @@ where
 fn returned_value_ids<P>(module: &Module<P>, value: &P::Value) -> Option<Vec<Placed>>
 where
     P: Program,
-    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType + From<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // The items of a result are nodes, so each is read back through the module
     // rather than matched in place.
@@ -5802,7 +5804,11 @@ where
         let items = unsafe { array.items() };
         let mut placed = Vec::new();
         for item in items {
-            placed.extend(place_of(item.node)?);
+            // An element is a complete slot: the value position is its value
+            // (`docs/notes/compound-element-slots.md`).
+            placed.extend(place_of(
+                module.element_value_node(item.node).unwrap_or(item.node),
+            )?);
         }
         Some(placed)
     };
@@ -5813,7 +5819,9 @@ where
     // SAFETY: as above.
     let items = unsafe { array.items() };
     let first = items.first()?;
-    let node = dyn_node(first.node).ok()?;
+    // A block's first item reads the returned slot
+    // (`docs/notes/compound-element-slots.md`).
+    let node = dyn_node(peeled_argument(module, first.node).ok()?).ok()?;
     let inner = module.node_value(AnyNodeId::Dynamic(node))?;
     placed_of(&inner)
 }

@@ -67,6 +67,12 @@ pub struct Lower<'a, P: Program> {
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
+    /// The nodes whose own lowering is in progress.
+    ///
+    /// # Invariant
+    /// A definition edge can cycle, so a lowering that meets a node it is already
+    /// lowering refuses it by name instead of following the cycle.
+    lowered_path: HashSet<NodeId>,
     /// The nodes whose origin fallback is already in progress.
     ///
     /// # Invariant
@@ -209,6 +215,7 @@ where
             values: HashMap::new(),
             depth: 0,
             value_classes: HashMap::new(),
+            lowered_path: HashSet::new(),
             origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
@@ -260,6 +267,7 @@ where
             values: HashMap::new(),
             depth: 0,
             value_classes: HashMap::new(),
+            lowered_path: HashSet::new(),
             origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
@@ -286,6 +294,17 @@ where
     /// The value `node` names, emitting its definition the first time it is asked
     /// for.
     fn value(&mut self, node: NodeId) -> Result<ValueId, String> {
+        if !self.lowered_path.insert(node) {
+            return Err(format!(
+                "a definition cycle: {node:?} is lowered while it is already being lowered, so                  the edge that reaches it again names no computation this kernel can place                  (`docs/notes/cycle-free-definitions.md`)"
+            ));
+        }
+        let result = self.value_inner(node);
+        self.lowered_path.remove(&node);
+        result
+    }
+
+    fn value_inner(&mut self, node: NodeId) -> Result<ValueId, String> {
         // **Inside a `@loop` nest the roles are the binding**: a marked function's read
         // resolves to its block's parameters.
         if let Some(index) = self.loop_owner(node)
