@@ -76,5 +76,6 @@ mod zz_operator_floor_probe;
 mod zz_plain_leg_probe;
 mod zz_pool_probe;
 mod zz_replicate_address_probe;
+mod zz_store_loop_probe;
 mod zz_subrange_write_probe;
 mod zz_zero_extent_probe;

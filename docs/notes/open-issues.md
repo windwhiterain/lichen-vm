@@ -82,6 +82,16 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**A minimal probe narrows the crash to the *second* backend's run.** A probe
+(`tests/lichen_compute/zz_store_loop_probe.rs`) repeats six
+`new_store(None)` registrations plus a compile-and-drop of the `jit`/`launch` program, and it
+**passes** with and without the peel — registrations and module drops are not the trigger.
+Replacing that program with the failing test's parallel program on the **`cpu`** backend also
+**completes** (`preprocess start → done → checked → finished`, with and without the peel). The
+failing test differs in one respect that is now the whole gap: it runs the program **twice**,
+the second time after `lichen_compute_gpu::install_default()`. So the abort follows the
+**second (device) run**, not the check and not a drop of a compile result.
+
 **The crash point moves between runs, from before the first registration to after the third.**
 With a file marker at `register_compute`'s entry: one run shows `register_compute 1, 2, 3`
 and then a crash with no fourth line; another run (256 MB test stack) crashes with **no line
