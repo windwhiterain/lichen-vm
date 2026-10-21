@@ -5467,20 +5467,35 @@ where
         Some(roles) => {
             // A buffer role's cell is a `Buf` wrapper around the placeholder;
             // a scalar role stays bare.
-            let mut paths: Vec<(&Vec<usize>, bool)> = roles
+            let mut paths: Vec<(&Vec<usize>, bool, Option<ScalarClass>)> = roles
                 .scalars
                 .iter()
-                .map(|path| (path, false))
-                .chain(roles.inputs.iter().map(|path| (path, true)))
-                .chain(roles.outputs.iter().map(|path| (path, true)))
+                .map(|path| (path, false, None))
+                .chain(
+                    roles
+                        .inputs
+                        .iter()
+                        .zip(&roles.input_classes)
+                        .map(|(path, class)| (path, true, *class)),
+                )
+                .chain(
+                    roles
+                        .outputs
+                        .iter()
+                        .zip(&roles.output_classes)
+                        .map(|(path, class)| (path, true, *class)),
+                )
                 .collect();
             paths.sort_by(|left, right| left.0.cmp(right.0));
             let mut cells: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(paths.len());
-            for (slot, (path, wrapped)) in paths.into_iter().enumerate() {
+            for (slot, (path, wrapped, class)) in paths.into_iter().enumerate() {
                 let value = <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
                 let node = module.add_node(block, None, Some(value));
+                // A buffer's element class is the parameter's declaration
+                // (`docs/notes/compile-order-class.md` §3).
                 let node = if wrapped {
-                    buf_value::<P>(module, block, AnyNodeId::Dynamic(node), ScalarClass::Int)?
+                    let class = class.unwrap_or(ScalarClass::Int);
+                    buf_value::<P>(module, block, AnyNodeId::Dynamic(node), class)?
                 } else {
                     node
                 };
