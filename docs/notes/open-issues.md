@@ -51,6 +51,18 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The empty callee is the *type-side* apply, by design.** The fold's template holds the
+applies in **pairs** for one call site: `610` with the callee `556` = `Function(Static)`
+and the argument pair `605` — the **value-side** apply — and `613` with the callee `611` =
+an **empty cell**, the same result-type cell `608` and the same function type `557` — the
+**type-side** apply whose callee is `check_app`'s `undecided_callee` ("the same four
+elements over an undecided callee: the type applies, the body does not"). The same pairing
+repeats for every call in the body (`738`/`741`, `879`/`882`). So the callee is empty
+**because the apply the loop's lowering reached is the type-side one**, not because a
+wildcard was cloned; the emitter must not lower a type apply for a value, and the value
+apply for the same call is identifiable by the shared result-type and function-type
+operands.
+
 **No apply in the finished module has a wildcard callee, and node ids do not carry
 across runs.** A full scan of every function's `Apply` nodes prints **nothing** whose
 callee operand holds the shared wildcard, and `check_app`'s per-apply probe shows every
