@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**A frozen apply names its function in item 3, and the residual is not materializable.**
+Two emitter facts moved the plan program's kernel to a full lowering: an apply records its
+function type in **item 3**, so a callee whose own class is empty still names the frozen
+function there (`static_callee` consults the value, the read chain and that slot), and the
+callee's operator is read **before** any residual (the residual is the operator's own node,
+and an operator inside a call's argument has none). Measured: the diagnostic moves from the
+kernel-body Apply refusal to the parallel extension's input-buffer check — the kernel now
+lowers end to end — while compute stays 115 (the extension check is the next layer).
+
 **The entry is the test's own `Geq`: its first operand is the type-graph chain.** The
 emitter's path is `lower_loop_tests → value(condition) → definition(Geq) →
 arithmetic → value_item(Geq, 0) → value(4318)` — so the **test comparison's operand 0** *is*
