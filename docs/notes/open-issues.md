@@ -73,6 +73,13 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**The registry is per store, so the shared state is a compute-crate global.** `new_store`
+builds `PackageStore::new()`, and that constructs a **fresh** `Arc<RwLock<Registry>>`, so the
+fourth registration does not see the first three through the symbol registry. The cumulative
+state that differs on the fourth run therefore lives in the compute crate's own globals
+(`kernels`, `graphs`, `fragment_facts`, or the recording's registries), and the next probe is
+their sizes and the fourth registration's first call into them.
+
 **Confirmed: the crash is the *fourth* store's registration.** Phase markers written to a
 file (stderr loses its tail when the stack overflow aborts the process) show **three complete
 cycles** of `preprocess → checked → finished`, and then the crash with **no fourth
