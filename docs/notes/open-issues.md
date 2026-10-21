@@ -61,6 +61,13 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The launch extent is correct, so the loop is downstream of it.** The frozen test's
+extent reads `LowValue::USize(69)` both raw **and** peeled — 69 is the program's own
+`ELEMENT_COUNT` (`LOCAL_SIZE_X + 5`), so the peel is innocent at that leaf and the launch runs
+the extent the test wrote. The node loop therefore starts *after* a correct launch: the clone
+walk (frames at 20 000 and 26 000) and the checker's type pass both appear, and the process
+creates 26 000+ nodes with a shallow stack.
+
 **The loop is the checker's `check_term` walking an index.** Attributing every thousandth
 node creation to its caller (peel in place): the loop is built by the **checker**, and the
 deeper frames are `check_term → check_index → slot_read → array_node → array_node_with_layout`.
