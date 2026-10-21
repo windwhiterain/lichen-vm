@@ -5746,6 +5746,27 @@ where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
 {
+    flatten_leaves_at::<P>(module, node, out, 0);
+}
+
+/// [`flatten_leaves`] with a depth bound.
+///
+/// # Invariant
+/// The bound is the widest argument a graph can be handed, because a value nesting
+/// deeper than the graph's input ceiling is a block naming itself: it is cut rather
+/// than followed, since following it names no leaf.
+fn flatten_leaves_at<P>(
+    module: &mut Module<P>,
+    node: AnyNodeId,
+    out: &mut Vec<AnyNodeId>,
+    depth: usize,
+) where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+{
+    if depth > graph::MAX_GRAPH_INPUTS {
+        return;
+    }
     let value = module.node_value(node);
     if value.as_ref().is_some_and(ValueType::is_kind_marker) {
         return;
@@ -5759,7 +5780,7 @@ where
         let items = unsafe { array.items() };
         let nodes: Vec<AnyNodeId> = items.iter().map(|item| item.node).collect();
         for item in nodes {
-            flatten_leaves::<P>(module, item, out);
+            flatten_leaves_at::<P>(module, item, out, depth + 1);
         }
         return;
     }
