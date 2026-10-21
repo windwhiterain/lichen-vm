@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The entry is the test's own `Geq`: its first operand is the type-graph chain.** The
+emitter's path is `lower_loop_tests → value(condition) → definition(Geq) →
+arithmetic → value_item(Geq, 0) → value(4318)` — so the **test comparison's operand 0** *is*
+the frozen type-graph read (a clone, origin = the frozen call's apply node), not the state
+read. The clone binds that operand directly, so the wrong node comes from the **frozen
+module's own graph** (the `>=` inside `greater_or_equal`): the comparison's left is already
+the type side there. The next probe is that frozen graph's `Geq` operands — the core
+compile's class merge, most likely through the refinement/assert path
+(`operands : array{(_ ! in_num), 2}`).
+
 **The type side no longer copies the frozen body; the remaining clone is the value side's.**
 Both type-side static applications copied the frozen **return pair whole** — and that pair's
 value is the *body*, so the type side dragged `greater_or_equal`'s graph into the caller and
