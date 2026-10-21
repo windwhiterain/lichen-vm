@@ -114,6 +114,8 @@ struct ActiveLoop {
     conversion: LoopConversion,
     /// The parameters of [`Self::block`], in the conversion's slot order.
     block_slots: Vec<ValueId>,
+    /// The state value the nest entered with — the call's own argument.
+    state: NodeId,
     /// The block the nest starts from: it dominates every block of the nest.
     entry: usize,
     /// The block the nest is currently emitting into.
@@ -417,6 +419,15 @@ where
     /// A read is matched by the conversion's own path ([`LoopConversion::state`])
     /// against [`Module::parameter_value_path`]; a read covering no slot is a
     /// disagreement between the readers, not a shape to guess at.
+    /// The call's **argument** — the state the nest enters with.
+    fn loop_argument(&self, node: NodeId) -> Option<NodeId> {
+        let operands = self.module.operands_of(node).ok()?;
+        operands
+            .get(1)
+            .copied()
+            .or_else(|| operands.first().copied())
+    }
+
     fn loop_value(&self, index: usize, node: NodeId) -> Result<Option<ValueId>, String> {
         let active = &self.loops[index];
         // A clone of the marked function's node reads what its template does.
@@ -427,6 +438,14 @@ where
                 self.module
                     .node_origin(node)
                     .and_then(|origin| self.module.parameter_value_path(active.function, origin))
+            })
+            // A read of the entering call's own element names the same slot
+            // (`docs/notes/loop-conversion.md`).
+            .or_else(|| self.module.entry_state_path(active.state, node))
+            .or_else(|| {
+                self.module
+                    .node_origin(node)
+                    .and_then(|origin| self.module.entry_state_path(active.state, origin))
             });
         let Some(path) = path else {
             return Ok(None);
@@ -1126,6 +1145,7 @@ where
             function,
             conversion: conversion.clone(),
             block_slots: self.body.blocks[header].params.clone(),
+            state: self.loop_argument(node).unwrap_or(node),
             entry,
             block: header,
             header,

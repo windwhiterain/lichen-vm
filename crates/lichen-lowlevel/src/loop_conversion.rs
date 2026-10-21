@@ -173,15 +173,6 @@ impl<P: Program> Module<P> {
         let mut path = Vec::new();
         let mut current = node;
         for _ in 0..16 {
-            if std::env::var("DBG_PATH").is_ok() {
-                println!(
-                    "PATH {current:?} op {:?} class {:?} value-class {:?}",
-                    self.node_operation(current)
-                        .map(|operation| format!("{:?}", operation.operator)),
-                    self.class_root(current),
-                    value_class,
-                );
-            }
             if self.class_root(current) == value_class {
                 // The chain reached the state's value: what was collected reads
                 // outermost-first.
@@ -198,6 +189,50 @@ impl<P: Program> Module<P> {
             let (target, selector) = (*operands.first()?, *operands.get(1)?);
             let position = self.usize_value(selector)?;
             path.push(position);
+            current = target;
+        }
+        None
+    }
+
+    /// A read's selector position: a dynamic `USize` node or a frozen one.
+    pub fn read_position(&self, item: AnyNodeId) -> Option<usize> {
+        match item {
+            AnyNodeId::Dynamic(node) => self.usize_value(node),
+            AnyNodeId::Static(sref) => match self
+                .static_read(sref)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::USize(n)) => Some(n),
+                _ => None,
+            },
+        }
+    }
+
+    /// The state path a read of the entering call's element names
+    /// (`docs/notes/loop-conversion.md`).
+    pub fn entry_state_path(&self, state: NodeId, node: NodeId) -> Option<Vec<usize>> {
+        let mut collected = Vec::new();
+        let mut current = node;
+        for _ in 0..16 {
+            let operation = self.node_operation(current)?;
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                return None;
+            }
+            let operands = self.operand_items(operation.operand?).ok()?;
+            let position = self.read_position(operands.get(1)?.node)?;
+            let target = operands.first()?.node.dynamic()?;
+            if target == state {
+                // The argument **pair**'s value position is the state itself.
+                return if position == 0 {
+                    Self::state_path(collected)
+                } else {
+                    None
+                };
+            }
+            collected.push(position);
             current = target;
         }
         None
