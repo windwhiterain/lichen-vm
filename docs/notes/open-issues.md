@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The merged operand is a template node, and the merge happens after the check.** Every
+node of the traced chain (`1298` the condition, `4450` a frozen path read, `4468` the `Geq`)
+is owned by the fold — all **template** nodes. At `check_binop` time, no comparison's left
+operand has a frozen chain (measured over the whole program), so the operand array was
+built correctly and the frozen chain reached the operand **afterwards**: the check-time
+application of the fold (the type-side apply and its clone) merged the left value's equality
+class with the `compute.read` callee path, and the emitter's view/definition walk then
+follows the class representative into the frozen path. So the defect is the **class merge in
+the check-time apply**, not the clone's remap.
+
 **The wrong operand is the *clone's* state read.** The spine root is the fold's own node
 (`1302`, owner the fold), and no `check_binop` builds a comparison with a literal right in
 this program — so the `Geq` node the emitter walks (`4468`) is the **check-time clone** of
