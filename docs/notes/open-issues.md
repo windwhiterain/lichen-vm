@@ -82,6 +82,18 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The reader channel is in, and the correspondence is the one missing piece.** Landed
+(`b0d5c8e`): `compile_fragment` collects the class roots the parameter's **type** tree names,
+the body accepts a walk base that stands on one of them (or on a domain leaf), and the
+dereference gained a width reading — a pair or a slot is `2 + attributes` wide, a tuple's
+elements are slots. Measured **neutral (225)**, because the type tree's nodes and the value
+tree's nodes are in different classes: the walk's base (an element pair, class 671) is in
+neither. A scan of the template's **slots** would give the correspondence, but reading a
+node's array items is `unsafe` and crashed (`STATUS_ACCESS_VIOLATION`) on the frozen handles a
+package slot can carry, so it was removed rather than shipped. The two ways to finish are a
+**safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
+map, or the **checker** unifying each element's value class with its type node's class.
+
 **The method needs a correspondence the checker does not build: the type tree and the value
 tree are separate classes.** Implementing the verdict's direction faithfully — readers take
 the shape from the **type node**, the highlevel seeds nothing for a node that has one — was

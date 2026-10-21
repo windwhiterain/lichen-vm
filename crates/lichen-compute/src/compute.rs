@@ -2425,9 +2425,8 @@ where
         _ => DomainStatement::Absent,
     };
     let param_shape = kernel_domain(domain, statement)?;
-    // **The parameter's type node is the shape authority**
-    // (`docs/notes/compound-element-slots.md`): its tree names the classes a body read's
-    // base stands on, so the walk reads it instead of a class shape copied there.
+    // The parameter's type node is the shape authority
+    // (`docs/notes/compound-element-slots.md`).
     let type_classes = domain_type_classes(
         module,
         fid,

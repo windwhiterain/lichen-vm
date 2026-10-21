@@ -588,9 +588,7 @@ where
                 cursor = *target;
                 break;
             }
-            // A slot's value position is no path step: the read's own element is
-            // the pair the transfer states. A pair or a slot is **`2 + attributes`**
-            // wide, and a tuple's elements are slots, so a tuple is a different width
+            // A pair or a slot is `2 + attributes` wide; a tuple's elements are slots
             // (`docs/notes/compound-element-slots.md`).
             let class_value = self
                 .module
@@ -631,8 +629,7 @@ where
         let on_a_slot = self.params.iter().any(|slot| {
             root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
         });
-        // **Or one of the domain's leaves**, or a node the parameter's **type tree**
-        // names: the type node is the shape authority
+        // The domain's leaves, or a class the parameter's type tree names
         // (`docs/notes/compound-element-slots.md`).
         let on_a_leaf = self.type_classes.contains(&root)
             || self

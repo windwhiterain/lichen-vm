@@ -133,8 +133,6 @@ impl<P: Program> Module<P> {
         operator.low_type(&arguments)
     }
 
-    /// The operand array's elements, as dynamic node ids; a static ref has
-    /// no class to refine.
     /// Every node whose value `node` reads, in operand order.
     ///
     /// # Invariant
