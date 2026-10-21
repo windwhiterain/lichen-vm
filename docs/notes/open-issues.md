@@ -82,6 +82,14 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The gate is the operands' values now: compute 177 → 193.** The compute leaf's
+`run_deferred` no longer consults the deep verdict (a compound's element is a slot whose type
+position is unset, so the verdict read every collect behind a slot as undecided); it evaluates
+the operand and stays lazy only when an operand item's value is missing (`6545e837`). Measured:
+**compute 177 → 193 passed, 61 failed**, `graph_jit` **6/10 → 7/10**. Dropping the gate
+entirely was measured first and regressed the family (fuse_licence 7 → 1, graph_jit 6 → 0), so
+the gate is a narrower one, not no gate.
+
 **The fusion tests that fail on an undecided root stop at the collect.** Instrumenting the
 extension dispatch's silent `None`s on
 `fuse_licence::a_read_at_a_computed_address_runs_on_the_device_and_the_counterfactual_moves`
