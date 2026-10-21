@@ -73,6 +73,15 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**The overflow is inside the *prelude's* registration, not the test program.** A marker
+printed after `run_at`'s check and after `finish` **never appears** on the overflowing run,
+so the crash happens in `preprocess` — the import resolution that makes the store
+`register_compute`, whose nine `Checker::build` calls are the prelude's three modules per
+store. The last print before the abort is `BUILD 9 exprs 108`, so the crash is inside the
+**check of a prelude module with the peel active**. That isolates the repro: compile
+`compute.lichen` alone. It also explains why the sampled stacks looked shallow and the node
+count looked normal — they belong to the prelude's build, not the test's program.
+
 **The repeated builds and the node count are normal, so the overflow is elsewhere.** Probes:
 `Checker::build` runs ~9 times per test and each stack names
 `PackageStore::register_embedded ← register_native ← register_compute` — i.e. the **package
