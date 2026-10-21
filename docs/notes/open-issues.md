@@ -61,6 +61,13 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The loop family passes: an element read names the slot's value position.** `115 → 120`
+with `peeled_argument` ending on `element_value_node`: the read's buffer argument is the
+*value* position of the full `[value, type, attrs]` slot, the same reading the arc states
+for elements everywhere. `plan_staging`'s declared plan and `tiled_reduction`'s closed form
+now pass, so the `@loop` conversion lowers end to end (the marked recursion, the state
+slots, the frozen operator, and the kernel) — the campaign's loop target is met.
+
 **A frozen apply names its function in item 3, and the residual is not materializable.**
 Two emitter facts moved the plan program's kernel to a full lowering: an apply records its
 function type in **item 3**, so a callee whose own class is empty still names the frozen
