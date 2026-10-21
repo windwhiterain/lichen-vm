@@ -61,6 +61,19 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The one overflow left with the peel is in the graph *run*, and its bisect is narrowed.**
+Fresh-build measurements of `a_graph_runs_at_whichever_extent_its_argument_names` with the
+peel in place: the recording **succeeds** (`GRAPH arm done, value ComputeValue(Graph(0,
+Gpu))`, `graph::intern` completes and answers a digest), then the process overflows. That
+it stays inside `run_graph` is shown by returning early at its top, which removes the
+overflow. Every probe inside it was negative: `evaluate_node` depth never passes 200, the
+deep pass stays at depth 0, the clone walk below 300, `flatten_leaves` below 100, skipping
+`consult_graph_pass` does not help, and skipping `graph::run` does not help either. The
+`RUN before lookup` print does not survive the abort, so the last writes are lost and the
+bisect needs a *flag-return* at each landmark rather than a print. The peel's six passing
+tests are otherwise real (measured alone), so this overflow is the last blocker for landing
+it.
+
 **Measured again, the interference is deterministic and not the recording flag.** With the
 peel in place: `a_graph_recorded_for_one_backend_runs_on_another` **passes alone** and
 **fails in the family run**, and `a_graph_runs_at_whichever_extent_its_argument_names`
