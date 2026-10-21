@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The chain is created by the clone walk, and two sites overflow across runs.** With the
+peel in place the chain's node-creation backtrace is `check_lam → check_term → … →
+value_apply → node_apply → add_node`, i.e. the **clone walk** creates the contiguous ids,
+and its own depth stays below 300 — so the chain is built *breadth* first. The overflow
+then appears at one of two places in different runs (the clone walk's own recursion, or the
+evaluation's 26 800-deep recursion over the built chain); both are the same defect: the peel
+makes a frozen body's clone graph grow without a bound, and whichever walk follows it next
+overflows.
+
 **The peel's recursion follows one frozen clone per evaluation step.** The creation
 backtrace of the chain's nodes is `check_lam → check_term → … → value_apply → node_apply →
 add_node`, and the evaluation depth reaches 26 800 over contiguous node ids — so each
