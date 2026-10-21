@@ -519,6 +519,9 @@ where
             Some(type_operands),
         );
         self.type_applies.insert(e, type_apply);
+        // The call's value-side apply is recorded against its type side
+        // (`docs/notes/apply-type-side-check.md`).
+        self.module.apply_pairs.insert(type_apply, value_apply);
         // The call's type application at check; a function under check is skipped.
         if self.module.is_function_type(function_ty) {
             let in_progress = matches!(

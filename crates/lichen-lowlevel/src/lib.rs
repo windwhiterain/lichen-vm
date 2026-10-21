@@ -959,6 +959,8 @@ pub struct Module<P: Program> {
     pub applied_pairs: HashMap<NodeId, NodeId>,
     /// The clone's parameter of each type-side apply, keyed by the apply node.
     pub applied_parameters: HashMap<NodeId, NodeId>,
+    /// The value-side apply of a call, keyed by its type-side apply.
+    pub apply_pairs: HashMap<NodeId, NodeId>,
     /// Nested-application guard: refuses when an application's node depth exceeds this.
     ///
     /// # Invariant
