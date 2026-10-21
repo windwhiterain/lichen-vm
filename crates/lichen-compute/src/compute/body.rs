@@ -930,24 +930,44 @@ where
     /// the callee is reachable by `FunctionId` whether or not anything evaluated,
     /// which is why this answers where the class channel cannot — the argument is
     /// a read the kernel emits and the host never decides.
+    /// The frozen function an apply's callee names
+    /// (`docs/notes/loop-conversion.md` §8.5).
+    fn static_callee(
+        &self,
+        callee: NodeId,
+        type_slot: Option<AnyNodeId>,
+    ) -> Option<lichen_lowlevel::StaticFunctionRef> {
+        if let Some(value) = self.module.node_value(AnyNodeId::Dynamic(callee))
+            && let Some(LowValue::Function(AnyFunctionId::Static(function))) =
+                AsEnum::<LowValue>::as_enum(&value)
+        {
+            return Some(function);
+        }
+        if let Some(function) = self.module.static_function_of_callee(callee) {
+            return Some(function);
+        }
+        let type_node = type_slot?.dynamic()?;
+        match self.module.function_type_function(type_node)? {
+            AnyFunctionId::Static(function) => Some(function),
+            AnyFunctionId::Dynamic(_) => None,
+        }
+    }
+
     fn routed_operator(
         &mut self,
         node: NodeId,
         callee: NodeId,
         operand: NodeId,
     ) -> Result<Option<ValueId>, String> {
-        let function = match self
-            .module
-            .node_value(AnyNodeId::Dynamic(callee))
-            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-        {
-            Some(LowValue::Function(AnyFunctionId::Static(function))) => function,
-            // The cell's value, or the projection into the frozen module's own
-            // export array.
-            _ => match self.module.static_function_of_callee(callee) {
-                Some(function) => function,
-                None => return Ok(None),
-            },
+        let function = match self.static_callee(
+            callee,
+            self.module
+                .operand_items(operand)
+                .ok()
+                .and_then(|items| items.get(3).map(|item| item.node)),
+        ) {
+            Some(function) => function,
+            None => return Ok(None),
         };
         let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
             return Ok(None);
@@ -1020,8 +1040,16 @@ where
                 .map(|item| item.node)
                 .unwrap_or(operands[0].node),
         )?;
+        // The callee's operator is read before any residual
+        // (`docs/notes/loop-conversion.md` §8.5).
+        let frozen = self
+            .static_callee(callee, operands.get(3).map(|item| item.node))
+            .is_some()
+            || is_static_function(self.module, callee);
+        if frozen && let Some(value) = self.routed_operator(node, callee, operand)? {
+            return Ok(value);
+        }
         // The routing case: emit the residual the clone wrote.
-        let frozen = is_static_function(self.module, callee);
         if frozen {
             let residual = (unsafe { self.module.array_items(node) })
                 .and_then(|items| items.first())
@@ -1034,11 +1062,6 @@ where
                 return self.value(residual);
             }
         }
-        // The operator's identity is a static fact of its callee, residual or not,
-        // so the frozen body is read by `FunctionId`.
-        if let Some(value) = self.routed_operator(node, callee, operand)? {
-            return Ok(value);
-        }
         if frozen {
             return Err(
                 "this kernel body applies a prelude operator where the kernel cannot reach the \
@@ -1049,11 +1072,25 @@ where
                     .into(),
             );
         }
-        // **A marked recursion** converts to a loop; the callee's own template decides
-        // the shape.
-        if let Some(function) = self.module.callee_function(node)
-            && self.module.function_is_looping(function)
-        {
+        // **A marked recursion** converts to a loop
+        // (`docs/notes/loop-conversion.md` §4).
+        let recursion = self
+            .module
+            .callee_function(node)
+            .or_else(|| {
+                self.module
+                    .operand_items(operand)
+                    .ok()
+                    .and_then(|items| items.get(3).map(|item| item.node))
+                    .and_then(|item| item.dynamic())
+                    .and_then(|type_node| self.module.function_type_function(type_node))
+                    .and_then(|function| match function {
+                        AnyFunctionId::Dynamic(function) => Some(function),
+                        AnyFunctionId::Static(_) => None,
+                    })
+            })
+            .filter(|function| self.module.function_is_looping(*function));
+        if let Some(function) = recursion {
             return match self.module.loop_conversion(function) {
                 Ok(conversion) => self.lower_loop(node, function, &conversion),
                 Err(refusal) => Err(format!(
@@ -1086,6 +1123,7 @@ where
         {
             return self.apply(value_apply, operand);
         }
+
         // **Style 1, an ordinary lichen-function call, is refused by name**.
         let _ = node;
         Err(
