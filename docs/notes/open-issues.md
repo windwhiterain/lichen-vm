@@ -73,6 +73,15 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**Confirmed: the crash is the *fourth* store's registration.** Phase markers written to a
+file (stderr loses its tail when the stack overflow aborts the process) show **three complete
+cycles** of `preprocess → checked → finished`, and then the crash with **no fourth
+`preprocess` mark** — so it happens in the test's next `new_store(None)`, i.e.
+`register_compute` compiling the prelude. The first three registrations are fine and the
+fourth overflows, so the difference is **cumulative state shared across stores**, not the
+prelude itself. That also explains why other tests pass with the peel: they register fewer
+stores.
+
 **The overflow is inside the *prelude's* registration, not the test program.** A marker
 printed after `run_at`'s check and after `finish` **never appears** on the overflowing run,
 so the crash happens in `preprocess` — the import resolution that makes the store
