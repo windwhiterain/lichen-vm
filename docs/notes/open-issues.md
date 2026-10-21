@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Three leftover slot-reading helpers and one unevaluated root: compute 188 → 195.**
+`4542b047`: `sibling_diamond`, `tiling_visibility` and `union_ports` still read a root element
+with `node_value(node)` twice, the shape the fusion helpers had already been cured of; each now
+reads the slot's value position first — **+6 tests**. `5dc1b3e7`: `compile_order_class` read a
+kernel's classes after `common::check`, which never evaluates, so its root was undecided; it now
+runs the module's deep pass first — **+1**. Remaining failures with no stub at all: `graph_jit`
+twice (the class-shape assertion), `compute` twice, `buf_element_class_recorded`,
+`graph_structure` (the captured struct has no payload), and one compile-order case.
+
 **The stub was the class refusal, and what it leaves is a value assertion a stub cannot meet.**
 Fixed with the superior's approval (`e9ccea68`): the stub minted one resident id for every
 output and answered `Float` zeros for every fetch, so an `Int` buffer came back `Float` and the
