@@ -82,6 +82,17 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The crash is in the test-side `array_values`, after the device run.** A mark in
+`common::run` per program shows three runs — the `jit`/`launch` one, then the parallel one on
+`cpu`, then on `gpu` after `install_default` — and the abort comes **after the third**, i.e.
+in the test's own assertions. `common::array_values` is the walker there, and it **applies the
+same peel rule as the cfg-leaf peel**: an element whose value is an array with
+`layout() != 0` is read through its **first position**, then the value is recursed into. That
+is why the faithful probe passed: it dropped the modules instead of reading their values. The
+next probe is the slot `array_values` walks at that point: if its first position names the
+slot itself, the peel has met a **self-referential slot** and the value walk can never
+terminate — which is the real defect behind the moving crash point.
+
 **With a one-megabyte test stack, none of the three candidate walks passes depth 200.** A
 1 MB stack makes the abort shallow, and file-marked depth counters in `evaluate_node`,
 `evaluate_node_deep_inner`, `node_apply` and `value_apply` print **nothing**: no walk reaches
