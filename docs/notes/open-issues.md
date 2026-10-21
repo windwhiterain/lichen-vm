@@ -61,6 +61,13 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Site 1 is both the graph family's gain and the frozen overflow's trigger.** Peeling only
+the buffer and recorded-scalar sites (the launch's input buffers and the recording's scalars,
+**not** the launch's scalar leaf): the frozen test is **graceful** and graph_jit stays
+**1/10**; adding the launch's scalar leaf back gives **6/10** and the frozen overflow. So the
+five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
+is the one that explodes the class-crossing test.
+
 **The launch extent is correct, so the loop is downstream of it.** The frozen test's
 extent reads `LowValue::USize(69)` both raw **and** peeled — 69 is the program's own
 `ELEMENT_COUNT` (`LOCAL_SIZE_X + 5`), so the peel is innocent at that leaf and the launch runs
