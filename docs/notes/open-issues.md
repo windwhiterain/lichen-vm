@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Corrected: no launch ever has a value, and the recording's apply creates none.** The
+user's objection is right — a function that never ran returns nothing decided. Measured: the
+module holds **only the templates' launch nodes** (owners `9/10/11/14/22`), **every one with
+an empty value**, and after the recording's apply the module still holds no launch node with
+a value; forcing the value the returned pair carries (`d53b07e1`) does not change that. So
+the body's application neither runs nor clones a launch inside the recording window. The
+next probe is `function_apply` for the graph body itself: whether it clones the body at all,
+and whether its parameter check passes.
+
 **The graph family's root: the body's launches are decided before the recording.** Probes
 on `graph_jit::a_graph_recorded_for_one_backend_runs_on_another` with the recording in
 place: the recording's own apply is fresh (`value-before None`, `recording true`), its deep
