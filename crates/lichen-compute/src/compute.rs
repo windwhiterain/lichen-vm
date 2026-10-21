@@ -1659,10 +1659,12 @@ where
                         Some(LowValue::USize(n)) => n,
                         _ => return None,
                     };
-                    // The operand is a `Buf` value — the wrapper the type level
-                    // reads — so the buffer it names is that wrapper's payload.
-                    let buffer =
-                        buf_payload::<P>(module, operands[0].node).unwrap_or(operands[0].node);
+                    // The operand is a `Buf` wrapper behind the element's slot
+                    // (`docs/notes/compound-element-slots.md`).
+                    let element = module
+                        .element_value_node(operands[0].node)
+                        .unwrap_or(operands[0].node);
+                    let buffer = buf_payload::<P>(module, element).unwrap_or(element);
                     let element = match module
                         .node_value(buffer)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
