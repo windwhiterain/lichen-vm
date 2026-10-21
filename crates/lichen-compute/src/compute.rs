@@ -5811,7 +5811,13 @@ fn flatten_leaves_at<P>(
         // SAFETY: the array is the value of a live node of `module`, and its
         // items are live nodes of the same module.
         let items = unsafe { array.items() };
-        let nodes: Vec<AnyNodeId> = items.iter().map(|item| item.node).collect();
+        // Only a slot's value position is a dispatch argument
+        // (`docs/notes/compound-element-slots.md`).
+        let nodes: Vec<AnyNodeId> = if array.layout() != 0 {
+            items.first().map(|item| item.node).into_iter().collect()
+        } else {
+            items.iter().map(|item| item.node).collect()
+        };
         for item in nodes {
             flatten_leaves_at::<P>(module, item, out, depth + 1);
         }
@@ -5991,6 +5997,18 @@ where
     }
     let mut run_arguments: Vec<RunArgument> = Vec::new();
     for (position, node) in argument_leaves.iter().enumerate() {
+        // A compound's element is a slot, so a leaf is read at its value position
+        // (`docs/notes/compound-element-slots.md`).
+        let node = &module.element_value_node(*node).unwrap_or(*node);
+        if std::env::var("DBG_ARG").is_ok() {
+            eprintln!(
+                "GRAPH-ARG {position} {:?} value {:?}",
+                node,
+                module
+                    .node_value(*node)
+                    .map(|value| format!("{value:?}").chars().take(50).collect::<String>())
+            );
+        }
         let Some(value) = module
             .node_value(*node)
             .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
