@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The inlined body is `greater_or_equal`, and the emitter reaches it as a `definition`.**
+`core.lichen` writes `greater_or_equal = operands => { operands : array{(_ ! in_num), 2};
+operands[0] >= operands[1] }`, so `s(0) >= 7` becomes an apply whose single argument is the
+pair, and the `Geq` node is that body's `BinOp`, cloned into the caller by
+`static_function_type_apply`'s `static_node_apply(r#return, …)` with the signature's
+remap. The emitter reaches it through `definition` (not `apply`), so it reads the operand
+array as `[left, right]` — correct for the `BinOp` form — and the wrong node is the left,
+which the remap bound to the `compute.read` callee path instead of the argument pair's first
+element. The next probe is `materialize_static_signature_with_classes`' parameter remap.
+
 **The `Geq` node is a cloned frozen body, not a check-time comparison.** Only one `Geq`
 is created by the checker (`964`, in block 10) and it is not the traced node: the `Geq` the
 emitter walks (`4468`) is owned by the fold but created by the **clone** — the inlined body
