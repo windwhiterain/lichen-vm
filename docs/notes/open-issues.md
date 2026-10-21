@@ -82,6 +82,11 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**User verdict (round 88): fixing the stale test helpers is approved** — only helpers that
+read a raw node, no assertion changes, no new tests. First application: `fuse_licence`'s
+`recorded` now reads the slot's value position (`d6c2f17`'s commit), and **fuse_licence goes
+1/11 → 7/11, compute 152 → 158**.
+
 **A kernel lookup now descends wrappers — compute 147 → 152.** The lookup looked one array
 level deep, but a compound's element is a slot and a wrapper nests its `.native`, so a
 reader's node is a slot whose value holds the wrapper. It now descends to `KERNEL_DEPTH`
