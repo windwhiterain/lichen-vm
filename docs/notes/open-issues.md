@@ -82,6 +82,13 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The graph run's argument walk was reading slots: compute 193 → 225.** `flatten_leaves`
+descended every item of every array, so a compound's element **slot** contributed its type and
+attribute positions as dispatch arguments — a wildcard among them — which is what produced
+"argument 1 is neither a buffer nor a number". It now walks only a slot's **value position**
+(`15e0d5b`), and the leaf read goes past the slot too. Measured: **compute 193 → 225 passed,
+29 failed**, `pack_placement` **2/8 → 7/8**, `graph_jit` **7/10 → 8/10**.
+
 **The gate is the operands' values now: compute 177 → 193.** The compute leaf's
 `run_deferred` no longer consults the deep verdict (a compound's element is a slot whose type
 position is unset, so the verdict read every collect behind a slot as undecided); it evaluates
