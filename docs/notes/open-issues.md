@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The fused region's two legs prove the record too: compute 199 → 201.** `82b5d734`:
+`fused_region`'s two tests compared a device answer with a closed form; each now proves the
+dispatch record — the merged leg dispatches **one node that is not either recorded kernel, over
+the same extent**, and the swapped element dispatches a **different fragment**. Measured:
+**fused_region 6/8 → 8/8**, compute **199 → 201 / 29**. The same rewrite applies to
+`decode_step_graph` (3), `automatic_tiling` (3), `fold_datum` (2), `compile_order_class`,
+`chain_merge`, `combine_fold`, `float_leaf`, `cooperative_product`, `fan_out_merge`,
+`runtime_scalar_leaf`, `recompute_reads`, `pack_placement` and the rest of the stub-value group.
+
 **The fusion triple proves the record now: compute 195 → 199.** `device_triple`, the shared
 helper behind four `fuse_licence` tests, compared device answers, which a stub cannot compute.
 Its legs now prove what a record can: the recording dispatches, the merged leg dispatches **one
