@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The peel's overflow is an unbounded chain the checker builds.** Instrumenting
+`evaluate_node`'s depth shows 26 800 nested calls with the peel in place, over a *growing*
+chain of contiguous dynamic nodes (`3800, 3801, … 3909, …`) interleaved with the prelude's
+static reads (`3`, `7`, `10`, `11`) — so the recursion follows a chain the **check** creates
+while it runs, not one the emitter walks. Without the peel the same program terminates, so
+the peel sends some checker path into an unbounded expansion (each step a fresh node), which
+the evaluation then follows. That is the defect to find before the peel can land; the
+`value()` guard (`f9a0a461`) still bounds the lowering itself.
+
 **The peel's overflow is not the lowering's guarded path.** With the peel and the
 `value()` cycle guard both in place, the guard **never fires**: its path shrinks between
 calls (`4 → 3 → 0`) because each `value` call *completes*, and the process still overflows
