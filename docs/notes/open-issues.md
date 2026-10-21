@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The loop body's failing callee is a read of an undecided pair.** Probing the refusal
+itself: the apply's callee is `Index(691, 0)` where `691` is an **empty cell** — no value,
+no operation, so `array_items_of` answers `None` — and `static_function_of_callee` returns
+`None` for it. So the callee the loop's lowering holds is a `value_of` **read** whose pair
+was never filled in the clone, not the shared wildcard and not the type-side apply (those
+are the *template's* pairing, measured last round). The fix therefore belongs at the
+callee's **definition resolution**: the emitter must follow the read to what defines the
+pair (the frozen function value) before deciding it is unresolvable.
+
 **The empty callee is the *type-side* apply, by design.** The fold's template holds the
 applies in **pairs** for one call site: `610` with the callee `556` = `Function(Static)`
 and the argument pair `605` — the **value-side** apply — and `613` with the callee `611` =
