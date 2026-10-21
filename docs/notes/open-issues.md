@@ -82,6 +82,18 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The second conflict is an observation meeting a seeded class.** With the two-seed fill in
+place the first conflict (1414) is gone and the assertion moves to node **1684**, whose class
+carries `Tuple([Some(Tuple([Some(Tuple([None, None]))])), None])` and is later stated as
+`Tuple([Some(Tuple([Some(Tuple([None, Some(USize)]))])), None])`. A trace of
+`observe_class_low_type` shows **no** observation for that node, and seeds no longer reach
+`refine_class_low_type`, so the second statement comes from `fill_class_holes` or `gc` — a
+**value fill** — after a **union** merged a seeded class with one whose node has a type node.
+That is the verdict's case: the seed and the observation did not start on one node, the union
+put them there. The invariant is left as it is and the seed fill is **not committed** (it edits
+the "one shape" wording that is an Invariant, so it needs the superior's word, and it is
+measured neutral on its own).
+
 **The seed conflict is seed-vs-seed, and removing the value seed regresses three.** Tracing
 both write paths on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`: node
 1414's class root 4246 receives **two seeds** (lines 502 and 578 of the trace, no observation),
