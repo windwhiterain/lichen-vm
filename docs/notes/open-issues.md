@@ -73,6 +73,15 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**The crash point moves between runs, from before the first registration to after the third.**
+With a file marker at `register_compute`'s entry: one run shows `register_compute 1, 2, 3`
+and then a crash with no fourth line; another run (256 MB test stack) crashes with **no line
+at all**. So the abort is **not tied to a fixed phase** — it moves with the run — which no
+program-order probe can chase further. That is the signature of a **`Drop`** (order and stack
+layout dependent) over a deep structure that the peel deepened, not of a step in the check.
+The next probe is a `DBG_LEAK`-style run that never drops the modules; if the abort moves or
+disappears, the drop is confirmed.
+
 **The registry is per store, so the shared state is a compute-crate global.** `new_store`
 builds `PackageStore::new()`, and that constructs a **fresh** `Arc<RwLock<Registry>>`, so the
 fourth registration does not see the first three through the symbol registry. The cumulative
