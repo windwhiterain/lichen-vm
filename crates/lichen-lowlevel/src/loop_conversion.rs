@@ -442,6 +442,16 @@ impl<P: Program> Spine<'_, P> {
 
     /// One selection of the spine: record its test, then walk both arms.
     fn walk_test(&mut self, selection: NodeId) -> Result<usize, LoopRefusal> {
+        // A view is not a conditional: the test is what the view names
+        // (`docs/notes/loop-conversion.md`).
+        let mut selection = selection;
+        let mut seen = HashSet::new();
+        while seen.insert(selection) {
+            match self.module.selection_of(selection) {
+                Some(Selection::Views(view)) => selection = view,
+                _ => break,
+            }
+        }
         let operands = self
             .module
             .operands_of(selection)

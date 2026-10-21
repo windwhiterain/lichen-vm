@@ -269,7 +269,7 @@ impl<P: Program> Module<P> {
         };
         // **An operand may be frozen**, by reference from the apply clone. A
         // view is a view wherever the node it reads lives.
-        if let Some(k) = self.usize_value(index.node) {
+        if let Some(k) = self.read_position(index.node) {
             if let Some(element) = self.item_of(target.node, k) {
                 return Some(Selection::Views(element));
             }
