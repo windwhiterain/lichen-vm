@@ -97,6 +97,14 @@ where
             None => items.extend(std::iter::repeat_n(any, P::Attr::ORDER.len())),
         }
         let layout = self.full_width_layout();
+        // The second position is the value's shape authority
+        // (`docs/notes/compound-element-slots.md`).
+        if let (Some(value), Some(ty)) = (value, ty)
+            && value != ty
+        {
+            self.module
+                .record_element_type(value, AnyNodeId::Dynamic(ty));
+        }
         self.array_node_with_layout(self.current_block, &items, layout)
     }
 

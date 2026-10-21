@@ -472,6 +472,28 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// State the **type node** of an element's value.
+    ///
+    /// # Invariant
+    /// The type node is the element slot's second position
+    /// (`docs/notes/compound-element-slots.md`), so the value node has a shape authority
+    /// without a class shape being copied onto it; one statement per value node.
+    pub fn record_element_type(&mut self, value: NodeId, r#type: AnyNodeId) {
+        self.element_types.entry(value).or_insert(r#type);
+    }
+
+    /// The type node an element value states, read by node and then by class.
+    ///
+    /// # Invariant
+    /// A class holds one value, so a merged value node answers its class's statement;
+    /// a node that states none answers [`None`].
+    pub fn element_type_of(&self, node: NodeId) -> Option<AnyNodeId> {
+        self.element_types
+            .get(&node)
+            .or_else(|| self.element_types.get(&self.class_root(node)))
+            .copied()
+    }
+
     /// The structural value `node` holds, when it holds one — what a consumer
     /// reads for a literal rather than an operator.
     pub fn structural_value(&self, node: NodeId) -> Option<LowValue> {

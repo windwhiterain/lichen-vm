@@ -952,6 +952,14 @@ pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
+    /// The **type node** of each element value, keyed by the value node.
+    ///
+    /// # Invariant
+    /// A compound's element is a slot, and the slot's second position is the element's
+    /// type (`docs/notes/compound-element-slots.md`); the checker states that
+    /// correspondence when it builds the slot, so a reader holding only the value node
+    /// reaches the type node that is its shape authority.
+    pub element_types: HashMap<NodeId, AnyNodeId>,
     /// The clone's return pair of each type-side apply, keyed by the apply node.
     pub applied_pairs: HashMap<NodeId, NodeId>,
     /// The clone's parameter of each type-side apply, keyed by the apply node.
