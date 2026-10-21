@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The frozen overflow is a node loop, not a deep recursion.** Instrumenting `add_node` with
+a backtrace every 2000 creations (peel in place): at 2 000 nodes the stack is **27 frames**
+and names no clone walk; by 18 000–26 000 it is 50–90 frames and its top frames are
+`checker`, `function` and **`static_module`**, still shallow. So the process **creates
+26 000+ nodes in a loop** and only then exhausts the stack — the expensive path is a
+repeated materialization (a frozen/static read re-materializing a value), not a linear
+descent. A probe on `static_function_apply` fires nothing, so the loop is in another static
+path (the materialization of a *value* or the checker's re-drive). That is the next probe.
+
 **The frozen-body overflow's trigger is the launch's scalar leaf read.** Bisecting the
 peel's five sites: peeling **only** `record_launch`'s extent leaves the frozen test graceful;
 peeling **only** `ParLaunch`'s scalar leaf read (site 1) reproduces the overflow. So the
