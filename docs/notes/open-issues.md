@@ -61,6 +61,11 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**User steer (round 75): keep investigating the checker's stability.** Presented with
+(a) the checker's type pass and the peel route, (b) switching to the parallel family's
+peel-independent failures, (c) freezing the campaign for handoff, the user chose **(a)**:
+the checker's stability is the next target, and the peel stays out until it is fixed.
+
 **Site 1 is both the graph family's gain and the frozen overflow's trigger.** Peeling only
 the buffer and recorded-scalar sites (the launch's input buffers and the recording's scalars,
 **not** the launch's scalar leaf): the frozen test is **graceful** and graph_jit stays
