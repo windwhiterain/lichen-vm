@@ -43,6 +43,30 @@ subject its own. A crate that asserts only its own subject runs the same
 everywhere — with a device or without — which is what makes the suite mean
 something on a machine that has no GPU.
 
+## The recording path, and why it is a separate entry point
+
+A program whose tail is `compute.graph step` is **recorded**, not run: the
+recording intercepts a launch before it reaches a backend. So a caller that wants
+the record — a graph's shape, the lines the passes wrote, a node's schema — needs
+no device at all.
+
+`lichen-serve` used to reach that only through a session, because `prepare` was a
+method on a session and a session owns a device. The recording half is now
+`lichen_serve::record(source, packs)`, a free function, and `Session::prepare`
+goes through it: one recording path, two callers. A `Recorded` holds the graph
+and the report, and offers no `step`.
+
+**A record is not a run, and the difference is the extent.** The automatic
+floor is asked over the **recorded** graph, and it names each node's schema
+there — so a schema is learnable without a device, which is what the serve
+suite's schema probe now does. What a record cannot say is the **tiling**: the
+floor tiles on the extent, and the extent of a runtime argument is only known at
+a dispatch. The measured difference: the same probe, recorded with a placeholder
+pack installed, names the schema; recorded with no pack, it answered `a
+recorded graph prints its node's schema: []` in 0.25 s — no device, and nothing
+to read, because no pass was there to report. The product's own path
+(`src/narrowed.rs`) still prepares, which runs.
+
 ## What each crate keeps
 
 | crate | verifies | starts a backend |
@@ -57,6 +81,11 @@ something on a machine that has no GPU.
 - The end-to-end path — a lichen program compiled, landed on the device, and
   answering a number — is no longer covered by a test. It is covered by the
   device crate's own IR-level acceptance and by the serve crate's examples.
+- **A recorded fact is not always data-independent.** The automatic floor and
+  the fusion licence decide on the data, so a stub that answers with its own
+  value makes them decide differently: the floor tiles where the test expected a
+  refusal. A test whose subject is such a decision needs a real backend, and it
+  is not a test of the record.
 - A suite that no longer runs a kernel cannot report a number, so the
   assertions that read one are gone rather than rewritten.
 - The serve crate's examples are run by hand, not by CI. The CI runner has no

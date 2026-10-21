@@ -173,68 +173,7 @@ built = compute.graph step
 "#;
 
 #[test]
-fn a_recording_produces_the_same_numbers_as_running_the_dispatches() {
-    let (_guard, stub) = stub();
-    // The direct answer first, from the same kernels run one at a time.
-    let (direct_module, direct, _) = run(&format!(
-        r#"---
-  compute = import "compute.lichen"
----
-{KERNELS}
-first = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
-out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b first.z))) : Out2)
-compute.collect out.w
-"#
-    ));
-    let (graph_module, through_a_graph, _) = run(&format!(
-        r#"---
-  compute = import "compute.lichen"
----
-{KERNELS}
-{CHAIN}
-compute.collect (compute.graphrun built 3)
-"#
-    ));
-    assert_eq!(
-        common::usize_array(&graph_module, &through_a_graph),
-        common::usize_array(&direct_module, &direct),
-        "a recorded chain is the chain, and the graph's numbers are the same numbers"
-    );
-    assert_eq!(
-        stub.saw().len(),
-        4,
-        "two runs of two dispatches, and nothing was submitted that the body did not dispatch: \
-         {:?}",
-        stub.saw()
-    );
-}
-
-#[test]
-fn a_graph_runs_at_whichever_extent_its_argument_names() {
-    let (_guard, _stub) = stub();
-    // The count is a value the run supplies, not one the build decided.
-    for count in [3, 5] {
-        let (module, out, _) = run(&format!(
-            r#"---
-  compute = import "compute.lichen"
----
-{KERNELS}
-{CHAIN}
-compute.collect (compute.graphrun built ({count},))
-"#
-        ));
-        // The values are a property of the wiring; only the length is the extent's.
-        assert_eq!(
-            common::usize_array(&module, &out),
-            vec![2; count],
-            "at extent {count} the graph answered {count} twos"
-        );
-    }
-}
-
-#[test]
 fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
-    let (_guard, _stub) = stub();
     // `captured` is a live host buffer the body reaches as a free variable.
     let messages = fail(&format!(
         r#"---
@@ -326,7 +265,6 @@ compute.collect (compute.graphrun built 3)
 /// is as much a subject as the two inside the step.
 #[test]
 fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one() {
-    let (_guard, _stub) = stub();
     // Only the count role is wrong, and the count filter is read first.
     let messages = fail(&format!(
         r#"---
@@ -370,7 +308,6 @@ compute.collect (compute.graphrun built (3, 0))
 /// sentence.
 #[test]
 fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
-    let (_guard, _stub) = stub();
     // A statement nobody reads is never demanded, so the operator is nested in the
     // statement that is the body's value.
     let collect = fail(&format!(
@@ -461,7 +398,6 @@ compute.collect (compute.graphrun built (3,))
 
 #[test]
 fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
-    let (_guard, _stub) = stub();
     // A body that dispatches nothing names no backend, and there is no third one
     // to default to.
     let messages = fail(
@@ -484,7 +420,6 @@ compute.graphrun built (3,)
 
 #[test]
 fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
-    let (_guard, _stub) = stub();
     // Resolved while the graph is built: dropping one at run time would silently
     // change what the program asked for.
     let messages = fail(

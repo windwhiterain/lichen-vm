@@ -1,5 +1,6 @@
 //! What a chain of projections costs when each one hands its answer back through the host.
 
+use std::process::ExitCode;
 use std::time::Instant;
 
 use lichen_compute::compute::graph::{RunArgument, RunResult};
@@ -21,25 +22,16 @@ const REPEATS: usize = 10;
 /// # Invariant
 /// Both chains run the same programs over the same shapes, so the only difference is whether each stage's
 /// answer is fetched and handed back as a buffer or passed on as the resident the device already wrote.
-#[test]
-fn a_chain_costs_what_it_hands_back() {
-    let Ok(session) = Session::open() else {
-        eprintln!("SKIPPED a_chain_costs_what_it_hands_back: no device");
-        return;
-    };
-    let prepared = match session.prepare(MATVEC_ROW_STEP) {
-        Ok(prepared) => prepared,
-        Err(refusal) => {
-            eprintln!("SKIPPED: {refusal}");
-            return;
-        }
-    };
+fn measure(session: &Session) -> Result<(), String> {
+    let prepared = session
+        .prepare(MATVEC_ROW_STEP)
+        .map_err(|refusal| format!("the projection did not prepare: {refusal}"))?;
     let weights: Vec<u8> = (0..ROWS * DIM)
         .flat_map(|index| ((index % 251) as f32 * 0.001).to_le_bytes())
         .collect();
     let placed = session
         .place(&weights, ScalarClass::Float)
-        .unwrap_or_else(|refusal| panic!("the weights are placed: {refusal}"));
+        .map_err(|refusal| format!("the weights are not placed: {refusal}"))?;
     let values: Vec<u8> = (0..DIM)
         .flat_map(|index| ((index % 97) as f32 * 0.01).to_le_bytes())
         .collect();
@@ -64,15 +56,15 @@ fn a_chain_costs_what_it_hands_back() {
         for _ in 0..STAGES {
             let stepped = prepared
                 .step(arguments(input))
-                .unwrap_or_else(|refusal| panic!("the chain runs: {refusal}"));
+                .map_err(|refusal| format!("the chain did not run: {refusal}"))?;
             let [RunResult::Resident(resident)] = &stepped.results[..] else {
-                panic!("a projection answers with one resident");
+                return Err("a projection answers with one resident".into());
             };
             let answered = session
                 .fetch(*resident)
-                .unwrap_or_else(|refusal| panic!("the answer is fetched: {refusal}"));
+                .map_err(|refusal| format!("the answer is not fetched: {refusal}"))?;
             let ScalarData::Float(floats) = answered else {
-                panic!("a float projection answers with floats");
+                return Err("a float projection answers with floats".into());
             };
             input = RunArgument::Buffer {
                 class: ScalarClass::Float,
@@ -91,14 +83,14 @@ fn a_chain_costs_what_it_hands_back() {
     for _ in 0..REPEATS {
         let mut input = session
             .place(&values, ScalarClass::Float)
-            .unwrap_or_else(|refusal| panic!("the input is placed: {refusal}"));
+            .map_err(|refusal| format!("the input is not placed: {refusal}"))?;
         let mut kept = vec![input];
         for _ in 0..STAGES {
             let stepped = prepared
                 .step(arguments(RunArgument::Resident(input)))
-                .unwrap_or_else(|refusal| panic!("the chain runs: {refusal}"));
+                .map_err(|refusal| format!("the chain did not run: {refusal}"))?;
             let [RunResult::Resident(resident)] = &stepped.results[..] else {
-                panic!("a projection answers with one resident");
+                return Err("a projection answers with one resident".into());
             };
             input = *resident;
             kept.push(input);
@@ -115,4 +107,21 @@ fn a_chain_costs_what_it_hands_back() {
         on_device,
         through_host / on_device
     );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match Session::open() {
+        Ok(session) => match measure(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(refusal) => {
+            eprintln!("this reading needs a device: {refusal}");
+            ExitCode::FAILURE
+        }
+    }
 }

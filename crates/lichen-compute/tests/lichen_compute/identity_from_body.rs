@@ -4,8 +4,10 @@ use super::common;
 
 use super::common::LANES;
 use lichen_compute::automatic_tiling::install_tiling;
-use lichen_compute::compute::clear_graph_pass;
+use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
+use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
@@ -85,6 +87,53 @@ out
 "#,
         combine = combine.replace("READ", read),
     )
+}
+
+/// The one-node graph the recording's own fragment makes.
+///
+/// # Invariant
+/// The node is built from the registry's own fragment and not from a run's, so the pass is
+/// handed exactly the body the program compiled: a refusal is then the derivation's answer to
+/// that body, and the consultation dispatches nothing.
+fn recorded_graph(module: &Module<LangProgram>) -> Graph {
+    let kernel = module
+        .nodes
+        .iter()
+        .find_map(|(id, _node)| kernel_id(module, id).ok())
+        .expect("the program compiled one parallel kernel");
+    let fragment = fragment_of(kernel).expect("the registry holds the fragment it compiled");
+    let mut graph = Graph::with_inputs(1);
+    let node = graph
+        .push(
+            Node::Kernel(KernelNode {
+                fragment,
+                inputs: vec![0],
+                count: Count::Constant(COUNT),
+                scalars: Vec::new(),
+            }),
+            1,
+        )
+        .expect("one output, one declared");
+    graph
+        .returning(vec![node])
+        .expect("a value the graph defines");
+    graph
+}
+
+/// The lines the tiling pass reports for `source`'s recorded graph.
+///
+/// # Invariant
+/// The pass is consulted over the recording and never through a run, so its refusals are read
+/// without a dispatch: both refusals this test reads are the derivation's, and neither needs a
+/// backend to be raised.
+fn consulted(source: &str) -> Vec<String> {
+    let build = common::check(source).build.expect("the program checks");
+    install_tiling(&build.module);
+    let graph = recorded_graph(&build.module);
+    consult_graph_pass(&graph, &|_node| Some(COUNT));
+    let lines = take_graph_pass_lines();
+    clear_graph_pass();
+    lines
 }
 
 /// The lines the installed pass reported for a module, through the run report's own channel.
@@ -186,21 +235,15 @@ fn a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers() {
 /// A seed that is no literal, and a claim naming a role its body never marked, are refused by name.
 ///
 /// # Invariant
-/// Both refusals come out of the **derivation**, and both reached the run report through an arm
+/// Both refusals come out of the **derivation**, and both used to reach the report through an arm
 /// that printed only the sentence, so a report could name the answer but not the variant. These
 /// two measure the fix: a `NaN` seed, which the restated `Div` keeps in a tree rather than
 /// folding to an infinity, and a claim asking for an `identity` the body never marked.
 #[test]
 fn a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name() {
-    let (_stub, _guard) = common::stub();
-
     // `0.0 / 0.0` is a `NaN` and not an infinity, so it keeps its tree and is no literal.
     let not_a_literal = fold_over("(max s(1) (READ))", "(0.0 / 0.0)", &a_row_of_positives());
-    let (module, _value, _root) = common::run(&not_a_literal);
-    install_tiling(&module);
-    let (passed, _value, _root) = common::run(&not_a_literal);
-    let report = pass_report(&passed);
-    clear_graph_pass();
+    let report = consulted(&not_a_literal);
     println!("the tiling pass reported:\n  {}", report.join("\n  "));
     assert!(
         report.iter().any(|line| line.contains("refused:")
@@ -220,11 +263,7 @@ fn a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name() {
         "claim:Reduction(combine,identity)",
         "claim:Reduction(combine)",
     );
-    let (module, _value, _root) = common::run(&missing);
-    install_tiling(&module);
-    let (passed, _value, _root) = common::run(&missing);
-    let report = pass_report(&passed);
-    clear_graph_pass();
+    let report = consulted(&missing);
     println!("the tiling pass reported:\n  {}", report.join("\n  "));
     assert!(
         report.iter().any(|line| {

@@ -1,7 +1,10 @@
 //! The order the layer's own struct arrives in, read off rather than assumed.
 
-use super::common::{floats, read};
+use std::process::ExitCode;
+
+use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
+use lichen_kernel_ir::ScalarClass;
 use lichen_serve::Session;
 
 /// The layer's twelve field names, in the order its own struct declares them.
@@ -59,16 +62,30 @@ built
     source
 }
 
+/// A `Float` buffer argument of `values`.
+fn floats(values: &[f32]) -> RunArgument {
+    RunArgument::Buffer {
+        class: ScalarClass::Float,
+        data: values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// The one resident a single-return step answered with.
+fn only(stepped: &lichen_serve::Stepped) -> Result<ResidentBuffer, String> {
+    match &stepped.results[..] {
+        [RunResult::Resident(resident)] => Ok(*resident),
+        _ => Err("the probe answers with one buffer, and this one answered otherwise".into()),
+    }
+}
+
 /// Which argument reached which field, decoded from one number.
-#[test]
-fn the_layers_own_struct_arrives_in_a_measurable_order() {
-    let Ok(session) = Session::open() else {
-        eprintln!("SKIPPED the_layers_own_struct_arrives_in_a_measurable_order: no device");
-        return;
-    };
+fn measure(session: &Session) -> Result<(), String> {
     let prepared = session
         .prepare(&program())
-        .unwrap_or_else(|refusal| panic!("the probe prepares: {refusal}"));
+        .map_err(|refusal| format!("the probe did not prepare: {refusal}"))?;
     println!("the held step is {} dispatches", prepared.nodes());
     // Distinct lengths, so a collapsed-shape list would answer with fewer slots.
     let mut arguments: Vec<RunArgument> = (1..=12)
@@ -81,12 +98,13 @@ fn the_layers_own_struct_arrives_in_a_measurable_order() {
     arguments.push(RunArgument::Count(0));
     let stepped = prepared
         .step(arguments)
-        .unwrap_or_else(|refusal| panic!("the probe runs: {refusal}"));
-    let [RunResult::Resident(resident)] = &stepped.results[..] else {
-        panic!("the probe answers with one buffer, and this one answered otherwise");
+        .map_err(|refusal| format!("the probe did not run: {refusal}"))?;
+    let answered = match session.fetch(only(&stepped)?) {
+        Ok(lichen_kernel_ir::ScalarData::Float(values)) => values,
+        Ok(other) => return Err(format!("the answer declared a Float buffer: {other:?}")),
+        Err(refusal) => return Err(format!("the answer is not readable: {refusal}")),
     };
-    let answered = read(&session, *resident);
-    session.release(*resident);
+    session.release(only(&stepped)?);
     let total = answered[0] as u64;
     println!("the answer is {total}");
     let mut arrived = [0u64; 12];
@@ -95,5 +113,22 @@ fn the_layers_own_struct_arrives_in_a_measurable_order() {
     }
     for (index, field) in FIELDS.iter().enumerate() {
         println!(".{field} <- argument {}", arrived[index]);
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match Session::open() {
+        Ok(session) => match measure(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(refusal) => {
+            eprintln!("this reading needs a device: {refusal}");
+            ExitCode::FAILURE
+        }
     }
 }

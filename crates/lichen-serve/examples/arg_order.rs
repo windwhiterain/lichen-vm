@@ -1,7 +1,10 @@
 //! What order the step's arguments arrive in, measured rather than assumed.
 
-use super::common::{floats, read};
+use std::process::ExitCode;
+
+use lichen_compute::compute::ResidentBuffer;
 use lichen_compute::compute::graph::{RunArgument, RunResult};
+use lichen_kernel_ir::{ScalarClass, ScalarData};
 use lichen_serve::Session;
 
 /// Three buffers read at one index, weighted by their position in a decimal number.
@@ -41,16 +44,30 @@ built = compute.graph step
 built
 "#;
 
+/// A `Float` buffer argument of `values`.
+fn floats(values: &[f32]) -> RunArgument {
+    RunArgument::Buffer {
+        class: ScalarClass::Float,
+        data: values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect(),
+    }
+}
+
+/// The one resident a single-return step answered with.
+fn only(stepped: &lichen_serve::Stepped) -> Result<ResidentBuffer, String> {
+    match &stepped.results[..] {
+        [RunResult::Resident(resident)] => Ok(*resident),
+        _ => Err("the mix answers with one buffer, and this one answered otherwise".into()),
+    }
+}
+
 /// The answer says which order the three buffers arrive in.
-#[test]
-fn the_arguments_arrive_in_a_measurable_order() {
-    let Ok(session) = Session::open() else {
-        eprintln!("SKIPPED the_arguments_arrive_in_a_measurable_order: no device");
-        return;
-    };
+fn measure(session: &Session) -> Result<(), String> {
     let prepared = session
         .prepare(MIX_STEP)
-        .unwrap_or_else(|refusal| panic!("the mix prepares: {refusal}"));
+        .map_err(|refusal| format!("the mix did not prepare: {refusal}"))?;
     println!("the held step is {} dispatches", prepared.nodes());
     let stepped = prepared
         .step(vec![
@@ -59,11 +76,30 @@ fn the_arguments_arrive_in_a_measurable_order() {
             floats(&[2.0]),
             floats(&[3.0]),
         ])
-        .unwrap_or_else(|refusal| panic!("the mix runs: {refusal}"));
-    let [RunResult::Resident(resident)] = &stepped.results[..] else {
-        panic!("the mix answers with one buffer, and this one answered otherwise");
+        .map_err(|refusal| format!("the mix did not run: {refusal}"))?;
+    let resident = only(&stepped)?;
+    let answered = match session.fetch(resident) {
+        Ok(ScalarData::Float(values)) => values,
+        Ok(other) => return Err(format!("the answer declared a Float buffer: {other:?}")),
+        Err(refusal) => return Err(format!("the answer is not readable: {refusal}")),
     };
-    let answered = read(&session, *resident);
     println!("a=1, b=2, c=3 answered {}", answered[0]);
-    session.release(*resident);
+    session.release(resident);
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match Session::open() {
+        Ok(session) => match measure(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(refusal) => {
+            eprintln!("this reading needs a device: {refusal}");
+            ExitCode::FAILURE
+        }
+    }
 }

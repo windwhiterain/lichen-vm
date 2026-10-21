@@ -1,5 +1,6 @@
 //! What one projection costs, and whether its price grows with the rows or with each row's walk.
 
+use std::process::ExitCode;
 use std::time::Instant;
 
 use lichen_compute::compute::graph::RunArgument;
@@ -27,19 +28,10 @@ const REPEATS: usize = 20;
 /// # Invariant
 /// Every row reads `DIM` weights, so the bytes a row costs are the same for every row: a constant time per
 /// row is a walk that does not depend on the rows, and a constant time in total would be a launch that is.
-#[test]
-fn a_projection_costs_what_its_rows_walk() {
-    let Ok(session) = Session::open() else {
-        eprintln!("SKIPPED a_projection_costs_what_its_rows_walk: no device");
-        return;
-    };
-    let prepared = match session.prepare(MATVEC_ROW_STEP) {
-        Ok(prepared) => prepared,
-        Err(refusal) => {
-            eprintln!("SKIPPED: {refusal}");
-            return;
-        }
-    };
+fn measure(session: &Session) -> Result<(), String> {
+    let prepared = session
+        .prepare(MATVEC_ROW_STEP)
+        .map_err(|refusal| format!("the projection did not prepare: {refusal}"))?;
     // The model's own programs are the narrowed ones, so a Float probe may be measuring a path it never runs.
     match session.prepare(MATVEC_ROW_STEP) {
         Ok(prepared) => {
@@ -50,7 +42,7 @@ fn a_projection_costs_what_its_rows_walk() {
         }
         Err(refusal) => println!("the row-major projection does not prepare: {refusal}"),
     }
-    let halved = match lichen_serve::narrowed(&session, MATVEC_ROW_STEP) {
+    let halved = match lichen_serve::narrowed(session, MATVEC_ROW_STEP) {
         Ok(prepared) => {
             println!("narrowed pass lines: {}", prepared.report().len());
             for line in prepared.report() {
@@ -68,13 +60,13 @@ fn a_projection_costs_what_its_rows_walk() {
         .replace("compute.range k.n", "compute.range 2048")
         .replace(".n s.n,", ".n 2048,")
         .replace(".n s.n)", ".n 2048)");
-    if let Ok(prepared) = lichen_serve::narrowed(&session, &literal) {
+    if let Ok(prepared) = lichen_serve::narrowed(session, &literal) {
         let halves: Vec<u8> = (0..2048 * 2048)
             .flat_map(|index| (((index % 251) as u16) << 4).to_le_bytes())
             .collect();
         let placed = session
             .place(&halves, ScalarClass::BFloat16)
-            .unwrap_or_else(|refusal| panic!("the literal weights are placed: {refusal}"));
+            .map_err(|refusal| format!("the literal weights are not placed: {refusal}"))?;
         let values: Vec<u8> = (0..2048)
             .flat_map(|index| (((index % 97) as u16) << 4).to_le_bytes())
             .collect();
@@ -131,7 +123,7 @@ fn a_projection_costs_what_its_rows_walk() {
         // A resident weight is what the model steps over, not a buffer handed in on every step.
         let placed = session
             .place(&weights, ScalarClass::Float)
-            .unwrap_or_else(|refusal| panic!("the weights are placed: {refusal}"));
+            .map_err(|refusal| format!("the weights are not placed: {refusal}"))?;
         let arguments = || {
             vec![
                 RunArgument::Count(rows as i64),
@@ -152,11 +144,11 @@ fn a_projection_costs_what_its_rows_walk() {
             for _ in 0..REPEATS {
                 let stepped = prepared
                     .step(arguments())
-                    .unwrap_or_else(|refusal| panic!("the projection runs: {refusal}"));
+                    .map_err(|refusal| format!("the projection did not run: {refusal}"))?;
                 let [lichen_compute::compute::graph::RunResult::Resident(resident)] =
                     &stepped.results[..]
                 else {
-                    panic!("a projection answers with one resident");
+                    return Err("a projection answers with one resident".into());
                 };
                 last = Some(*resident);
                 if kept {
@@ -190,7 +182,7 @@ fn a_projection_costs_what_its_rows_walk() {
                 .collect();
             let placed = session
                 .place(&halves, ScalarClass::BFloat16)
-                .unwrap_or_else(|refusal| panic!("the halves are placed: {refusal}"));
+                .map_err(|refusal| format!("the halves are not placed: {refusal}"))?;
             let half_values: Vec<u8> = (0..DIM)
                 .flat_map(|index| (((index % 97) as u16) << 4).to_le_bytes())
                 .collect();
@@ -207,7 +199,7 @@ fn a_projection_costs_what_its_rows_walk() {
                         },
                         RunArgument::Resident(placed),
                     ])
-                    .unwrap_or_else(|refusal| panic!("the narrowed projection runs: {refusal}"));
+                    .map_err(|refusal| format!("the narrowed projection did not run: {refusal}"))?;
                 let _ = stepped;
             }
             println!(
@@ -215,6 +207,23 @@ fn a_projection_costs_what_its_rows_walk() {
                 started.elapsed().as_secs_f64() / REPEATS as f64 * 1000.0
             );
             let _ = session.release(placed);
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match Session::open() {
+        Ok(session) => match measure(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(refusal) => {
+            eprintln!("this reading needs a device: {refusal}");
+            ExitCode::FAILURE
         }
     }
 }

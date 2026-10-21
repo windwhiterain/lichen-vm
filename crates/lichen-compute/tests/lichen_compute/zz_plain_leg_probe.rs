@@ -7,15 +7,11 @@
 //! `reopen_stalled`. See docs/notes/graph-recording-rounds.md, which already calls the
 //! matching test's premise a test premise.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, set_hook, take_hook};
-
 use lichen_compute::ComputeOperator;
 use lichen_compute::language::{LangProgram, LangValue, new_store};
 use lichen_language::render::print_value_lang;
 use lichen_lowlevel::{AnyNodeId, EvaluatedDeep, LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
-
-use super::common;
 
 /// The failing test's kernels, with every class left a fresh cell.
 const KERNELS_OPEN: &str = r#"
@@ -275,25 +271,6 @@ fn report(name: &str, source: &str) {
             }
         }
     }
-    // What `common::run` — the harness the failing test uses — does with this program.
-    let hook = take_hook();
-    set_hook(Box::new(|_| {}));
-    let harness = catch_unwind(AssertUnwindSafe(|| common::run(source)));
-    set_hook(hook);
-    match harness {
-        Ok((module, value, root_ty)) => println!(
-            "  harness: ran, root renders as {}",
-            print_value_lang(&module, value, root_ty)
-        ),
-        Err(payload) => {
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
-                .unwrap_or_else(|| "<a non-string panic>".to_string());
-            println!("  harness: panicked: {message}");
-        }
-    }
     let (module, value, root_val, root_ty) = build_and_run(source);
     println!("  root value decided: {}", value.is_some());
     if let Some(value) = &value {
@@ -321,7 +298,6 @@ fn report(name: &str, source: &str) {
 
 #[test]
 fn probe_the_plain_leg() {
-    let (_stub, _guard) = common::stub();
     report(
         "plain_unread",
         &program(

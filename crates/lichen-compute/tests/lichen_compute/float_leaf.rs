@@ -317,8 +317,6 @@ fn a_float_leaf_and_an_integer_value_are_refused_in_both_directions() {
          see what the argument turns out to be, which is why the refusal is not here"
     );
 
-    let test = "a_float_leaf_and_an_integer_value_are_refused_in_both_directions";
-    let (_stub, _guard) = common::stub();
     let (lines, _value) = run_mismatched("Float", "Float", "2");
     let refusal = line_naming(&lines, "reads its runtime scalar from value 1");
     assert!(

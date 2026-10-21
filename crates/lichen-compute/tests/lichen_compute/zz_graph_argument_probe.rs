@@ -2,7 +2,20 @@
 
 use super::common;
 
-use lichen_compute::language::{LangProgram, new_store};
+/// What the compile recorded: its diagnostics, and nothing a run answered.
+fn recorded(source: &str) -> String {
+    let report = common::check(source);
+    format!(
+        "ok={} {}",
+        report.ok(),
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<String>>()
+            .join(" | ")
+    )
+}
 
 const SINGLE: &str = r#"
 --- compute = import "compute.lichen" ---
@@ -290,7 +303,6 @@ built
 "#;
 #[test]
 fn probe_graph_argument_buffer() {
-    let (_stub, _guard) = common::stub();
     for (name, source) in [
         ("graph_of_a_constant", GRAPH_OF_A_CONSTANT),
         ("two_buffers_float", TWO_BUFFERS_FLOAT),
@@ -308,15 +320,6 @@ fn probe_graph_argument_buffer() {
         ("one_buffer", ONE_BUFFER),
         ("one_buffer_collect", ONE_BUFFER_COLLECT),
     ] {
-        let mut store = new_store(None).expect("the embedded compute package registers");
-        match lichen_language::run::evaluate_raw::<LangProgram>(source, None, &mut store) {
-            Ok(rendered) => println!("[{name}] runs: {rendered}"),
-            Err(diagnostics) => {
-                println!("[{name}] refused:");
-                for diagnostic in &diagnostics {
-                    println!("    {diagnostic:?}");
-                }
-            }
-        }
+        println!("[{name}] {}", recorded(source));
     }
 }

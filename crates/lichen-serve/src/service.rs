@@ -36,6 +36,88 @@ enum Shape {
     },
 }
 
+/// The slots a batch of sequences is served from, admitted and retired by the host.
+///
+/// # Invariant
+/// A slot's position is its place in its own cache, and a retired slot holds `capacity`, which no
+/// position inside the cache equals, so its lanes copy themselves. `capacity` and `dim` are the
+/// **source's own literals**, since the kernel divides a lane by them. The bookkeeping is a host's
+/// own, so it needs no device: a caller that only admits and retires never opens one.
+pub struct Slots {
+    sequences: usize,
+    capacity: i64,
+    positions: Vec<i64>,
+}
+
+impl Slots {
+    /// The slots a batch of `sequences` sequences starts with, every one of them free.
+    pub fn new(sequences: usize, capacity: usize) -> Self {
+        Self {
+            sequences,
+            capacity: capacity as i64,
+            positions: vec![capacity as i64; sequences],
+        }
+    }
+
+    /// How many lanes one step covers, which is the whole cache and not the live sequences.
+    pub fn lanes(&self, dim: usize) -> usize {
+        self.sequences * self.capacity as usize * dim
+    }
+
+    /// How many sequences are live.
+    pub fn active(&self) -> usize {
+        self.positions
+            .iter()
+            .filter(|position| **position < self.capacity)
+            .count()
+    }
+
+    /// Take a free slot for a new sequence, at position zero.
+    ///
+    /// # Invariant
+    /// A reused slot keeps the words its previous sequence wrote past position zero, which is safe
+    /// only because a reader reads positions before its own.
+    pub fn admit(&mut self) -> Option<usize> {
+        let free = self
+            .positions
+            .iter()
+            .position(|position| *position >= self.capacity)?;
+        self.positions[free] = 0;
+        Some(free)
+    }
+
+    /// Free `slot`, leaving its cache where it is and its lanes copying themselves.
+    pub fn retire(&mut self, slot: usize) {
+        if let Some(position) = self.positions.get_mut(slot) {
+            *position = self.capacity;
+        }
+    }
+
+    /// The positions, one per slot, in slot order.
+    pub fn positions(&self) -> &[i64] {
+        &self.positions
+    }
+
+    /// Every live slot's position becomes `after`, so the next step appends past the prompt.
+    pub fn adopt(&mut self, after: usize) {
+        let after = after.min(self.capacity as usize) as i64;
+        for position in &mut self.positions {
+            if *position < self.capacity {
+                *position = after;
+            }
+        }
+    }
+
+    /// Every live slot's position moves on by one.
+    pub fn advance(&mut self) {
+        for position in &mut self.positions {
+            if *position < self.capacity {
+                *position += 1;
+            }
+        }
+    }
+}
+
 /// A batch of sequences sharing one cache, admitted and retired by slot.
 ///
 /// # Invariant
@@ -54,7 +136,7 @@ pub struct Service<'session> {
     tokens: Option<ResidentBuffer>,
     keys: Option<ResidentBuffer>,
     values: Option<ResidentBuffer>,
-    positions: Vec<i64>,
+    slots: Slots,
 }
 
 impl<'session> Service<'session> {
@@ -156,21 +238,18 @@ impl<'session> Service<'session> {
             tokens: None,
             keys: None,
             values: None,
-            positions: vec![capacity as i64; sequences],
+            slots: Slots::new(sequences, capacity),
         })
     }
 
     /// How many lanes one step covers, which is the whole cache and not the live sequences.
     pub fn lanes(&self) -> usize {
-        self.sequences * self.capacity * self.dim
+        self.slots.lanes(self.dim)
     }
 
     /// How many sequences are live.
     pub fn active(&self) -> usize {
-        self.positions
-            .iter()
-            .filter(|position| **position < self.capacity as i64)
-            .count()
+        self.slots.active()
     }
 
     /// Take a free slot for a new sequence, at position zero.
@@ -179,19 +258,12 @@ impl<'session> Service<'session> {
     /// A reused slot keeps the words its previous sequence wrote past position zero, which is safe
     /// only because a reader reads positions before its own.
     pub fn admit(&mut self) -> Option<usize> {
-        let free = self
-            .positions
-            .iter()
-            .position(|position| *position >= self.capacity as i64)?;
-        self.positions[free] = 0;
-        Some(free)
+        self.slots.admit()
     }
 
     /// Free `slot`, leaving its cache where it is and its lanes copying themselves.
     pub fn retire(&mut self, slot: usize) {
-        if let Some(position) = self.positions.get_mut(slot) {
-            *position = self.capacity as i64;
-        }
+        self.slots.retire(slot);
     }
 
     /// Take the caches a prefill wrote as this batch's own, starting every live sequence past them.
@@ -201,12 +273,7 @@ impl<'session> Service<'session> {
     /// retired slot stays retired. The residents become the batch's, so the service releases them when
     /// it replaces them, and `positions` is clamped to the capacity the cache holds.
     pub fn adopt(&mut self, keys: ResidentBuffer, values: ResidentBuffer, positions: usize) {
-        let after = positions.min(self.capacity) as i64;
-        for position in &mut self.positions {
-            if *position < self.capacity as i64 {
-                *position = after;
-            }
-        }
+        self.slots.adopt(positions);
         for previous in [
             self.tokens.take(),
             self.keys.replace(keys),
@@ -339,7 +406,7 @@ impl<'session> Service<'session> {
         }
         arguments.push(RunArgument::Buffer {
             class: ScalarClass::Int,
-            data: positions_of(&self.positions),
+            data: positions_of(self.slots.positions()),
         });
         let stepped = self.prepared.step(arguments)?;
         let (tokens, keys, values) = match &stepped.results[..] {
@@ -364,11 +431,7 @@ impl<'session> Service<'session> {
         self.keys = Some(keys);
         self.values = Some(values);
         let advanced = self.active();
-        for position in &mut self.positions {
-            if *position < self.capacity as i64 {
-                *position += 1;
-            }
-        }
+        self.slots.advance();
         Ok(Served {
             advanced,
             cost: stepped.cost,

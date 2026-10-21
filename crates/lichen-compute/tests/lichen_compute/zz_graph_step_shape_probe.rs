@@ -8,7 +8,20 @@
 
 use super::common;
 
-use lichen_compute::language::new_store;
+/// What the compile recorded: its diagnostics, and nothing a run answered.
+fn recorded(body: &str) -> String {
+    let report = common::check(&format!("{KERNEL}{body}"));
+    format!(
+        "ok={} {}",
+        report.ok(),
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<String>>()
+            .join(" | ")
+    )
+}
 
 /// Three kernels over the three input structs the cases below need, and the data they read.
 const KERNEL: &str = r#"
@@ -89,25 +102,8 @@ built = compute.graph step
 compute.collect (compute.graphrun built (3, data)) : array{Float, 3}
 "#;
 
-/// What the raw runner renders for `body`, or how it refused.
-fn rendered(body: &str) -> String {
-    let source = format!("{KERNEL}{body}");
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    match lichen_language::run::evaluate_raw(&source, None, &mut store) {
-        Ok(text) => text,
-        Err(diagnostics) => format!(
-            "refused: {:?}",
-            diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.message.clone())
-                .collect::<Vec<_>>()
-        ),
-    }
-}
-
 #[test]
 fn probe_the_graph_step_shape() {
-    let (_stub, _guard) = common::stub();
     for (name, body) in [
         ("same_one", SAME_ONE),
         ("same_two", SAME_TWO),
@@ -115,6 +111,6 @@ fn probe_the_graph_step_shape() {
         ("other_one", OTHER_ONE),
         ("two_nodes", TWO_NODES),
     ] {
-        println!("[{name}] {}", rendered(body));
+        println!("[{name}] {}", recorded(body));
     }
 }

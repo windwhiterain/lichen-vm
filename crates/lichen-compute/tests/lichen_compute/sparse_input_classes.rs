@@ -9,11 +9,8 @@ use super::common;
 
 use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
-use lichen_compute::{ComputeValue, compute::graph};
-use lichen_graph_ir::{Policy, Runner, Value};
-use lichen_kernel_ir::{BufferSlot, KernelFragment, ScalarClass, ScalarData};
-use lichen_lowlevel::{AnyNodeId, Module};
-use lichen_utils::extend::AsEnum;
+use lichen_kernel_ir::{KernelFragment, ScalarClass};
+use lichen_lowlevel::Module;
 
 /// The consumer's input position the producer's output feeds: `.e`, never `.d`.
 const ABSORBED: usize = 1;
@@ -80,15 +77,6 @@ fn the_consumer_declares_a_float_for_each_of_its_two_inputs() {
     );
 }
 
-/// The answer `e[i] = d[i] * 2` and a sum over every `e` fold to.
-///
-/// # Invariant
-/// Every lane folds the whole `count`-element buffer, so every position is `2 * (1 + … + count)`,
-/// and both factors are exact `f32` integers well below `2^53`.
-fn closed_form(count: usize) -> f32 {
-    (count * (count + 1)) as f32
-}
-
 /// The chain's two fragments, the consumer first: the one that declares two input buffers.
 fn instances(module: &Module<LangProgram>) -> (KernelFragment, KernelFragment) {
     let mut fragments: Vec<KernelFragment> = module
@@ -103,23 +91,4 @@ fn instances(module: &Module<LangProgram>) -> (KernelFragment, KernelFragment) {
         .expect("the program dispatched a two-input consumer");
     let producer = fragments.pop().expect("the program dispatched a producer");
     (producer, consumer)
-}
-
-/// The graph the program recorded.
-///
-/// # Invariant
-/// Read off a node's own value rather than out of the root tuple's slots, so the answer does not
-/// rest on where the program's own value puts the graph.
-fn recorded(module: &Module<LangProgram>) -> lichen_graph_ir::Graph {
-    module
-        .nodes
-        .iter()
-        .find_map(|(id, _node)| {
-            let value = module.node_value(AnyNodeId::Dynamic(id))?;
-            let ComputeValue::Graph(id, _) = AsEnum::<ComputeValue>::as_enum(&value)? else {
-                return None;
-            };
-            graph::lookup(id).ok()
-        })
-        .expect("the program recorded a graph")
 }

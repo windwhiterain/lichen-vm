@@ -506,7 +506,6 @@ fn combine() -> Expr {
 /// the latter passes here and fails in the numbers.
 #[test]
 fn the_landed_fragment_reads_the_class_the_pack_states() {
-    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, _value, _root) = common::run(&source);

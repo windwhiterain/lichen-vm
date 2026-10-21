@@ -31,7 +31,7 @@ mod upload;
 pub use narrowed::{narrowed, narrowed_projection};
 pub use qwen::{Batched, Generated, Qwen, QwenRefusal, Width};
 pub use sampling::{Chosen, Sampling, choose, choose_with, randomness};
-pub use service::{Served, Service};
+pub use service::{Served, Service, Slots};
 pub use tokenizer::{Tokenizer, TokenizerRefusal};
 
 /// What one run asked the device for.
@@ -229,6 +229,98 @@ impl Prepared<'_> {
     }
 }
 
+/// The step a program recorded, and what the passes said while it was recorded.
+///
+/// # Invariant
+/// Recording intercepts a launch before it reaches a backend, so a recording dispatches
+/// nothing: what it holds is the graph the program's tail recorded and the lines the
+/// installed passes wrote. A reading of the record therefore needs no device.
+pub struct Recorded {
+    graph: Graph,
+    backend: Backend,
+    report: Vec<String>,
+}
+
+impl Recorded {
+    /// What the installed passes said while the step was recorded.
+    ///
+    /// # Invariant
+    /// The lines name each node's schema, which is how a pack author learns the hash a
+    /// pack must target: a program whose tail only records never prints them from a run.
+    pub fn report(&self) -> &[String] {
+        &self.report
+    }
+
+    /// How many nodes the recorded graph dispatches.
+    pub fn nodes(&self) -> usize {
+        self.graph.nodes().len()
+    }
+}
+
+/// Compile `source` and record the step its tail names, with `packs` installed as graph passes.
+///
+/// # Invariant
+/// The program's tail must be the graph value — `compute.graph step` and nothing after it —
+/// because recording a step dispatches nothing. No device is opened and no backend is
+/// installed, so a caller that only wants the record never holds one.
+pub fn record(
+    source: &str,
+    packs: &[lichen_compute::placement_pack::PlacementPack],
+) -> Result<Recorded, ServeRefusal> {
+    let mut store = lichen_compute::language::new_store(None)
+        .map_err(|error| ServeRefusal::Device(error.to_string()))?;
+    if let Err(diagnostics) = lichen_language::run::evaluate_raw(source, None, &mut store) {
+        return Err(ServeRefusal::Program(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect(),
+        ));
+    }
+    let mut store = lichen_compute::language::new_store(None)
+        .map_err(|error| ServeRefusal::Device(error.to_string()))?;
+    let build = lichen_language::testing::compile_at(source, None, &mut store);
+    if !packs.is_empty() {
+        lichen_compute::automatic_tiling::install_tiling_with_packs(&build.module, packs);
+    }
+    let (module, value, _root) = lichen_language::testing::finish(build);
+    // A pass is asked while the graph is recorded, which is here: its lines are taken below.
+    let report: Vec<String> = module
+        .extension_diagnostics
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect();
+    let Some(ComputeValue::Graph(id, backend)) = AsEnum::<ComputeValue>::as_enum(&value) else {
+        return Err(ServeRefusal::Program(vec![
+            "this program's tail is not a recorded graph: recording wants `compute.graph step`              as the last binding, so that a step is recorded and nothing is dispatched"
+                .into(),
+        ]));
+    };
+    let mut graph = graph::lookup(id).map_err(|reason| ServeRefusal::Program(vec![reason]))?;
+    // A `compute.graph` tail is recorded rather than run, so the pass is asked here.
+    let extent = |node: usize| -> Option<usize> {
+        match graph.nodes().get(node)? {
+            lichen_graph_ir::Node::Kernel(kernel) => match kernel.count {
+                lichen_graph_ir::Count::Constant(count) => Some(count),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    // The pass hands its lines to this thread while it runs, so they are taken after it.
+    let mut report = report;
+    if let Some(rewritten) = lichen_compute::compute::consult_graph_pass(&graph, &extent) {
+        graph::store(&rewritten);
+        graph = rewritten;
+    }
+    report.extend(lichen_compute::compute::take_graph_pass_lines());
+    Ok(Recorded {
+        graph,
+        backend,
+        report,
+    })
+}
+
 impl Session {
     /// Compile `source` once and hold the step its tail recorded.
     ///
@@ -254,59 +346,12 @@ impl Session {
         source: &str,
         packs: &[lichen_compute::placement_pack::PlacementPack],
     ) -> Result<Prepared<'_>, ServeRefusal> {
-        let mut store = lichen_compute::language::new_store(None)
-            .map_err(|error| ServeRefusal::Device(error.to_string()))?;
-        if let Err(diagnostics) = lichen_language::run::evaluate_raw(source, None, &mut store) {
-            return Err(ServeRefusal::Program(
-                diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.message.clone())
-                    .collect(),
-            ));
-        }
-        let mut store = lichen_compute::language::new_store(None)
-            .map_err(|error| ServeRefusal::Device(error.to_string()))?;
-        let build = lichen_language::testing::compile_at(source, None, &mut store);
-        if !packs.is_empty() {
-            lichen_compute::automatic_tiling::install_tiling_with_packs(&build.module, packs);
-        }
-        let (module, value, _root) = lichen_language::testing::finish(build);
-        // A pass is asked while the graph is recorded, which is here: its lines are taken below.
-        let report: Vec<String> = module
-            .extension_diagnostics
-            .iter()
-            .map(|entry| entry.message.clone())
-            .collect();
-        let Some(ComputeValue::Graph(id, backend)) = AsEnum::<ComputeValue>::as_enum(&value) else {
-            return Err(ServeRefusal::Program(vec![
-                "this program's tail is not a recorded graph: preparing wants `compute.graph step` \
-                 as the last binding, so that a step is recorded and nothing is dispatched"
-                    .into(),
-            ]));
-        };
-        let mut graph = graph::lookup(id).map_err(|reason| ServeRefusal::Program(vec![reason]))?;
-        // A `compute.graph` tail is recorded rather than run, so the pass is asked here.
-        let extent = |node: usize| -> Option<usize> {
-            match graph.nodes().get(node)? {
-                lichen_graph_ir::Node::Kernel(kernel) => match kernel.count {
-                    lichen_graph_ir::Count::Constant(count) => Some(count),
-                    _ => None,
-                },
-                _ => None,
-            }
-        };
-        // The pass hands its lines to this thread while it runs, so they are taken after it.
-        let mut report = report;
-        if let Some(rewritten) = lichen_compute::compute::consult_graph_pass(&graph, &extent) {
-            graph::store(&rewritten);
-            graph = rewritten;
-        }
-        report.extend(lichen_compute::compute::take_graph_pass_lines());
+        let recorded = record(source, packs)?;
         Ok(Prepared {
             session: self,
-            graph,
-            backend,
-            report,
+            graph: recorded.graph,
+            backend: recorded.backend,
+            report: recorded.report,
         })
     }
 

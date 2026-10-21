@@ -1,9 +1,8 @@
-//! A node's schema, learned from a run, and the pack that class comes back through.
+//! A node's schema, learned from a recording, and the pack that class comes back through.
 
-use lichen_compute::automatic_tiling::install_tiling_with_packs;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::placement_pack::read_placement_pack;
-use lichen_serve::Session;
+use lichen_serve::record;
 
 /// The pack a human writes: the schema to target, and the class that input is stored in.
 fn pack_text(schema: &str, class: &str) -> String {
@@ -24,8 +23,8 @@ fn reported_schema(lines: &[String]) -> Option<String> {
     Some(line[start..start + "sha256:".len() + 64].to_string())
 }
 
-/// A program that runs its graph, which is what makes the pass report at all.
-const RUNNING: &str = r#"
+/// A program whose tail is the recorded graph, which is what a recording is asked for.
+const RECORDED: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -43,56 +42,43 @@ step = (s : Par) => {
   compute.plrun kernel ((Arg)(.n s.n, .dim s.dim, .I In(.x s.in.x, .w s.in.w))) : Rows
 }
 built = compute.graph step
-xs = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf _))
-ws = (compute.buffer ([1.0, 0.0, 0.0, 1.0] : array{Float, 4}) : (compute.Buf _))
-out = compute.collect (compute.graphrun built (2, 2, xs, ws))
-out
+built
 "#;
 
-/// The report names the schema once a graph runs, and a pack for it is then readable.
+/// The report names the schema once a graph is recorded, and a pack for it is then readable.
+///
+/// # Invariant
+/// The schema is learned from a **recording** and not from a run: the pass is asked while the graph
+/// is recorded, which dispatches nothing, so the step a placeholder pack returns already carries the
+/// lines that name every node's schema. A hash learned from a run would target a node this build
+/// does not have.
 #[test]
-fn a_running_graph_reports_the_schema_a_pack_must_target() {
-    let Ok(_session) = Session::open() else {
-        eprintln!("SKIPPED a_running_graph_reports_the_schema_a_pack_must_target: no device");
-        return;
-    };
+fn a_recorded_graph_reports_the_schema_a_pack_must_target() {
     clear_graph_pass();
     let placeholder = read_placement_pack(&pack_text(
         &format!("sha256:{}", "0".repeat(64)),
         "bfloat16",
     ))
     .expect("the placeholder reads");
-    let mut store = lichen_compute::language::new_store(None).expect("a store");
-    let (first, _value, _root) = lichen_language::testing::run_at(RUNNING, None, &mut store);
-    install_tiling_with_packs(&first, &[placeholder]);
-    let (module, _value, _root) = lichen_language::testing::run_at(RUNNING, None, &mut store);
-    let lines: Vec<String> = module
-        .extension_diagnostics
-        .iter()
-        .map(|entry| format!("{}: {}", entry.category, entry.message))
-        .collect();
-    println!("the module holds {} diagnostic(s)", lines.len());
+    let recorded = record(RECORDED, &[placeholder])
+        .unwrap_or_else(|refusal| panic!("the graph is recorded: {refusal}"));
+    let lines: Vec<String> = recorded.report().to_vec();
+    println!("the recording holds {} line(s)", lines.len());
     for line in &lines {
         println!("{line}");
     }
     let Some(schema) = reported_schema(&lines) else {
-        panic!("a running graph prints its node's schema: {lines:?}");
+        panic!("a recorded graph prints its node's schema: {lines:?}");
     };
     println!("the node's schema is {schema}");
 
-    // The real pack for that schema: the run under it shows the class reaching the node.
+    // The real pack for that schema: the recording under it shows the class reaching the node.
     clear_graph_pass();
     let pack = read_placement_pack(&pack_text(&schema, "bfloat16"))
         .unwrap_or_else(|refusal| panic!("the real pack reads: {refusal}"));
-    let mut store = lichen_compute::language::new_store(None).expect("a store");
-    let (first, _value, _root) = lichen_language::testing::run_at(RUNNING, None, &mut store);
-    install_tiling_with_packs(&first, &[pack]);
-    let (module, _value, _root) = lichen_language::testing::run_at(RUNNING, None, &mut store);
-    let packed: Vec<String> = module
-        .extension_diagnostics
-        .iter()
-        .map(|entry| format!("{}: {}", entry.category, entry.message))
-        .collect();
+    let recorded = record(RECORDED, &[pack])
+        .unwrap_or_else(|refusal| panic!("the packed graph records: {refusal}"));
+    let packed: Vec<String> = recorded.report().to_vec();
     for line in &packed {
         println!("packed: {line}");
     }

@@ -3,13 +3,10 @@
 
 use super::common;
 
-use lichen_compute::compute::{
-    GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, set_graph_pass,
-    take_graph_pass_lines,
-};
+use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
-use lichen_compute::region_merge::{install_region_merge, region_merge_pass};
+use lichen_compute::region_merge::install_region_merge;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{
     KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId, compose,
@@ -59,40 +56,6 @@ built = compute.graph step
 "#
     .to_string()
 }
-
-fn running(recording: &str, second: bool) -> String {
-    let launch = if second {
-        "(count, data, other)"
-    } else {
-        "(count, data)"
-    };
-    format!(
-        "{recording}\ncount = ({count})\ndata = (compute.buffer ([{data}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nother = (compute.buffer ([{other}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nout = compute.collect (compute.graphrun built {launch})\nout\n",
-        count = COUNT,
-        data = values(1, COUNT),
-        other = values(10, COUNT),
-    )
-}
-
-/// The `elements` float literals `first.0 … (first + elements - 1).0`.
-fn values(first: usize, elements: usize) -> String {
-    (first..first + elements)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// The answer `z[i] = Σ (a[k] + r[k]) + 1` has: `bias` is the consumer's own tail.
-fn answer(sum: f32, bias: f32) -> Vec<f32> {
-    vec![sum + bias; COUNT]
-}
-
-/// The sum `d = 1 … COUNT` folds to, and `10 … COUNT + 9` beside it.
-const SUM_D: f32 = 36.0;
-
-/// The sum `d = 1 … COUNT` folds to.
 
 /// The root tuple's items, read from the value the program answered.
 ///
@@ -181,132 +144,19 @@ fn buffer_reads_at(body: &KernelBody, position: i64) -> Vec<ValueId> {
         .collect()
 }
 
-/// The lines the installed pass reported for a module, through the run report's own channel.
-fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
-    module
-        .extension_diagnostics
-        .iter()
-        .filter(|entry| entry.category.contains("pass"))
-        .map(|entry| entry.message.clone())
-        .collect()
-}
-
-/// The merge with the consumer's `+ 1.0` tail turned into `+ 10.0`.
-///
-/// # Invariant
-/// The mutation is inside the composed body alone, so an answer that changes says the composed
-/// node executed and an answer that does not says the recording did.
-struct MovedBias(Box<dyn GraphPass>);
-
-impl GraphPass for MovedBias {
-    fn apply(
-        &self,
-        graph: &Graph,
-        extent: &LaunchExtent<'_>,
-        lines: &mut Vec<String>,
-    ) -> Option<Graph> {
-        let rewritten = self.0.apply(graph, extent, lines)?;
-        let mut mutated = rewritten.clone();
-        let Node::Kernel(node) = &rewritten.nodes()[0];
-        let mut fragment = node.fragment.clone();
-        move_bias(&mut fragment.body);
-        mutated
-            .replace_kernel(0, fragment)
-            .expect("a moved constant is the same shape");
-        Some(mutated)
-    }
-}
-
-/// Turn the one float constant `1.0` in the composed body into `10.0`.
-fn move_bias(body: &mut KernelBody) {
-    let one = 1.0f32.to_bits() as i64;
-    let chosen = body
-        .values
-        .iter()
-        .position(|definition| {
-            matches!(
-                definition,
-                ValueDef::Instr {
-                    op: KernelInstr::Const(ScalarClass::Float, bits),
-                    ..
-                } if *bits == one
-            )
-        })
-        .expect("the composed body holds the consumer's own `+ 1.0`");
-    let ValueDef::Instr { op, .. } = &mut body.values[chosen] else {
-        unreachable!("the index came from a constant");
-    };
-    *op = KernelInstr::Const(ScalarClass::Float, 10.0f32.to_bits() as i64);
-}
-
 /// The fragment a merged graph's one node holds.
 fn merged(rewritten: &Graph) -> &KernelFragment {
     let Node::Kernel(node) = &rewritten.nodes()[0];
     &node.fragment
 }
 
-/// Run `recording` three times on a device: as recorded, merged, and merged with the tail moved.
-///
-/// # Invariant
-/// The three answers are the whole of the evidence, and the **counterfactual is the proof**: a
-/// fused chain computes the same numbers unfused, so only an answer that moves with the composed
-/// body says which node the device dispatched.
-fn device_triple(name: &str, recording: &str, second: bool, sum: f32) {
-    let (_stub, _guard) = common::stub();
-    let program = running(recording, second);
-    clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&program);
-    let recorded = common::float_array(&base_module, &base_value);
-    assert_eq!(
-        recorded,
-        answer(sum, 1.0),
-        "with no pass installed the program runs its own two kernels"
-    );
-
-    let (module, _instances, _graph) = derived(recording);
-    install_region_merge(&base_module);
-    let (merged_module, merged_value, _root) = common::run(&program);
-    let merged = common::float_array(&merged_module, &merged_value);
-    let report = pass_report(&merged_module);
-    assert!(
-        report
-            .iter()
-            .any(|line| line.contains("licensed by the floor:")),
-        "the run's own report says the floor licensed the merge while the run was dispatched: \
-         {report:?}"
-    );
-    assert_eq!(
-        merged, recorded,
-        "the merged graph answers the program's answer element for element"
-    );
-
-    // **The counterfactual**: only the composed node can answer a value the recording cannot.
-    set_graph_pass(Box::new(MovedBias(region_merge_pass(&module))));
-    let (moved_module, moved_value, _root) = common::run(&program);
-    let moved = common::float_array(&moved_module, &moved_value);
-    clear_graph_pass();
-    println!(
-        "the device ran `{name}`: recorded {recorded:?}, merged {merged:?}, `+ 1.0` moved to \
-         `+ 10.0` {moved:?}"
-    );
-    assert_eq!(
-        moved,
-        answer(sum, 10.0),
-        "the composed body with the tail moved answers what the recording cannot"
-    );
-    assert_ne!(
-        moved, merged,
-        "the answer moved with the composed body, so the composed node is what the run dispatched"
-    );
-}
-
-/// A consumer whose parameter struct names only the buffer it absorbs merges, and runs.
+/// A consumer whose parameter struct names only the buffer it absorbs merges.
 ///
 /// # Invariant
 /// Nothing is declared that the consumer never reads, so the merged port list is the producer's
 /// alone: this is the natural program the old numbering refused.
 #[test]
-fn a_consumer_naming_only_the_absorbed_buffer_merges_and_the_device_agrees() {
+fn a_consumer_naming_only_the_absorbed_buffer_merges() {
     let (module, instances, graph) = derived(&natural());
     install_region_merge(&module);
     let rewritten = consult_graph_pass(&graph, &|_node| Some(COUNT))
@@ -343,13 +193,6 @@ fn a_consumer_naming_only_the_absorbed_buffer_merges_and_the_device_agrees() {
     assert!(
         !buffer_reads_at(&fragment.body, 0).is_empty(),
         "the producer's own fold reads survive at port 0"
-    );
-
-    device_triple(
-        "a_consumer_naming_only_the_absorbed_buffer_merges_and_the_device_agrees",
-        &natural(),
-        false,
-        COUNT as f32 * SUM_D,
     );
 }
 

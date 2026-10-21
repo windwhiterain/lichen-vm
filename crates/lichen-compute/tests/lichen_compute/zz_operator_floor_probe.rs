@@ -2,10 +2,21 @@
 
 use super::common;
 
-use lichen_compute::compute::{LANDING_DIAGNOSTIC, clear_graph_pass};
-use lichen_compute::floor::install_floor_for_run;
-use lichen_compute::language::new_store;
-use lichen_language::run::{PassReport, RunOutput, evaluate_raw_reporting};
+use lichen_compute::compute::{
+    clear_graph_pass, consult_graph_pass, set_graph_pass, take_graph_pass_lines,
+};
+use lichen_compute::floor::floor_pass_with_packs;
+use lichen_compute::fusion_claim::{fragment_of, kernel_id};
+use lichen_compute::language::LangProgram;
+use lichen_graph_ir::{Count, Graph, KernelNode, Node};
+use lichen_lowlevel::Module;
+
+/// The extent a consultation hands the pass.
+///
+/// # Invariant
+/// One count for every node of the graph, so the pass lines a case prints are the pass's answer
+/// to that extent and not to one the reader has to re-derive from the program.
+const EXTENT: usize = common::LANES as usize;
 
 /// The GEMV of `examples/gemv.lichen`, through the graph leg, collected directly.
 const GEMV: &str = r#"
@@ -250,57 +261,70 @@ x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Floa
 compute.collect (compute.graphrun built (4, 2.0, x))
 "#;
 
-/// Run `source` once with no pass installed and once with the floor installed for the run.
-fn measure(label: &str, source: &str) {
-    clear_graph_pass();
-    let baseline = one(source);
-    install_floor_for_run(&[]);
-    let floored = one(source);
-    clear_graph_pass();
-    for (name, report) in [("recorded", baseline), ("floored", floored)] {
-        match report {
-            Ok(output) => {
-                println!("[{label}/{name}] runs: {}", output.output);
-                if !output.pass_lines.is_empty() {
-                    for line in &output.pass_lines {
-                        println!("[{label}/{name}] pass: {line}");
-                    }
-                }
-            }
-            Err(diagnostics) => {
-                println!("[{label}/{name}] refused:");
-                for diagnostic in diagnostics {
-                    println!("[{label}/{name}]   {diagnostic}");
-                }
-            }
-        }
-    }
-}
-
-/// One run of `source` with its pass report carried beside its value.
+/// The one-node graph the recording's own fragment makes.
 ///
 /// # Invariant
-/// The refusal is rendered here, so the probe's own signature does not name the diagnostic type
-/// the run's store fixes.
-fn one(source: &str) -> Result<RunOutput, Vec<String>> {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    evaluate_raw_reporting(
-        source,
-        None,
-        &mut store,
-        PassReport::Reported(&[LANDING_DIAGNOSTIC]),
-    )
-    .map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|diagnostic| format!("{diagnostic:?}"))
-            .collect()
-    })
+/// The node is built from the registry's own fragment and not from a run's, so the pass is
+/// handed exactly the body the program compiled, and the consultation dispatches nothing.
+fn recorded_graph(module: &Module<LangProgram>) -> Graph {
+    let kernel = module
+        .nodes
+        .iter()
+        .find_map(|(id, _node)| kernel_id(module, id).ok())
+        .expect("the program compiled one parallel kernel");
+    let fragment = fragment_of(kernel).expect("the registry holds the fragment it compiled");
+    let mut graph = Graph::with_inputs(1);
+    let node = graph
+        .push(
+            Node::Kernel(KernelNode {
+                fragment,
+                inputs: vec![0],
+                count: Count::Constant(EXTENT),
+                scalars: Vec::new(),
+            }),
+            1,
+        )
+        .expect("one output, one declared");
+    graph
+        .returning(vec![node])
+        .expect("a value the graph defines");
+    graph
+}
+
+/// The lines the installed floor reports for `source`'s recorded graph.
+///
+/// # Invariant
+/// The pass is consulted over the recording and never through a run, so its lines are read
+/// without a dispatch: the merge stage's answer and the tiling stage's are both host work.
+fn measure(label: &str, source: &str) {
+    clear_graph_pass();
+    let report = common::check(source);
+    if !report.ok() {
+        println!(
+            "[{label}] refused: {}",
+            report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<String>>()
+                .join(" | ")
+        );
+        return;
+    }
+    let module = report
+        .build
+        .expect("an accepted program has a build")
+        .module;
+    set_graph_pass(floor_pass_with_packs(&module, &[]));
+    let graph = recorded_graph(&module);
+    consult_graph_pass(&graph, &|_node| Some(EXTENT));
+    let lines = take_graph_pass_lines();
+    clear_graph_pass();
+    println!("[{label}] pass: {lines:?}");
 }
 
 #[test]
 fn probe_the_floor_on_a_real_operator() {
-    let (_stub, _guard) = common::stub();
     measure("gemv", GEMV);
     measure("decode_direct", &decode_pair(8, 1, true));
     measure(

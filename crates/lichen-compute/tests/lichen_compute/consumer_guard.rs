@@ -245,9 +245,8 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// that line **now carries the check's name**, because every arm states its refusal by name.
 #[test]
 fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
-    let (_stub, _guard) = common::stub();
     clear_graph_pass();
-    let source = running();
+    let source = chain();
     let recorded = run(&source);
     assert_eq!(
         recorded.kernels[0].claim.roles,
