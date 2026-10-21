@@ -1169,21 +1169,27 @@ where
         }
     }
 
-    /// A recording does not consult its operand's verdict
-    /// (`docs/notes/graph-recording-rounds.md`).
+    /// A compute operand is gated on its operands' values, not on their verdict
+    /// (`docs/notes/compound-element-slots.md`).
     fn run_deferred(
         &self,
         operand: Option<NodeId>,
         block: BlockId,
         module: &mut Module<P>,
     ) -> Option<P::Value> {
-        if graph::is_recording() {
-            // A recorded operand carries open type positions by design
-            // (`docs/notes/graph-recording-rounds.md`).
-            let value = match operand {
-                Some(node) => module.evaluate_node_deep(node, Some(block))?,
-                None => P::Value::from(LowValue::Error),
+        {
+            let Some(node) = operand else {
+                return self.run(P::Value::from(LowValue::Error), block, module);
             };
+            let value = module.evaluate_node_deep(node, Some(block))?;
+            // SAFETY: `node` is the operand the VM just evaluated, and no block is dropped
+            // in this walk.
+            for item in unsafe { module.array_items(node) }.unwrap_or_default() {
+                let element = module.element_value_node(item.node).unwrap_or(item.node);
+                if module.node_value(element).is_none() {
+                    return None;
+                }
+            }
             return self.run(value, block, module);
         }
         let value = match operand {
@@ -1760,9 +1766,12 @@ where
                     // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     // `collect` says "give me these as host values" — where a `"gpu"`
-                    // chain's results cross the bus.
-                    let buffer =
-                        buf_payload::<P>(module, operands[0].node).unwrap_or(operands[0].node);
+                    // chain's results cross the bus. The element is a slot.
+                    let element = module
+                        .element_value_node(operands[0].node)
+                        .unwrap_or(operands[0].node);
+                    let buffer = buf_payload::<P>(module, element).unwrap_or(element);
+
                     let results: ScalarData = match module
                         .node_value(buffer)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
