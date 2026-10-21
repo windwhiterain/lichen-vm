@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The `Geq` node is a cloned frozen body, not a check-time comparison.** Only one `Geq`
+is created by the checker (`964`, in block 10) and it is not the traced node: the `Geq` the
+emitter walks (`4468`) is owned by the fold but created by the **clone** — the inlined body
+of the **frozen `geq`** the preprocess desugars `s(0) >= 7` into. Its first operand is the
+`compute.read` **callee path**, where the call's first argument (`s(0)`) belongs, so the
+frozen callee's **argument substitution is shifted**: the inlined parameter bound to the
+callee operand rather than to the argument. The next probe is that substitution
+(`materialize_static_return_apply` / the routed residual's parameter binding).
+
 **The merged operand is a template node, and the merge happens after the check.** Every
 node of the traced chain (`1298` the condition, `4450` a frozen path read, `4468` the `Geq`)
 is owned by the fold — all **template** nodes. At `check_binop` time, no comparison's left
