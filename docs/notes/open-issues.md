@@ -51,6 +51,19 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**Only the type-side apply has an unstated callee, measured over the whole module.** A
+scan classifying every `Apply` by whether its callee states a value prints **no value-side
+apply among the unstated ones**: each unstated apply has a *sibling* that shares its
+result cell and function type, and the sibling's callee is a stated function (mostly
+`Function(Static)`, once the fold's `Function(Dynamic)`). That sibling is the **value-side**
+apply of the same call, and the unstated one is the **type-side** apply `check_app` builds
+(`the type applies, the body does not`). So no empty *value* apply is placed anywhere; the
+defect is that the loop's lowering reaches a **type-side** apply for a value. A routing
+that lowers the sibling measured neutral (114) and was not kept, because it scans the
+module per unresolved apply; the fix must identify the pairing from data the emitter
+already holds (the recorded `apply_edges` are checker-only, so the module needs the pair
+relation).
+
 **The loop body's failing callee is a read of an undecided pair.** Probing the refusal
 itself: the apply's callee is `Index(691, 0)` where `691` is an **empty cell** — no value,
 no operation, so `array_items_of` answers `None` — and `static_function_of_callee` returns
