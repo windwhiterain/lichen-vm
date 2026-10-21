@@ -5822,7 +5822,13 @@ where
     // A block's first item reads the returned slot
     // (`docs/notes/compound-element-slots.md`).
     let node = dyn_node(peeled_argument(module, first.node).ok()?).ok()?;
-    let inner = module.node_value(AnyNodeId::Dynamic(node))?;
+    // A recorded body's return is reached through a clone
+    // (`docs/notes/graph-recording-rounds.md`).
+    let inner = module.node_value(AnyNodeId::Dynamic(node)).or_else(|| {
+        module
+            .node_origin(node)
+            .and_then(|origin| module.node_value(AnyNodeId::Dynamic(origin)))
+    })?;
     placed_of(&inner)
 }
 
