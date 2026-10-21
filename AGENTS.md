@@ -66,6 +66,31 @@ statically links the whole stack.
   belongs in alphabetical position in `tests/<name>/mod.rs`, or `cargo fmt` removes
   it and the binary loses a module.
 
+## Dependencies
+
+- **No dev-dependencies, except the test harness.** Every edge a crate declares
+  is a normal dependency, so a crate's tests reach the same public API a
+  consumer does. The one exception is `lichen-testkit`, which **uses** the
+  crates it serves: a normal edge back to `lichen-highlevel` would be a cycle,
+  and a harness that the crates it serves depend on would have the arrow the
+  wrong way round.
+- A crate gains a dependency when it needs it at run time. A test that needs
+  another crate's API is that crate's test, or the dependency is normal.
+
+## Backends
+
+- **Only `lichen-compute-gpu` may start a backend.** A backend is where a
+  compiled parallel kernel runs: the device (Vulkan) or the CPU (the wasm
+  interpreter). Every other crate asserts on the IR it produced, never on the
+  result of running it.
+- **A crate verifies what belongs to it.** A test that asserts what another
+  crate's behaviour is — a program's computed value, a device's answer — is
+  deleted, not moved: the owning crate writes that verification once.
+- The serve crate's **instances are examples**: a program that stands up a
+  session is a demonstration, not a shipped binary.
+- [The note](docs/notes/backend-ownership.md) is the prose form, with the
+  census and the costs.
+
 ## Land
 
 A branch lands **in the checkout that owns the branch**: `git -C <checkout> merge

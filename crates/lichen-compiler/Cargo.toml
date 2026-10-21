@@ -16,14 +16,11 @@ path = "src/lib.rs"
 clap.workspace = true
 lichen-compute.workspace = true
 lichen-highlevel.workspace = true
+# The tests read a value the lowlevel holds; the highlevel above already
+# depends on it, so the edge costs nothing to link.
+lichen-lowlevel.workspace = true
 lichen-language.workspace = true
 lichen-utils.workspace = true
-
-# The tests read a value the lowlevel holds and install a device to run a pack
-# on; the compiler itself links neither.
-[dev-dependencies]
-lichen-compute-gpu.workspace = true
-lichen-lowlevel.workspace = true
 
 [[bin]]
 name = "lichen-compiler"

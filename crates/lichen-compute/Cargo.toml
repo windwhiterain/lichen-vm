@@ -31,18 +31,9 @@ waffle = { version = "0.3.2", default-features = false }
 # Stated in the workspace because the runtime's emitted-module cache holds one of
 # these per kernel; the version note that matters is the one on the encoder above.
 wasmi.workspace = true
-
-[dev-dependencies]
-# The seam test: a real lichen program dispatching to a real device. This crate
-# depends on the GPU backend only for its tests, so no library half of it — and
-# no host that composes the sub-language — links a GPU loader.
-lichen-compute-gpu.workspace = true
-# `tests/readme.rs` and `tests/examples.rs` drive the README tooling, which
-# lives in its own crate; a dev-dependency keeps them here without putting the
-# generator in the library.
-lichen-tools.workspace = true
 # The symbolic core and its bridge: a region's schema is an expression tree, and
-# the tests state one by hand. The library reads both through `lichen-runtime`,
-# which is where the derivation now is.
+# the tests state one by hand. The library reads the derivation through
+# `lichen-runtime`, which is where it now is; these are the same crates the
+# runtime reads, so the edge costs nothing to link.
 lichen-fusion.workspace = true
 lichen-fusion-bridge.workspace = true

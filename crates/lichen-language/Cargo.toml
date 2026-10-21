@@ -19,8 +19,11 @@ lichen-render.workspace = true
 lichen-utils.workspace = true
 libloading = "0.8"
 
-[dev-dependencies]
-# Only `tests/persist.rs` uses this: the compiler-slot contract test compares
-# the slot this crate reads with the one the package manager installs into.
+# Only `tests/persist.rs` uses the package manager: the compiler-slot contract
+# test compares the slot this crate reads with the one the package manager
+# installs into. The native standard library is the one the tests load beside
+# it. Both are normal dependencies because this workspace declares no
+# dev-dependencies, and both cost nothing to link: the preprocess, registry and
+# highlevel above already carry them.
 lichen-package.workspace = true
 lichen-std-native.workspace = true

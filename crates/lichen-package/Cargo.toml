@@ -21,7 +21,6 @@ lichen-utils.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# The generated-manifest test parses the document it emits, so the escaping is
-# checked by a real TOML parser rather than by string comparison.
-[dev-dependencies]
+# The manifest is a TOML document, and the escaping is checked by a real TOML
+# parser rather than by string comparison.
 toml = "0.8"

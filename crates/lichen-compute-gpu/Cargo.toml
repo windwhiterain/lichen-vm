@@ -10,13 +10,13 @@ edition.workspace = true
 # not depend on this crate, so a build that never dispatches a kernel to a
 # device never links a GPU loader.
 #
-# This crate is not a workspace dependency of anything else in the workspace.  It
-# is a member so `cargo test --workspace` exercises it, which means the GPU
-# tests need a device.  Where there is no adapter carrying `shaderInt64` they do
-# not fail: each one returns early and writes the reason it skipped to stderr,
-# which libtest captures for a passing test, so `--nocapture` is how the skip is
-# read.  The emitter's tests need no device, except that the one shelling out to
-# `spirv-val` skips on the same terms when the tool is not on `PATH`.
+# This is the only crate that starts a backend, so its suite is the only one
+# that needs a device.  Where there is no adapter carrying `shaderInt64` the
+# tests do not fail: each one returns early and writes the reason it skipped to
+# stderr, which libtest captures for a passing test, so `--nocapture` is how the
+# skip is read.  The emitter's tests need no device, except that the one
+# shelling out to `spirv-val` skips on the same terms when the tool is not on
+# `PATH`.
 [dependencies]
 ash = "0.38.0"
 lichen-kernel-ir.workspace = true
@@ -29,13 +29,11 @@ lichen-kernel-ir.workspace = true
 # on an inherited `workspace.dependencies` entry.
 lichen-runtime = { path = "../lichen-runtime", default-features = false }
 
-# The graph IR, so a graph can be run against a real device. A **dev**
-# dependency on purpose: this crate is a backend and takes no part in building
-# graphs, and the dependency is here so the tests can prove the two fit rather
-# than so the backend can see a graph.
-[dev-dependencies]
+# The graph IR, so a graph can be run against a real device, and the symbolic
+# core and its bridge, whose acceptance case is a declared reduction tiled
+# across the workgroup. These are normal dependencies because this workspace
+# declares no dev-dependencies, and they cost nothing to link: the runtime
+# above already depends on all three.
 lichen-graph-ir = { path = "../lichen-graph-ir" }
-# The acceptance case's bodies: a declared reduction tiled across the workgroup, checked against
-# the emitter here and run on a device from `lichen-language`'s own tests.
 lichen-fusion = { path = "../lichen-fusion" }
 lichen-fusion-bridge = { path = "../lichen-fusion-bridge" }
