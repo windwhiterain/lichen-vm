@@ -82,6 +82,15 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**With a one-megabyte test stack, none of the three candidate walks passes depth 200.** A
+1 MB stack makes the abort shallow, and file-marked depth counters in `evaluate_node`,
+`evaluate_node_deep_inner`, `node_apply` and `value_apply` print **nothing**: no walk reaches
+200 frames before the process dies. So the deep part is in a fourth walk, or the stack is not
+consumed by a Rust recursion at all — the `#[stacksafe]` wrappers are the remaining suspect,
+since `stacker::maybe_grow` allocates a new segment per wrapped call and a path that re-enters
+a wrapper keeps the native stack. The next probe is a run with the wrappers' growth visible
+(e.g. a counter in a `stacksafe`-wrapped entry).
+
 **The faithful probe passes, so the abort is layout-dependent.** Extended to the failing
 test's exact sequence — the `jit`/`launch` program first, then the parallel program on `cpu`,
 `install_default`, the same program on `gpu`, `uninstall`, then six registration-and-drop
