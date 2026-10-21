@@ -82,6 +82,12 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The same helper shape swept the fusion tests: compute 158 → 177.** Eight more test helpers
+read a root element with `node_value(node).or_else(|| node_value(node))`, which cannot see
+past the slot a compound's element is; each now reads the slot's value position first
+(`89bff53f`). Measured: **compute 158 → 177 passed, 77 failed**. The tally is now compute 16,
+pack_placement 6, sibling_diamond 4, graph_jit 4, fuse_licence 4, then a tail of 2–3.
+
 **User verdict (round 88): fixing the stale test helpers is approved** — only helpers that
 read a raw node, no assertion changes, no new tests. First application: `fuse_licence`'s
 `recorded` now reads the slot's value position (`d6c2f17`'s commit), and **fuse_licence goes
