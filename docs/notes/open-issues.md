@@ -61,6 +61,18 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The frozen-body overflow's trigger is the launch's scalar leaf read.** Bisecting the
+peel's five sites: peeling **only** `record_launch`'s extent leaves the frozen test graceful;
+peeling **only** `ParLaunch`'s scalar leaf read (site 1) reproduces the overflow. So the
+overflow follows from **a correct scalar peel**: the launch's extent becomes the number the
+slot carries, and that program's body (a class-crossing one) then runs the launch into the
+clone walk. Two discriminators were tried for "is this array a slot": the type marker
+(`P::Value::type_marker()` at position 1) is **too strict** — a slot's type position holds an
+array, not the marker, so the peel stops working and graph_jit stays 1/10; a scalar-only
+guard at site 1 keeps graph_jit at **6/10** and still overflows the frozen test. The slot test
+stays the arc's `layout() != 0`, and the frozen test's overflow is therefore a separate defect
+in the launch path for a class-crossing body, not a misidentified slot.
+
 **Two attempts at the frozen-body overflow, both measured, both reverted.** (a) A
 **read-depth guard** on `evaluate_node` (a counter plus `MAX_READ_DEPTH = 512`) does not stop
 it — the recursion is not reached through `evaluate_node` at all. (b) Making the **role paths
