@@ -73,6 +73,18 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**The repeated builds and the node count are normal, so the overflow is elsewhere.** Probes:
+`Checker::build` runs ~9 times per test and each stack names
+`PackageStore::register_embedded ← register_native ← register_compute` — i.e. the **package
+registration** compiling the prelude's three modules for each store the test creates, not a
+loop. `check_index` is called **7 times**, once per expression. `array_node_with_layout`'s
+2000 calls are spread over `check_ann`/`element_slot` subtrees, which is the slot encoding
+doing its normal work: the 26 000 nodes are the prelude plus the program, not runaway
+growth. What remains is a **stack** overflow whose sampled frames are all shallow (27–90
+frames), so the deep part runs in code that creates no nodes — the next suspects are a deep
+`Drop` and the type printer/unifier. This corrects the round-74 reading that the checker
+loops.
+
 **The launch extent is correct, so the loop is downstream of it.** The frozen test's
 extent reads `LowValue::USize(69)` both raw **and** peeled — 69 is the program's own
 `ELEMENT_COUNT` (`LOCAL_SIZE_X + 5`), so the peel is innocent at that leaf and the launch runs
