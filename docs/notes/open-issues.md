@@ -61,6 +61,16 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The launch is gated by its operand's deep verdict.** Instrumenting `run_deferred` shows
+the mechanism behind "no operator runs": it deep-evaluates the operator's operand and
+returns `None` **without calling `run`** when the operand's `evaluated_deep` is unset or
+undecided. For the recorded launch the operand evaluates to a value but its verdict is
+**`undecided: true`**, so `record_launch` is never reached — the `ParLaunch` arm's own probe
+(round 61) fires nothing for the same reason. The undecided item is the **cfg placeholder**
+(the launch's `[kernel, cfg]` operand: its item's `evaluated_deep` is `undecided: true` and
+it holds no value). So the next probe is the placeholder struct: a `GraphInput` cell is
+decided by construction, and something under it reads undecided.
+
 **Inside the recording no operator runs at all, and the pair's value read answers nothing.**
 Two more measurements on the same test: (a) the returned pair's first item (`Index(5732)`)
 evaluates to **`None`** even though its target (`5734`) holds an array and its selector is
