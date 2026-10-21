@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The type side no longer copies the frozen body; the remaining clone is the value side's.**
+Both type-side static applications copied the frozen **return pair whole** — and that pair's
+value is the *body*, so the type side dragged `greater_or_equal`'s graph into the caller and
+its parameter reads were bound by the type arguments. They now copy only the type and
+attribute positions (the value is a hole), measured **114 → 115**. The remaining opaque
+(`4318`) is a fresh clone whose origin is the *apply node*, created by
+`static_function_apply` **inside the fold's own clone** (a nested static application): that
+path does unify the parameter with the argument, so the next probe is the nested clone's
+argument binding.
+
 **The inlined body is `greater_or_equal`, and the emitter reaches it as a `definition`.**
 `core.lichen` writes `greater_or_equal = operands => { operands : array{(_ ! in_num), 2};
 operands[0] >= operands[1] }`, so `s(0) >= 7` becomes an apply whose single argument is the
