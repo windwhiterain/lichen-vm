@@ -1015,7 +1015,7 @@ where
         // **A marked recursion** converts to a loop; the callee's own template decides
         // the shape.
         if let Some(function) = self.module.callee_function(node)
-            && self.module.functions[function].looping
+            && self.module.function_is_looping(function)
         {
             return match self.module.loop_conversion(function) {
                 Ok(conversion) => self.lower_loop(node, function, &conversion),

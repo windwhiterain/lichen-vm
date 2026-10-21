@@ -28,7 +28,7 @@ fn a_recursion_whose_call_is_not_in_tail_position_refuses() {
     // Both calls are operands of the `Add`, so neither is a branch of the spine.
     let mut m = Module::new();
     let (_func_node, function) = fibonacci(&mut m);
-    m.mark_looping(function);
+    m.mark_looping(function, 0);
     assert_eq!(m.loop_conversion(function), Err(LoopRefusal::NonTailCall));
 }
 
@@ -50,7 +50,7 @@ fn a_recursion_in_a_tuple_element_refuses() {
     let type_node = m.add_node(body, None, None);
     let ret = array_node(&mut m, body, &[tuple, type_node], None);
     let function = finish_function(&mut m, body, ret, param, func_node);
-    m.mark_looping(function);
+    m.mark_looping(function, 0);
     assert_eq!(m.loop_conversion(function), Err(LoopRefusal::NonTailCall));
 }
 
@@ -59,7 +59,7 @@ fn a_recursion_without_a_base_case_refuses() {
     // `f(x) = Apply(f, x)`: a step and no exit — the loop would never return.
     let mut m = Module::new();
     let (_func_node, function) = unconditional_self_apply(&mut m);
-    m.mark_looping(function);
+    m.mark_looping(function, 0);
     assert_eq!(m.loop_conversion(function), Err(LoopRefusal::NoBaseCase));
 }
 
@@ -71,7 +71,7 @@ fn a_mutual_recursion_refuses_at_the_component_cap() {
     let (_f_func, _g_func) = mutually_recursive_functions(&mut m);
     let functions: Vec<FunctionId> = m.functions.keys().collect();
     for &function in &functions {
-        m.mark_looping(function);
+        m.mark_looping(function, 0);
     }
     assert_eq!(
         m.loop_conversion(functions[0]),
@@ -84,7 +84,7 @@ fn a_non_recursive_function_refuses() {
     let mut m = Module::new();
     let (func_node, _ret, _param) = function(&mut m, |_m, _ret, _param| {});
     let function = dyn_function(m.node_value(AnyNodeId::Dynamic(func_node)).unwrap());
-    m.mark_looping(function);
+    m.mark_looping(function, 0);
     assert_eq!(m.loop_conversion(function), Err(LoopRefusal::NotRecursive));
 }
 

@@ -944,7 +944,7 @@ where
         let Some(&(function, Some(lambda))) = self.function_stack.last() else {
             return false;
         };
-        if !self.module.functions[function].looping {
+        if !self.module.function_is_looping(function) {
             return false;
         }
         let ExprKind::Function { parameter, .. } = self.ir[lambda].kind else {

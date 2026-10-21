@@ -46,7 +46,10 @@ where
         // The `@loop` mark crosses into the graph here, where the shell exists and
         // the body does not (loop-conversion.md §8.6).
         if looping {
-            self.module.mark_looping(function);
+            // The mark states the loop state's parameter slot
+            // (`docs/notes/loop-conversion.md`).
+            self.module
+                .mark_looping(function, crate::shape::PAIR_VALUE_SLOT);
         }
         // The parameter's value position is unconstrained: the call supplies it.
         let value_cell = self.fresh_cell();

@@ -101,7 +101,7 @@ fn marked_function(build: &Build<ProgramImpl>) -> lichen_lowlevel::FunctionId {
         .module
         .functions
         .keys()
-        .find(|&function| build.module.functions[function].looping)
+        .find(|&function| build.module.function_is_looping(function))
         .expect("the harness marks exactly one function")
 }
 

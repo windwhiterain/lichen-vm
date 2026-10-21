@@ -35,7 +35,7 @@ fn function_homed_in(
         asserts: Vec::new(),
         parent: None,
         block: home,
-        looping: false,
+        looping: None,
     });
     for &node in nodes {
         m.register_in_function(function, node);

@@ -497,7 +497,7 @@ fn finish_function(
         asserts: Vec::new(),
         parent: None,
         block,
-        looping: false,
+        looping: None,
     });
     tag_scope(m, function, nodes);
     m.blocks[block].functions.push(function);
@@ -537,7 +537,7 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
         asserts: Vec::new(),
         parent: None,
         block: body,
-        looping: false,
+        looping: None,
     });
     tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
     m.blocks[body].functions.push(function);
@@ -588,7 +588,7 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
         asserts: Vec::new(),
         parent: None,
         block: body,
-        looping: false,
+        looping: None,
     });
     tag_scope(m, f, vec![f_param, f_func, f_ops, f_apply, f_ret]);
     let g = m.functions.insert(Function {
@@ -602,7 +602,7 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
         asserts: Vec::new(),
         parent: None,
         block: body,
-        looping: false,
+        looping: None,
     });
     tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
     m.blocks[body].functions.extend([f, g]);
@@ -719,7 +719,7 @@ fn countdown(
     );
     let function = finish_function(m, body, ret, param, func_node);
     if marked {
-        m.mark_looping(function);
+        m.mark_looping(function, 0);
     }
     (func_node, function, condition, decrement, param)
 }

@@ -360,7 +360,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         asserts: vec![condition],
         parent: None,
         block: body,
-        looping: false,
+        looping: None,
     });
     tag_scope(&mut m, function, nodes);
     m.blocks[body].functions.push(function);

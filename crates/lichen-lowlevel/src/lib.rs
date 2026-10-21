@@ -814,7 +814,8 @@ pub struct Function {
     pub asserts: Vec<NodeId>,
     /// Owner.
     pub block: BlockId,
-    /// The `@loop` mark: **permission, not a command**.
+    /// The `@loop` mark: permission, not a command, and the parameter slot that holds
+    /// the loop's state.
     ///
     /// # Invariant
     /// Nothing here acts on the mark by itself. It changes what a recursion the deep pass
@@ -822,7 +823,7 @@ pub struct Function {
     /// conversion that replaces the expansion is built from this graph. It rides here
     /// because the cycle is a fact about this graph, not about syntax.
     /// See docs/notes/loop-conversion.md.
-    pub looping: bool,
+    pub looping: Option<usize>,
 }
 
 pub struct StaticFunction {

@@ -667,7 +667,7 @@ impl<P: Program> Module<P> {
             parent,
             asserts: Vec::new(),
             block,
-            looping: false,
+            looping: None,
         });
         self.blocks[block].functions.push(function);
         function
@@ -680,14 +680,19 @@ impl<P: Program> Module<P> {
     /// Stamped while the body is being compiled, by the layer that knows the source said
     /// `@loop`: the body is the only place the mark has to survive, because an apply
     /// clones templates away. Stamping twice is idempotent, so no bookkeeping is needed.
-    pub fn mark_looping(&mut self, function: FunctionId) {
-        self.functions[function].looping = true;
+    pub fn mark_looping(&mut self, function: FunctionId, slot: usize) {
+        self.functions[function].looping = Some(slot);
+    }
+
+    /// The parameter slot the mark states for `function`'s loop state.
+    pub fn function_loop_slot(&self, function: FunctionId) -> Option<usize> {
+        self.functions[function].looping
     }
 
     /// Whether `function` is a `@loop` binding. See [`Function::looping`] for
     /// what the mark does and does not mean.
     pub fn function_is_looping(&self, function: FunctionId) -> bool {
-        self.functions[function].looping
+        self.functions[function].looping.is_some()
     }
 
     /// Complete the shell begun by [`Self::begin_function`], naming the return and

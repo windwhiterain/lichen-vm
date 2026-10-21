@@ -131,7 +131,7 @@ fn an_unconvertible_marked_recursion_still_expands() {
         |_| {},
         |m| {
             let (function, id) = fibonacci(m);
-            m.mark_looping(id);
+            m.mark_looping(id, 0);
             (function, id)
         },
         6,

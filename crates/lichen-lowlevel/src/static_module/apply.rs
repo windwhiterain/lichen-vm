@@ -540,7 +540,7 @@ impl<P: Program> Module<P> {
             parent: ctx.branch_top,
             block: ctx.target,
             // An instance, not a template; the `@loop` mark does not travel here.
-            looping: false,
+            looping: None,
         });
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));

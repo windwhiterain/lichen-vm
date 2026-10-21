@@ -160,6 +160,13 @@ impl<P: Program> Module<P> {
     /// and a pair's type or attribute position ends the match rather than naming a
     /// state element (`docs/notes/compound-element-slots.md`).
     pub fn parameter_value_path(&self, function: FunctionId, node: NodeId) -> Option<Vec<usize>> {
+        // The mark's slot matches a state read structurally
+        // (`docs/notes/loop-conversion.md`).
+        if let Some(slot) = self.functions[function].looping
+            && let Some(path) = self.marked_state_path(function, node, slot)
+        {
+            return Some(path);
+        }
         let parameter = self.functions[function].parameter;
         let value_cell = self.pair_value_half(parameter).unwrap_or(parameter);
         let value_class = self.class_root(value_cell);
@@ -182,6 +189,39 @@ impl<P: Program> Module<P> {
             let (target, selector) = (*operands.first()?, *operands.get(1)?);
             let position = self.usize_value(selector)?;
             path.push(position);
+            current = target;
+        }
+        None
+    }
+
+    /// The state path a read of the marked slot names.
+    fn marked_state_path(
+        &self,
+        function: FunctionId,
+        node: NodeId,
+        slot: usize,
+    ) -> Option<Vec<usize>> {
+        let parameter = self.functions[function].parameter;
+        let mut collected = Vec::new();
+        let mut current = node;
+        for _ in 0..16 {
+            let operation = self.node_operation(current)?;
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                return None;
+            }
+            let operands = self.operands_of(current).ok()?;
+            let (target, selector) = (*operands.first()?, *operands.get(1)?);
+            let position = self.usize_value(selector)?;
+            if target == parameter {
+                if position != slot {
+                    return None;
+                }
+                return Self::state_path(collected);
+            }
+            collected.push(position);
             current = target;
         }
         None
@@ -281,7 +321,7 @@ impl<P: Program> Module<P> {
             }
             for &node in &self.functions[h].nodes {
                 if let Some(callee) = self.callee_function(node)
-                    && self.functions[callee].looping
+                    && self.functions[callee].looping.is_some()
                     && !out.contains(&callee)
                 {
                     out.push(callee);

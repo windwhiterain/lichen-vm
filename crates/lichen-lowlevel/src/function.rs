@@ -707,7 +707,7 @@ impl<P: Program> Module<P> {
                     block: target,
                     // A clone does not carry its template's `@loop` mark: an instance is expanded like
                     // any other call.
-                    looping: false,
+                    looping: None,
                 });
                 // The fresh id is recorded before the scope walk; a scope can name it again.
                 ctx.minted.insert(function, fresh);
