@@ -1875,7 +1875,7 @@ final = (drive (0, KVOut(.k kbuf, .v vbuf), log, OutW(.o spare)) : tuple{Int, KV
     file should not be the place to find that out. Nothing else in these three operators is \
     conditional.\n\n\
     **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
+    `crates/lichen-tools/examples/operators_on_device.rs` runs every example that dispatches a \
     kernel twice, on both backends, and this one answers `agrees, 10 of 10 element(s)` on the RTX \
     3060 — both chains, the fold included. Exact arithmetic is what that should say: every value is \
     a quarter or a half, there is no transcendental and no division, so there is no ulp for the two \
@@ -2638,7 +2638,7 @@ final = (generate (0, KVOut(.k kbuf, .v vbuf), Gout(.y blank)) : tuple{Int, KVOu
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
     `examples/kvcache.lichen`'s append before the guard landed. A six-element stencil is therefore a \
     device check of the tail-lane guard, not only a physics demonstration, and the sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
     on the RTX 3060 for all three chains: the padding is the same boundary on both backends, and the \
     surplus lanes leave the answer untouched."
   output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 6}, array{Float, 6}}"
@@ -2727,7 +2727,7 @@ solved = march (2, seed)
     **Nine lanes leave 55 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
     coordinates would put its write inside `[0, 9)` if nothing guarded it — the class of silent \
     wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
     on the RTX 3060 for both chains, so the four `Select`s, the computed `rows` and the guard are \
     all right on the device."
   output = "([1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 9}, array{Float, 9}}"
@@ -2806,7 +2806,7 @@ solved = march (1, seed)
     **Six lanes leave 58 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated coordinates \
     would put its write inside `[0, 6)` if nothing guarded it — the class of silent wrong answer \
     measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 12 of 12 element(s)` on \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 12 of 12 element(s)` on \
     the RTX 3060 for both chains, so the window read, the tap-count leaf and the guard are all right \
     on the device."
   output = "([1.0, 4.0, 8.0, 12.0, 16.0, 20.0], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]): tuple{array{Float, 6}, array{Float, 6}}"
@@ -2877,7 +2877,7 @@ differenced = (compute.plrun filter ((FArg)(.n 6, .taps 3, .I FIn(.x x, .w diffe
     coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
     answer measured on `examples/kvcache.lichen`'s append before the guard landed, and the reason a \
     window read needs the guard as much as a flat one does. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 50 of 50 element(s)` on \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 50 of 50 element(s)` on \
     the RTX 3060 for both chains: the window arithmetic, the coefficient buffer, the clamped addresses and the guard are all right there."
   output = "([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]): tuple{array{Float, 25}, array{Float, 25}}"
 ---
@@ -2944,7 +2944,7 @@ replicated = (compute.plrun replicate ((CArg)(.n 25, .cols 5, .taps 9, .I CIn(.x
     **Twenty-five lanes leave 39 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
     coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
     answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
     the RTX 3060: the padded addressing, the seed leaf and the guard are all right there."
   output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: array{Float, 25}"
 ---
