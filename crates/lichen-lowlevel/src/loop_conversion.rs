@@ -173,6 +173,15 @@ impl<P: Program> Module<P> {
         let mut path = Vec::new();
         let mut current = node;
         for _ in 0..16 {
+            if std::env::var("DBG_PATH").is_ok() {
+                println!(
+                    "PATH {current:?} op {:?} class {:?} value-class {:?}",
+                    self.node_operation(current)
+                        .map(|operation| format!("{:?}", operation.operator)),
+                    self.class_root(current),
+                    value_class,
+                );
+            }
             if self.class_root(current) == value_class {
                 // The chain reached the state's value: what was collected reads
                 // outermost-first.

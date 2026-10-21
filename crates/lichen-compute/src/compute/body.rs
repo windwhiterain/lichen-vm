@@ -1793,13 +1793,28 @@ where
     }
 
     /// One pending write's lowering, whichever instruction it becomes.
+    /// A read's selector, dynamic or frozen.
+    fn selector(&self, item: AnyNodeId) -> Option<usize> {
+        match item {
+            AnyNodeId::Dynamic(node) => self.module.usize_value(node),
+            AnyNodeId::Static(sref) => match self
+                .module
+                .static_read(sref)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::USize(n)) => Some(n),
+                _ => None,
+            },
+        }
+    }
+
     /// The call a value peel `Index(pair, 0)` names.
     fn call_of_value_read(&self, node: NodeId) -> Option<NodeId> {
-        let operands = self.module.operands_of(node).ok()?;
-        if self.module.usize_value(*operands.get(1)?)? != 0 {
+        let operands = self.arguments(node).ok()?;
+        if self.selector(*operands.get(1)?)? != 0 {
             return None;
         }
-        let container = *operands.first()?;
+        let container = operands.first()?.dynamic()?;
         let lichen_lowlevel::Define::Computed(defined) =
             self.module.define_in(self.function, container)
         else {
