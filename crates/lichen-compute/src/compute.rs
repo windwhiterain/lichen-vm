@@ -22,8 +22,8 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic,
-    FunctionId, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt,
-    PAIR_ATTR_BASE, Program, Release, StaticModule, ValueExt,
+    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
+    Release, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -2427,11 +2427,8 @@ where
     let param_shape = kernel_domain(domain, statement)?;
     // The parameter's type node is the shape authority
     // (`docs/notes/compound-element-slots.md`).
-    let type_classes = domain_type_classes(
-        module,
-        fid,
-        &[Some(AnyNodeId::Dynamic(param_value)), param_type],
-    );
+    let type_classes =
+        domain_type_classes(module, &[Some(AnyNodeId::Dynamic(param_value)), param_type]);
     let params = vec![ParamSlot {
         pair: param_pair,
         value: param_value,
@@ -2615,7 +2612,6 @@ where
     let roles = parallel_roles(module, cfg_pair)?;
     let type_classes = domain_type_classes(
         module,
-        fid,
         &[
             pair_value(module, cfg_pair).map(AnyNodeId::Dynamic),
             pair_type(module, cfg_pair),
@@ -8138,11 +8134,7 @@ pub const WRAPPER_SOURCE: &str = include_str!("compute.lichen");
 /// The type node is the shape authority (`docs/notes/compound-element-slots.md`), so a
 /// read's base is accepted when its class is one this set names; the walk is bounded by
 /// [`DOMAIN_DEPTH`], which stops a cyclic encoding rather than a real shape.
-fn domain_type_classes<P>(
-    module: &Module<P>,
-    function: FunctionId,
-    roots: &[Option<AnyNodeId>],
-) -> HashSet<NodeId>
+fn domain_type_classes<P>(module: &Module<P>, roots: &[Option<AnyNodeId>]) -> HashSet<NodeId>
 where
     P: Program,
     P::Value: AsEnum<LowValue> + ValueType,

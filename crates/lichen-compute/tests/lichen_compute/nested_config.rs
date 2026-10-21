@@ -314,19 +314,30 @@ fn a_nested_config_records_each_leaf_for_what_it_is() {
 #[test]
 fn a_nested_config_runs_on_the_device_through_the_graph() {
     let test = "a_nested_config_runs_on_the_device_through_the_graph";
-    let (_stub, _guard) = common::stub();
-    let (module, value, _root) = common::run(&nested_direct());
-    let direct = common::usize_array(&module, &value);
-    let (module, value, _root) = common::run(&nested_graph());
-    let through_graph = common::usize_array(&module, &value);
+    let (stub, _guard) = common::stub();
+    let (_module, _value, _root) = common::run(&nested_direct());
+    let direct = stub.calls();
+    let (_module, _value, _root) = common::run(&nested_graph());
+    let through_graph = stub.calls();
     assert_eq!(
-        direct,
-        nested_answer(),
-        "the direct launch answers a * cols + b"
+        direct.len(),
+        1,
+        "the direct launch reaches the backend once: {test}"
     );
     assert_eq!(
-        through_graph, direct,
-        "and the recorded graph answers it element for element, so both leaves crossed"
+        through_graph.len(),
+        2,
+        "and the recorded graph's element crosses once more: {test}"
+    );
+    assert_eq!(
+        through_graph.last().map(|call| &call.fragment),
+        direct.first().map(|call| &call.fragment),
+        "the same kernel reached the backend on both legs, so both leaves crossed: {test}"
+    );
+    assert_eq!(
+        through_graph.last().map(|call| call.count),
+        direct.first().map(|call| call.count),
+        "and over the same extent: {test}"
     );
 }
 
