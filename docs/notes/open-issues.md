@@ -720,10 +720,20 @@ the shape); only the pair's **value** — a node without a type slot — takes t
 Measured neutral (compute 117, lowlevel 164, other suites green). The `graph_jit`
 class-shape panic that motivated a refinement relaxation is **not** from that seed: it
 comes from a value seed whose stated type has an **open** position that an observation
-later decides. The relaxation (a later statement may fill the seed's open positions; a
-decided conflict still asserts) was measured **+1 (117 → 118)** with every suite green and
-the panic gone, but it is an Invariant change and **not approved**, so it is not in the
-tree.
+later decides. The relaxation was measured **+1 (117 → 118)** with every suite green and the
+panic gone, but per the superior's ruling below it is not the fix.
+
+**The superior's verdict on the seed, verbatim (recorded round 93 on request).**
+
+> seed 和 observation绝不同时存在于一个node，seed是高层为没有对应type node的那个node提供的
+
+Read out: a seed and an observation never coexist on one node; the seed is what the highlevel
+provides for the node that has **no corresponding type node**. So the fix is never to let the
+two statements merge: when a class carries a seed and an observation reaches the same class,
+some **seeding site seeded a node that has a type node** (or a union merged such a node into a
+seeded one), and that site is the defect. The assertion is the invariant and stays; the
+relaxation is reverted (it was measured again at +2 with the peel in the tree, compute
+225 → 227, and still rejected). No further question about it is to be asked.
 
 **The approved Invariant change is refuted by measurement.** With the superior's approval
 of both changes proposed here, they were implemented and measured: removing the unroll
@@ -1112,10 +1122,9 @@ the shape); only the pair's **value** — a node without a type slot — takes t
 Measured neutral (compute 117, lowlevel 164, other suites green). The `graph_jit`
 class-shape panic that motivated a refinement relaxation is **not** from that seed: it
 comes from a value seed whose stated type has an **open** position that an observation
-later decides. The relaxation (a later statement may fill the seed's open positions; a
-decided conflict still asserts) was measured **+1 (117 → 118)** with every suite green and
-the panic gone, but it is an Invariant change and **not approved**, so it is not in the
-tree.
+later decides. The relaxation was measured **+1 (117 → 118)** with every suite green and the
+panic gone, but the superior's verdict recorded at the head of this note says why it is not
+the fix: a seed and an observation never coexist on one node.
 
 **The approved Invariant change is refuted by measurement.** With the superior's approval
 of both changes proposed here, they were implemented and measured: removing the unroll
