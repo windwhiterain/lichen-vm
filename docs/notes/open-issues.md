@@ -82,6 +82,16 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**Corrected: the abort follows the second `array_values`, and its likeliest site is the
+assertion's `Debug`.** Marking the assertion helpers shows
+`float_of → type_is_float → array_values (cpu) → usize_array → array_values (gpu)` and then
+the abort. `array_values` itself is a **flat** map (it does not recurse), and its one failure
+mode is a `panic` (an element without a value), not a stack overflow — so the abort comes
+*after* it returns, in the assertion it feeds: a **failing `assert_eq!` formats its operands**,
+and a value the peel made **cyclic** (a slot whose value position names the slot) makes that
+`Debug` recurse without end. That also explains why the abort needs the *failing* assertion:
+tests that pass never format a value.
+
 **The crash is in the test-side `array_values`, after the device run.** A mark in
 `common::run` per program shows three runs — the `jit`/`launch` one, then the parallel one on
 `cpu`, then on `gpu` after `install_default` — and the abort comes **after the third**, i.e.
