@@ -73,6 +73,15 @@ the buffer and recorded-scalar sites (the launch's input buffers and the recordi
 five sites split cleanly: four are safe and worth nothing on their own, and the one that pays
 is the one that explodes the class-crossing test.
 
+**Regression inventory (user steer, round 79): the peel's neighbourhood is the biggest lever.**
+The 133 failing tests of `lichen_compute` group as: **compute 24**, **fuse_licence 10**,
+**graph_jit 9**, **fused_region 8**, pack_placement 6, then a long tail of 1–4. The first four
+groups (~51 tests) are exactly the families the cfg-leaf peel reaches: with the peel the
+graph family alone moves 1/10 → 6/10, and their refusals are the same "the return is not a
+value a graph can hand back" and the extent read. So the inventory does not dodge the crash:
+**fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
+the list. The tail (pack_placement, the merge/fan families) is separate work.
+
 **The crash point moves between runs, from before the first registration to after the third.**
 With a file marker at `register_compute`'s entry: one run shows `register_compute 1, 2, 3`
 and then a crash with no fourth line; another run (256 MB test stack) crashes with **no line
