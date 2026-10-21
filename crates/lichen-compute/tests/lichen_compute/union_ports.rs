@@ -138,8 +138,9 @@ fn recorded(module: &Module<LangProgram>, value: &lichen_compute::language::Lang
         panic!("the graph comes from a frozen artifact");
     };
     let value = module
-        .node_value(AnyNodeId::Dynamic(node))
-        .or_else(|| module.node_value(AnyNodeId::Dynamic(node)))
+        .element_value_node(AnyNodeId::Dynamic(node))
+        .or(Some(AnyNodeId::Dynamic(node)))
+        .and_then(|node| module.node_value(node))
         .and_then(|value| AsEnum::<lichen_compute::ComputeValue>::as_enum(&value));
     let Some(lichen_compute::ComputeValue::Graph(id, _)) = value else {
         panic!("the program's third root element is not a graph");
