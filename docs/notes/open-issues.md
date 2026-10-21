@@ -82,6 +82,18 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The walk ends on the domain's node, which holds no value at compile time.** Tracing
+`parameter_path` on `compute::jit_nested_tuple_domain`: the outer read's walk goes
+`667 → 669 → 671` and stops at **671**, while the parameter's value is **47** — so the base the
+walk reaches is a *nested element's pair*, not the domain, and `on_a_slot`/`on_a_leaf` are both
+false (the domain's class root is 71, the slot pair's 795). A domain-membership test that
+descends the domain's **value** tree answers nothing, because the parameter's value node is a
+placeholder with no value at compile time; only its *shape* is known. So the placement needs
+the domain's **type structure** (the decoded `LowShape`, which carries no node ids), and the
+seed is what currently makes the nested bases match their classes. This is the design the next
+round has to settle; the three experimental variants (node value, class value, kind-based
+dereference, domain membership) were all measured **neutral at 222** and are reverted.
+
 **The five are refused where the body tells a pair from a tuple.** Reading `parameter_path`: the
 outer read `p(0)(1)` walks its target (the inner `Index`), sees `step == 1`, takes the
 *dereference* branch because the class shape says "a two-position tuple with an open second
