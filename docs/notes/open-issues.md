@@ -61,6 +61,16 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Inside the recording no operator runs at all, and the pair's value read answers nothing.**
+Two more measurements on the same test: (a) the returned pair's first item (`Index(5732)`)
+evaluates to **`None`** even though its target (`5734`) holds an array and its selector is
+the constant `0` — so the descent stops at that read; (b) instrumenting the extension
+operator's `run` shows it is **never called while recording** (`is_recording()` true), and
+the index reads the walk does reach end at value-only elements. The launch clones therefore
+stay unevaluated, `record_launch` never runs, and the recording cannot name its return. The
+next probe is why the read of `5734`'s item yields `None` — the item is the launch clone,
+whose evaluation is the operator call the recording never makes.
+
 **The recording clones the launches and never evaluates them.** Probes on
 `graph_jit::a_graph_recorded_for_one_backend_runs_on_another`: every apply **instantiates**
 (`APPLY fn … instantiated true`, including the graph body's apply); after the recording's
