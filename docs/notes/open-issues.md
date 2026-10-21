@@ -61,6 +61,15 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The peel's recursion follows one frozen clone per evaluation step.** The creation
+backtrace of the chain's nodes is `check_lam → check_term → … → value_apply → node_apply →
+add_node`, and the evaluation depth reaches 26 800 over contiguous node ids — so each
+evaluation step clones a frozen body and evaluates *that* clone, which contains another
+frozen call: the frozen body evaluates itself without a bound. The peel changes a cfg
+leaf's value (a slot's value where a number was), and that value reaches the interpreter.
+Peeling through *nested* slots does not stop it (measured: the +1 test still passes and the
+cross-kernel test still overflows), so the recursion is not the slot depth.
+
 **The peel's overflow is an unbounded chain the checker builds.** Instrumenting
 `evaluate_node`'s depth shows 26 800 nested calls with the peel in place, over a *growing*
 chain of contiguous dynamic nodes (`3800, 3801, … 3909, …`) interleaved with the prelude's
