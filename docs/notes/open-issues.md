@@ -61,6 +61,16 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The cfg leaf peel is measured again and kept out: it exposes a definition cycle.**
+Applying `.scratch-core/leaf-fix.patch` (the peel at `value_at_path`) makes
+`a_body_reads_a_scalar_leaf_of_its_input_struct` pass, as recorded before, and again makes
+two cross-kernel tests overflow: traced with the peel in place, the lowering walks a cycle
+(`value 446 → definition 2643 → value 2682 → … 446`) whose nodes the guard cannot stop
+because each round reaches a *different* node (the chain is continued, not repeated). So the
+peel is reverted and the cycle is the next defect for that family; `value()` now records the
+nodes it is lowering and names a repeat (`f9a0a461`) instead of overflowing. Measured:
+compute **120**, lowlevel 164.
+
 **The loop family passes: an element read names the slot's value position.** `115 → 120`
 with `peeled_argument` ending on `element_value_node`: the read's buffer argument is the
 *value* position of the full `[value, type, attrs]` slot, the same reading the arc states
