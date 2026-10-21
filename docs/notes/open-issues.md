@@ -82,16 +82,15 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
-**Asked again (round 93): the seed relaxation is still not approved.** The class-shape
-assertion in `refine_class_low_type` fired again on
-`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`: the seed states
-`Tuple([.., Tuple([None, None]), ..])` and the observation `Tuple([.., Tuple([None, Some(USize)]),
-..])` — the same value-seed-with-an-open-position case the round-62 note names. The fill
-relaxation was re-measured with the peel in the tree: **compute 225 → 227** (+2, no other suite
-moved), better than the +1 it measured then. The superior points out the question was already
-asked, and the standing verdict is **not approved**, so the change is reverted and the two
-tests stay red. This line exists so it is not asked a third time: the datum is +2, the verdict
-is no.
+**The seed relaxation was asked again (round 93) and the superior's verdict is recorded
+verbatim in this note's head: a seed and an observation never coexist on one node.** The
+class-shape assertion fired on
+`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` with a seed
+`Tuple([.., Tuple([None, None]), ..])` and an observation
+`Tuple([.., Tuple([None, Some(USize)]), ..])`. The fill relaxation was measured at **+2**
+(compute 225 → 227) and is **not the fix**: per the verdict the conflict means some seeding
+site seeded a node that has a type node, so that site is the defect and the assertion stays.
+The change is reverted; the two tests stay red until the seeding site is found.
 
 **The graph run's argument walk was reading slots: compute 193 → 225.** `flatten_leaves`
 descended every item of every array, so a compound's element **slot** contributed its type and
