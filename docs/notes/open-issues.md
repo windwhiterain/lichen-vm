@@ -82,6 +82,13 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The slots the assertion reads are not self-referential.** Instrumenting `array_values`'
+slot branch: the four slots it visits hold `USize(0)`, `USize(1)`, `USize(68)` and an array in
+their value positions — no first position names its own slot. So the `Debug`-of-a-cycle
+reading is **wrong**, and the abort after the second `array_values` is not a cyclic format.
+What remains in that region is the **drop of the device module and its value** (the gpu
+module is the last one alive), which the probe deliberately dropped *before* reading.
+
 **Corrected: the abort follows the second `array_values`, and its likeliest site is the
 assertion's `Debug`.** Marking the assertion helpers shows
 `float_of → type_is_float → array_values (cpu) → usize_array → array_values (gpu)` and then
