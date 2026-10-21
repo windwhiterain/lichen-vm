@@ -58,7 +58,8 @@ out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
         Ok(()) => {
             mark("gpu installed");
             let (gpu_module, gpu_value, _) = common::run(&parallel.replace("BACKEND", "gpu"));
-            mark("gpu values kept");
+            let gpu_elements = common::array_values(&gpu_module, &gpu_value);
+            mark(&format!("gpu elements {}", gpu_elements.len()));
             mark("gpu done");
             lichen_compute_gpu::uninstall();
             mark("gpu uninstalled");
@@ -67,7 +68,8 @@ out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
         }
         Err(reason) => mark(&format!("no device: {reason}")),
     }
-    mark("cpu values kept");
+    let cpu_elements = common::array_values(&cpu_module, &cpu_value);
+    mark(&format!("cpu elements {}", cpu_elements.len()));
     drop(cpu_module);
     mark("cpu module dropped");
     for round in 0..6 {

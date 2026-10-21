@@ -3409,6 +3409,27 @@ where
     Some(unsafe { array.items() })
 }
 
+/// The value position of a **slot**, or [`None`] for a node that is not one.
+///
+/// # Invariant
+/// A compound's element is a full-width `[value, type, attributes]` pair; a bare array
+/// is a value of its own (`docs/notes/compound-element-slots.md`).
+fn slot_value_of<P>(module: &Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    let value = module.node_value(node)?;
+    let LowValue::Array(array) = value.as_enum()? else {
+        return None;
+    };
+    if array.layout() == 0 {
+        return None;
+    }
+    // SAFETY: the value came from a live node or a pinned artifact; either keeps it.
+    unsafe { array.items() }.first().map(|item| item.node)
+}
+
 /// The node a role path names in a cfg value: each step is an array index.
 fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
 where
@@ -3417,7 +3438,8 @@ where
 {
     let mut node = AnyNodeId::Dynamic(root);
     for &at in path {
-        node = items_of(module, node)?.get(at)?.node;
+        let field = items_of(module, node)?.get(at)?.node;
+        node = slot_value_of(module, field).unwrap_or(field);
     }
     Some(node)
 }
