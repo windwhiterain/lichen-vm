@@ -82,6 +82,19 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The method needs a correspondence the checker does not build: the type tree and the value
+tree are separate classes.** Implementing the verdict's direction faithfully — readers take
+the shape from the **type node**, the highlevel seeds nothing for a node that has one — was
+tried in one build. A `domain_type_classes` map of the class roots named by the parameter's
+**type** tree was threaded into the body's `Lower`, and `parameter_path` accepted a chain whose
+base class that map names. The walk's base for `p(0)(1)` is still rejected: its class root is
+**not** any class the type tree names, because the checker never unified the **value** tree's
+nodes with the **type** tree's nodes — the type node 48's tree is `{48, 60, 61, 11}`, and the
+value-side element pair stands in classes of its own. That is the piece of the method that is
+missing: the correspondence between an element's value node and its type node, which the
+**checker** has to state. Once it does, the seed has nothing to bridge and can go. The
+type-class acceptance alone is **neutral** (225, no regression) and was reverted with the rest.
+
 **The walk ends on the domain's node, which holds no value at compile time.** Tracing
 `parameter_path` on `compute::jit_nested_tuple_domain`: the outer read's walk goes
 `667 → 669 → 671` and stops at **671**, while the parameter's value is **47** — so the base the
