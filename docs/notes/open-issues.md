@@ -82,6 +82,21 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The seed conflict is seed-vs-seed, and removing the value seed regresses three.** Tracing
+both write paths on `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`: node
+1414's class root 4246 receives **two seeds** (lines 502 and 578 of the trace, no observation),
+the second with the more specific shape; the conflict then moves to node 1684, again a
+seed-container whose later statement fills an open position. Letting two seeds **fill each
+other** (a seed is the provider's statement for the same node, so the two states are one
+statement, not a seed meeting an observation) resolves that first conflict and is measured
+**neutral (225)** — the next conflict, on 1684, is reached only after it. The verdict's stricter
+reading — a pair's value **has a corresponding type node**, so `prepare_template_low_types` must
+not seed it — was measured too: **compute 225 → 222**, a regression of three, so the seed is
+load-bearing for those three and the defect is not simply "that call should go". What remains
+unknown is **which nodes the highlevel is supposed to seed** under the verdict: the templates
+here are all pairs, so a literal reading seeds almost nothing, and the three regressions say
+something still needs the shape the type slot already states.
+
 **The seed relaxation was asked again (round 93) and the superior's verdict is recorded
 verbatim in this note's head: a seed and an observation never coexist on one node.** The
 class-shape assertion fired on
