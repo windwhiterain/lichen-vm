@@ -5764,6 +5764,15 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut result = module.evaluate_node_deep(apply, Some(block));
+    // The apply forces the returned pair, not the value it carries
+    // (`docs/notes/graph-recording-rounds.md`).
+    if let Some(value) = result.as_ref()
+        && let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value)
+        && let Some(item) = (unsafe { array.items() }).first()
+        && let Some(node) = item.node.dynamic()
+    {
+        module.evaluate_node_deep(node, Some(block));
+    }
     let mut recorded = result
         .as_ref()
         .and_then(|value| returned_value_ids::<P>(module, value));
