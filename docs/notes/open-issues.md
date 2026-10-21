@@ -82,6 +82,18 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The two statements are both the provider's: the seed and the inference.** A backtrace at the
+conflict names the caller chain `refine ← seed ← prepare_template_low_types` for the first
+conflict, and after a last-seed-wins variant the second names
+`refine ← infer_template_low_types ← prepare_template_low_types` on node 1684 — so the
+collision is **inside one provider call**: `prepare_template_low_types` seeds the pair's value
+from the pair's type slot, and then `infer_template_low_types` states the same class from the
+node's operands, more specifically. Under the verdict the *first* statement is the one that
+should not exist (the pair's value has a corresponding type node), and the inference is the
+legitimate one — but removing the seed costs **three** tests (measured 225 → 222), so the
+inference does not yet state what the seed states for those three. The next work is therefore
+**the inference's transfer for those nodes**, so the seed can go without losing them.
+
 **The second conflict is an observation meeting a seeded class.** With the two-seed fill in
 place the first conflict (1414) is gone and the assertion moves to node **1684**, whose class
 carries `Tuple([Some(Tuple([Some(Tuple([None, None]))])), None])` and is later stated as
