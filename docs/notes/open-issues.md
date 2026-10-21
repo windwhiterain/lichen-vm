@@ -61,6 +61,16 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Two attempts at the frozen-body overflow, both measured, both reverted.** (a) A
+**read-depth guard** on `evaluate_node` (a counter plus `MAX_READ_DEPTH = 512`) does not stop
+it — the recursion is not reached through `evaluate_node` at all. (b) Making the **role paths
+carry the slot step** (`walk_role` pushes `PAIR_VALUE_SLOT` after each field) is the
+structural shape that would make the peel unnecessary, but it costs **16 tests**
+(compute 120 → 104): the paths are consumed by several readers that already account for the
+slot, so the change must move every reader in the same step, not one walker. The local peel
+(the scratch patch) stays outside the tree, and its five sites are all in the parallel and
+recording extensions.
+
 **Resolved: `flatten_leaves` was the graph run's overflow.** Flag-return bisects inside
 `run_graph` show it: returning before the argument walk avoids the overflow, returning after
 it does not, and a backtrace at the walk's sixth call shows `flatten_leaves` recursing on
