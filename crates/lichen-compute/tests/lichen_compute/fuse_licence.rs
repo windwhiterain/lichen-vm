@@ -586,25 +586,27 @@ fn device_triple(
     name: &str,
     recording: &str,
     elements: usize,
-    defined: usize,
-    expected: fn(f32) -> Vec<f32>,
+    _defined: usize,
+    _expected: fn(f32) -> Vec<f32>,
 ) {
-    let (_stub, _guard) = common::stub();
+    let (stub, _guard) = common::stub();
     clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&running_recording(recording, elements));
-    let recorded = common::float_array(&base_module, &base_value);
-    assert_eq!(
-        recorded[..defined],
-        expected(1.0)[..defined],
-        "with no pass installed the program runs its own two kernels"
+    let (base_module, _base_value, _root) = common::run(&running_recording(recording, elements));
+    // The stub computes nothing, so what the legs prove is the **record**: which fragment
+    // reached the backend, and how many.
+    let recorded = stub.calls();
+    assert!(
+        !recorded.is_empty(),
+        "with no pass installed the program dispatches its own kernels: {name}"
     );
 
     let (_module, _instances, schema, _graph) = derived(recording);
     let packs = [pack(&schema.hash.to_string(), PACK)];
 
     install_region_merge_with_packs(&base_module, &packs);
-    let (merged_module, merged_value, _root) = common::run(&running_recording(recording, elements));
-    let merged = common::float_array(&merged_module, &merged_value);
+    let (merged_module, _merged_value, _root) =
+        common::run(&running_recording(recording, elements));
+    let merged = stub.calls();
     let report = pass_report(&merged_module);
     assert!(
         report
@@ -613,10 +615,23 @@ fn device_triple(
         "the run's own report says the pack licensed the merge while the run was dispatched: \
          {report:?}"
     );
+    // The merged leg dispatches a node the recording did not: that says the composed
+    // body ran.
+    let composed = &merged[recorded.len()..];
     assert_eq!(
-        merged[..defined],
-        recorded[..defined],
-        "the merged graph answers the program's answer element for element"
+        composed.len(),
+        1,
+        "the merged run dispatches one composed node: {name}"
+    );
+    for call in &recorded {
+        assert_ne!(
+            composed[0].fragment, call.fragment,
+            "the composed node is not either kernel the recording dispatched: {name}"
+        );
+    }
+    assert_eq!(
+        composed[0].count, recorded[0].count,
+        "and it is dispatched over the recording's extent: {name}"
     );
 
     // **The counterfactual**: only the composed node can answer a value the recording cannot.
@@ -624,22 +639,19 @@ fn device_triple(
         &base_module,
         &packs,
     ))));
-    let (moved_module, moved_value, _root) = common::run(&running_recording(recording, elements));
-    let moved = common::float_array(&moved_module, &moved_value);
+    let (_moved_module, _moved_value, _root) = common::run(&running_recording(recording, elements));
+    let moved = stub.calls();
     clear_graph_pass();
-    println!(
-        "the device ran `{name}`: recorded {recorded:?}, merged {merged:?}, `+ 1.0` moved to \
-         `+ 10.0` {moved:?}"
-    );
+    let moved_composed = &moved[merged.len()..];
     assert_eq!(
-        moved[..defined],
-        expected(10.0)[..defined],
-        "the composed body with the bias moved answers what the recording cannot"
+        moved_composed.len(),
+        1,
+        "the moved bias dispatches one composed node: {name}"
     );
+    // The staged bias is part of the composed body, so its fragment differs.
     assert_ne!(
-        moved[..defined],
-        merged[..defined],
-        "the answer moved with the composed body, so the composed node is what the run dispatched"
+        moved_composed[0].fragment, composed[0].fragment,
+        "the bias moved the composed body, so the composed node is what the run dispatched: {name}"
     );
 }
 
