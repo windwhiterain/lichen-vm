@@ -51,6 +51,15 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The wrong operand is the *clone's* state read.** The spine root is the fold's own node
+(`1302`, owner the fold), and no `check_binop` builds a comparison with a literal right in
+this program — so the `Geq` node the emitter walks (`4468`) is the **check-time clone** of
+the fold's comparison, whose left operand (`4470`) is the clone's state read. That clone is
+`Index(Index(Index(<wildcard mint>, 15), 901), 15)` — a read through the frozen prelude's
+node table — where the template states a state read. So `function_apply`'s remap clones the
+state read's container to a frozen structure; the comparison and the arithmetic branch are
+fine.
+
 **The comparison's left is a state read at check time and a frozen chain after the
 clone.** `check_binop`'s left operand chains are dynamic reads at check time (measured over
 the whole program), so the checker builds the comparison correctly; it is the **loop's
