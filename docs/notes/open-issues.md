@@ -82,6 +82,19 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**A kernel lookup now descends wrappers — compute 147 → 152.** The lookup looked one array
+level deep, but a compound's element is a slot and a wrapper nests its `.native`, so a
+reader's node is a slot whose value holds the wrapper. It now descends to `KERNEL_DEPTH`
+and stops there, because a value past that bound names itself (`977c0521`). Measured:
+**fused_region 0/8 → 2/8**, fuse_licence's kernel assertion passes, compute **152/102**.
+
+**What the remaining fusion failures need is the *tests'* helpers, not the production code.**
+`fuse_licence::recorded` reads a root element with
+`module.node_value(node).or_else(|| module.node_value(node))` — the same call twice, which
+cannot see past the slot the element now is. Those helpers were written before the slot
+encoding and read a raw node where the encoding now puts a slot. Updating them is *test*
+editing, which the workspace forbids without the user's permission.
+
 **The new tally, and the next lead.** After the peel: **compute 16**, fuse_licence 10,
 fused_region 8, pack_placement 6, then a tail of 3–4 (sibling_diamond, graph_jit, fan_out_merge,
 chain_merge, runtime_scalar_leaf, recompute_reads, identity_from_body, decode_step_graph,
