@@ -61,15 +61,7 @@ belongs — a class/unify merge of a value with a type cell is the next suspect.
 principled fixes landed first: `selection_of` reads a frozen selector through the shared
 accessor, and `walk_test` resolves views before reading its arms (both measured neutral).
 
- The
-plan program's remaining opaque is reached through `lower_loop_tests` → `value` →
-`lower_definition` → `arithmetic` → `value_item` → `value`: the conversion's
-`tests[0].condition` is `Index(apply, 0)` — the **call's value read** (`Index(1249, 0)`,
-`1249` an `Apply` whose pair's value is an array) — where the `if`'s own condition
-(`s(0) >= 7`) belongs. So the computation chain is wrong at the **spine walk**: the
-conversion recorded a call's value as the test's condition, and the emitter then traced
-through it into the type-side structure. The next probe is the conversion's `walk_test`
-classification of that node.
+
 
 **Only the type-side apply has an unstated callee, measured over the whole module.** A
 scan classifying every `Apply` by whether its callee states a value prints **no value-side
