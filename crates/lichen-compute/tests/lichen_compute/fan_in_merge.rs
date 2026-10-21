@@ -129,9 +129,12 @@ fn recorded(module: &Module<LangProgram>, value: &LangValue) -> Graph {
     let AnyNodeId::Dynamic(node) = item.node else {
         panic!("the graph comes from a frozen artifact");
     };
+    // A compound's element is a slot, so the value is the one its slot carries
+    // (`docs/notes/compound-element-slots.md`).
     let value = module
-        .node_value(AnyNodeId::Dynamic(node))
-        .or_else(|| module.node_value(AnyNodeId::Dynamic(node)))
+        .element_value_node(AnyNodeId::Dynamic(node))
+        .or(Some(AnyNodeId::Dynamic(node)))
+        .and_then(|node| module.node_value(node))
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value));
     let Some(ComputeValue::Graph(id, _)) = value else {
         panic!("the program's last root element is not a graph");
