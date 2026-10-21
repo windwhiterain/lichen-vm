@@ -82,6 +82,16 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**The new tally, and the next lead.** After the peel: **compute 16**, fuse_licence 10,
+fused_region 8, pack_placement 6, then a tail of 3–4 (sibling_diamond, graph_jit, fan_out_merge,
+chain_merge, runtime_scalar_leaf, recompute_reads, identity_from_body, decode_step_graph,
+consumer_guard, automatic_tiling). The first probe of the biggest remaining group: a
+`fuse_licence` test fails at `kernel_id(...).expect("the item names a kernel")` with
+`NotAKernel { found: "an undecided value" }` — the root tuple's item node carries **no value**.
+`kernel_id` already looks *inside* an array for a nested kernel, so the item's value is what is
+missing: the program's root tuple reaches the test with its elements **unforced**. That is the
+next probe (whether the root's items are shallow regions, and what forces them).
+
 **Resolved: `values_eq` was the recursion, and the peel is landed — compute 121 → 147.**
 `cdb` (the Windows debugger, installed under the Windows Kits) caught the crash's stack: the
 recursion is **`values_eq`** — the testkit's value comparison — calling itself through its own
