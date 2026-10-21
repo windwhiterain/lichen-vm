@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The new baseline's 44 failures cluster by refusal site.** Running each alone and taking its
+first panic line: `testing.rs:70` (a check refusal) ×6, `sibling_diamond.rs:68` ×4,
+`fuse_licence.rs:596` ×4, **`equality.rs:196` ×2** (the class-shape assertion — the seed
+question is still alive for two tests), `union_ports.rs:145` ×2, `tiling_visibility.rs:78` ×2,
+then one each across `automatic_tiling`, `fold_datum`, `decode_step_graph`, `compile_order_class`
+and the rest. The six check refusals share one message — "input buffer 0 was issued as a Int
+buffer but the backend returned Float elements" — a **device class** disagreement on an `Int`
+buffer, i.e. the class channel, not the slot channel. The per-test list is
+`.scratch-core/diag-01d8297e.txt`.
+
 **Baseline moved: the suite no longer runs a device, and compute dropped from ~140 s to 79 s.**
 `dev` is at `01d8297e` in this checkout (the update was local, not pushed). The suite is
 **231 tests**: `test result: FAILED. 186 passed; 44 failed; 1 ignored` in **79.38 s**, from
