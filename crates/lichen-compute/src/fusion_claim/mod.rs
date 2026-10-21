@@ -26,22 +26,39 @@ pub use lichen_runtime::fusion_claim::{
 /// and a `compute.jit` result holds it directly — one walk for both shapes, because the
 /// host that reads claims should not have to know which spelling a program used.
 pub fn kernel_id(module: &Module<LangProgram>, value: NodeId) -> Result<KernelId, ClaimRefusal> {
-    if let Some(id) = kernel_id_of(module, value) {
+    if let Some(id) = kernel_id_below(module, value, 0) {
         return Ok(id);
-    }
-    // The wrapper's own fields, where `.native` is.
-    // SAFETY: `value` is live, and no block is dropped here.
-    for item in unsafe { module.array_items(value) }.unwrap_or_default() {
-        if let AnyNodeId::Dynamic(node) = item.node
-            && let Some(id) = kernel_id_of(module, node)
-        {
-            return Ok(id);
-        }
     }
     Err(ClaimRefusal::NotAKernel {
         found: describe(module, value),
     })
 }
+
+/// The kernel id a node's value holds, or one an array it nests holds, to a bounded depth.
+///
+/// # Invariant
+/// A compound's element is a slot and a wrapper nests its `.native`, so the walk goes one
+/// level per compound; the bound is [`KERNEL_DEPTH`], past which a value names itself.
+fn kernel_id_below(module: &Module<LangProgram>, value: NodeId, depth: usize) -> Option<KernelId> {
+    if depth > KERNEL_DEPTH {
+        return None;
+    }
+    if let Some(id) = kernel_id_of(module, value) {
+        return Some(id);
+    }
+    // SAFETY: `value` is live, and no block is dropped here.
+    for item in unsafe { module.array_items(value) }.unwrap_or_default() {
+        if let AnyNodeId::Dynamic(node) = item.node
+            && let Some(id) = kernel_id_below(module, node, depth + 1)
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// The deepest array nesting a kernel lookup walks.
+const KERNEL_DEPTH: usize = 4;
 
 /// The kernel id a value's own class holds, when it holds one.
 fn kernel_id_of(module: &Module<LangProgram>, value: NodeId) -> Option<KernelId> {
