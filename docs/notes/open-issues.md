@@ -51,6 +51,14 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The comparison's left is a state read at check time and a frozen chain after the
+clone.** `check_binop`'s left operand chains are dynamic reads at check time (measured over
+the whole program), so the checker builds the comparison correctly; it is the **loop's
+clone** that turns that left into `Index(Index(Index(<wildcard>, 15), 901), 15)` — a read
+through the **frozen prelude's node table** (module 3 indices). So the defect is in
+`function_apply`'s **remap**: the state read's target (the parameter) cloned to the wrong
+node. The next probe is the remap of the parameter and of the read's container chain.
+
 **The test condition is right; its comparison's left operand is a type-side chain.**
 Corrected measurement: the condition (`Index(1249, 16)`) resolves `Views → Views →` a
 `TypeOperator(Geq)` apply — the `if`'s own comparison — but that comparison's **left
