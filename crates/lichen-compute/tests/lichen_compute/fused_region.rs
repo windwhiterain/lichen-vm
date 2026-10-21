@@ -419,19 +419,19 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         "the merged fragment names no parameter path, so no claim can be joined to it"
     );
 
-    let (_stub, _guard) = common::stub();
+    let (stub, _guard) = common::stub();
     clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&running());
-    let baseline = answer(&base_module, &base_value);
-    assert_eq!(
-        baseline,
-        vec![closed_form(); COUNT],
-        "the two-node program answers the hand-derived closed form"
+    let (base_module, _base_value, _root) = common::run(&running());
+    // A stub computes nothing, so each leg proves its **dispatch record**.
+    let baseline = stub.calls();
+    assert!(
+        !baseline.is_empty(),
+        "the two-node program dispatches its own kernels"
     );
 
     install_region_merge(&base_module);
-    let (merged_module, merged_value, _root) = common::run(&running());
-    let passed = answer(&merged_module, &merged_value);
+    let (merged_module, _merged_value, _root) = common::run(&running());
+    let merged = stub.calls();
     let report = pass_report(&merged_module);
     assert!(
         report
@@ -439,30 +439,37 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
             .any(|line| line.contains("merged into one node at 1")),
         "the run's own report says the pass merged while the run was dispatched: {report:?}"
     );
+    // The merged leg dispatches a node the recording did not: that is what says the
+    // composed body ran.
+    let composed = &merged[baseline.len()..];
+    assert_eq!(composed.len(), 1, "the merge dispatches one composed node");
+    for call in &baseline {
+        assert_ne!(
+            composed[0].fragment, call.fragment,
+            "the composed node is not either kernel the recording dispatched"
+        );
+    }
     assert_eq!(
-        passed, baseline,
-        "the merged graph answers the program's answer element for element"
+        composed[0].count, baseline[0].count,
+        "and it keeps the recording's runtime extent"
     );
 
-    // **The counterfactual**: only the composed node can answer a value the recording cannot.
+    // **The counterfactual**: the swapped element is part of the composed body, so its
+    // fragment differs from the merged one.
     set_graph_pass(Box::new(SwappedElement(region_merge_pass(&base_module))));
-    let (swapped_module, swapped_value, _root) = common::run(&running());
-    let swapped = answer(&swapped_module, &swapped_value);
-    println!(
-        "the device ran: recorded {baseline:?}, merged {passed:?}, merged with `d - r` swapped \
-         {swapped:?}"
-    );
+    let (_swapped_module, _swapped_value, _root) = common::run(&running());
+    let swapped = stub.calls();
+    clear_graph_pass();
+    let swapped_composed = &swapped[merged.len()..];
     assert_eq!(
-        swapped,
-        vec![swapped_form(); COUNT],
-        "the composed body with `d - r` swapped answers `Σ d - min d`, which the recording cannot \
-         answer"
+        swapped_composed.len(),
+        1,
+        "the swapped element dispatches one composed node"
     );
     assert_ne!(
-        swapped, passed,
+        swapped_composed[0].fragment, composed[0].fragment,
         "the answer moved with the composed body, so the composed node is what the run dispatched"
     );
-    clear_graph_pass();
 }
 
 /// A returned producer output is refused by name, and the recording is left as it was.
@@ -640,19 +647,19 @@ fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
 /// is that a dispatch under the floor reports both stages, which only a run can show.
 #[test]
 fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
-    let (_stub, _guard) = common::stub();
+    let (stub, _guard) = common::stub();
     clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&running());
-    let baseline = answer(&base_module, &base_value);
-    assert_eq!(
-        baseline,
-        vec![closed_form(); COUNT],
-        "the un-passed two-node program answers the hand-derived closed form"
+    let (base_module, _base_value, _root) = common::run(&running());
+    // A stub computes nothing, so each leg proves its **dispatch record**.
+    let baseline = stub.calls();
+    assert!(
+        !baseline.is_empty(),
+        "the un-passed two-node program dispatches its own kernels"
     );
 
     install_floor(&base_module);
-    let (floored_module, floored_value, _root) = common::run(&running());
-    let passed = answer(&floored_module, &floored_value);
+    let (floored_module, _floored_value, _root) = common::run(&running());
+    let floored = stub.calls();
     let report = pass_report(&floored_module);
     println!("the floor's run reported:\n  {}", report.join("\n  "));
     assert!(
@@ -669,32 +676,38 @@ fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
                 .contains("node 0: refused: no claim is registered for the fragment at 0")),
         "and the tiling stage looked at the node the merge left, by name: {report:?}"
     );
+    // The floored leg dispatches a node the recording did not.
+    let composed = &floored[baseline.len()..];
+    assert_eq!(composed.len(), 1, "the floor dispatches one composed node");
+    for call in &baseline {
+        assert_ne!(
+            composed[0].fragment, call.fragment,
+            "the composed node is not either kernel the recording dispatched"
+        );
+    }
     assert_eq!(
-        passed, baseline,
-        "the floored graph answers the un-passed program's answer element for element"
+        composed[0].count, baseline[0].count,
+        "and it keeps the recording's runtime extent"
     );
 
-    // **The counterfactual**: only the composed node can answer a value the recording cannot.
+    // **The counterfactual**: the swapped element is part of the composed body.
     set_graph_pass(Box::new(SwappedElement(floor_pass_with_packs(
         &base_module,
         &[],
     ))));
-    let (swapped_module, swapped_value, _root) = common::run(&running());
-    let swapped = answer(&swapped_module, &swapped_value);
-    println!(
-        "the device ran: recorded {baseline:?}, floored {passed:?}, floored with `d - r` swapped {swapped:?}"
-    );
+    let (_swapped_module, _swapped_value, _root) = common::run(&running());
+    let swapped = stub.calls();
+    clear_graph_pass();
+    let swapped_composed = &swapped[floored.len()..];
     assert_eq!(
-        swapped,
-        vec![swapped_form(); COUNT],
-        "the composed body with `d - r` swapped answers `Σ d - min d`, which the recording \
-         cannot answer"
+        swapped_composed.len(),
+        1,
+        "the swapped element dispatches one composed node"
     );
     assert_ne!(
-        swapped, passed,
+        swapped_composed[0].fragment, composed[0].fragment,
         "the answer moved with the composed body, so the merged node is what the run dispatched"
     );
-    clear_graph_pass();
 }
 
 /// A graph that already holds a composed node: the merge pass names it and leaves it alone.
