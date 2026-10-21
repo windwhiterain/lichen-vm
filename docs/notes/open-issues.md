@@ -61,6 +61,18 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Resolved: `flatten_leaves` was the graph run's overflow.** Flag-return bisects inside
+`run_graph` show it: returning before the argument walk avoids the overflow, returning after
+it does not, and a backtrace at the walk's sixth call shows `flatten_leaves` recursing on
+itself. The walk now carries a depth bounded by `MAX_GRAPH_INPUTS`, the way
+`place_of_node_at` bounds its own (`ecf43489`). **Measured with the peel: the graph_jit
+family reaches 6 passed / 4 failed in one run** (was 1/10), which is the number the
+individually-passing tests predicted. Without the peel the bound is neutral (compute 120).
+The peel itself still cannot land: the full compute suite then aborts on the *other*
+overflow, `compute::a_body_may_compute_in_one_class_and_cross` (the frozen-body recursion,
+rounds 57–58), which a read-depth guard on `evaluate_node` did **not** stop — so that
+recursion is not reached through `evaluate_node` either.
+
 **The one overflow left with the peel is in the graph *run*, and its bisect is narrowed.**
 Fresh-build measurements of `a_graph_runs_at_whichever_extent_its_argument_names` with the
 peel in place: the recording **succeeds** (`GRAPH arm done, value ComputeValue(Graph(0,
