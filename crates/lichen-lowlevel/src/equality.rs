@@ -137,6 +137,15 @@ impl<P: Program> Module<P> {
         self.nodes.get(self.class_root(node))?.low_shape.as_ref()
     }
 
+    /// The value the node's **class** holds, read through the representative.
+    ///
+    /// # Invariant
+    /// One class holds one value, so every member answers the same; a class holding
+    /// nothing answers [`None`]. See docs/notes/lowlevel-vm.md.
+    pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
+        self.nodes.get(self.class_root(node))?.value
+    }
+
     /// The class's recursive low type, cut by a path guard. See docs/notes/lowlevel-low-types.md.
     pub fn low_type_of_node(&self, node: NodeId) -> Option<LowShape> {
         let shape = self.class_low_type(node)?.clone();

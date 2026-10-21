@@ -22,8 +22,8 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, ArrayValue, BlockId, ExtensionDiagnostic,
-    LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program,
-    Release, StaticModule, ValueExt,
+    FunctionId, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt,
+    PAIR_ATTR_BASE, Program, Release, StaticModule, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -2425,6 +2425,14 @@ where
         _ => DomainStatement::Absent,
     };
     let param_shape = kernel_domain(domain, statement)?;
+    // **The parameter's type node is the shape authority**
+    // (`docs/notes/compound-element-slots.md`): its tree names the classes a body read's
+    // base stands on, so the walk reads it instead of a class shape copied there.
+    let type_classes = domain_type_classes(
+        module,
+        fid,
+        &[Some(AnyNodeId::Dynamic(param_value)), param_type],
+    );
     let params = vec![ParamSlot {
         pair: param_pair,
         value: param_value,
@@ -2452,7 +2460,21 @@ where
     tally.element_class = Some(class);
     // **One walk of the graph into one SSA body**, so a shared subexpression is emitted
     // once.
-    let mut body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
+    let type_classes_ref = &type_classes;
+    if std::env::var("DBG_CLASSES").is_ok() {
+        let mut ids: Vec<String> = type_classes.iter().map(|id| format!("{id:?}")).collect();
+        ids.sort();
+        eprintln!("CLASSES value {param_value:?} type {param_type:?} set {ids:?}");
+    }
+    let mut body = Lower::lower(
+        module,
+        &params,
+        param_value,
+        fid,
+        ret_value,
+        &mut tally,
+        type_classes_ref,
+    )?;
     // **Instructions become a target's before anything reads the body**: a
     // transcendental is defined by its expansion.
     body.expand_transcendentals()?;
@@ -2592,6 +2614,15 @@ where
     // The role table is decoded from the parameter's type, whose shape the low
     // vocabulary reads as a tuple of its fields.
     let roles = parallel_roles(module, cfg_pair)?;
+    let type_classes = domain_type_classes(
+        module,
+        fid,
+        &[
+            pair_value(module, cfg_pair).map(AnyNodeId::Dynamic),
+            pair_type(module, cfg_pair),
+        ],
+    );
+    let type_classes_ref = &type_classes;
     // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
 
@@ -2683,8 +2714,16 @@ where
             }
         }
     }
-    let mut body_instr =
-        Lower::lower_index_function(module, &params, cfg_value, fid, &outputs, class, &mut tally)?;
+    let mut body_instr = Lower::lower_index_function(
+        module,
+        &params,
+        cfg_value,
+        fid,
+        &outputs,
+        class,
+        &mut tally,
+        type_classes_ref,
+    )?;
     body_instr.expand_transcendentals()?;
     if outputs.len() != roles.outputs.len() {
         return Err(format!(
@@ -8093,3 +8132,46 @@ where
 /// repeats `lichen-std`'s definition, because an embedded native source is compiled
 /// against this plugin's private registry and cannot depend on a package.
 pub const WRAPPER_SOURCE: &str = include_str!("compute.lichen");
+
+/// The class roots of the nodes a parameter's **type** tree names.
+///
+/// # Invariant
+/// The type node is the shape authority (`docs/notes/compound-element-slots.md`), so a
+/// read's base is accepted when its class is one this set names; the walk is bounded by
+/// [`DOMAIN_DEPTH`], which stops a cyclic encoding rather than a real shape.
+fn domain_type_classes<P>(
+    module: &Module<P>,
+    function: FunctionId,
+    roots: &[Option<AnyNodeId>],
+) -> HashSet<NodeId>
+where
+    P: Program,
+    P::Value: AsEnum<LowValue> + ValueType,
+{
+    let mut classes = HashSet::new();
+    let mut pending: Vec<(AnyNodeId, usize)> =
+        roots.iter().flatten().map(|node| (*node, 0usize)).collect();
+    while let Some((node, depth)) = pending.pop() {
+        if depth > DOMAIN_DEPTH {
+            continue;
+        }
+        let Some(value) = module.node_value(node) else {
+            continue;
+        };
+        let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value) else {
+            continue;
+        };
+        if let AnyNodeId::Dynamic(node) = node {
+            classes.insert(module.class_root(node));
+        }
+        // SAFETY: the array is a value of a live node of `module`, and its items are
+        // live nodes of the same module.
+        for item in unsafe { array.items() } {
+            pending.push((item.node, depth + 1));
+        }
+    }
+    classes
+}
+
+/// The deepest a type tree walk descends.
+const DOMAIN_DEPTH: usize = 8;

@@ -57,6 +57,9 @@ pub struct Lower<'a, P: Program> {
     params: &'a [ParamSlot],
     /// The domain's **value** node — its leaves are this body's parameters, stated by the caller.
     domain: NodeId,
+    /// The class roots the domain's **type** tree names: the shape authority
+    /// (`docs/notes/compound-element-slots.md`).
+    type_classes: &'a HashSet<NodeId>,
     /// The function the domain belongs to, so `Module::define_in` derives the domain once.
     function: FunctionId,
     tally: &'a mut Positions,
@@ -198,6 +201,7 @@ where
         function: FunctionId,
         codomain: NodeId,
         tally: &'a mut Positions,
+        type_classes: &'a HashSet<NodeId>,
     ) -> Result<KernelBody, String> {
         let mut body = KernelBody::new();
         let entry = body.add_block();
@@ -209,6 +213,7 @@ where
             module,
             params,
             domain,
+            type_classes,
             function,
             tally,
             body,
@@ -248,6 +253,7 @@ where
         outputs: &[NodeId],
         class: ScalarClass,
         tally: &'a mut Positions,
+        type_classes: &'a HashSet<NodeId>,
     ) -> Result<KernelBody, String> {
         let mut body = KernelBody::new();
         let entry = body.add_block();
@@ -261,6 +267,7 @@ where
             module,
             params,
             domain,
+            type_classes,
             function,
             tally,
             body,
@@ -582,12 +589,33 @@ where
                 break;
             }
             // A slot's value position is no path step: the read's own element is
-            // the pair the transfer states.
+            // the pair the transfer states. A pair or a slot is **`2 + attributes`**
+            // wide, and a tuple's elements are slots, so a tuple is a different width
+            // (`docs/notes/compound-element-slots.md`).
+            let class_value = self
+                .module
+                .class_value(*target)
+                .and_then(|value| AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value));
             let dereference = matches!(
                 self.module.class_low_type(*target),
                 Some(lichen_lowlevel::LowShape::Tuple(items))
                     if items.len() == 2 && items[1].is_none()
+            ) || matches!(
+                class_value,
+                Some(lichen_lowlevel::LowValue::Array(ref array))
+                    if array.layout() != 0
+                        && (unsafe { array.items() }).len()
+                            == lichen_lowlevel::PAIR_ATTR_BASE
+                                + self.module.attribute_layout(array.layout()).len()
             );
+            if std::env::var("DBG_DEREF").is_ok() {
+                eprintln!(
+                    "DEREF target {target:?} step {step} deref {dereference} class {class_value:?} shape {:?}",
+                    self.module
+                        .class_low_type(*target)
+                        .map(|shape| format!("{shape:?}").chars().take(60).collect::<String>()),
+                );
+            }
             if dereference {
                 // A pair's type (`1`) and attributes (`2+`) are not values this body
                 // emits (`docs/notes/compound-element-slots.md`).
@@ -603,16 +631,18 @@ where
         let on_a_slot = self.params.iter().any(|slot| {
             root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
         });
-        // **Or one of the domain's leaves**: a read of `p` reaches the wrapper's field
-        // first, so the chain ends at a leaf.
-        let on_a_leaf = self
-            .domain_leaves()
-            .map(|leaves| {
-                leaves
-                    .iter()
-                    .any(|leaf| self.module.class_root(*leaf) == root)
-            })
-            .unwrap_or(false);
+        // **Or one of the domain's leaves**, or a node the parameter's **type tree**
+        // names: the type node is the shape authority
+        // (`docs/notes/compound-element-slots.md`).
+        let on_a_leaf = self.type_classes.contains(&root)
+            || self
+                .domain_leaves()
+                .map(|leaves| {
+                    leaves
+                        .iter()
+                        .any(|leaf| self.module.class_root(*leaf) == root)
+                })
+                .unwrap_or(false);
         if !(on_a_slot || on_a_leaf) {
             return Ok(None);
         }

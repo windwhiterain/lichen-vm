@@ -135,7 +135,13 @@ impl<P: Program> Module<P> {
 
     /// The operand array's elements, as dynamic node ids; a static ref has
     /// no class to refine.
-    fn operand_elements(&self, node: NodeId) -> Vec<NodeId> {
+    /// Every node whose value `node` reads, in operand order.
+    ///
+    /// # Invariant
+    /// A structural operator names its operands and a compound names its items, so this
+    /// is the one place a caller learns a node's own children; it is a read and builds
+    /// no node. See docs/notes/lowlevel-vm.md.
+    pub fn operand_elements(&self, node: NodeId) -> Vec<NodeId> {
         let Some(operation) = self.nodes.get(node).and_then(|node| node.operation) else {
             return Vec::new();
         };
