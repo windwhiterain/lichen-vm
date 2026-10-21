@@ -51,6 +51,16 @@ function's return expression. The emitter then lowers that body as a loop. The n
 upstream of the emitter: the write's value operand must be the call **expression**, not its
 pair-peeled value.
 
+**The nested binding is correct; a plain kernel's comparison compiles.** Two measurements
+this round: (a) a **plain kernel** writing `i >= 7` compiles (`--- ok true`), so the emitter
+resolves the frozen `greater_or_equal` correctly for a *checker* node; (b) every
+`static_function_apply` binding reports `same: true` — the cloned parameter's value class
+equals the argument's value class. So the clone's binding is fine and the difference is
+**clone vs original**: the loop's conversion condition is the `Geq` *clone* (origin = the
+apply node), and the emitter's `Define::Opaque` origin fallback requires the origin's
+function to be the emitting function, which a clone's origin (the apply node) is not. The
+next fix is that fallback through a static clone's origin chain.
+
 **The entry is the test's own `Geq`: its first operand is the type-graph chain.** The
 emitter's path is `lower_loop_tests → value(condition) → definition(Geq) →
 arithmetic → value_item(Geq, 0) → value(4318)` — so the **test comparison's operand 0** *is*
