@@ -67,6 +67,12 @@ pub struct Lower<'a, P: Program> {
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
+    /// The nodes whose origin fallback is already in progress.
+    ///
+    /// # Invariant
+    /// A node's origin chain can cycle back through a nested function's apply, so a
+    /// fallback that follows it must stop where it began.
+    origins: HashSet<NodeId>,
     /// The class each emitted value was declared in, keyed by the value itself.
     ///
     /// # Invariant
@@ -203,6 +209,7 @@ where
             values: HashMap::new(),
             depth: 0,
             value_classes: HashMap::new(),
+            origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
             leaf_classes: param_classes_of(params),
@@ -253,6 +260,7 @@ where
             values: HashMap::new(),
             depth: 0,
             value_classes: HashMap::new(),
+            origins: HashSet::new(),
             published_marks: HashSet::new(),
             lowering: Vec::new(),
             leaf_classes: param_classes_of(params),
@@ -332,15 +340,25 @@ where
                     }
                     // A clone of another function's node is that body, not this one's
                     // (`docs/notes/loop-conversion.md`).
-                    Define::Opaque => match self.module.node_origin(node) {
-                        Some(origin)
-                            if origin != node
-                                && self.module.node_function(origin) == Some(self.function) =>
-                        {
-                            self.value(origin)?
+                    Define::Opaque => {
+                        let follow = self.module.node_origin(node).filter(|origin| {
+                            *origin != node
+                                && self.origins.insert(node)
+                                && (self.module.node_function(*origin) == Some(self.function)
+                                    || self
+                                        .module
+                                        .belongs_to(*origin, self.function)
+                                        .unwrap_or(false))
+                        });
+                        match follow {
+                            Some(origin) => {
+                                let value = self.value(origin)?;
+                                self.origins.remove(&node);
+                                value
+                            }
+                            None => self.opaque(node)?,
                         }
-                        _ => self.opaque(node)?,
-                    },
+                    }
                 },
             },
         };
