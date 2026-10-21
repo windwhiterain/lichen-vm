@@ -1036,6 +1036,7 @@ dependencies = [
 name = "lichen-compute"
 version = "0.1.0"
 dependencies = [
+ "lichen-compute-gpu",
  "lichen-doc",
  "lichen-fusion",
  "lichen-fusion-bridge",
@@ -1291,6 +1292,7 @@ name = "lichen-tools"
 version = "0.1.0"
 dependencies = [
  "lichen-compute",
+ "lichen-compute-gpu",
  "lichen-language",
 ]
 
