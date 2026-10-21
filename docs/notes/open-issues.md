@@ -61,6 +61,17 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**Lifting the gate by ignoring a slot's type position costs 43 tests.** The gate is
+`value_is_undecided`'s array arm, which counts *every* item of a slot — including the type
+position, which is empty by design in the template. Making that arm skip the type position
+made the recording's launch **run** (the recording then advanced to the output assembly and
+refused there: "the callee of an instantiation must be a struct type"), but it also changed
+the concreteness verdict everywhere: **compute 120 → 77 and highlevel 136 → 134**, because a
+type cell being open is a real undecidedness for other readers. Reverted. So the fix must be
+**narrow** (the recording's own operand check, not the global verdict) — the next probe is
+what the recording-side `unrecordable` gate needs to accept an operand whose type positions
+are open.
+
 **The launch is gated by its operand's deep verdict.** Instrumenting `run_deferred` shows
 the mechanism behind "no operator runs": it deep-evaluates the operator's operand and
 returns `None` **without calling `run`** when the operand's `evaluated_deep` is unset or
