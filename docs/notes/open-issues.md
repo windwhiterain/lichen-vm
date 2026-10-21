@@ -61,6 +61,22 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**With the gate lifted, the peel takes graph_jit from 1/10 to 6/10.** Measured test by
+test with `.scratch-core/leaf-fix.patch` on top of `4fdc2bf2`: six tests pass
+(`a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`,
+`a_dispatch_the_body_closed_over_is_refused_rather_than_recorded`,
+`a_buffer_the_body_closed_over_is_refused_by_the_capture`,
+`a_graph_recorded_for_one_backend_runs_on_another`, `one_backend_for_the_whole_graph_is_
+checked_while_it_is_built`, `what_a_recorded_body_may_not_reach_for_is_refused_by_name`),
+three fail with diagnostics, and **one overflows**:
+`a_graph_runs_at_whichever_extent_its_argument_names`. Its recursion is **not** where the
+earlier ones were: the shallow evaluation, `evaluate_node_deep_inner` (depth stays 0), the
+clone walk (below 300), and the compute helpers `walk_role`/`assemble_parameter`/
+`place_of_node`/`assemble_result` (no hit at depth 200) were all probed. The next probe is
+the graph **run** path (`run_graph`'s `flatten_leaves` and the dispatch replay), which that
+test alone exercises. The peel stays out until it is fixed, because one overflow aborts the
+whole binary's run.
+
 **The gate is lifted narrowly: the union dispatches `run_deferred` to its leaves.** The
 composition's `OperatorExt` impl defined only `run`, so every union operator took the
 *default* `run_deferred` and the compute leaf's own rule was never consulted. The union now
