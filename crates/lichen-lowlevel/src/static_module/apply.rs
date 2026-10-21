@@ -121,18 +121,19 @@ impl<P: Program> Module<P> {
             .functions
             .get(function.index.0)
             .map(|entry| entry.r#return);
-        let mut remap = remap;
         if let Some(r#return) = applied {
+            // The type side copies the return pair's type and attributes only
+            // (`docs/notes/apply-type-side-check.md`).
             let mut ctx = StaticApplyCtx {
                 target: block,
-                module,
+                module: module.clone(),
                 remap,
                 applied: function.index,
                 branch_top: None,
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
             };
-            let applied = self.static_node_apply(r#return, &mut ctx);
+            let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.applied_pairs.insert(node, applied);
             remap = ctx.remap;
         }
@@ -164,6 +165,48 @@ impl<P: Program> Module<P> {
         true
     }
 
+    /// The frozen return pair's type and attribute positions; its value is a hole.
+    fn static_return_type_apply(
+        &mut self,
+        r#return: LocalNodeId,
+        ctx: &mut StaticApplyCtx<P>,
+    ) -> NodeId {
+        let Some(value) = ctx.module.read(r#return) else {
+            return self.static_node_apply(r#return, ctx);
+        };
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return self.static_node_apply(r#return, ctx);
+        };
+        // SAFETY: the payload lives in the frozen module, pinned by the Arc.
+        let source = unsafe { array.items() };
+        let mut items = Vec::with_capacity(source.len());
+        for (index, item) in source.iter().enumerate() {
+            // Position 0 is the pair's value (`docs/notes/compound-element-slots.md`).
+            if index == 0 {
+                let hole = self.add_node(ctx.target, None, None);
+                items.push(ArrayItem::new(AnyNodeId::Dynamic(hole)));
+                continue;
+            }
+            let node = match item.node {
+                AnyNodeId::Static(sref) if sref.module == ctx.module.key => {
+                    AnyNodeId::Dynamic(self.static_node_apply(sref.index, ctx))
+                }
+                other => other,
+            };
+            items.push(ArrayItem { node, ..*item });
+        }
+        let copied = self.alloc_array(&items, ctx.target);
+        let node = self.add_node(
+            ctx.target,
+            None,
+            Some(P::Value::from(LowValue::Array(ArrayValue::with_layout(
+                copied,
+                array.layout(),
+            )))),
+        );
+        node
+    }
+
     /// The frozen return pair, cloned into `block` and recorded as the applied pair,
     /// together with the parameter's clone.
     #[stacksafe]
@@ -191,7 +234,9 @@ impl<P: Program> Module<P> {
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
         };
-        let applied = self.static_node_apply(r#return, &mut ctx);
+        // The record states the call's attribute state
+        // (`docs/notes/apply-type-side-check.md`).
+        let applied = self.static_return_type_apply(r#return, &mut ctx);
         self.static_node_apply(parameter, &mut ctx);
         if let Some(&cloned_parameter) = ctx.remap.get(&parameter) {
             self.applied_parameters.insert(node, cloned_parameter);
