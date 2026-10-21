@@ -217,6 +217,26 @@ where
     P: LangProgramShape,
     P::Value: ValueType + PartialEq + 'static,
 {
+    values_eq_at(a, b, 0)
+}
+
+/// The deepest value a comparison walks.
+///
+/// # Invariant
+/// A value nesting deeper than the language's own compound ceilings names itself, so the
+/// walk stops there instead of descending forever; a stopped walk answers unequal, because
+/// a cyclic value can never be proven equal.
+const VALUES_EQ_DEPTH: usize = 64;
+
+/// [`values_eq`] with a depth.
+fn values_eq_at<P>(a: (&Module<P>, &P::Value), b: (&Module<P>, &P::Value), depth: usize) -> bool
+where
+    P: LangProgramShape,
+    P::Value: ValueType + PartialEq + 'static,
+{
+    if depth > VALUES_EQ_DEPTH {
+        return false;
+    }
     match (
         AsEnum::<LowValue>::as_enum(a.1),
         AsEnum::<LowValue>::as_enum(b.1),
@@ -239,7 +259,7 @@ where
                     let yv =
                         b.0.node_value(yi.node)
                             .unwrap_or_else(|| panic!("right element {:?} has no value", yi.node));
-                    values_eq((a.0, &xv), (b.0, &yv))
+                    values_eq_at((a.0, &xv), (b.0, &yv), depth + 1)
                 })
         }
         _ => a.1 == b.1,
