@@ -61,6 +61,18 @@ apply node), and the emitter's `Define::Opaque` origin fallback requires the ori
 function to be the emitting function, which a clone's origin (the apply node) is not. The
 next fix is that fallback through a static clone's origin chain.
 
+**The gate is lifted narrowly: the union dispatches `run_deferred` to its leaves.** The
+composition's `OperatorExt` impl defined only `run`, so every union operator took the
+*default* `run_deferred` and the compute leaf's own rule was never consulted. The union now
+dispatches it (`4fdc2bf2`), and the compute leaf evaluates a **recording's** operand without
+consulting its concreteness verdict. Measured: the recording reaches `record_launch` (four
+launch runs per recording) and the family's refusal moves from "return not nameable" to
+**"a dispatch's count is a tuple or a struct value"** — the extent read, which is the cfg
+leaf peel by another name. With `.scratch-core/leaf-fix.patch` applied on top, **three**
+`graph_jit` tests pass before the run aborts on the frozen-body recurrence, so the peel is
+held out until that recurrence is fixed. compute 120, lowlevel 164, highlevel 136,
+language 275 — all unchanged.
+
 **Lifting the gate by ignoring a slot's type position costs 43 tests.** The gate is
 `value_is_undecided`'s array arm, which counts *every* item of a slot — including the type
 position, which is empty by design in the template. Making that arm skip the type position
