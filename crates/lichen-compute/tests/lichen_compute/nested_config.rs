@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
@@ -316,9 +315,7 @@ fn a_nested_config_records_each_leaf_for_what_it_is() {
 #[test]
 fn a_nested_config_runs_on_the_device_through_the_graph() {
     let test = "a_nested_config_runs_on_the_device_through_the_graph";
-    let Some((_context, _guard)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (module, value, _root) = common::run(&nested_direct());
     let direct = common::usize_array(&module, &value);
     let (module, value, _root) = common::run(&nested_graph());
@@ -358,9 +355,7 @@ fn a_two_scalar_config_carries_both_and_runs_on_the_device() {
     );
 
     let test = "a_two_scalar_config_carries_both_and_runs_on_the_device";
-    let Some((_context, _guard)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (module, value, _root) = common::run(&flat_direct());
     let direct = common::usize_array(&module, &value);
     let (module, value, _root) = common::run(&flat_graph());

@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::compute::{
     GraphPass, LaunchExtent, clear_graph_pass, consult_graph_pass, set_graph_pass,
@@ -253,9 +252,7 @@ fn merged(rewritten: &Graph) -> &KernelFragment {
 /// fused chain computes the same numbers unfused, so only an answer that moves with the composed
 /// body says which node the device dispatched.
 fn device_triple(name: &str, recording: &str, second: bool, sum: f32) {
-    let Some((_context, _device)) = device(name) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let program = running(recording, second);
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&program);

@@ -3,19 +3,18 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
 use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{KernelFragment, fragment_digest};
 use lichen_lowlevel::Module;
 
 /// One workgroup covers the launch, so the tile divides the extent exactly.
-const COUNT: usize = LOCAL_SIZE_X as usize;
+const COUNT: usize = LANES as usize;
 
 /// The elements the program folds: `2.0 + 4.0 + 6.0` is the producer's own sum.
 ///
@@ -247,11 +246,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// that line **now carries the check's name**, because every arm states its refusal by name.
 #[test]
 fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
-    let Some((_context, _device)) =
-        device("a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = running();
     let recorded = run(&source);
@@ -316,11 +311,7 @@ fn a_consumer_is_refused_by_name_and_its_recorded_fragment_is_untouched() {
 /// a pass that tiled it would replace that read with a datum read and answer a different function.
 #[test]
 fn the_program_answers_the_same_with_the_pass_and_without_it() {
-    let Some((_context, _device)) =
-        device("the_program_answers_the_same_with_the_pass_and_without_it")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = running();
     let (base_module, base_value, _root) = common::run(&source);
@@ -355,11 +346,7 @@ fn the_program_answers_the_same_with_the_pass_and_without_it() {
 /// producer's output. The digest is compared across the pass, which is what says nothing landed.
 #[test]
 fn a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds() {
-    let Some((_context, _device)) =
-        device("a_combine_only_consumer_is_refused_by_the_edge_and_the_differential_holds")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = with_run(bare_consumer());
     let recorded = run(&source);

@@ -10,7 +10,6 @@ use super::common;
 use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_compute::{ComputeValue, compute::graph};
-use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Policy, Runner, Value};
 use lichen_kernel_ir::{BufferSlot, KernelFragment, ScalarClass, ScalarData};
 use lichen_lowlevel::{AnyNodeId, Module};
@@ -56,7 +55,7 @@ built = compute.graph step
 "#;
 
 #[test]
-fn the_consumer_that_reads_only_its_second_input_runs_and_answers_the_closed_form() {
+fn the_consumer_declares_a_float_for_each_of_its_two_inputs() {
     let (module, _value, _root) = common::run(SOURCE);
     let (_producer, consumer) = instances(&module);
 
@@ -80,32 +79,7 @@ fn the_consumer_that_reads_only_its_second_input_runs_and_answers_the_closed_for
          the class the read declares"
     );
 
-    let Some(context) = device() else {
-        return;
-    };
-    let recorded = recorded(&module);
-    for count in [1_usize, 8, 100] {
-        let data: Vec<f32> = (1..=count).map(|position| position as f32).collect();
-        let answer = run(
-            &context,
-            &recorded,
-            vec![
-                Value::int(count as i64),
-                Value::host_data(
-                    ScalarClass::Float,
-                    data.iter().flat_map(|value| value.to_le_bytes()).collect(),
-                ),
-            ],
-            count,
-        );
-        assert_eq!(
-            answer,
-            vec![closed_form(count); count],
-            "`e[i] = d[i] * 2` doubled the triangle: {count} element(s) answer {}",
-            closed_form(count)
-        );
-        println!("count {count}: {answer:?}");
-    }
+
 }
 
 /// The answer `e[i] = d[i] * 2` and a sum over every `e` fold to.
@@ -117,26 +91,6 @@ fn closed_form(count: usize) -> f32 {
     (count * (count + 1)) as f32
 }
 
-/// A context on a device, or `None` when there is none here.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in
-/// this tree reports one.
-fn device() -> Option<GpuContext> {
-    match GpuContext::new() {
-        Ok(context) => {
-            println!("device: {}", context.device_name());
-            Some(context)
-        }
-        Err(reason) => {
-            eprintln!(
-                "SKIPPED the_consumer_that_reads_only_its_second_input_runs_and_answers_the_closed_form: \
-                 no device to run on: {reason}"
-            );
-            None
-        }
-    }
-}
 
 /// The chain's two fragments, the consumer first: the one that declares two input buffers.
 fn instances(module: &Module<LangProgram>) -> (KernelFragment, KernelFragment) {
@@ -173,38 +127,3 @@ fn recorded(module: &Module<LangProgram>) -> lichen_graph_ir::Graph {
         .expect("the program recorded a graph")
 }
 
-/// Run the recorded chain and answer the returned node's first `count` elements as floats.
-fn run<'a>(
-    context: &'a GpuContext,
-    recorded: &lichen_graph_ir::Graph,
-    inputs: Vec<Value<'a>>,
-    count: usize,
-) -> Vec<f32> {
-    let out = Runner::new(context, Policy::Serial)
-        .run(recorded, inputs)
-        .unwrap_or_else(|refusal| panic!("the recorded chain is dispatched: {refusal}"));
-    let returned = recorded.returns().expect("the return was recorded")[0];
-    let id = match out[returned]
-        .slot()
-        .expect("a dispatch's output names a buffer")
-    {
-        BufferSlot::Resident(id) => id,
-        BufferSlot::Host(_) => panic!("a dispatch's output is a buffer, not host data"),
-    };
-    let answer = match context
-        .fetch(id, count)
-        .expect("the answer comes off the device")
-    {
-        ScalarData::Float(elements) => elements,
-        ScalarData::Int(elements) => panic!(
-            "a float run's result came back as {} integer element(s)",
-            elements.len()
-        ),
-    };
-    for value in &out {
-        if let Ok(BufferSlot::Resident(id)) = value.slot() {
-            context.release(id);
-        }
-    }
-    answer
-}

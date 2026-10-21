@@ -8,14 +8,14 @@ use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, graph, take_graph_pass_lines};
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_compute::region_merge::install_region_merge;
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::fragment_digest;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module};
 use lichen_utils::extend::AsEnum;
 
 /// One workgroup covers the launch, so the tile divides the extent exactly.
-const COUNT: usize = LOCAL_SIZE_X as usize;
+const COUNT: usize = LANES as usize;
 
 /// A `Σ` producer feeding a `max(d − r)` consumer, recorded and never dispatched.
 ///
@@ -109,7 +109,13 @@ fn digest_of(graph: &Graph, node: usize) -> u64 {
 fn a_composed_node_is_reported_by_name_and_nothing_lands_in_it() {
     clear_graph_pass();
     println!("device: none, the recording and the two consultations are host work");
-    let (module, value, _root) = common::run(&chain());
+    let build = common::check(&chain())
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let recording = recorded(&module, &value);
     assert_eq!(
         recording.len(),
@@ -176,7 +182,13 @@ fn a_composed_node_is_reported_by_name_and_nothing_lands_in_it() {
 fn an_ordinary_graph_reports_one_line_per_node() {
     clear_graph_pass();
     println!("device: none, the recording and the two consultations are host work");
-    let (module, value, _root) = common::run(&chain());
+    let build = common::check(&chain())
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let recording = recorded(&module, &value);
     let nodes = recording.nodes().len();
     assert_eq!(

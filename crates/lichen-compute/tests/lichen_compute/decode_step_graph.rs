@@ -108,10 +108,7 @@ fn numbers(body: &str) -> String {
 /// The three dispatches answer step zero, which is what the graph legs are measured against.
 #[test]
 fn the_direct_chain_answers_the_hand_derivation() {
-    let Some((_context, _guard)) = common::device("the_direct_chain_answers_the_hand_derivation")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     assert_eq!(
         numbers(DIRECT),
         "([5.0, 8.0, 8.0, 4.0], [2.0], [1.0, 2.0, 2.0, -1.0, -1.0])",
@@ -122,9 +119,7 @@ fn the_direct_chain_answers_the_hand_derivation() {
 /// All three kernels record into one graph and answer the same cache.
 #[test]
 fn the_whole_step_records_into_one_graph() {
-    let Some((_context, _guard)) = common::device("the_whole_step_records_into_one_graph") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     assert_eq!(
         numbers(ONE_STEP),
         "[1.0, 2.0, 2.0, -1.0, -1.0]",
@@ -135,10 +130,7 @@ fn the_whole_step_records_into_one_graph() {
 /// The second graphrun reads the first's answer, so a loop needs no host round trip.
 #[test]
 fn a_second_step_reads_the_first_ones_answer() {
-    let Some((_context, _guard)) = common::device("a_second_step_reads_the_first_ones_answer")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     assert_eq!(
         numbers(TWO_STEPS),
         "[1.0, 2.0, 2.0, 0.0, -1.0]",

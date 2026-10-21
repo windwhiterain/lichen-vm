@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -418,9 +417,7 @@ fn device_triple() {
         .name()
         .unwrap_or("recompute_reads")
         .to_string();
-    let Some((_context, _device)) = device(&name) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running_recording(ELEMENTS));
     let recorded = common::float_array(&base_module, &base_value);

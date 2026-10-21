@@ -89,7 +89,7 @@ fn rendered(source: &str) -> String {
 
 #[test]
 fn probe_the_clamp_grouping() {
-    let _guard = common::device("zz_clamp_grouping_probe");
+    let (_stub, _guard) = common::stub();
     println!("[clamp_in_fold] {}", rendered(CLAMP_IN_FOLD));
     println!("[address] {}", rendered(ADDRESS));
     for (label, expression) in [

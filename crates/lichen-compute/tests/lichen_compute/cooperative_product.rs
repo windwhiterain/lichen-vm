@@ -114,9 +114,7 @@ fn the_cpu_product_matches_the_host() {
 fn the_gpu_product_matches_the_host() {
     let (a, b, c) = operands();
     let expected = product(&a, &b, &c);
-    let Some((_context, _guard)) = common::device("the_gpu_product_matches_the_host") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (module, value, _root) = common::run(&source("gpu", &a, &b, &c));
     assert_eq!(words(&module, &value), expected);
 }

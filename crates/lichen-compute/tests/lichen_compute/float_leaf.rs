@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
@@ -281,9 +280,7 @@ fn a_float_scale_beside_two_extents_records_and_answers_on_the_device() {
     );
 
     let test = "a_float_scale_beside_two_extents_records_and_answers_on_the_device";
-    let Some((_context, _guard)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (module, value, _root) = common::run(&direct());
     let launched = common::float_array(&module, &value);
     let (module, value, _root) = common::run(&through_graph());
@@ -322,9 +319,7 @@ fn a_float_leaf_and_an_integer_value_are_refused_in_both_directions() {
     );
 
     let test = "a_float_leaf_and_an_integer_value_are_refused_in_both_directions";
-    let Some((_context, _guard)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (lines, _value) = run_mismatched("Float", "Float", "2");
     let refusal = line_naming(&lines, "reads its runtime scalar from value 1");
     assert!(

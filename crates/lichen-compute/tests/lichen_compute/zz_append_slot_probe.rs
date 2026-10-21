@@ -90,9 +90,7 @@ fn run(source: &str) -> String {
 
 #[test]
 fn probe_the_lost_cache_slot() {
-    let Some((_context, _guard)) = common::device("zz_append_slot_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     // The same run three times: a slot whose loss moves between them is a race, not an address.
     for attempt in 1..=3 {
         println!(

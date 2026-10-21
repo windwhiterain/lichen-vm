@@ -107,9 +107,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_graph_step_shape() {
-    let Some((_context, _guard)) = common::device("zz_graph_step_shape_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     for (name, body) in [
         ("same_one", SAME_ONE),
         ("same_two", SAME_TWO),

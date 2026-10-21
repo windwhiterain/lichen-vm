@@ -132,7 +132,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_argmax_folds() {
-    let _guard = common::device("zz_argmax_probe");
+    let (_stub, _guard) = common::stub();
     println!("[stage1_max] {}", rendered(STAGE_ONE));
     println!("[stage2_int] {}", rendered(STAGE_TWO_INT));
     println!("[stage2_float] {}", rendered(STAGE_TWO_FLOAT));

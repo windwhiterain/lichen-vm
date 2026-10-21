@@ -14,7 +14,7 @@ use super::common;
 use lichen_compute::ComputeValue;
 use lichen_compute::fusion_claim::{fragment_of, kernel_id};
 use lichen_kernel_ir::ScalarClass;
-use lichen_lowlevel::Module;
+use lichen_lowlevel::{AnyNodeId, Module};
 use lichen_utils::extend::AsEnum;
 
 /// The two attention kernels: `scores` over `Q`, then `attend` over the scores and `V`.
@@ -115,9 +115,15 @@ fn classes(module: &Module<lichen_compute::language::LangProgram>) -> Vec<String
 
 /// The classes `extra` and the shared kernels give, as a program of their own.
 fn compiled(extra: &str) -> Vec<String> {
-    let (module, _value, _root) = common::run(&format!(
+    let build = common::check(&format!(
         "---\n  compute = import \"compute.lichen\"\n---\n{KERNELS}{extra}"
-    ));
+    ))
+    .build
+    .expect("the program checks");
+let module = build.module;
+let _value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     classes(&module)
 }
 
@@ -158,9 +164,15 @@ fn a_kernels_classes_do_not_depend_on_which_kernel_compiled_first() {
 /// the body performs them, and the body dispatches `scores` first.
 #[test]
 fn the_recorded_consumer_carries_the_programs_float_class() {
-    let (module, value, _root) = common::run(&format!(
+    let build = common::check(&format!(
         "---\n  compute = import \"compute.lichen\"\n---\n{KERNELS}{STEP}"
-    ));
+    ))
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     assert!(
         module
             .extension_diagnostics

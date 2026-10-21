@@ -149,7 +149,13 @@ fn recorded(module: &Module<LangProgram>, value: &LangValue) -> Graph {
 
 /// The one schema `source`'s recording derives, with the instances behind it.
 fn derived(source: &str) -> (Vec<Instance>, RegionSchema) {
-    let (module, value, _root) = common::run(source);
+    let build = common::check(source)
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let instances = instances(&module, &value);
     let graph = recorded(&module, &value);
     let regions = derive_regions(&graph, &instances);

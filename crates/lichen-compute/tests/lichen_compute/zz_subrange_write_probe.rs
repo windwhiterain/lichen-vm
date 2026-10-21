@@ -74,7 +74,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_subrange_write() {
-    let _guard = common::device("zz_subrange_write_probe");
+    let (_stub, _guard) = common::stub();
     println!("[a off0_at4] {}", rendered(OFFSET_ZERO));
     println!("[b off4_at8] {}", rendered(OFFSET_FOUR_WIDE));
     println!("[c off4_at4] {}", rendered(OFFSET_FOUR_NARROW));

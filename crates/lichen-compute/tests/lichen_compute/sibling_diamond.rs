@@ -83,7 +83,13 @@ fn derived(
     Result<RegionSchema, String>,
     Graph,
 ) {
-    let (module, value, _root) = common::run(source);
+    let build = common::check(source)
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let instances = instances(&module, &value);
     let graph = recorded(&module, &value);
     assert_eq!(region_positions(&graph, &instances), vec![vec![0, 1, 2]]);

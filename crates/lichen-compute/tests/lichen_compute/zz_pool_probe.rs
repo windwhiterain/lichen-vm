@@ -60,7 +60,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_pool_identity() {
-    let _guard = common::device("zz_pool_probe");
+    let (_stub, _guard) = common::stub();
     println!("[seed_zero] {}", rendered(SEED_ZERO));
     println!("[seed_low] {}", rendered(SEED_LOW));
 }

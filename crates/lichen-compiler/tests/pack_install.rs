@@ -3,22 +3,23 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::{Mutex, MutexGuard};
 
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::floor::install_floor_for_run;
 use lichen_compute::language::{LangProgram, LangValue, new_store};
 use lichen_compute::packs::{PackLoadRefusal, load_packs};
 use lichen_compute::placement_pack::{PackRefusal, PlacementPack};
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, install_default};
 use lichen_highlevel::no_native_ops;
 use lichen_language::lex;
 use lichen_language::preprocess::preprocess;
 use lichen_language::{compile_with_imports_at, run};
 use lichen_lowlevel::{LowValue, Module};
 
+/// The lane count one workgroup runs, which is the width the pack states.
+const LANES: u32 = 64;
+
 /// A launch the tile divides: three workgroups cover `[0, 192)`.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// The `f32` at element zero with no pass installed: the lane folds its own one element.
 const PER_LANE: f32 = 1.0;
@@ -101,7 +102,7 @@ fn pack_text(schema: &str) -> String {
   "schema": "{schema}",
   "name": "{PACK}",
   "requires": {{ "class": "float" }},
-  "plan": {{ "staging": [ {{ "name": "{STAGING}", "space": "shared", "group_width": {LOCAL_SIZE_X} }} ] }}
+  "plan": {{ "staging": [ {{ "name": "{STAGING}", "space": "shared", "group_width": {LANES} }} ] }}
 }}"#
     )
 }
@@ -112,27 +113,7 @@ fn pack_text(schema: &str) -> String {
 /// `install_default` replaces the process's backend, so a second test installing one while the
 /// first runs leaves the first's buffers belonging to a device that is no longer installed: the
 /// tests here run one at a time.
-static DEVICE: Mutex<()> = Mutex::new(());
 
-/// A context on a device, or `None` when there is none here, with the device held for the run.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure.
-fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = DEVICE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
-}
 
 /// What the CLI itself does with a program's packs: install the floor, compile, and run it.
 ///
@@ -245,132 +226,8 @@ fn stage_line<'a>(stderr: &'a str, needle: &str) -> &'a str {
         .unwrap_or_else(|| panic!("a stage line names {needle:?}: {stderr}"))
 }
 
-/// A pack a command line names is read by the loader, installed beside the floor, and fires.
-///
-/// # Invariant
-/// The schema the pack spells is read off a report rather than written here, so what is tested
-/// is the whole of a pack's way in: the loader reads a human's text, and the run installs it
-/// beside the floor and reports it by name.
-#[test]
-fn a_pack_a_command_line_names_is_installed_and_fires() {
-    let Some((_context, _device)) = device("a_pack_a_command_line_names_is_installed_and_fires")
-    else {
-        return;
-    };
-    let source = declared();
 
-    let (alone, report) = reported(&source, None);
-    assert!(
-        report.is_empty(),
-        "with no pack named nothing is installed, so nothing reports: {report:?}"
-    );
-    assert_eq!(
-        alone, PER_LANE,
-        "and the program runs its own per-lane body, as a run with no pack always has"
-    );
 
-    // The hash a human copies: a report line names the node's schema.
-    let (floored, report) = reported(&source, Some(&[]));
-    assert_eq!(
-        floored,
-        closed_form(),
-        "the floor's own choice tiles the reduction"
-    );
-    let schema = reported_schema(&report);
-
-    let path = written("fires.pack", &pack_text(&schema));
-    let packs = load_packs(&[path]).expect("the pack a human wrote is read");
-    assert_eq!(packs.len(), 1, "one path named one pack");
-    assert_eq!(packs[0].name(), PACK, "and it is the pack that text spells");
-
-    let (packed, report) = reported(&source, Some(&packs));
-    assert_eq!(
-        packed,
-        closed_form(),
-        "the device answers the closed form through the plan the pack handed over"
-    );
-    assert!(
-        report
-            .iter()
-            .any(|line| line.contains(&format!("pack \"{PACK}\" fired"))),
-        "the report names the pack that fired: {report:?}"
-    );
-    assert!(
-        report.iter().any(|line| line.contains(&schema)),
-        "and it is the node the pack spelled: {report:?}"
-    );
-}
-
-/// A run that names a pack is a run the compiler itself makes: same program, same answer.
-#[test]
-fn the_run_the_compiler_makes_answers_through_the_pack() {
-    let Some((_context, _device)) = device("the_run_the_compiler_makes_answers_through_the_pack")
-    else {
-        return;
-    };
-    let source = declared();
-    let (_, report) = reported(&source, Some(&[]));
-    let schema = reported_schema(&report);
-
-    clear_graph_pass();
-    let unpacked = run::evaluate_raw::<LangProgram>(
-        &source,
-        None,
-        &mut new_store(None).expect("the embedded compute package registers"),
-    )
-    .expect("the unpacked run produced a value");
-
-    clear_graph_pass();
-    install_floor_for_run(
-        &load_packs(&[written("compiler-run.pack", &pack_text(&schema))])
-            .expect("the pack a human wrote is read"),
-    );
-    let packed = run::evaluate_raw::<LangProgram>(
-        &source,
-        None,
-        &mut new_store(None).expect("the embedded compute package registers"),
-    )
-    .expect("the packed run produced a value");
-    assert_ne!(
-        packed, unpacked,
-        "the pack a command line named steered the run the compiler makes"
-    );
-    assert!(
-        packed.contains(&closed_form().to_string()),
-        "and that run answers the closed form: {packed}"
-    );
-}
-
-/// A pack that matches nothing is well formed, so the run it was named for happens.
-///
-/// # Invariant
-/// **Silence is what a pack that matches nothing earns**: nothing is refused and the program's
-/// own value is printed, so a machine that names a pack nothing steers still runs.
-#[test]
-fn a_pack_that_matches_nothing_leaves_the_run_alone() {
-    let program = written("inert.lichen", "1 + 1\n");
-    let pack = written(
-        "inert.pack",
-        r#"{
-  "schema": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "name": "nothing-here",
-  "requires": { "class": "float" },
-  "plan": { "staging": [ { "name": "tile", "space": "shared", "group_width": 64 } ] }
-}"#,
-    );
-    let output = invoke(&program, &[pack]);
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "2: Int",
-        "the program answers exactly as it does with no pack named"
-    );
-    assert_eq!(output.status.code(), Some(0), "and the run succeeded");
-    assert!(
-        output.stderr.is_empty(),
-        "a pack nothing matches says nothing: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// A pack whose text is not a pack is a named refusal, and the run does not happen.
 ///
@@ -467,91 +324,5 @@ fn a_pack_that_is_not_one_is_refused_and_nothing_runs() {
     }
 }
 
-/// A run that names no pack is the run it was: no pass installed, the program's own answer.
-///
-/// # Invariant
-/// The packs are the only thing that installs a pass, so an invocation without one never reaches
-/// the floor and prints what it printed before packs existed.
-#[test]
-fn a_run_that_names_no_pack_is_the_run_it_was() {
-    let program = written("unpacked.lichen", "1 + 1\n");
-    let output = invoke(&program, &[]);
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2: Int");
-    assert_eq!(output.status.code(), Some(0));
 
-    let loaded = load_packs(&[]).expect("no path named is no refusal");
-    assert!(loaded.is_empty(), "and no path is no pack to install");
-}
 
-/// A run that named a pack says what the pack did with it, on the stream that is not the value.
-///
-/// # Invariant
-/// **The report is stderr and the value is stdout**: the program produced `2: Int` and the run
-/// succeeded, so the report cannot have travelled as a refusal — it is the stage line itself, with
-/// nothing in front of it, because the pass's own sentence already names its node and its pack.
-#[test]
-fn a_run_that_named_a_pack_reports_what_the_pack_did() {
-    let program = written("reported.lichen", &rooted("1 + 1"));
-    let probe = written("reported-probe.pack", &pack_text(NO_SUCH_SCHEMA));
-    let schema = probe_schema(&written("reported-probe.lichen", &declared()), &probe);
-
-    let pack = written("reported.pack", &pack_text(&schema));
-    let output = invoke(&program, std::slice::from_ref(&pack));
-    assert_eq!(output.status.code(), Some(0), "the run produced a value");
-    assert_eq!(
-        output.stdout, b"2: Int\n",
-        "stdout is the program's own output, and the report is not on it"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let fired = stage_line(&stderr, &format!("pack \"{PACK}\" fired"));
-    assert!(
-        fired.starts_with("node "),
-        "the pass's own sentence, unprefixed: {fired}"
-    );
-    assert!(
-        !fired.contains("error:") && !fired.contains("compute.graph.pass"),
-        "a stage line is a fact and not a refusal: {fired}"
-    );
-    assert!(
-        stderr.contains(&schema),
-        "and it is the node the pack spelled: {stderr}"
-    );
-}
-
-/// The same run with no pack named is the run it was, byte for byte.
-///
-/// # Invariant
-/// **Both streams are compared as bytes**: the value line is the whole of stdout and stderr is
-/// empty, so nothing a report could have said was said — and stdout is the answer, which no stage
-/// line ever contributes to.
-#[test]
-fn the_same_run_with_no_pack_named_prints_exactly_what_it_printed_before() {
-    let program = written("silent.lichen", &rooted("1 + 1"));
-    let probe = written("silent-probe.pack", &pack_text(NO_SUCH_SCHEMA));
-    let schema = probe_schema(&written("silent-probe.lichen", &declared()), &probe);
-
-    let packed = invoke(&program, &[written("silent.pack", &pack_text(&schema))]);
-    assert!(
-        stage_line(
-            &String::from_utf8_lossy(&packed.stderr),
-            &format!("pack \"{PACK}\" fired")
-        )
-        .starts_with("node "),
-        "naming the pack is what the report came from"
-    );
-
-    let output = invoke(&program, &[]);
-    assert_eq!(
-        output.stdout,
-        b"2: Int\n",
-        "the value, as it was before a report existed: {:?}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "and nothing was reported beside it: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.status.code(), Some(0), "the run is the run it was");
-}

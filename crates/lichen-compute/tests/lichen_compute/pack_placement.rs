@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::{install_tiling, install_tiling_with_packs};
 use lichen_compute::compute::{clear_graph_pass, consult_graph_pass, take_graph_pass_lines};
@@ -11,14 +10,14 @@ use lichen_compute::fusion_claim::{RoleProjection, SchemaHash, SchemaNode, kerne
 use lichen_compute::kernel_fragment;
 use lichen_compute::language::{LangProgram, LangValue};
 use lichen_compute::placement_pack::{PackRefusal, read_placement_pack};
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Variable};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node};
 use lichen_kernel_ir::{KernelFragment, ScalarClass, Slice, Space, fragment_digest};
 use lichen_lowlevel::Module;
 
 /// A launch the tile divides: three workgroups cover `[0, 192)`.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// The per-lane answer at `out[0]`: the body folds the lane's own one element there.
 const PER_LANE: f32 = 1.0;
@@ -178,11 +177,7 @@ fn landed(recorded: &KernelFragment, extent: usize) -> (KernelFragment, Vec<Stri
 /// is the whole of the match.
 #[test]
 fn a_matching_pack_fires_and_the_plan_it_states_is_what_lands() {
-    let Some((_context, _device)) =
-        device("a_matching_pack_fires_and_the_plan_it_states_is_what_lands")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, value, _root) = common::run(&source);
@@ -215,7 +210,7 @@ fn a_matching_pack_fires_and_the_plan_it_states_is_what_lands() {
     );
 
     // The pack a human would write for that schema.
-    let text = pack_text(&schema, "sum-in-shared", "float", "shared", LOCAL_SIZE_X);
+    let text = pack_text(&schema, "sum-in-shared", "float", "shared", LANES);
     let pack = read_placement_pack(&text)
         .unwrap_or_else(|refusal| panic!("the pack a human wrote is read: {refusal}"));
 
@@ -225,7 +220,7 @@ fn a_matching_pack_fires_and_the_plan_it_states_is_what_lands() {
         packed_landed.slices,
         vec![Slice {
             class: ScalarClass::Float,
-            count: LOCAL_SIZE_X,
+            count: LANES,
             space: Space::Shared,
         }],
         "the landed fragment's slice states the plan's space, and its count is the body's"
@@ -267,9 +262,7 @@ fn a_matching_pack_fires_and_the_plan_it_states_is_what_lands() {
 /// A pack whose schema is not the node's is inert, and the floor answers exactly as before.
 #[test]
 fn an_unmatched_pack_is_inert() {
-    let Some((_context, _device)) = device("an_unmatched_pack_is_inert") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, _value, _root) = common::run(&source);
@@ -286,7 +279,7 @@ fn an_unmatched_pack_is_inert() {
         "sum-in-shared",
         "float",
         "shared",
-        LOCAL_SIZE_X,
+        LANES,
     ))
     .expect("the pack is well formed; it is its schema that differs");
 
@@ -318,9 +311,7 @@ fn an_unmatched_pack_is_inert() {
 /// A pack whose constraints the fragment does not satisfy is inert too.
 #[test]
 fn a_pack_whose_constraints_do_not_hold_is_inert() {
-    let Some((_context, _device)) = device("a_pack_whose_constraints_do_not_hold_is_inert") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, _value, _root) = common::run(&source);
@@ -336,7 +327,7 @@ fn a_pack_whose_constraints_do_not_hold_is_inert() {
         "sum-in-shared",
         "int",
         "shared",
-        LOCAL_SIZE_X,
+        LANES,
     ))
     .expect("the pack is well formed; it is its constraint that does not hold");
 
@@ -364,10 +355,7 @@ fn a_pack_whose_constraints_do_not_hold_is_inert() {
 /// A pack whose group width the target does not have is refused, and nothing lands.
 #[test]
 fn a_pack_asking_for_a_width_the_target_lacks_is_refused() {
-    let Some((_context, _device)) = device("a_pack_asking_for_a_width_the_target_lacks_is_refused")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, value, _root) = common::run(&source);
@@ -379,9 +367,9 @@ fn a_pack_asking_for_a_width_the_target_lacks_is_refused() {
     let schema = reported_schema(&pass_report(&floor_module));
 
     // Half a workgroup is not a group this target has.
-    let narrow = LOCAL_SIZE_X / 2;
+    let narrow = LANES / 2;
     assert_ne!(
-        narrow, LOCAL_SIZE_X,
+        narrow, LANES,
         "the width asked for is not the target's"
     );
     let pack = read_placement_pack(&pack_text(
@@ -528,10 +516,7 @@ fn combine() -> Expr {
 /// the latter passes here and fails in the numbers.
 #[test]
 fn the_landed_fragment_reads_the_class_the_pack_states() {
-    let Some((_context, _device)) = device("the_landed_fragment_reads_the_class_the_pack_states")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let source = declared();
     let (module, _value, _root) = common::run(&source);
@@ -544,7 +529,7 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
         "narrow",
         "bfloat16",
         "shared",
-        LOCAL_SIZE_X,
+        LANES,
     ))
     .expect("the pack reads");
     install_tiling_with_packs(&module, &[pack]);
@@ -584,57 +569,3 @@ fn the_landed_fragment_reads_the_class_the_pack_states() {
     );
 }
 
-/// The class a landed fragment reads is the class its module's buffer stride declares.
-///
-/// # Invariant
-/// The stride is the one reading that connects the two halves: a fragment class that the emitter's type
-/// chain does not follow is a class nothing reads, and `ArrayStride 4` here is the whole of "the pack's
-/// class was stated and the bytes were read as floats anyway".
-#[test]
-fn the_landed_fragment_emits_the_stride_its_class_declares() {
-    let Some((_context, _device)) =
-        device("the_landed_fragment_emits_the_stride_its_class_declares")
-    else {
-        return;
-    };
-    clear_graph_pass();
-    let source = declared();
-    let (module, _value, _root) = common::run(&source);
-    let recorded = registered(&module);
-    install_tiling(&module);
-    let (floor_module, _value, _root) = common::run(&source);
-    let schema = reported_schema(&pass_report(&floor_module));
-    let pack = read_placement_pack(&pack_text(
-        &schema,
-        "narrow",
-        "bfloat16",
-        "shared",
-        LOCAL_SIZE_X,
-    ))
-    .expect("the pack reads");
-    install_tiling_with_packs(&module, &[pack]);
-    let (landed, _lines) = landed(&recorded, COUNT);
-    let words = lichen_compute_gpu::spirv::compile(
-        &lichen_kernel_ir::LaunchSet::single(&landed),
-        lichen_compute_gpu::spirv::Binding {
-            inputs: 1,
-            outputs: 1,
-        },
-    )
-    .unwrap_or_else(|refusal| panic!("the landed fragment is emitted: {refusal}"));
-    // OpDecorate is 71 and ArrayStride 6, both in the instruction's low half.
-    let mut strides: Vec<u32> = Vec::new();
-    let mut at = 5;
-    while at < words.len() {
-        let (count, opcode) = ((words[at] >> 16) as usize, (words[at] & 0xffff) as u32);
-        if opcode == 71 && count >= 4 && words[at + 2] == 6 {
-            strides.push(words[at + 3]);
-        }
-        at += count.max(1);
-    }
-    assert_eq!(
-        strides,
-        vec![2],
-        "a BFloat16 buffer is two bytes an element, and the landed class is what the module declares"
-    );
-}

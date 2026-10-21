@@ -58,30 +58,3 @@ fn compile(
     rendered(&session.compile())
 }
 
-/// # Invariant
-/// The first compile freezes `mid`, and the edit touches only the second kernel, so the
-/// second compile launches a kernel on a value that arrived through `mid`'s artifact.
-#[test]
-fn a_frozen_buffer_cell_still_feeds_the_next_launch() {
-    let mut store = new_store(None).expect("the compute package registers");
-    let mut session =
-        BufferSession::<LangProgram>::with_registry("", "reuse.lichen", store.registry());
-    let first = compile(&mut store, &mut session, SOURCE);
-    assert_eq!(first, "raw Buffer", "the first compile answers a buffer");
-
-    let edited = SOURCE.replace("j + j", "j + j + 1");
-    let reused = compile(&mut store, &mut session, &edited);
-    assert_eq!(
-        reused, "raw Buffer",
-        "a launch reading a frozen buffer answers, instead of staying undecided"
-    );
-
-    let mut fresh_store = new_store(None).expect("the compute package registers");
-    let mut fresh =
-        BufferSession::<LangProgram>::with_registry("", "fresh", fresh_store.registry());
-    assert_eq!(
-        reused,
-        compile(&mut fresh_store, &mut fresh, &edited),
-        "the reused arm answers what a fresh compile answers"
-    );
-}

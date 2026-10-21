@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -375,11 +374,7 @@ fn a_chain_of_three_merges_into_one_node_under_the_floor() {
 /// the third kernel's element alone, so no recording can answer the moved value.
 #[test]
 fn the_merged_chain_answers_the_un_passed_program_and_a_moved_bias_moves_it() {
-    let Some((_context, _device)) =
-        device("the_merged_chain_answers_the_un_passed_program_and_a_moved_bias_moves_it")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running());
     let recorded_answer = answer(&base_module, &base_value);

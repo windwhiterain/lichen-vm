@@ -70,7 +70,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_struct_annotation() {
-    let _guard = common::device("zz_fold_struct_probe");
+    let (_stub, _guard) = common::stub();
     for (label, body) in [
         ("unannotated", UNANNOTATED),
         ("annotated", ANNOTATED),

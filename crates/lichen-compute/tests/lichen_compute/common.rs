@@ -3,10 +3,12 @@
 
 #![allow(dead_code, unused_imports)]
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use lichen_compute::language::{LangProgram, LangValue, new_store};
-use lichen_compute_gpu::{GpuContext, install_default};
+use lichen_kernel_ir::{
+    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarData, install_parallel_backend,
+};
 use lichen_lowlevel::{Module, NodeId};
 
 pub use lichen_language::testing::{
@@ -115,43 +117,104 @@ pub fn check(source: &str) -> lichen_language::Report<LangProgram> {
     )
 }
 
-/// The device slot, which is process-global, so it is spelled once here.
+/// The stub backend the suite installs where a device would go.
 ///
 /// # Invariant
-/// `install_default` replaces the process's backend, so a test that installs one while another
-/// runs leaves the first's buffers on a device that is no longer installed. Every test here that
-/// installs a backend holds this slot first, through [`device_slot`] or [`device`].
-static DEVICE: Mutex<()> = Mutex::new(());
+/// A stub runs no kernel and computes nothing, so the answers it hands back are its own: a
+/// test that reads a value from it reads the stub's. What it does answer is the routing —
+/// which fragment reached a backend and over how many elements — and that is this crate's
+/// own subject.
+pub struct Stub {
+    calls: Mutex<Vec<Call>>,
+}
 
-/// The device slot alone, for a test that installs its own backends.
+/// One dispatch the stub was handed.
+#[derive(Clone)]
+pub struct Call {
+    /// The fragment the launch set's root named.
+    pub fragment: KernelFragment,
+    /// The extent the host asked for.
+    pub count: usize,
+}
+
+impl ParallelBackend for Stub {
+    fn name(&self) -> &'static str {
+        "stub"
+    }
+
+    fn run(
+        &self,
+        launch: &LaunchSet<'_>,
+        _inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Vec<ResidentId>, String> {
+        let root = launch.root();
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Call {
+                fragment: root.clone(),
+                count,
+            });
+        Ok(vec![ResidentId(41); root.outputs])
+    }
+
+    fn fetch(&self, _id: ResidentId, count: usize) -> Result<ScalarData, String> {
+        Ok(ScalarData::Float(vec![0.0; count]))
+    }
+
+    fn release(&self, _id: ResidentId) {}
+}
+
+/// The slot the installed backend lives in, which is the process's.
 ///
 /// # Invariant
-/// The lock is taken before the caller touches a device and is released only when the guard is
-/// dropped, which is the hold [`device`] takes and for the same reason: the slot it guards is the
-/// process's, not the caller's.
-pub fn device_slot() -> MutexGuard<'static, ()> {
-    DEVICE
+/// The lock is taken before the caller installs a backend and released only when the guard
+/// is dropped, so a second test that installs one while another runs cannot leave the
+/// first's residents on a backend that is no longer installed.
+static BACKEND_SLOT: Mutex<()> = Mutex::new(());
+
+/// The slot alone, for a test that installs a backend of its own.
+///
+/// # Invariant
+/// The lock is taken before the caller installs a backend and released only when the guard
+/// is dropped, so the slot it guards is the process's and not the caller's.
+pub fn slot() -> MutexGuard<'static, ()> {
+    BACKEND_SLOT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// A context on a device, or `None` when there is none here, with the device held for the run.
+/// The stub, installed as this process's backend, with the slot held.
 ///
 /// # Invariant
-/// The skip is reported and never turned into a failure. The context is installed as the
-/// process's backend, because a graph run reaches a device only through `ParallelBackend`. The
-/// guard travels back with the context, so a caller that keeps both keeps the device for as long
-/// as it runs.
-pub fn device(test: &str) -> Option<(GpuContext, MutexGuard<'static, ()>)> {
-    let guard = device_slot();
-    match install_default() {
-        Ok(()) => Some((
-            GpuContext::new().expect("a context was just installed"),
-            guard,
-        )),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
+/// The guard travels back with the stub, so a caller that keeps both keeps the slot for as
+/// long as it runs.
+pub fn stub() -> (Arc<Stub>, MutexGuard<'static, ()>) {
+    let guard = BACKEND_SLOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let stub = Arc::new(Stub {
+        calls: Mutex::new(Vec::new()),
+    });
+    install_parallel_backend(stub.clone());
+    (stub, guard)
+}
+
+/// The calls the stub was handed, in the order they came.
+impl Stub {
+    pub fn calls(&self) -> Vec<Call> {
+        let calls = self
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        calls.to_vec()
     }
 }
+
+/// The lane count one row of a workgroup runs, which is the width the tests take.
+///
+/// # Invariant
+/// A launch the tile divides is a whole number of these rows, so a count that is not a
+/// multiple of it covers a last row that is short, and a test that wants that says so.
+pub const LANES: u32 = 64;

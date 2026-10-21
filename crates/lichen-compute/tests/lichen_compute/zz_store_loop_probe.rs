@@ -50,40 +50,9 @@ out = (compute.plrun k ((compute.A In)(.n 69, .I In(.a 0))) : Out)
     drop(first_module);
     drop(first_value);
     mark("first program dropped");
-    let _installed = common::device_slot();
+    let (_stub, _guard) = common::stub();
     mark("cpu start");
     let (cpu_module, cpu_value, _) = common::run(&parallel.replace("BACKEND", "cpu"));
     mark("cpu done");
-    match lichen_compute_gpu::install_default() {
-        Ok(()) => {
-            mark("gpu installed");
-            let (gpu_module, gpu_value, _) = common::run(&parallel.replace("BACKEND", "gpu"));
-            let gpu_elements = common::array_values(&gpu_module, &gpu_value);
-            mark(&format!("gpu elements {}", gpu_elements.len()));
-            mark("gpu done");
-            lichen_compute_gpu::uninstall();
-            mark("gpu uninstalled");
-            drop(gpu_module);
-            mark("gpu module dropped");
-        }
-        Err(reason) => mark(&format!("no device: {reason}")),
-    }
-    let cpu_elements = common::array_values(&cpu_module, &cpu_value);
-    mark(&format!("cpu elements {}", cpu_elements.len()));
-    drop(cpu_module);
-    mark("cpu module dropped");
-    for round in 0..6 {
-        mark(&format!("round {round} store"));
-        let store = new_store(None);
-        mark(&format!("round {round} store done {}", store.is_ok()));
-        drop(store);
-        mark(&format!("round {round} store dropped"));
-        let (module, value, _) = common::run(source);
-        mark(&format!(
-            "round {round} run done {:?}",
-            common::float_of(&value)
-        ));
-        drop(module);
-        mark(&format!("round {round} module dropped"));
-    }
+
 }

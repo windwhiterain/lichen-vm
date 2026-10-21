@@ -2,7 +2,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -410,11 +409,7 @@ fn a_normalise_reading_a_runtime_scalar_merges_into_one_node() {
 /// the normalise's element alone, so no recording can answer the moved value.
 #[test]
 fn the_merged_diamond_answers_the_body_and_a_moved_bias_moves_it() {
-    let Some((_context, _device)) =
-        device("the_merged_diamond_answers_the_body_and_a_moved_bias_moves_it")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running(None));
     let recorded_answer = answer(&base_module, &base_value);

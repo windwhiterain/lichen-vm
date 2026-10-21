@@ -56,7 +56,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_zero_extent() {
-    let _guard = common::device("zz_zero_extent_probe");
+    let (_stub, _guard) = common::stub();
     println!("[plain] {}", rendered(PLAIN));
     println!("[recorded] {}", rendered(RECORDED));
 }

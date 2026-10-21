@@ -76,7 +76,7 @@ fn rendered(source: &str) -> String {
 
 #[test]
 fn probe_the_two_dimensional_convolution() {
-    let _guard = common::device("zz_conv2d_probe");
+    let (_stub, _guard) = common::stub();
     println!("[centre] {}", rendered(PROGRAM));
     println!("[wrap] {}", rendered(WRAP_PROGRAM));
 }

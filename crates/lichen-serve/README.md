@@ -21,8 +21,8 @@ answer against the half-width one.
 ## Building and running
 
 ```
-cargo build --release -p lichen-serve --bin qwen-serve
-LICHEN_MODEL_DIR=C:\resource\lichen-vm\.model ./target/release/qwen-serve 8099
+cargo build --release -p lichen-serve --example qwen_serve
+LICHEN_MODEL_DIR=C:\resource\lichen-vm\.model ./target/release/examples/qwen_serve 8099
 ```
 
 It prints `the model is loaded; the queue is open` once the weights are on the device — 28 layers placed,
@@ -58,7 +58,7 @@ leaves room to spare, and 6 GB is enough. What to check on the target, in order:
 
 1. `nvidia-smi --query-gpu=memory.used,memory.total --format=csv` — the model needs the free memory, not the
    total, so check what is **free** before starting it beside anything else.
-2. The half-width files, not the f32 dumps: `.model/` holds the ones `qwen-serve` reads and
+2. The half-width files, not the f32 dumps: `.model/` holds the ones `qwen_serve` reads and
    `.model/dump_bf16.py` writes them.
 3. Its own tokenizer: `LICHEN_MODEL_DIR` must point at a directory holding `tokenizer.json` **and** the
    tensors; they do not have to come from the same download.

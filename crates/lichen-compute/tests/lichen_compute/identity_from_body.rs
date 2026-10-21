@@ -2,16 +2,15 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// The row a `max` folds: every element **below** the `(0.0 - 1000000.0)` the defect was seeded with.
 ///
@@ -108,11 +107,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// as derived here from the literals the device folded.
 #[test]
 fn a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers() {
-    let Some((_context, _device)) =
-        device("a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let data = below_the_old_seed();
     let source = fold_over("(max s(1) (READ))", "((0.0 - 1.0) / 0.0)", &data);
 
@@ -156,11 +151,7 @@ fn a_maximum_over_data_below_the_old_seed_answers_what_the_untiled_body_answers(
 /// it on a row of large negatives.
 #[test]
 fn a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers() {
-    let Some((_context, _device)) =
-        device("a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let data = a_row_of_positives();
     let source = fold_over("(min s(1) (READ))", "(1.0 / 0.0)", &data);
 
@@ -202,11 +193,7 @@ fn a_minimum_over_a_row_of_positives_answers_what_the_untiled_body_answers() {
 /// folding to an infinity, and a claim asking for an `identity` the body never marked.
 #[test]
 fn a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name() {
-    let Some((_context, _device)) =
-        device("a_seed_that_is_no_literal_and_a_missing_role_are_refused_by_name")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
 
     // `0.0 / 0.0` is a `NaN` and not an infinity, so it keeps its tree and is no literal.
     let not_a_literal = fold_over("(max s(1) (READ))", "(0.0 / 0.0)", &a_row_of_positives());

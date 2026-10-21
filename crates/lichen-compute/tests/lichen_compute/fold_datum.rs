@@ -2,19 +2,18 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Reduction, Variable};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::ScalarClass;
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// One `Reduction` program whose combine is `combine`, over the buffer read as `READ`.
 ///
@@ -130,9 +129,9 @@ fn a_datum_that_is_the_bare_slot_builds_the_raw_buffers_body() {
     .expect("a sum over the datum itself is the same fold");
     assert_eq!(
         carried
-            .tiled(LOCAL_SIZE_X, 0)
+            .tiled(LANES, 0)
             .map(|tiled| tiled.into_body()),
-        raw.tiled(LOCAL_SIZE_X, 0).map(|tiled| tiled.into_body()),
+        raw.tiled(LANES, 0).map(|tiled| tiled.into_body()),
         "the two elements build the same tiled body, value for value"
     );
     assert_eq!(
@@ -151,11 +150,7 @@ fn a_datum_that_is_the_bare_slot_builds_the_raw_buffers_body() {
 /// re-association, where `+` does not.
 #[test]
 fn a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body() {
-    let Some((_context, _device)) =
-        device("a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = maximum();
     let largest = COUNT as f32;
 
@@ -205,11 +200,7 @@ fn a_maximum_tiles_under_the_same_proof_and_answers_the_untiled_body() {
 /// the `Σ x` a raw-buffer fold would have produced is not reachable.
 #[test]
 fn a_datum_no_body_computes_is_refused_by_name_and_the_body_answers() {
-    let Some((_context, _device)) =
-        device("a_datum_no_body_computes_is_refused_by_name_and_the_body_answers")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = unreadable_datum();
 
     let (module, value, _root) = common::run(&source);

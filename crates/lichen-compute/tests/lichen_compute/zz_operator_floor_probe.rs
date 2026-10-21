@@ -300,9 +300,7 @@ fn one(source: &str) -> Result<RunOutput, Vec<String>> {
 
 #[test]
 fn probe_the_floor_on_a_real_operator() {
-    let Some((_context, _guard)) = common::device("zz_operator_floor_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     measure("gemv", GEMV);
     measure("decode_direct", &decode_pair(8, 1, true));
     measure(

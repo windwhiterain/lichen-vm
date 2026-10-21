@@ -2,16 +2,15 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::clear_graph_pass;
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_lowlevel::Module;
 
 /// The launch the tile divides: three workgroups cover `[0, 192)`.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// The per-lane answer at `out[0]`: the body folds the lane's own one element there, and that
 /// element is `1.0²`.
@@ -88,11 +87,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// writes the whole `Σ x²` at `out[COUNT - 1]` and the tiled body writes it at `out[0]`.
 #[test]
 fn a_sum_of_squares_tiles_with_the_datum_its_claim_names_and_answers_the_squares() {
-    let Some((_context, _device)) =
-        device("a_sum_of_squares_tiles_with_the_datum_its_claim_names_and_answers_the_squares")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = squares();
 
     let (module, value, _root) = common::run(&source);

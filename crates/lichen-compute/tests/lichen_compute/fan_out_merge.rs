@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -451,9 +450,7 @@ fn a_pack_naming_the_fan_out_merges_all_three_nodes_into_one() {
 /// body says which node the device dispatched. One consumer's constant moves alone, so one returned
 /// buffer moves alone and the second ordinal is read rather than inferred from the first.
 fn device_triple(test: &str) {
-    let Some((_context, _device)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running());
     let recorded = outputs(&base_module, &base_value);

@@ -78,7 +78,7 @@ fn rendered(source: &str) -> String {
 
 #[test]
 fn probe_the_replicate_addresses() {
-    let _guard = common::device("zz_replicate_address_probe");
+    let (_stub, _guard) = common::stub();
     for taps in 1..=2 {
         println!("[taps={taps}] {}", rendered(&program(taps)));
     }

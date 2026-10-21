@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::automatic_tiling::install_tiling;
 use lichen_compute::compute::{GraphPass, LaunchExtent, clear_graph_pass, set_graph_pass};
@@ -11,7 +10,7 @@ use lichen_compute::floor::{floor_pass_with_packs, install_floor};
 use lichen_compute::fusion_claim::{claim_of, kernel_id};
 use lichen_compute::kernel_fragment;
 use lichen_compute::language::{LangProgram, LangValue};
-use lichen_compute_gpu::LOCAL_SIZE_X;
+use super::common::LANES;
 use lichen_fusion::BinaryOp;
 use lichen_graph_ir::{Graph, Node};
 use lichen_kernel_ir::{
@@ -24,7 +23,7 @@ use lichen_lowlevel::Module;
 /// # Invariant
 /// A whole number of tiles is what the dispatcher accepts and what a tiled fold reads, so the
 /// program's extent must be one. The count `reduction_chain` drives, `200`, is **not** one.
-const COUNT: usize = 3 * LOCAL_SIZE_X as usize;
+const COUNT: usize = 3 * LANES as usize;
 
 /// The per-lane answer at `out[0]`: the body folds the lane's own one element there.
 const PER_LANE: f32 = 1.0;
@@ -32,8 +31,6 @@ const PER_LANE: f32 = 1.0;
 /// The seed the counterfactual puts under the tiled fold, and what one occurrence adds.
 const RAISED: f32 = 7.0;
 
-/// The lanes a tiled fold spreads the launch over: the workgroup its tile stages.
-const LANES: usize = LOCAL_SIZE_X as usize;
 
 /// How many times the tiled fold carries the reduction's identity into `out[0]`.
 ///
@@ -166,11 +163,7 @@ fn pass_report(module: &Module<LangProgram>) -> Vec<String> {
 /// is the proof that the pass's body is what ran, and it is a device run or a reported skip.
 #[test]
 fn the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers() {
-    let Some((_context, _device)) =
-        device("the_pipeline_tiles_a_declared_reduction_and_the_tiled_body_answers")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = declared();
 
     // The floor: the same program with no pass installed answers the per-lane partial.
@@ -274,11 +267,7 @@ fn reports_a_tiling(lines: &[String]) -> bool {
 /// away — so the half the refusal names is the mark the lowering could not keep.
 #[test]
 fn a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands() {
-    let Some((_context, _device)) =
-        device("a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = literal();
     let (module, value, _root) = common::run(&source);
     let per_lane = common::float_array(&module, &value);
@@ -384,11 +373,7 @@ fn raise_seed(body: &mut KernelBody) {
 /// the per-lane partial.
 #[test]
 fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
-    let Some((_context, _device)) =
-        device("the_floor_tiles_a_declared_reduction_the_merge_stage_declines")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let source = declared();
 
     // The floor of the program itself: no pass, and the per-lane answer.
@@ -500,7 +485,7 @@ fn the_floor_tiles_a_declared_reduction_the_merge_stage_declines() {
 fn a_non_whole_tile_launch_is_not_reachable_from_a_program() {
     let count = COUNT + 1;
     assert_ne!(
-        count % LOCAL_SIZE_X as usize,
+        count % LANES as usize,
         0,
         "the count a pass has to decline is one the tile does not divide"
     );

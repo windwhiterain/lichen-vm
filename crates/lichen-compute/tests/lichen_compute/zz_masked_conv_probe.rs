@@ -90,7 +90,7 @@ fn rendered(source: &str) -> String {
 
 #[test]
 fn probe_the_masked_window() {
-    let _guard = common::device("zz_masked_conv_probe");
+    let (_stub, _guard) = common::stub();
     println!("[unmasked] {}", rendered(CONVOLVE_UNMASKED));
     println!("[masked] {}", rendered(CONVOLVE_MASKED));
     println!("[if_in_fold] {}", rendered(IF_IN_FOLD));

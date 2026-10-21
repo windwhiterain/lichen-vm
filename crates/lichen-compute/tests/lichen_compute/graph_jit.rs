@@ -113,7 +113,7 @@ impl Pending for StubPending {
 /// installed under it, held for the whole test.
 fn stub() -> (MutexGuard<'static, ()>, Stub) {
     static STUB: OnceLock<Stub> = OnceLock::new();
-    let guard = common::device_slot();
+    let guard = common::slot();
     let stub = STUB.get_or_init(Stub::default);
     // A device test that ran earlier replaced the installed backend, so this
     // installs every call rather than once.

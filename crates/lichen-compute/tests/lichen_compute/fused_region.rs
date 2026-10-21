@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::{
@@ -421,11 +420,7 @@ fn the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fra
         "the merged fragment names no parameter path, so no claim can be joined to it"
     );
 
-    let Some((_context, _device)) = device(
-        "the_region_merges_into_one_node_and_the_surviving_node_holds_the_composed_fragment",
-    ) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running());
     let baseline = answer(&base_module, &base_value);
@@ -646,11 +641,7 @@ fn the_floor_reports_the_merge_and_then_the_tiling_pass_on_the_merged_node() {
 /// is that a dispatch under the floor reports both stages, which only a run can show.
 #[test]
 fn the_floor_run_reports_both_stages_and_answers_the_un_passed_program() {
-    let Some((_context, _device)) =
-        device("the_floor_run_reports_both_stages_and_answers_the_un_passed_program")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     clear_graph_pass();
     let (base_module, base_value, _root) = common::run(&running());
     let baseline = answer(&base_module, &base_value);

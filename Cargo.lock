@@ -1026,7 +1026,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "lichen-compute",
- "lichen-compute-gpu",
  "lichen-highlevel",
  "lichen-language",
  "lichen-lowlevel",
@@ -1037,7 +1036,6 @@ dependencies = [
 name = "lichen-compute"
 version = "0.1.0"
 dependencies = [
- "lichen-compute-gpu",
  "lichen-doc",
  "lichen-fusion",
  "lichen-fusion-bridge",
@@ -1048,7 +1046,6 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-perspective",
  "lichen-runtime",
- "lichen-tools",
  "lichen-utils",
  "waffle",
  "wasm-encoder 0.248.0",

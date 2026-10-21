@@ -74,14 +74,3 @@ fn rendered(body: &str) -> String {
     }
 }
 
-#[test]
-fn probe_the_fold_type() {
-    for (label, body) in [
-        ("straight", STRAIGHT),
-        ("loop", LOOP),
-        ("loop_root_annotated", LOOP_ANNOTATED),
-        ("loop_recursion_annotated", LOOP_RECURSION_ANNOTATED),
-    ] {
-        println!("[{label}] {}", rendered(body));
-    }
-}

@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
@@ -251,9 +250,7 @@ fn a_step_whose_argument_names_two_buffers_records_three_inputs() {
 #[test]
 fn the_two_buffer_chain_runs_on_the_device_and_answers_over_both() {
     let test = "the_two_buffer_chain_runs_on_the_device_and_answers_over_both";
-    let Some((_context, _device)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let (module, value, _root) = common::run(&running());
     let found = common::float_array(&module, &value);
     assert_eq!(

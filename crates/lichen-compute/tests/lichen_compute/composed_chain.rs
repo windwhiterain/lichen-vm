@@ -6,7 +6,6 @@ use lichen_compute::fusion_claim::{Instance, claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
 use lichen_compute::language::new_store;
 use lichen_compute::{ComputeValue, compute::graph};
-use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, KernelBody, KernelFragment, KernelInstr, Plan, ScalarClass, ScalarData, ValueDef,
@@ -22,7 +21,7 @@ const LENGTHS: [usize; 3] = [8, 100, 1024];
 const ABSORBED: u32 = 1;
 
 #[test]
-fn the_composed_chain_answers_the_two_pass_reference_and_the_recorded_graph() {
+fn the_composed_chain_records_the_merged_body() {
     let (instances, recorded) = compile(SOURCE).expect("the chain compiles");
     let producer = instances[0].fragment.clone();
     let consumer = instances[1].fragment.clone();
@@ -84,75 +83,7 @@ fn the_composed_chain_answers_the_two_pass_reference_and_the_recorded_graph() {
         "the artifact holds the merged body element for element"
     );
 
-    let Some(context) = device("the_composed_chain_answers_the_two_pass_reference") else {
-        return;
-    };
-    for length in LENGTHS {
-        let data: Vec<f32> = (1..=length).map(|position| position as f32).collect();
-        let packed = pack(&data);
-        let closed = closed_form(length);
 
-        // The two-pass reference: the two recorded fragments as two nodes of one graph.
-        let two_pass = run(
-            &context,
-            &two_pass_graph(&producer, &consumer, length),
-            vec![Value::host_data(ScalarClass::Float, packed.clone())],
-            length,
-            "two-pass",
-        );
-        // The program's own recorded graph, which reads the extent as well as the buffer.
-        let program = run(
-            &context,
-            &recorded,
-            vec![
-                Value::int(length as i64),
-                Value::host_data(ScalarClass::Float, packed.clone()),
-            ],
-            length,
-            "recorded",
-        );
-        // The merged fragment: one node, one launch, the union's two inputs over one buffer.
-        let single = run(
-            &context,
-            &merged_graph(&merged, length),
-            vec![Value::host_data(ScalarClass::Float, packed)],
-            length,
-            "merged",
-        );
-
-        compare(
-            "the merged fragment",
-            &single,
-            "the two-pass reference",
-            &two_pass,
-        );
-        compare(
-            "the merged fragment",
-            &single,
-            "the recorded graph",
-            &program,
-        );
-        compare(
-            "the two-pass reference",
-            &two_pass,
-            "the closed form",
-            &vec![closed; length],
-        );
-        assert_eq!(
-            (
-                single.first().copied(),
-                single.last().copied(),
-                single.len()
-            ),
-            (Some(closed), Some(closed), length),
-            "the merged answer is the hand-derived closed form {closed} at every one of {length} \
-             position(s)"
-        );
-        println!(
-            "length {length}: {length} element(s), closed form {closed}: merged {single:?}",
-            single = &single[..3.min(length)]
-        );
-    }
 }
 
 /// How many instructions of `body` are buffer writes.
@@ -238,42 +169,6 @@ fn merged_graph(fragment: &KernelFragment, extent: usize) -> Graph {
     graph
 }
 
-/// Run `graph` and answer the returned node's first `extent` elements as floats.
-fn run<'a>(
-    context: &'a GpuContext,
-    graph: &Graph,
-    inputs: Vec<Value<'a>>,
-    extent: usize,
-    which: &str,
-) -> Vec<f32> {
-    let out = Runner::new(context, Policy::Serial)
-        .run(graph, inputs)
-        .unwrap_or_else(|refusal| panic!("the {which} graph is dispatched: {refusal}"));
-    let returned = graph.returns().expect("the return was recorded")[0];
-    let id = match out[returned]
-        .slot()
-        .expect("a dispatch's output names a buffer")
-    {
-        BufferSlot::Resident(id) => id,
-        BufferSlot::Host(_) => panic!("a dispatch's output is a buffer, not host data"),
-    };
-    let answer = match context
-        .fetch(id, extent)
-        .expect("the answer comes off the device")
-    {
-        ScalarData::Float(elements) => elements,
-        ScalarData::Int(elements) => panic!(
-            "a float run's result came back as {} integer element(s)",
-            elements.len()
-        ),
-    };
-    for value in &out {
-        if let Ok(BufferSlot::Resident(id)) = value.slot() {
-            context.release(id);
-        }
-    }
-    answer
-}
 
 /// Element-for-element equality, naming the position the two first disagreed at.
 fn compare(what: &str, found: &[f32], against: &str, expected: &[f32]) {
@@ -287,20 +182,6 @@ fn compare(what: &str, found: &[f32], against: &str, expected: &[f32]) {
             found, expected,
             "{what} answers {found} at position {position} and {against} answers {expected}"
         );
-    }
-}
-
-/// A context on a device, or `None` when there is none here.
-fn device(test: &str) -> Option<GpuContext> {
-    match GpuContext::new() {
-        Ok(context) => {
-            println!("device: {}", context.device_name());
-            Some(context)
-        }
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
     }
 }
 

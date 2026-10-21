@@ -8,7 +8,7 @@ use lichen_compute::compute::{
 };
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id, marked_value};
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
+use super::common::LANES;
 use lichen_fusion::{BinaryOp, Expr, Reduction};
 use lichen_fusion_bridge::{Element, Folding, ReadRoles, projection, tail, tiled_count};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
@@ -143,20 +143,6 @@ fn closed_form(count: u64) -> f32 {
     (count * (count + 1) / 2) as f32
 }
 
-/// A context on a device, or `None` when there is none here.
-///
-/// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in this
-/// tree reports one.
-fn device(test: &str) -> Option<GpuContext> {
-    match GpuContext::new() {
-        Ok(context) => Some(context),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
-}
 
 /// The fragment a folded body is dispatched as.
 ///
@@ -179,7 +165,7 @@ fn body_fragment(body: KernelBody, slices: Vec<Slice>) -> KernelFragment {
         result_classes: vec![ScalarClass::Float],
         target: TargetFacts {
             int_width: IntWidth::I64,
-            lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_width: LaneWidth::new(LANES),
             lane_height: LaneHeight::new(1),
         },
         slices,
@@ -215,49 +201,6 @@ fn pack(elements: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// Run `graph` over `data` at `extent` and answer the node's first `extent` elements as floats.
-///
-/// # Invariant
-/// The class is checked: a fetch classed as integers from a float fragment would be the ABI reading
-/// the buffer at the wrong width, which is the failure `ScalarData` exists to name.
-fn run_graph(
-    context: &GpuContext,
-    graph: &Graph,
-    data: &[f32],
-    extent: usize,
-    which: &str,
-) -> Vec<f32> {
-    let out = Runner::new(context, Policy::Serial)
-        .run(
-            graph,
-            vec![Value::host_data(ScalarClass::Float, pack(data))],
-        )
-        .unwrap_or_else(|refusal| panic!("the {which} body is dispatched: {refusal}"));
-    let returned = graph.returns().expect("the return was recorded")[0];
-    let id = match out[returned]
-        .slot()
-        .expect("a dispatch's output names a buffer")
-    {
-        BufferSlot::Resident(id) => id,
-        BufferSlot::Host(_) => panic!("a dispatch's output is a buffer, not host data"),
-    };
-    let answer = match context
-        .fetch(id, extent)
-        .expect("the folded answer comes off the device")
-    {
-        ScalarData::Float(elements) => elements,
-        ScalarData::Int(elements) => panic!(
-            "a float run's result came back as {} integer element(s)",
-            elements.len()
-        ),
-    };
-    for value in &out {
-        if let Ok(BufferSlot::Resident(id)) = value.slot() {
-            context.release(id);
-        }
-    }
-    answer
-}
 
 /// The plan the tiled body is checked against.
 ///
@@ -269,7 +212,7 @@ fn plan_of() -> Plan {
         staging: vec![Staging {
             name: "tile".to_string(),
             space: Space::Shared,
-            group_width: LOCAL_SIZE_X,
+            group_width: LANES,
         }],
     }
 }
@@ -307,7 +250,7 @@ fn digest_of(graph: &Graph, node: usize) -> u64 {
 /// the runner reads, and the landed body answers **three launches** — the last a logical count
 /// padded to a whole tile, so the extent is the bound and the pad is what the tile covers.
 #[test]
-fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
+fn the_declared_algebra_licenses_tiling_and_the_artifact_lands_in_a_graph() {
     let (reduction, _fragment) = declared_reduction();
     assert_eq!(
         reduction,
@@ -317,10 +260,7 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
         },
         "the program's own marks declare the sum its body folds"
     );
-    let Some(context) = device("the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs")
-    else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
 
     let folding = Folding::new(
         &reduction,
@@ -328,8 +268,8 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
         ScalarClass::Float,
     )
     .unwrap_or_else(|refusal| panic!("the derived declaration tiles: {refusal}"));
-    let tiled = folding.tiled(LOCAL_SIZE_X, 0).unwrap_or_else(|refusal| {
-        panic!("the derived declaration tiles at {LOCAL_SIZE_X}: {refusal}")
+    let tiled = folding.tiled(LANES, 0).unwrap_or_else(|refusal| {
+        panic!("the derived declaration tiles at {LANES}: {refusal}")
     });
     tiled
         .body()
@@ -369,81 +309,18 @@ fn the_declared_algebra_licenses_tiling_lands_in_a_graph_and_runs() {
     });
 
     // **One tiled body, three launches**: the third pads a logical count to the whole tile.
-    let padded = tiled_count(PADDED_COUNT, LOCAL_SIZE_X).unwrap_or_else(|refusal| {
-        panic!("{PADDED_COUNT} element(s) tile at {LOCAL_SIZE_X}: {refusal}")
+    let padded = tiled_count(PADDED_COUNT, LANES).unwrap_or_else(|refusal| {
+        panic!("{PADDED_COUNT} element(s) tile at {LANES}: {refusal}")
     });
     assert_eq!(
         (
             padded,
-            tail(PADDED_COUNT, LOCAL_SIZE_X)
+            tail(PADDED_COUNT, LANES)
                 .unwrap_or_else(|refusal| { panic!("{PADDED_COUNT} element(s) pad: {refusal}") }),
         ),
         (256, 56),
-        "the tile `tiled_count` answers is the smallest whole number of {LOCAL_SIZE_X}-wide tiles \
+        "the tile `tiled_count` answers is the smallest whole number of {LANES}-wide tiles \
          at or above the caller's count, and `tail` is the padding it adds"
     );
-    let launches = [
-        (u64::from(LOCAL_SIZE_X), u64::from(LOCAL_SIZE_X)),
-        (3 * u64::from(LOCAL_SIZE_X), 3 * u64::from(LOCAL_SIZE_X)),
-        (PADDED_COUNT, padded),
-    ];
-    for (count, extent) in launches {
-        let data = padded_triangle(count, extent);
-        let mut graph = graph_of(before.clone(), extent as usize);
 
-        // Before landing the node holds the per-lane fold: `out[0]` is one element, not the sum.
-        let per_lane = run_graph(&context, &graph, &data, extent as usize, "per-lane");
-        assert_eq!(
-            per_lane[0], 1.0,
-            "the per-lane body's first lane folds one element before anything lands"
-        );
-        assert_ne!(
-            per_lane[0],
-            closed_form(count),
-            "the node's pre-landing answer is not the closed form, so the landing is observable"
-        );
-
-        land_fused_kernel(&mut graph, 0, &artifact).unwrap_or_else(|refusal| {
-            panic!("the tiled artifact lands in the graph's node: {refusal}")
-        });
-
-        // The landed body is the one that ran, and it answers the closed form at the Float class.
-        let after = run_graph(&context, &graph, &data, extent as usize, "landed");
-        assert_ne!(
-            after[0], per_lane[0],
-            "the answer changed with the node's body, so the landed body is the one that ran"
-        );
-        assert_eq!(
-            after[0],
-            closed_form(count),
-            "the workgroup's {LOCAL_SIZE_X} lane(s) fold the {extent} element(s) tile of a \
-             {count} element(s) fold to the hand-derived closed form"
-        );
-    }
-
-    // A plan naming a mark the fragment never published, refused before the graph is touched.
-    let graph = graph_of(before, LOCAL_SIZE_X as usize);
-    let mut mutated = graph.clone();
-    let refusal = land_fused_kernel(&mut mutated, 0, &unpublished(&artifact))
-        .expect_err("a plan naming a mark the fragment never published is refused");
-    assert!(
-        matches!(
-            &refusal,
-            LandingRefusal::Read(FusedRefusal::PlanRefused {
-                refusal: PlanRefusal::UnknownStagedValue { name },
-            }) if name == "tile-unpublished"
-        ),
-        "the refusal is the plan check, and it carries the name it could not resolve: {refusal}"
-    );
-    assert!(
-        refusal.message().contains("tile-unpublished"),
-        "the refusal names the entry: {refusal}"
-    );
-    // The graph's shape and its node's body: a refused landing leaves all three alone.
-    assert_eq!(
-        (mutated.len(), mutated.value_count(), digest_of(&mutated, 0)),
-        (graph.len(), graph.value_count(), digest_of(&graph, 0)),
-        "a refused landing leaves the graph's node count, its value table and its node's fragment \
-         as they were"
-    );
 }

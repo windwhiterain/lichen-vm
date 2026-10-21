@@ -63,7 +63,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_gather_address() {
-    let _guard = common::device("zz_gather_address_probe");
+    let (_stub, _guard) = common::stub();
     println!("[plain] {}", rendered(PLAIN));
     println!("[past_the_end] {}", rendered(PAST_THE_END));
 }

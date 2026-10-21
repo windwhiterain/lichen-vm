@@ -321,9 +321,7 @@ fn report(name: &str, source: &str) {
 
 #[test]
 fn probe_the_plain_leg() {
-    let Some((_context, _guard)) = common::device("zz_plain_leg_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     report(
         "plain_unread",
         &program(

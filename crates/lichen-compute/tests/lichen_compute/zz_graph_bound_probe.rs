@@ -100,7 +100,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_bound_a_producer_wrote() {
-    let _guard = common::device("zz_graph_bound_probe");
+    let (_stub, _guard) = common::stub();
     println!("[chained] {}", rendered(CHAINED));
     println!("[direct] {}", rendered(DIRECT));
     println!("[plus_ten] {}", rendered(PLUS_TEN));

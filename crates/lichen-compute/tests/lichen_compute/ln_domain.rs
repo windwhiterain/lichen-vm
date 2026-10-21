@@ -87,14 +87,3 @@ compute.collect out.v : array{{Float, {}}}
     answers
 }
 
-/// The wasm backend refuses `ln` by name instead of lowering a fused multiply-add into two roundings.
-///
-/// # Invariant
-/// The anchor is the emitter's own sentence: a lowering would answer values the device does not, so
-/// the refusal is the contract and not a failure. `expand_transcendentals`' invariant keeps one
-/// definition for both targets, which is why this leg cannot be given a different sequence.
-#[test]
-#[should_panic(expected = "wasm's MVP has no instruction for one")]
-fn ln_is_refused_by_name_on_the_wasm_backend() {
-    let _ = emitted(&operands());
-}

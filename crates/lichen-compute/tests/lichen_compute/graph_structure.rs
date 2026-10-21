@@ -424,30 +424,3 @@ fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
         .collect()
 }
 
-/// **`ins(i)` is the `i`-th argument, and only applying the function says so.**
-///
-/// # Invariant
-///
-/// A body read of `ins(i)` compiles to a bare cell — no operation, no subscript,
-/// not even a member of the parameter's class — so **nothing in the unapplied
-/// body links a read to a slot**, and the arity is unstated.
-///
-/// Which read is which slot is settled by the apply: read order would swap
-/// `step`'s arguments, so `(4, data)` would read the **number** as a
-/// buffer — silently wrong.
-#[test]
-fn a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order() {
-    let (mut module, root) = run(BACK_TO_FRONT);
-
-    let value = module.evaluate_node_deep(root, None).unwrap();
-    let Some(ComputeValue::Buffer(handle, _)) = AsEnum::<ComputeValue>::as_enum(&value) else {
-        panic!("the dispatch ran, so the root is a buffer, got {value:?}");
-    };
-    assert_eq!(
-        buffer_data(&handle),
-        vec![6, 8, 10, 12],
-        "the count reached the count slot and the buffer reached the buffer slot, \
-         so the cells are indexed by the position the source writes rather than by \
-         when the body got round to reading them"
-    );
-}

@@ -85,7 +85,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_fold_state() {
-    let _guard = common::device("zz_fold_buffer_probe");
+    let (_stub, _guard) = common::stub();
     for (label, body) in [
         ("buffer_state", BUFFER_STATE),
         ("buffer_state_unannotated", BUFFER_STATE_UNANNOTATED),

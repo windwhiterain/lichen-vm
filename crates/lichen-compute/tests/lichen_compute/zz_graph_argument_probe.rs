@@ -290,9 +290,7 @@ built
 "#;
 #[test]
 fn probe_graph_argument_buffer() {
-    let Some((_context, _guard)) = common::device("zz_graph_argument_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     for (name, source) in [
         ("graph_of_a_constant", GRAPH_OF_A_CONSTANT),
         ("two_buffers_float", TWO_BUFFERS_FLOAT),

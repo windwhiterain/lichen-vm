@@ -3,7 +3,6 @@
 
 use super::common;
 
-use common::device;
 
 use lichen_compute::ComputeValue;
 use lichen_compute::compute::graph;
@@ -209,9 +208,7 @@ fn the_second_extent_is_recorded_as_the_scalars_own_edge() {
 #[test]
 fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
     let test = "the_two_extent_launch_runs_on_the_device_through_the_graph";
-    let Some((_context, _guard)) = device(test) else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     let direct = format!(
         "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          a = (compute.buffer ([{elements}] : array{{Int, {n}}}) : (compute.Buf Int))\n\

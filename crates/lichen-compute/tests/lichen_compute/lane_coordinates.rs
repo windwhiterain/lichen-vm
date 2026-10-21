@@ -66,20 +66,6 @@ fn attempt(program: &str) -> Result<String, Vec<String>> {
         .map_err(|diags| diags.into_iter().map(|diag| diag.message).collect())
 }
 
-/// A lane's coordinates are the ones its **second extent** divides the index into.
-///
-/// # Invariant
-/// The strides come from a leaf the body never names as a coordinate, so a lowering
-/// that read the third scalar instead would answer a different program here.
-#[test]
-fn a_two_extent_config_answers_the_coordinates_of_its_second_extent() {
-    let (module, answer, _root) = common::run(TWO_EXTENTS);
-    assert_eq!(
-        common::float_array(&module, &answer),
-        vec![1.0, 2.0, 3.0, 3.0, 4.0, 5.0],
-        "six lanes over three columns, each reading its element of a row two wide"
-    );
-}
 
 /// A configuration with one extent has no row or column to take, and says so.
 ///

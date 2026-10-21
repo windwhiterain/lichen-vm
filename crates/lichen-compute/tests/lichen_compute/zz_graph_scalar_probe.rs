@@ -84,7 +84,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_graph_scalar() {
-    let _guard = common::device("zz_graph_scalar_probe");
+    let (_stub, _guard) = common::stub();
     println!("[recorded] {}", rendered(RECORDED));
     println!("[recorded_wide] {}", rendered(RECORDED_WIDE));
     println!("[recorded_off0] {}", rendered(RECORDED_OFFSET_ZERO));

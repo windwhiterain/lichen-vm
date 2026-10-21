@@ -60,7 +60,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_buffer_read_trip_count() {
-    let _guard = common::device("zz_dynamic_trip_probe");
+    let (_stub, _guard) = common::stub();
     println!("[lim_three] {}", rendered(THREE));
     println!("[lim_five] {}", rendered(FIVE));
 }

@@ -145,7 +145,13 @@ fn recorded(module: &Module<LangProgram>, value: &LangValue) -> Graph {
 /// The only schema the recording derives, or the refusal that stopped it.
 fn derived(source: &str) -> Result<RegionSchema, String> {
     clear_graph_pass();
-    let (module, value, _root) = common::run(source);
+    let build = common::check(source)
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let regions = derive_regions(&recorded(&module, &value), &instances(&module, &value));
     assert_eq!(regions.len(), 1, "the diamond is one region");
     regions
@@ -204,7 +210,13 @@ fn a_consumer_of_two_producers_merges_into_one_node_under_the_floor() {
         "a chain whose nodes read earlier producers is the shape the floor's own proof holds"
     );
 
-    let (module, value, _root) = common::run(&program());
+    let build = common::check(&program())
+    .build
+    .expect("the program checks");
+let module = build.module;
+let value = module
+    .node_value(AnyNodeId::Dynamic(build.root_val))
+    .expect("the root is decided");
     let graph = recorded(&module, &value);
     assert_eq!(
         (graph.len(), graph.value_count()),

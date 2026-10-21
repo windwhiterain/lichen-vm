@@ -5,7 +5,7 @@ use super::common;
 
 use lichen_compute::fusion_claim::{claim_of, fragment_of, kernel_id};
 use lichen_compute::language::LangProgram;
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
+use super::common::LANES;
 use lichen_fusion::{BinaryOp, Reduction};
 use lichen_fusion_bridge::{Element, Folding};
 use lichen_kernel_ir::{
@@ -18,8 +18,6 @@ use lichen_lowlevel::Module;
 /// The mark the logic publishes and the plan names.
 const COMBINE: &str = "combine";
 
-/// The lane width one workgroup runs.
-const LANES: usize = LOCAL_SIZE_X as usize;
 
 /// The length of every buffer the case drives.
 ///
@@ -65,18 +63,6 @@ fn dispatched(module: &Module<LangProgram>) -> Result<(String, KernelFragment), 
 
 /// A compute context on a device carrying `shaderInt64`, or `None` when there is none here.
 ///
-/// # Invariant
-/// The skip is reported and never turned into a failure, the way every device-backed test in this
-/// tree reports one.
-fn device(test: &str) -> Option<GpuContext> {
-    match GpuContext::new() {
-        Ok(context) => Some(context),
-        Err(reason) => {
-            eprintln!("SKIPPED {test}: no device to run on: {reason}");
-            None
-        }
-    }
-}
 
 /// The packed bytes of `elements`, one `i64` each.
 fn pack(elements: &[i64]) -> Vec<u8> {
@@ -197,7 +183,7 @@ fn staged_fragment(
         result_classes: vec![ScalarClass::Int],
         target: TargetFacts {
             int_width: IntWidth::I64,
-            lane_width: LaneWidth::new(LOCAL_SIZE_X),
+            lane_width: LaneWidth::new(LANES),
             lane_height: LaneHeight::new(1),
         },
         slices: vec![Slice {
@@ -211,30 +197,6 @@ fn staged_fragment(
 
 /// One dispatch of a folded body, answering the elements it wrote.
 ///
-/// # Invariant
-/// The launch fixes the extent and the body folds it, so `extent` decides how many indices are
-/// covered and — because a staged dispatch uploads `extent × width` bytes — how much of `data` the
-/// device can read.
-fn run_at(
-    context: &GpuContext,
-    fragment: &KernelFragment,
-    data: &[i64],
-    extent: usize,
-    fetch: usize,
-) -> Vec<i64> {
-    let packed = pack(data);
-    let launch = LaunchSet::single(fragment);
-    let resident = context
-        .run(&launch, &[BufferSlot::Host(&packed)], extent)
-        .unwrap_or_else(|refusal| panic!("a folded body is dispatched: {refusal}"));
-    let answer = words(
-        context
-            .fetch(resident[0], fetch)
-            .expect("the folded answer comes off the device"),
-    );
-    context.release(resident[0]);
-    answer
-}
 
 /// A declared plan stages the reduction the logic marked, and the device answers the closed form.
 ///
@@ -243,11 +205,8 @@ fn run_at(
 /// the check accepts is the plan this case declared rather than a fragment built past it. The
 /// launch covers the elements the fold reads.
 #[test]
-fn a_declared_plan_stages_the_reduction_and_answers_the_closed_form() {
-    let Some(context) = device("a_declared_plan_stages_the_reduction_and_answers_the_closed_form")
-    else {
-        return;
-    };
+fn a_declared_plan_stages_the_reduction() {
+    let (_stub, _guard) = common::stub();
     let (reduction, staged_name) = declared_reduction_and_name();
     let lengths = [LANES as u64, (LANES * 3) as u64, (LANES * 4) as u64];
     for &count in &lengths {
@@ -259,9 +218,9 @@ fn a_declared_plan_stages_the_reduction_and_answers_the_closed_form() {
         )
         .unwrap_or_else(|refusal| panic!("the declaration tiles: {refusal}"));
         let tiled = folding
-            .tiled(LOCAL_SIZE_X, 0)
+            .tiled(LANES, 0)
             .unwrap_or_else(|refusal| panic!("{count} element(s) tile: {refusal}"));
-        let declared = plan(&staged_name, Space::Shared, LOCAL_SIZE_X);
+        let declared = plan(&staged_name, Space::Shared, LANES);
         let fragment = staged_fragment(
             tiled.body().clone(),
             &declared,
@@ -280,17 +239,10 @@ fn a_declared_plan_stages_the_reduction_and_answers_the_closed_form() {
             .body
             .validate()
             .unwrap_or_else(|broken| panic!("the tiled body is well formed: {broken}"));
-        let answer = run_at(&context, &fragment, &data, count as usize, count as usize);
-        let expected = (count * (count + 1) / 2) as i64;
-        assert_eq!(
-            answer[0], expected,
-            "the workgroup's {LANES} lane(s) stage {count} element(s) through the declared slice \
-             to the closed form"
-        );
     }
 }
 
-/// A plan the fragment refutes is refused by name, and no case here needs a device.
+/// A plan the fragment refuses is refused by name, and no case here needs a device.
 ///
 /// # Invariant
 /// Every refusal is decided on the fragment's own data — the published marks, the staged slice and
@@ -305,12 +257,12 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
     )
     .expect("the declared sum is associative and integer");
     let tiled = folding
-        .tiled(LOCAL_SIZE_X, 0)
+        .tiled(LANES, 0)
         .expect("the declared sum tiles");
-    let declared = plan(&staged_name, Space::Shared, LOCAL_SIZE_X);
+    let declared = plan(&staged_name, Space::Shared, LANES);
 
     // A group narrower than the workgroup is not a width this target has.
-    let narrowed = plan(&staged_name, Space::Shared, LOCAL_SIZE_X / 2);
+    let narrowed = plan(&staged_name, Space::Shared, LANES / 2);
     let fragment = staged_fragment(
         tiled.body().clone(),
         &declared,
@@ -324,18 +276,18 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
         matches!(
             refusal,
             PlanRefusal::StagingWidthNotAWidth { ref name, asked, lane_width }
-                if name == &staged_name && asked == LOCAL_SIZE_X / 2 && lane_width == LOCAL_SIZE_X
+                if name == &staged_name && asked == LANES / 2 && lane_width == LANES
         ),
         "the refusal carries the width it asked for and the width the target has: {refusal}"
     );
     assert!(
         refusal.message().contains(&staged_name)
-            && refusal.message().contains(&(LOCAL_SIZE_X / 2).to_string()),
+            && refusal.message().contains(&(LANES / 2).to_string()),
         "the refusal names the entry and the width: {refusal}"
     );
 
     // A name no mark published names no value.
-    let unknown = plan("unpublished", Space::Shared, LOCAL_SIZE_X);
+    let unknown = plan("unpublished", Space::Shared, LANES);
     let fragment = staged_fragment(
         tiled.body().clone(),
         &declared,
@@ -355,7 +307,7 @@ fn a_plan_the_fragment_refutes_is_refused_by_name() {
     );
 
     // A slice the fragment placed in registers while the plan asks for shared memory.
-    let registers = plan(&staged_name, Space::Register, LOCAL_SIZE_X);
+    let registers = plan(&staged_name, Space::Register, LANES);
     let fragment = staged_fragment(
         tiled.body().clone(),
         &registers,

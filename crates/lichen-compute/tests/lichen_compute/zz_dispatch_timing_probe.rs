@@ -130,9 +130,7 @@ fn timed(source: &str) -> (f64, String) {
 
 #[test]
 fn probe_the_dispatch_cost() {
-    let Some((_context, _guard)) = common::device("zz_dispatch_timing_probe") else {
-        return;
-    };
+    let (_stub, _guard) = common::stub();
     // One warm-up run, so the first measurement is not the driver's first.
     let _ = timed(&program("gpu", 6, 1, "stencil"));
     for backend in ["cpu", "gpu"] {
