@@ -120,10 +120,9 @@ fn compiled(extra: &str) -> Vec<String> {
     ))
     .build
     .expect("the program checks");
-    let module = build.module;
-    let _value = module
-        .node_value(AnyNodeId::Dynamic(build.root_val))
-        .expect("the root is decided");
+    let mut module = build.module;
+    // The classes are stated while the module's own deep pass runs, so it runs here.
+    let _ = module.evaluate_node_deep(build.root_val, None);
     classes(&module)
 }
 
