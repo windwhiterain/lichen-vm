@@ -82,6 +82,21 @@ value a graph can hand back" and the extent read. So the inventory does not dodg
 **fixing the frozen overflow is worth ~50 tests**, more than any other single root cause on
 the list. The tail (pack_placement, the merge/fan families) is separate work.
 
+**Resolved: `values_eq` was the recursion, and the peel is landed — compute 121 → 147.**
+`cdb` (the Windows debugger, installed under the Windows Kits) caught the crash's stack: the
+recursion is **`values_eq`** — the testkit's value comparison — calling itself through its own
+closure over array elements, with no depth bound. A value that nests into itself ran the
+test's stack to its end, and only a *failing* comparison walks that far, which is why every
+probe that skipped an assertion stayed silent. `values_eq` now carries a depth bounded by the
+language's compound ceilings and answers unequal past it (`7418d718`), because a cyclic value
+can never be proven equal.
+
+With that in place the **cfg-leaf peel lands** (`a51736e6`): `value_at_path` reads through the
+slot each step lands on, which is what the parallel and recording extensions needed. Measured:
+**compute 121 → 147 passed (107 failed)**, `graph_jit` **1/10 → 6/10**, and every other suite
+unchanged (lowlevel 164, highlevel 136, language 275). The class-crossing test now fails on its
+own numbers instead of aborting the binary.
+
 **The slots the assertion reads are not self-referential.** Instrumenting `array_values`'
 slot branch: the four slots it visits hold `USize(0)`, `USize(1)`, `USize(68)` and an array in
 their value positions — no first position names its own slot. So the `Debug`-of-a-cycle
