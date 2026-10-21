@@ -139,6 +139,24 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether an apply's callee operand **states** its function; a type-side
+    /// apply's callee is undecided by construction.
+    fn apply_callee_is_stated(&self, apply: NodeId) -> bool {
+        let Some(operation) = self.node_operation(apply) else {
+            return false;
+        };
+        let Some(operand) = operation.operand else {
+            return false;
+        };
+        let Ok(items) = self.operand_items(operand) else {
+            return false;
+        };
+        let Some(callee) = items.first().and_then(|item| item.node.dynamic()) else {
+            return false;
+        };
+        self.node_value(callee.into()).is_some() || self.node_operation(callee).is_some()
+    }
+
     /// The member of `node`'s equality class that **defines** its value: a
     /// class member carrying a computational operator.
     ///
@@ -152,18 +170,21 @@ impl<P: Program> Module<P> {
     pub fn defining_member(&self, node: NodeId) -> Option<NodeId> {
         let root = self.class_root(node);
         let members: Vec<NodeId> = disjoint::members(&self.nodes, root).collect();
-        // A call defines the value it produces; its expanded body is the
-        // implementation (`docs/notes/lowlevel-low-types.md`).
-        if let Some(call) = members.iter().copied().find(|member| {
-            self.node_operation(*member).is_some_and(|operation| {
-                matches!(
-                    AsEnum::<LowOperator>::as_enum(&operation.operator),
-                    Some(LowOperator::Apply)
-                )
-            })
-        }) {
-            return Some(call);
+        // A call defines the value it produces, and only a stated callee can
+        // (`docs/notes/lowlevel-low-types.md`).
+        for member in &members {
+            let Some(operation) = self.node_operation(*member) else {
+                continue;
+            };
+            if matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Apply)
+            ) && self.apply_callee_is_stated(*member)
+            {
+                return Some(*member);
+            }
         }
+
         members.into_iter().find(|member| {
             self.node_operation(*member).is_some_and(|operation| {
                 !matches!(
@@ -323,15 +344,23 @@ impl<P: Program> Module<P> {
         // SAFETY: the target is live, and a frozen array's element is read
         // through a module the reference outlives.
         let items = unsafe { self.array_items_of(target.node) }?;
-        let AnyNodeId::Static(function) = items.get(position)?.node else {
-            return None;
-        };
-        match self
-            .static_read(function)
-            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-        {
-            Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
-            _ => None,
+        match items.get(position)?.node {
+            // A frozen element: its value is read through the reference.
+            AnyNodeId::Static(function) => match self
+                .static_read(function)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
+                _ => None,
+            },
+            // A materialized leaf of the same fact.
+            AnyNodeId::Dynamic(function) => match self
+                .node_value(AnyNodeId::Dynamic(function))
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
+                _ => None,
+            },
         }
     }
 
