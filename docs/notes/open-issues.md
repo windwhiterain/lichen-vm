@@ -98,7 +98,7 @@ map, or the **checker** unifying each element's value class with its type node's
 walk with the widths: a read of an array's element (`2582 → 2566`, class shape
 `Array(Some(USize), 2)`) has steps 0 and 1 *onto the element's slot*, so both are the slot's own
 positions and the walk must dereference step 0 and refuse step 1. That rule is added
-(`e6f9eb19`-era work) and measured **neutral (202/24)**: the nested-config refusal is the
+(`13375eda`) and measured **neutral (202/24)**: the nested-config refusal is the
 **offset**, not the dereference — the chain reaches the parameter's own pair (250, class 2981)
 and passes the root check, then `offset_of` answers `None`. The `[0,0,1]`-against-a-two-element
 shape reading from the previous round is that same offset defect.
