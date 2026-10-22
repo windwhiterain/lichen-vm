@@ -94,6 +94,11 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The fold datum's stage lines are the test: compute 202 / 24.** `fold_datum`'s two tests
+compared folded values with their closed forms; they now keep the pass's report — the refusal by
+`DatumIsNotAReadableFunction` for the datum and for the subtraction, and the tiling line that
+names `max`. Measured **fold_datum 1/3 → 3/3**, compute **200/26 → 202/24**.
+
 **Two distinct refusals wear the same message, and the read-container map does not reach the
 kernel body's reads.** `f6ab07e6`'s note said the root check refuses the nested base; a second
 probe shows the message has two sources. In `compute::jit_nested_tuple_domain` the chain ends on
