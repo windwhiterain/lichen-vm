@@ -94,6 +94,17 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Two compute tests need the launch's deferral, not a reader fix.** With the dereference fixed,
+`jit_cross_kernel_passes_a_sub_tuple_through` and
+`jit_cross_kernel_tuple_argument_through_the_wrapper` reach their next claim and both fail on
+**dispatch**, not on shape. The second is refused by name — "argument element 0 is no value, not
+a concrete Int or Float" — because a `compute.jit` body's `compute.launch k0 (x, 1)` runs while
+`x` is still the wrapper's undecided argument cell; the launch should defer to the outer launch
+that supplies `x`. The first dispatches nothing at all for the same reason: `k1 = compute.jit
+(r => k0 r(1))` is a cross-kernel *call*, and the outer `compute.launch k1 (…)` never reaches a
+dispatch. That is the deferral machinery's line, and rewriting the first test as a dispatch
+assertion was measured wrong (`stubs.calls()` stays empty) and reverted.
+
 **A pair's second position is its type, and that is the dereference's one honest reading.**
 `acff0fe6`: the walk's three readings — a two-position shape with an open second position, the
 class value's `2 + attributes` width, and an array's shape — all mistake a **bare two-element
