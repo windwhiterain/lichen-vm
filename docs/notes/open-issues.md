@@ -94,6 +94,14 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**An undecided kernel argument defers the launch now: compute 219/7.** The wrapper's inner
+launch was refused by name before its parameter could be supplied; `argument_decided` walks the
+argument and separates an **empty** position (undecided → the launch stays lazy) from a **wrong
+value** (decided → the refusal is the answer), and the launch arm returns `None` on the former.
+`jit_cross_kernel_tuple_argument_through_the_wrapper` passes. The first test of the pair still
+dispatches nothing: `k1 = compute.jit (r => k0 r(1))` is a cross-kernel *call*, so its outer
+`compute.launch` reaches no dispatch at all.
+
 **Two compute tests need the launch's deferral, not a reader fix.** With the dereference fixed,
 `jit_cross_kernel_passes_a_sub_tuple_through` and
 `jit_cross_kernel_tuple_argument_through_the_wrapper` reach their next claim and both fail on
