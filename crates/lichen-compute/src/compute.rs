@@ -35,7 +35,8 @@ pub mod graph_pass;
 
 use graph::{Extent, Placed, RunArgument, RunResult};
 use lichen_runtime::wasm::{
-    assemble_module, buffer_import_name, param_classes, run_kernel as run_on_engine,
+    HostWords, SEQUENTIAL_PARALLEL_ELEMENTS, assemble_module, buffer_import_name, param_classes,
+    run_kernel as run_on_engine, run_parallel,
 };
 
 pub use fused::{
@@ -6375,15 +6376,60 @@ struct ParallelState<'a> {
     /// The class the whole fragment is lowered in: the type of the imports and of
     /// the kernel's own parameters and result.
     class: ScalarClass,
-    /// The launch's scalar leaves, one word per leaf in field order.
-    ///
-    /// # Invariant
-    /// The parameter's scalars as the ABI passes them, the extent first; the index is
-    /// not here, since it is the worker's loop variable.
-    leaves: &'a [i64],
-    /// Each leaf's own class, so a runtime `Float` scalar is an `f32` argument
-    /// beside `i64` ordinals.
-    leaf_classes: &'a [ScalarClass],
+}
+
+impl HostWords for ParallelState<'_> {
+    fn read(&self, position: usize, index: usize) -> i64 {
+        self.inputs
+            .get(position)
+            .and_then(|buffer| buffer.words.get(index))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn write(&self, position: usize, index: usize, value: i64) {
+        // A relaxed store: `compute.write`'s disjointness contract is what
+        // makes the store the whole of a write.
+        if let Some(word) = self
+            .outputs
+            .get(position)
+            .and_then(|buffer| buffer.get(index))
+        {
+            word.store(value, Ordering::Relaxed);
+        }
+    }
+
+    fn atomic_add(&self, position: usize, index: usize, value: i64) {
+        let Some(word) = self
+            .outputs
+            .get(position)
+            .and_then(|buffer| buffer.get(index))
+        else {
+            return;
+        };
+        match self.class {
+            ScalarClass::Int => {
+                word.fetch_add(value, Ordering::Relaxed);
+            }
+            // The float add is a compare-exchange loop over the word bits.
+            _ => {
+                let addend = f32::from_bits(value as u32);
+                let mut current = word.load(Ordering::Relaxed);
+                loop {
+                    let next = f32::from_bits(current as u32) + addend;
+                    match word.compare_exchange_weak(
+                        current,
+                        i64::from(next.to_bits()),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => current = actual,
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Hand a run to the installed [`lichen_kernel_ir::ParallelBackend`].
@@ -6491,26 +6537,6 @@ const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 
 /// The element count at or above which a parallel run spreads over worker threads.
 ///
-/// # Invariant
-/// Below it the run keeps its own latency: every worker costs a spawn plus its own
-/// store, linker and instantiation, repaid only once a worker owns enough indices for
-/// the interpreted calls to dominate. A few thousand indices cost milliseconds of
-/// interpretation against a spawn measured in tens of microseconds.
-const SEQUENTIAL_PARALLEL_ELEMENTS: usize = 1 << 12;
-
-/// How many workers a parallel run of `count` indices uses, the caller included.
-///
-/// # Invariant
-/// Never below [`SEQUENTIAL_PARALLEL_ELEMENTS`] — the fan-out must pay for itself —
-/// and never above what the machine has or what there are indices for. An unavailable
-/// `available_parallelism` reads as one, the sequential run.
-fn parallel_worker_count(count: usize) -> usize {
-    if count < SEQUENTIAL_PARALLEL_ELEMENTS {
-        return 1;
-    }
-    let available = std::thread::available_parallelism().map_or(1, |count| count.get());
-    available.clamp(1, count)
-}
 
 // How many workers the calling thread's most recent parallel launch used.
 
@@ -6611,73 +6637,30 @@ fn run_parallel_kernel(
         }
     }
     let inputs = host_inputs;
-    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     // Shared atomic words: a write stores its slot, an atomic add read-modify-writes it.
     let outputs: Vec<Vec<AtomicI64>> = (0..outputs)
         .map(|_| (0..count).map(|_| AtomicI64::new(0)).collect())
         .collect();
-    let workers = parallel_worker_count(count);
-    PARALLEL_LAUNCH_WORKERS.set(workers);
-    if workers == 1 {
-        // The sequential run *is* the one-worker run: the calling thread runs every lane,
-        // and nothing is spawned.
-        let state = ParallelState {
-            inputs: &inputs,
-            outputs: &outputs,
+    {
+        let inputs = &inputs;
+        let outputs = &outputs;
+        let leaves = &leaves;
+        let leaf_classes = &leaf_classes;
+        let state = move || ParallelState {
+            inputs,
+            outputs,
             class,
-            leaves: &leaves,
-            leaf_classes: &leaf_classes,
         };
-        run_parallel_range(&engine, &module, state, 0, count)?;
-    } else {
-        // Lane bounds, not storage bounds: the worker count partitions indices only.
-        let bounds = chunk_bounds(count, workers);
-        let mut failures: Vec<Option<Result<(), String>>> = (0..workers).map(|_| None).collect();
-        // Scoped, not detached: the scope joins every worker before the shared
-        // buffers are read back.
-        std::thread::scope(|scope| {
-            for (failure, window) in failures.iter_mut().zip(bounds.windows(2)) {
-                let (base, end) = (window[0], window[1]);
-                let engine = &engine;
-                let module = &module;
-                let inputs = &inputs;
-                let outputs = &outputs;
-                let leaves = &leaves;
-                let leaf_classes = &leaf_classes;
-                let run = move || {
-                    run_parallel_range(
-                        engine,
-                        module,
-                        ParallelState {
-                            inputs,
-                            outputs,
-                            class,
-                            leaves,
-                            leaf_classes,
-                        },
-                        base,
-                        end,
-                    )
-                };
-                // The first chunk is the calling thread's own work: it runs here
-                // and joins only the others.
-                if base == 0 {
-                    *failure = Some(run());
-                    continue;
-                }
-                scope.spawn(move || *failure = Some(run()));
-            }
-        });
-        for (worker, failure) in failures.into_iter().enumerate() {
-            if let Some(Err(message)) = failure {
-                return Err(format!(
-                    "parallel launch of kernel {id} failed in worker {worker}, \
-                     over indices [{}, {}): {message}",
-                    bounds[worker],
-                    bounds[worker + 1]
-                ));
-            }
-        }
+        let workers = run_parallel(
+            id,
+            || assemble_launch_set(id),
+            state,
+            leaves,
+            leaf_classes,
+            class,
+            count,
+        )?;
+        PARALLEL_LAUNCH_WORKERS.set(workers);
     }
     // Read back after the scope joins: the scope is the ordering.
     let outputs: Vec<Vec<i64>> = outputs
@@ -6760,214 +6743,10 @@ fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarDat
     }
 }
 
-/// The chunk end of each of `workers` contiguous chunks of `count` indices.
-///
-/// # Invariant
-/// A function of its two arguments and nothing else, so a partition is reproducible
-/// and the result does not depend on how the indices are grouped. Chunk `k` is
-/// `count / workers` long with the first `count % workers` one longer, and the calling
-/// thread takes chunk 0 so the later workers are off the shortest chunk.
-fn chunk_bounds(count: usize, workers: usize) -> Vec<usize> {
-    let (length, extra) = (count / workers, count % workers);
-    (0..=workers)
-        .map(|index| index * length + index.min(extra))
-        .collect()
-}
 
-/// Run one worker's index range `[base, end)`: the store, linker, instance and the
-/// per-index call loop.
-///
-/// # Invariant
-/// The extent is the first of `state.leaves` and is the whole launch's: the index
-/// function is a function of the full extent, not of the chunk.
-fn run_parallel_range(
-    engine: &wasmi::Engine,
-    module: &wasmi::Module,
-    state: ParallelState<'_>,
-    base: usize,
-    end: usize,
-) -> Result<(), String> {
-    let class = state.class;
-    let mut store = wasmi::Store::new(engine, state);
-    let mut linker = wasmi::Linker::<ParallelState<'_>>::new(engine);
 
-    // One `read`/`write` pair per class: both are defined even when the module
-    // declares only one.
-    for (element_class, value_type) in [
-        (ScalarClass::Int, wasmi::ValType::I64),
-        (ScalarClass::Float, wasmi::ValType::F32),
-    ] {
-        let read_ty =
-            wasmi::FuncType::new([wasmi::ValType::I64, wasmi::ValType::I64], [value_type]);
-        let write_ty =
-            wasmi::FuncType::new([wasmi::ValType::I64, wasmi::ValType::I64, value_type], []);
-        linker
-            .func_new(
-                "env",
-                &buffer_import_name(element_class, "read"),
-                read_ty,
-                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
-                      params: &[wasmi::Val],
-                      results: &mut [wasmi::Val]| {
-                    let pos = position_of(params.first());
-                    let idx = position_of(params.get(1));
-                    // The index is global, so no rebase: the word is the element's
-                    // own bits.
-                    let value = caller
-                        .data()
-                        .inputs
-                        .get(pos)
-                        .and_then(|buffer| buffer.words.get(idx))
-                        .copied()
-                        .unwrap_or(0);
-                    results[0] = word_value(element_class, value);
-                    Ok(())
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        linker
-            .func_new(
-                "env",
-                &buffer_import_name(element_class, "write"),
-                write_ty.clone(),
-                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
-                      params: &[wasmi::Val],
-                      _results: &mut [wasmi::Val]| {
-                    let out_pos = position_of(params.first());
-                    let idx = position_of(params.get(1));
-                    let value = params.get(2).map_or(0, |v| value_word(element_class, v));
-                    // A relaxed store: `compute.write`'s disjointness contract is what
-                    // makes the store the whole of a write.
-                    if let Some(word) = caller
-                        .data()
-                        .outputs
-                        .get(out_pos)
-                        .and_then(|buffer| buffer.get(idx))
-                    {
-                        word.store(value, Ordering::Relaxed);
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        linker
-            .func_new(
-                "env",
-                &buffer_import_name(element_class, "atomic"),
-                write_ty.clone(),
-                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
-                      params: &[wasmi::Val],
-                      _results: &mut [wasmi::Val]| {
-                    let out_pos = position_of(params.first());
-                    let idx = position_of(params.get(1));
-                    let value = params.get(2).map_or(0, |v| value_word(element_class, v));
-                    let Some(word) = caller
-                        .data()
-                        .outputs
-                        .get(out_pos)
-                        .and_then(|buffer| buffer.get(idx))
-                    else {
-                        return Ok(());
-                    };
-                    match element_class {
-                        ScalarClass::Int => {
-                            word.fetch_add(value, Ordering::Relaxed);
-                        }
-                        // The float add is a compare-exchange loop over the word bits.
-                        _ => {
-                            let addend = f32::from_bits(value as u32);
-                            let mut current = word.load(Ordering::Relaxed);
-                            loop {
-                                let next = f32::from_bits(current as u32) + addend;
-                                match word.compare_exchange_weak(
-                                    current,
-                                    i64::from(next.to_bits()),
-                                    Ordering::Relaxed,
-                                    Ordering::Relaxed,
-                                ) {
-                                    Ok(_) => break,
-                                    Err(actual) => current = actual,
-                                }
-                            }
-                        }
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(|e| e.to_string())?;
-    }
 
-    let instance = linker
-        .instantiate_and_start(&mut store, module)
-        .map_err(|e| e.to_string())?;
-    let main = instance
-        .get_func(&store, "main")
-        .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
-    // The leaves are fixed for the whole range and only the index moves, so the
-    // list is built once.
-    let mut args: Vec<wasmi::Val> = {
-        let state = store.data();
-        state
-            .leaf_classes
-            .iter()
-            .zip(state.leaves)
-            .map(|(class, word)| word_value(*class, *word))
-            .collect()
-    };
-    args.push(word_value(ScalarClass::Int, base as i64));
-    let mut results = [word_value(class, 0)];
-    for i in base..end {
-        // The ABI's arguments are the scalar leaves then the index: only the index
-        // moves per element.
 
-        // The extent and the index are not data: `i64` whatever class the body
-        // computes in.
-        if let Some(index) = args.last_mut() {
-            *index = word_value(ScalarClass::Int, i as i64);
-        }
-        main.call(&mut store, &args, &mut results)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// The position or the index a `read`/`write` import's argument carries.
-///
-/// # Invariant
-/// Always an `i64`, in every class: a position is a compile-time ordinal and an index
-/// a lane number, so neither is ever data.
-fn position_of(value: Option<&wasmi::Val>) -> usize {
-    value.and_then(|value| value.i64()).unwrap_or(0) as usize
-}
-
-/// The word a `read`/`write` import's value argument carries, in the fragment's
-/// class.
-///
-/// # Invariant
-/// A bf16 crosses the `f32` lane wasm gives it at its own sixteen bits: the low
-/// half is zero, so the word is the element's own pattern and not a `Float`'s.
-fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
-    match class {
-        ScalarClass::Int => value.i64().unwrap_or(0),
-        ScalarClass::Float => float_bits(value.f32().map_or(0.0, |bits| bits.to_float())),
-        ScalarClass::BFloat16 => {
-            i64::from(value.f32().map_or(0.0, |bits| bits.to_float()).to_bits() & !0xFFFF)
-        }
-    }
-}
-
-/// One buffer word as the wasm value a class takes.
-///
-/// # Invariant
-/// The read-back half of [`value_word`]: a bf16's word keeps its high sixteen bits
-/// twice, so the lane holds the half and nothing of the bits below it.
-fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
-    match class {
-        ScalarClass::Int => wasmi::Val::I64(word),
-        ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(word as u32)),
-        ScalarClass::BFloat16 => wasmi::Val::F32(wasmi::F32::from_bits(word as u32 & !0xFFFF)),
-    }
-}
 
 // --- The parallel run: the worker rule, the partition, the fan-out ---
 
@@ -7359,63 +7138,13 @@ mod parallel_launch_tests {
 
     /// The threshold is a count boundary: a run below it must not spawn.
     #[test]
-    fn a_run_below_the_threshold_uses_one_worker() {
-        assert_eq!(parallel_worker_count(0), 1);
-        assert_eq!(parallel_worker_count(1), 1);
-        assert_eq!(parallel_worker_count(SEQUENTIAL_PARALLEL_ELEMENTS - 1), 1);
-    }
 
     /// ...and at or above it the fan-out is the machine's, never more.
     #[test]
-    fn a_run_over_the_threshold_is_capped_by_the_machine() {
-        let count = SEQUENTIAL_PARALLEL_ELEMENTS;
-        let available = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let workers = parallel_worker_count(count);
-        assert_eq!(workers, available.clamp(1, count));
-        assert!(
-            workers <= count,
-            "never more workers than indices to process: {workers} > {count}"
-        );
-    }
 
     /// The chunk bounds tile `[0, count)` with no gap or overlap, and differ in
     /// length by at most one.
     #[test]
-    fn the_chunk_bounds_tile_every_index_exactly_once() {
-        for count in [SEQUENTIAL_PARALLEL_ELEMENTS, 4097, MAX_PARALLEL_ELEMENTS] {
-            for workers in [1, 2, 3, 8, 20] {
-                let bounds = chunk_bounds(count, workers);
-                assert_eq!(bounds.len(), workers + 1, "{count} over {workers}");
-                assert_eq!(bounds[0], 0);
-                assert_eq!(bounds[workers], count, "the chunks must cover the range");
-                let lengths: Vec<usize> = bounds
-                    .windows(2)
-                    .map(|window| window[1] - window[0])
-                    .collect();
-                assert!(
-                    lengths.iter().all(|len| *len > 0),
-                    "every chunk must be non-empty: {lengths:?}"
-                );
-                assert_eq!(
-                    lengths.iter().sum::<usize>(),
-                    count,
-                    "every index belongs to exactly one chunk: {lengths:?}"
-                );
-                let (shortest, longest) = (
-                    *lengths.iter().min().unwrap(),
-                    *lengths.iter().max().unwrap(),
-                );
-                assert!(
-                    longest - shortest <= 1,
-                    "chunks must differ by at most one element: {lengths:?}"
-                );
-                assert!(
-                    lengths[0] >= longest,
-                    "the calling thread's chunk must not be the shortest: {lengths:?}"
-                );
-            }
-        }
-    }
 
     /// The host buffers of a "cpu" run: a resident outcome here is a routing bug.
     fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {

@@ -46,6 +46,21 @@ pub fn from_wasmi(class: ScalarClass, value: &wasmi::Val) -> Option<i64> {
     Some(bits)
 }
 
+/// The word a `read`/`write` import's value argument carries.
+///
+/// # Invariant
+/// A float arrives as `f32` whatever the class that named the import, so a
+/// `BFloat16`'s word is the half's own pattern at the width its class holds.
+pub fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
+    match class {
+        ScalarClass::Int => value.i64().unwrap_or(0),
+        ScalarClass::Float => i64::from(value.f32().map_or(0.0, |bits| bits.to_float()).to_bits()),
+        ScalarClass::BFloat16 => {
+            i64::from(value.f32().map_or(0.0, |bits| bits.to_float()).to_bits() & !0xFFFF)
+        }
+    }
+}
+
 /// Run the kernel `id` over `args` and answer its results.
 ///
 /// # Invariant

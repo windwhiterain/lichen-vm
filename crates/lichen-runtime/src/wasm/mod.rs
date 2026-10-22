@@ -9,11 +9,13 @@
 mod assemble;
 pub mod lower;
 pub mod mixed;
+pub mod parallel;
 pub mod run;
 mod spike;
 
 pub use assemble::assemble_module;
-pub use run::{from_wasmi, run_kernel, to_wasmi, wasmi_zero};
+pub use parallel::{HostWords, SEQUENTIAL_PARALLEL_ELEMENTS, run_parallel};
+pub use run::{from_wasmi, run_kernel, to_wasmi, value_word, wasmi_zero};
 
 use lichen_kernel_ir::{KernelFragment, ScalarClass};
 
