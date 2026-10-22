@@ -103,7 +103,9 @@ shape walk outran the shape**, fixes **both** remaining compute placement tests 
 `jit_cross_kernel_passes_a_sub_tuple_through` and `jit_nested_tuple_domain` — and breaks three
 others (`a_runtime_scalar_reaches_the_body_beside_the_extent`, `jit_lowers_the_arithmetic…`,
 `jit_tuple_codomain_returns_several_values`), so the retry is too eager for a scalar path that
-legitimately outran a one-position shape. Net 222/4 against 223/3, reverted.
+legitimately outran a one-position shape. Net 222/4 against 223/3, reverted. Dropping the **innermost** position instead was measured too
+(221/5), so neither end of the path is the projection the walk should not have recorded, and the
+next step is to mark the projection where it is pushed rather than guess it from the path's shape.
 
 **The literal-bound ruling landed, and the class propagation's first step is neutral: 223/3.**
 `d39273e1`: the literal-bound fold tiles and the test proves the tiling line naming `+` with no
