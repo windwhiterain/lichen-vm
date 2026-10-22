@@ -2001,7 +2001,8 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
 
     // The highlevel `check.message` is raw (`[[TypeInt, TypeInt], TypeTuple]`).
     let d = diags("g = (x : tuple{Int, Int}) => x(0)\ng (5)");
-    assert_eq!(d.len(), 1);
+    // A failed apply does not narrow the checked set: the body checks under it too.
+    assert_eq!(d.len(), 2, "the apply's refusal and the body's: {d:?}");
     assert_eq!(d[0].span, Some((2, 4)), "the caret is on the argument `5`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -2010,6 +2011,9 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
         "{}",
         d[0].message
     );
+    assert_eq!(d[1].span, Some((1, 6)), "the body's read names its value");
+    let body = d[1].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(body.kind, DiagKind::RuntimeIndexTarget);
 }
 
 #[test]
