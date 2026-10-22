@@ -465,7 +465,23 @@ where
             None => None,
         };
         let pair_marker = caller_marker.filter(|_| argument_attr.is_some());
-        let value_argument_pair = match (pair_marker, argument_attr) {
+        // **The pair carries the requirement the parameter states**, not the caller's raw
+        // slot: the runtime compares the attribute positions structurally, so both sides
+        // must state the same one (`docs/notes/array-attribute-view.md`).
+        let pair_attr = match (pair_marker, argument_attr) {
+            (Some(marker), Some(attr)) => parameter_pair
+                .and_then(|pair| self.slot_attribute(pair, marker.order_index() as u32))
+                .map(|declared| match declared {
+                    AnyNodeId::Dynamic(_) => declared,
+                    AnyNodeId::Static(_) => AnyNodeId::Dynamic(attr),
+                }),
+            _ => None,
+        };
+        let pair_attr = match pair_attr {
+            Some(AnyNodeId::Dynamic(node)) => Some(node),
+            _ => None,
+        };
+        let value_argument_pair = match (pair_marker, pair_attr) {
             (Some(marker), Some(attr)) => self.attribute_pair(
                 self.current_block,
                 argument_value,
