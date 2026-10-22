@@ -200,20 +200,24 @@ exists (`Checker::deferred_requirements`; measured by
 `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`,
 which fails without the change and refuses with `expected 32, found 1`).
 
-## The isomorphism, landed
+## The isomorphism: every expression carries the default, the order is the checker's
 
-**Every position is compared, and the pair carries the requirement.** Two changes together:
+**No slot is ever missing.** Every expression's pair is full width and every attribute position
+carries a value: a literal `1` is `[1, Int, 0, 0, 0]`, the perspective default `0` being the
+lattice identity. A parameter that states nothing, and a caller that provides nothing, both carry
+that default rather than a hole.
 
-1. `apply_parameter_check` unifies **every position** of the pair, the attribute slots included —
-   the isomorphism the design asks for.
-2. The pair the checker builds for the apply carries **the requirement the parameter states**, not
-   the caller's raw slot. A caller that provides nothing states the lattice **top** (`0`), and a
-   structural compare of `0` against `32` refused programs the perspective order admits
-   (`expected Int, found Int`); with both sides stating the requirement, the structural compare is
-   exact, and the perspective *order* stays where it belongs — the checker's
-   `unify_declared_value` sites and the **deferred requirement** replayed at the apply.
+**The order is not the runtime's to judge.** `apply_parameter_check` compares the **value** and the
+**type** only. Comparing the attribute positions there would compare `32` (a requirement) against
+`0` (the default), and `32 | 0 = 32` — the fact that admits the program — is an order fact the
+lowlevel does not have; widening that loop is measured to refuse six perspective programs with
+`expected Int, found Int`. Carrying the parameter's requirement in the apply's pair instead (to make
+the structural compare exact) makes the runtime compare vacuous and is measured to lose the check
+for a runtime-valued attribute.
 
-Measured: compute 219, highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
+The attribute comparison therefore lives in the checker: `unify_declared_value` at each requirement
+site, plus the **deferred requirement** recorded where a body's read consumes it and replayed at the
+apply. Measured: compute 219, highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
 
 ## Open questions
 
