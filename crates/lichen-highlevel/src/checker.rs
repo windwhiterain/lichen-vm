@@ -765,7 +765,7 @@ where
             };
             let admitted = checker
                 .attribute_extension(&marker)
-                .is_some_and(|ext| ext.is_subtype(&checker, error.root_b, error.root_a));
+                .is_some_and(|ext| ext.is_subtype(&checker, error.root_a, error.root_b));
             if admitted {
                 pardoned.push(index);
             }

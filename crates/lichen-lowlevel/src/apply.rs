@@ -61,10 +61,11 @@ impl<P: Program> Module<P> {
                 let supplieds: Vec<_> = unsafe { self.array_items(argument) }
                     .map(|items| items.iter().map(|item| item.node).collect())
                     .unwrap_or_default();
-                // **Only the value and the type are compared here**: an attribute's order
-                // is the extension's, and the checker compares it
+                // **Every position is compared**: an attribute's failure is pardoned by the
+                // highlevel, which knows which attribute the pair position belongs to
                 // (`docs/notes/array-attribute-view.md`).
-                for slot in 0..2 {
+                let width = parameters.len().max(supplieds.len());
+                for slot in 0..width {
                     let (Some(&left), Some(&right)) = (parameters.get(slot), supplieds.get(slot))
                     else {
                         continue;
