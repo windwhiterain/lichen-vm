@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The suite's stub tests are order-dependent, and the offset sees extra positions.** Two
+measurements this round. First: `nested_config`'s tests move between runs — three fail in one
+run and two in the next with an unchanged tree — because `common::stub()` installs a backend in a
+**process-global** slot: a test that builds a graph through `graph_of` *before* installing the
+stub dispatches into whatever backend is current, so a `stub.calls()` count is not a property of
+the test alone. The fix for any record assertion is to read a **delta** from the same stub (or
+`slot()` before the install), and even then the *fragments* of two different programs differ, so
+"the same kernel on both legs" is only true when both legs are the **same program** — the
+two-scalar test's legs are `flat_direct` and `flat_graph`, which are not. Second: the offset
+probe still shows `positions [0, 0, 1]` against the shape `Tuple([Some(USize), Some(USize)])`,
+so one step in that walk is a projection the dereference does not catch.
+
 **The array element's slot read is now dereferenced, and it was not the blocker.** Probing the
 walk with the widths: a read of an array's element (`2582 → 2566`, class shape
 `Array(Some(USize), 2)`) has steps 0 and 1 *onto the element's slot*, so both are the slot's own
