@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The projection is the leading zero: compute 223/4 → 225/1.** The probe that settled it compares
+the five paths: the good ones are two positions for a two-level parameter (`[0,0]`, `[1,0]`), and
+the two that got offset 0 where 1 was right are **three** (`[0,0,1]`) — one extra, at the front.
+`offset_of` retries without the leading position **only when the walk outran the shape and that
+position is a `0`**, which is exactly the pair's own value projection; the zero guard is what
+keeps the three tests the unguarded retry broke green. Measured **225 passed / 1 failed**, twice.
+
 **The projection retry is exactly half right, and the class cells are fresh.** Two measurements
 this round. The four `Buf` wrapper structs that read `None` (`520`, `576`, `763`, `822`) have an
 `element` node whose class root **is itself** — a fresh cell with no shape, not a clone of `Buf`'s
