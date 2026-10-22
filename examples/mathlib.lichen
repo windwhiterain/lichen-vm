@@ -50,7 +50,7 @@
     file should not be the place to find that out. Nothing else in these three operators is \
     conditional.\n\n\
     **The declaration is `cpu`, and the device agrees with it bit for bit.** The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` runs every example that dispatches a \
+    `crates/lichen-tools/examples/operators_on_device.rs` runs every example that dispatches a \
     kernel twice, on both backends, and this one answers `agrees, 10 of 10 element(s)` on the RTX \
     3060 — both chains, the fold included. Exact arithmetic is what that should say: every value is \
     a quarter or a half, there is no transcendental and no division, so there is no ulp for the two \

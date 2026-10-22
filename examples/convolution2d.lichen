@@ -43,7 +43,7 @@
     coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
     answer measured on `examples/kvcache.lichen`'s append before the guard landed, and the reason a \
     window read needs the guard as much as a flat one does. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 50 of 50 element(s)` on \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 50 of 50 element(s)` on \
     the RTX 3060 for both chains: the window arithmetic, the coefficient buffer, the clamped addresses and the guard are all right there."
   output = "([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]): tuple{array{Float, 25}, array{Float, 25}}"
 ---

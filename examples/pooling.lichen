@@ -28,7 +28,7 @@
     **Twenty-five lanes leave 39 surplus.** `LOCAL_SIZE_X` is 64, so a surplus lane's fabricated \
     coordinates would put its write inside `[0, 25)` if nothing guarded it — the class of silent wrong \
     answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 25 of 25 element(s)` on \
     the RTX 3060: the padded addressing, the seed leaf and the guard are all right there."
   output = "[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, 4.0, 4.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]: array{Float, 25}"
 ---

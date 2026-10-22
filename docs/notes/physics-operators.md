@@ -23,7 +23,7 @@ it.
 
 That this holds on the **device** too is the measurement, not an assumption: the input is uploaded
 at its own length and the tail past it is zeroed on the device, so a lane whose index runs off the
-end reads that zero. `crates/lichen-compute/examples/operators_on_device.rs` answers
+end reads that zero. `crates/lichen-tools/examples/operators_on_device.rs` answers
 `agrees, 18 of 18 element(s)` on the RTX 3060 for `stencil.lichen`'s three chains of six — this one, on
 `x = 4 0 0 0 0 4` with `alpha = 0.25`, is `2 1 0 0 1 2` by hand.
 

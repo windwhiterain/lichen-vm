@@ -7,7 +7,7 @@
 > restated**; the arithmetic is [floating-point](floating-point.md)'s and [llm-operators](llm-operators.md)'s.
 > **Nothing in this note changed production code, and no test was added.**
 > **The method is a program now**:
-> `crates/lichen-compute/examples/operators_on_device.rs`, and
+> `crates/lichen-tools/examples/operators_on_device.rs`, and
 > [§ The sweep, as a program](#the-sweep-as-a-program) re-measures every example that
 > dispatches a kernel.
 > **Superseded in one respect**: the length rule four of these verdicts were measured under
@@ -581,7 +581,7 @@ is made in memory, in the probe, and never written back.
 
 The method above was a scratch program **deleted before its commit**, which is why its readings could not
 be retaken without rewriting it. It is committed now:
-`crates/lichen-compute/examples/operators_on_device.rs`.
+`crates/lichen-tools/examples/operators_on_device.rs`.
 
 ```
 cargo run -p lichen-compute --example operators_on_device

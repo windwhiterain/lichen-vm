@@ -70,7 +70,7 @@
     `i < 6` if nothing guarded it — which is exactly the class of silent wrong answer measured on \
     `examples/kvcache.lichen`'s append before the guard landed. A six-element stencil is therefore a \
     device check of the tail-lane guard, not only a physics demonstration, and the sweep \
-    `crates/lichen-compute/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
+    `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
     on the RTX 3060 for all three chains: the padding is the same boundary on both backends, and the \
     surplus lanes leave the answer untouched."
   output = "([2.0, 1.0, 0.0, 0.0, 1.0, 2.0], [3.0, 1.0, 0.0, 0.0, 1.0, 3.0], [2.1875, 1.3125, 0.5, 0.5, 1.3125, 2.1875]): tuple{array{Float, 6}, array{Float, 6}, array{Float, 6}}"
