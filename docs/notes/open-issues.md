@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The graphrun's tuple is slots now: compute 212/14.** The writer-side fix landed: the
+`GraphRun` apply states the program's **full-width layout** (it is the only `HighProgram` bound
+in the path), through `Ctx::full_width_layout`/`record_full_width_layout` and one module field
+`full_width_layout: Option<u32>`, and `run_graph` builds each result as
+`[value, type, attrs…]` with that layout. `fan_out_merge`'s collect of `r[0]` reads the slot's
+value position and the test passes. Measured **211/15 → 212/14**.
+
 **The graphrun's returned tuple is built from plain nodes, not slots, and two fixes were
 measured and rejected.** `run_graph` builds its multi-result array with
 `module.add_node(block, None, Some(value))` per result — a plain node holding a buffer, where the
