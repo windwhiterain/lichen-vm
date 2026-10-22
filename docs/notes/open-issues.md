@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Two drifted expectations and one unevaluated root: compute 215/11 → 217/9.** `555910dd`:
+`graph_jit`'s dispatch-nothing test looked for "names no backend", while the refusal that answers
+it now reads "this function's return is not a value a graph can hand back" — the behaviour is
+what the test wants. `6df04ba8`: `compile_order_class`'s consumer test read the root after a
+check that never evaluates, the same fix its sibling took. The remaining class test,
+`buf_element_class_recorded`, names its own defect: four `Buf` element cells (520, 576, 763, 822)
+read `None` where every one must read `Float`, which is the propagation gap the test's own doc
+records.
+
 **The two-scalar config proves its kernel's scalars: compute 215/11.** `1ed09059`: the test
 compared both legs' device answers with the strided strip; it now proves the dispatch — both legs
 dispatch, and the graph leg's kernel carries **three** scalar roles: the extent and the two
