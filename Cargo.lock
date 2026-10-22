@@ -1049,8 +1049,6 @@ dependencies = [
  "lichen-runtime",
  "lichen-testkit",
  "lichen-utils",
- "waffle",
- "wasm-encoder 0.248.0",
  "wasmi",
 ]
 
@@ -1243,6 +1241,8 @@ dependencies = [
  "lichen-graph-ir",
  "lichen-kernel-ir",
  "lichen-utils",
+ "waffle",
+ "wasm-encoder 0.248.0",
  "wasmi",
 ]
 
