@@ -932,6 +932,12 @@ The nested re-home finds the first one's return pair and parameter already in th
 id, and the last writer wins. So the two closures **share one shell**, whose owner
 tag names one of them only, and the other reads its own parameter **in place**:
 
+```text
+instantiate function=FunctionId(3) parameter=166 return=149
+  node_apply IN PLACE 166 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
+  node_apply IN PLACE 149 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
+```
+
 `ctx.remap.get(&parameter)` then finds nothing, **no parameter check runs at all**,
 the argument never binds, the operand item that reads the parameter stays open, and
 §17's guard answers `ran_undecided` → `none: Int`.
