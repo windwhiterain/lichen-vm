@@ -19,6 +19,8 @@ use lichen_utils::extend::AsEnum;
 mod apply;
 mod freeze;
 
+pub use apply::Rehome;
+
 /// A one-entry cache for a value walk: the lock and `Arc` clone are paid once per
 /// *distinct* module, not once per ref.
 ///

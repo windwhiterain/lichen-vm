@@ -37,7 +37,7 @@ impl<P: Program> Module<P> {
                 // The caller-side node every clone is attributed through: the apply or
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
-                label: "static_function_apply",
+                minted: HashMap::new(),
             };
             let applied = self.static_node_apply(r#return, &mut ctx);
             // The parameter is a walk entry point: an ignored one is still satisfied.
@@ -57,12 +57,6 @@ impl<P: Program> Module<P> {
             }
             // The parameter unify, as in `function_apply`: regroup clones by their
             // static reps, then unify against the argument.
-            eprintln!(
-                "TRACE static_apply fn={function:?} parameter={parameter:?} return={:?} remap_has_parameter={} remap_len={}",
-                r#return,
-                ctx.remap.contains_key(&parameter),
-                ctx.remap.len()
-            );
             if let Some(&cloned_param) = ctx.remap.get(&parameter) {
                 if ctx.remap.len() > 1 {
                     let groups = crate::apply::regroup_clones(
@@ -122,6 +116,7 @@ impl<P: Program> Module<P> {
         else {
             return false;
         };
+        let mut minted = HashMap::new();
         // The return pair through the signature's remap, so the graph stays bound.
         let module = self.static_module(function.module);
         let applied = module
@@ -139,11 +134,12 @@ impl<P: Program> Module<P> {
                 branch_top: None,
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
-                label: "static_function_type_apply",
+                minted: HashMap::new(),
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.applied_pairs.insert(node, applied);
             remap = ctx.remap;
+            minted = ctx.minted;
         }
         if check != ParameterCheck::Skip {
             let recorded = self.unify_errors.len();
@@ -163,7 +159,7 @@ impl<P: Program> Module<P> {
                 return false;
             }
             // The asserts re-check on this call's copies (apply-type-side-check §6).
-            self.register_static_type_asserts(function, block, node, remap);
+            self.register_static_type_asserts(function, block, node, remap, minted);
         }
         let Some(cell) = cell else {
             return true;
@@ -241,7 +237,7 @@ impl<P: Program> Module<P> {
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
-            label: "materialize_static_return_apply",
+            minted: HashMap::new(),
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -261,6 +257,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         remap: HashMap<LocalNodeId, NodeId>,
+        minted: HashMap<StaticFunctionRef, FunctionId>,
     ) {
         let module = self.static_module(function.module);
         if module.functions[function.index.0].asserts.is_empty() {
@@ -274,7 +271,7 @@ impl<P: Program> Module<P> {
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
-            label: "register_static_type_asserts",
+            minted,
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
@@ -411,16 +408,6 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&local) {
             return clone;
         }
-        if let Some(value) = ctx.module.read(local)
-            && let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum()
-        {
-            eprintln!(
-                "TRACE   static_node_apply local={local:?} holds function {:?} in_own_scope={} open_captures={}",
-                sref,
-                ctx.module.functions[sref.index.0].nodes.contains(&local),
-                ctx.module.functions[sref.index.0].open_captures
-            );
-        }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
         let (undecided, _runned, evaluated_deep, template_operation, template_shape) = (
@@ -486,10 +473,6 @@ impl<P: Program> Module<P> {
                 });
             self.stamp_node_ran_if(clone, claimed);
         }
-        eprintln!(
-            "TRACE   static_node_apply local={local:?} clone={clone:?} mapped={:?}",
-            self.nodes[clone].value.as_ref().and_then(|v| v.as_enum())
-        );
         clone
     }
 
@@ -583,11 +566,17 @@ impl<P: Program> Module<P> {
     /// alongside the applied parameter and re-join its class in the regroup. Its own scope
     /// nodes are re-tagged with the fresh owner and re-instantiated per call; captures,
     /// outside the scope, keep the enclosing owner and are read in place.
+    ///
+    /// A frozen closure is re-homed **once** per pass ([`StaticApplyCtx::minted`]).
     fn static_clone_function(
         &mut self,
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
+        // The closure this pass already re-homed: its own value node names it again.
+        if let Some(&fresh) = ctx.minted.get(&sref) {
+            return P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)));
+        }
         let (r#return, parameter, return_type, asserts, scope) = {
             let f = &ctx.module.functions[sref.index.0];
             (
@@ -617,33 +606,11 @@ impl<P: Program> Module<P> {
             // An instance, not a template; the `@loop` mark does not travel here.
             looping: None,
         });
+        // The fresh id is recorded before the walk, so the closure's own value node
+        // resolves to this closure and not to a second one.
+        ctx.minted.insert(sref, fresh);
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
-        let shared_ret = ctx.remap.get(&r#return).copied();
-        let shared_param = ctx.remap.get(&parameter).copied();
-        eprintln!(
-            "TRACE rehome ctx={} sref={sref:?} fresh={fresh:?} tag={:?} branch_top={:?} applied={:?} shared_ret={shared_ret:?} shared_param={shared_param:?} frozen_return={:?} frozen_param={:?} scope_len={}",
-            ctx.label,
-            ctx.tag,
-            outer_top,
-            ctx.applied,
-            r#return,
-            parameter,
-            scope.len()
-        );
-        if !crate::static_module::apply::TRACE_DUMP.swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            for (index, entry) in ctx.module.functions.iter().enumerate() {
-                eprintln!(
-                    "TRACE   frozen[{index}] return={:?} param={:?} nodes={} open_captures={} origin={:?}",
-                    entry.r#return,
-                    entry.parameter,
-                    entry.nodes.len(),
-                    entry.open_captures,
-                    entry.origin
-                );
-            }
-        }
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
         let return_type_clone = self.static_node_apply(return_type, ctx);
@@ -676,12 +643,6 @@ impl<P: Program> Module<P> {
                 self.nodes[clone].function = Some(fresh);
             }
         }
-        eprintln!(
-            "TRACE   rehome fresh={fresh:?} ret={ret_clone:?} owner={:?} param={param_clone:?} owner={:?} ret_owner={:?}",
-            self.nodes[ret_clone].function,
-            self.nodes[param_clone].function,
-            self.nodes[ret_clone].function
-        );
         ctx.branch_top = outer_top;
         let fresh_function = &mut self.functions[fresh];
         fresh_function.nodes = own;
@@ -692,11 +653,56 @@ impl<P: Program> Module<P> {
         self.blocks[ctx.target].functions.push(fresh);
         P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
     }
+
+    /// Every closure this module re-homed from a frozen function, in mint order.
+    ///
+    /// # Invariant
+    ///
+    /// A frozen closure is re-homed **once** per materialization pass, so two entries
+    /// with the same [`Rehome::origin`] are two passes' closures, never one pass's two.
+    pub fn rehomed_functions(&self) -> Vec<Rehome> {
+        self.functions
+            .iter()
+            .filter_map(|(function, entry)| {
+                let origin = entry.static_origin?;
+                Some(Rehome {
+                    function,
+                    origin,
+                    parent: entry.parent,
+                    r#return: entry.r#return,
+                    return_owner: self.nodes.get(entry.r#return).and_then(|n| n.function),
+                    parameter: entry.parameter,
+                    parameter_owner: self.nodes.get(entry.parameter).and_then(|n| n.function),
+                })
+            })
+            .collect()
+    }
 }
 
-/// Whether the frozen function table was dumped already.
-pub(crate) static TRACE_DUMP: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// A closure this module re-homed from a frozen function.
+///
+/// # Invariant
+///
+/// `return_owner` and `parameter_owner` name the closure that owns the shell: a
+/// re-homed closure's own shell belongs to the re-home that minted it, so both tags
+/// name `function` itself.
+#[derive(Debug, Clone, Copy)]
+pub struct Rehome {
+    /// The fresh dynamic id the re-home minted.
+    pub function: FunctionId,
+    /// The frozen function the closure came from.
+    pub origin: StaticFunctionRef,
+    /// The enclosing fresh closure a nested re-home hangs under.
+    pub parent: Option<FunctionId>,
+    /// The re-homed closure's own return pair.
+    pub r#return: NodeId,
+    /// The owner tag on that return pair.
+    pub return_owner: Option<FunctionId>,
+    /// The re-homed closure's own parameter.
+    pub parameter: NodeId,
+    /// The owner tag on that parameter.
+    pub parameter_owner: Option<FunctionId>,
+}
 
 /// Whether `node` holds a same-module closure with open captures, inside an
 /// array rather than as the value's function.
@@ -737,6 +743,15 @@ struct StaticApplyCtx<P: Program> {
     /// The node the clones record as their origin: the apply node, or its own
     /// template — never a frozen template's node.
     origin: NodeId,
-    /// The pass this context belongs to, for the trace.
-    label: &'static str,
+    /// The closure-level counterpart of the node remap: a frozen closure a pass
+    /// re-homed, and the fresh closure it became.
+    ///
+    /// # Invariant
+    ///
+    /// A frozen closure is re-homed **once** per pass. Its own scope holds its own value
+    /// node, so the scope walk reaches it; a second re-home would share the first's
+    /// return pair and parameter through the remap, and the owner tag would then name
+    /// one of the two closures only — the other would read its own shell in place and
+    /// run no parameter check.
+    minted: HashMap<StaticFunctionRef, FunctionId>,
 }

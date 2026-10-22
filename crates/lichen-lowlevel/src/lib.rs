@@ -17,6 +17,7 @@ pub use crate::loop_conversion::{
     LoopArm, LoopConversion, LoopExit, LoopRefusal, LoopStep, LoopTest,
 };
 pub use crate::resolve::{Define, Selection};
+pub use crate::static_module::Rehome;
 pub(crate) use crate::static_module::StaticModuleCache;
 
 pub mod ancestors;

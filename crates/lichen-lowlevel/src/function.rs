@@ -330,38 +330,8 @@ impl<P: Program> Module<P> {
         // references it.  Idempotent.  It is walked **before** the return pair, so a nested
         // closure the body mints captures this call's parameter clone and not the parameter
         // node the call is about to clone away from.
-        let traced = self.functions[function].static_origin.is_some();
-        if traced {
-            eprintln!(
-                "TRACE instantiate function={function:?} parameter={parameter:?} return={:?} apply_node={node:?} origin={:?} static_origin={:?} template={:?} parent={:?}",
-                r#return,
-                self.nodes[node].origin,
-                self.functions[function].static_origin,
-                self.functions[function].template,
-                self.functions[function].parent
-            );
-        }
-        let param_walk = self.node_apply(parameter, &mut ctx);
+        self.node_apply(parameter, &mut ctx);
         let applied = self.node_apply(r#return, &mut ctx);
-        if traced {
-            eprintln!(
-                "TRACE   parameter walked in_place={} owner={:?} chain={:?}",
-                param_walk == parameter,
-                self.nodes[param_walk].function,
-                self.function_chain(param_walk)
-            );
-            eprintln!(
-                "TRACE   return    walked in_place={} owner={:?} chain={:?}",
-                applied == r#return,
-                self.nodes[applied].function,
-                self.function_chain(applied)
-            );
-            eprintln!(
-                "TRACE   remap has parameter={} cloned_param={:?}",
-                ctx.remap.contains_key(&parameter),
-                ctx.remap.get(&parameter)
-            );
-        }
         // The body's asserts come from the function's own registry, instantiated through the
         // remap; only a real clone registers.
 
@@ -853,17 +823,6 @@ impl<P: Program> Module<P> {
             current = self.functions.get(f).and_then(|f| f.parent);
         }
         false
-    }
-
-    /// The owner chain of a node, for the trace.
-    pub(crate) fn function_chain(&self, node: NodeId) -> Vec<FunctionId> {
-        let mut chain = Vec::new();
-        let mut current = self.nodes[node].function;
-        while let Some(f) = current {
-            chain.push(f);
-            current = self.functions.get(f).and_then(|f| f.parent);
-        }
-        chain
     }
 
     /// Whether an answer's own slots are undecided — the dynamic read of the shared
