@@ -83,8 +83,9 @@ impl<P: Program> Module<P> {
             return false;
         }
 
-        // Record the apply context, then stop — the body under a mismatched argument
-        // may panic.  One error per apply node.
+        // Record the apply context and **continue**: a failed slot must not abort its
+        // siblings, so the value still unifies and the body runs
+        // (`docs/notes/array-attribute-view.md`).  One error per apply node.
 
         // SAFETY: `parameter_type_source` is a live node of this module.
         let parameter_type = unsafe { self.array_items(parameter_type_source) }
@@ -106,7 +107,7 @@ impl<P: Program> Module<P> {
                 error_index: pre_unify_errors,
             });
         }
-        true
+        false
     }
 
     /// Wire the apply result: cache the return pair, unify it with the cloned return
