@@ -97,9 +97,12 @@ map, or the **checker** unifying each element's value class with its type node's
 **Two compute tests need the launch's deferral, not a reader fix.** With the dereference fixed,
 `jit_cross_kernel_passes_a_sub_tuple_through` and
 `jit_cross_kernel_tuple_argument_through_the_wrapper` reach their next claim and both fail on
-**dispatch**, not on shape. The second is refused by name — "argument element 0 is no value, not
-a concrete Int or Float" — because a `compute.jit` body's `compute.launch k0 (x, 1)` runs while
-`x` is still the wrapper's undecided argument cell; the launch should defer to the outer launch
+**dispatch**, not on shape. The deferral is right per node: `run_deferred` already leaves an
+inner launch lazy when an operand array's element has no value. What is missing is what follows —
+the outer `compute.launch` evaluates the wrapper's body, meets the deferred inner launch, and
+refuses instead of **re-running** it once its own argument (`x = 5`) is known. The second is
+refused by name — "argument element 0 is no value, not a concrete Int or Float" — because that
+inner `compute.launch k0 (x, 1)` runs while
 that supplies `x`. The first dispatches nothing at all for the same reason: `k1 = compute.jit
 (r => k0 r(1))` is a cross-kernel *call*, and the outer `compute.launch k1 (…)` never reaches a
 dispatch. That is the deferral machinery's line, and rewriting the first test as a dispatch
