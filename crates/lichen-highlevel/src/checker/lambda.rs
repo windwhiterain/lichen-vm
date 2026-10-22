@@ -448,13 +448,24 @@ where
         let argument_type = self.state[argument].ty.unwrap();
         // The pair's attribute position is the argument's **provided** slot, so the
         // callee's cell binds the caller's there.
-        let argument_attr = match parameter_marker {
+        // **A parameter that states nothing takes the caller's own attribute**: the cell
+        // is undecided, and undecided is what the pair carries
+        // (`docs/notes/array-attribute-view.md`).
+        let caller_marker = match parameter_marker {
+            Some(marker) => Some(marker),
+            None => self
+                .merged_tails
+                .get(&argument)
+                .and_then(|tail| tail.first().copied()),
+        };
+        let argument_attr = match caller_marker {
             Some(marker) => self
                 .attribute_extension(&marker)
                 .map(|ext| self.provided_slot(argument, &marker, ext)),
             None => None,
         };
-        let value_argument_pair = match (parameter_marker, argument_attr) {
+        let pair_marker = caller_marker.filter(|_| argument_attr.is_some());
+        let value_argument_pair = match (pair_marker, argument_attr) {
             (Some(marker), Some(attr)) => self.attribute_pair(
                 self.current_block,
                 argument_value,
@@ -467,7 +478,7 @@ where
         // The type side's argument: the same slots with an undecided value, so
         // its check never evaluates the argument's value.
         let type_value = self.fresh_cell();
-        let type_argument_pair = match (parameter_marker, argument_attr) {
+        let type_argument_pair = match (pair_marker, argument_attr) {
             (Some(marker), Some(attr)) => {
                 self.attribute_pair(self.current_block, type_value, argument_type, &marker, attr)
             }
