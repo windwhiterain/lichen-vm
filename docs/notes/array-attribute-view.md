@@ -217,7 +217,11 @@ for a runtime-valued attribute.
 
 The attribute comparison therefore lives in the checker: `unify_declared_value` at each requirement
 site, plus the **deferred requirement** recorded where a body's read consumes it and replayed at the
-apply. Measured: compute 219, highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
+apply. The order is the extension's: `check_unify_relaxed` tries the unify, and on failure consults
+`AttrExt::is_subtype` — "consulted after a failed unify" — and suppresses the recorded error when
+the relation holds (`checker/diagnostics.rs`). That is why `0` against `32` is admitted and `1`
+against `32` is refused without the lowlevel ever knowing the lattice. Measured: compute 219,
+highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
 
 ## Open questions
 
