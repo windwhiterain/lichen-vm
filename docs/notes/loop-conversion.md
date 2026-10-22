@@ -58,6 +58,14 @@
 > is ours, not CUDA's. Allowing the write was therefore not "following the
 > device", it was dropping a premise we had chosen to rely on.
 >
+> **The author's ruling below (§6's "The author's ruling") withdrew that
+> refusal**, and the **version spine** is what makes the write legal: the cpu
+> answers a fold whose step writes (`[1.0, 1.0]`), with the store in the nest's
+> step block. The **device's** own refusal of a write inside a loop body
+> ([`spirv.rs`](../../crates/lichen-compute-gpu/src/spirv.rs)'s
+> `SpirvRefusal::WriteInsideLoop`) is still standing, and no device is installed
+> here to reach it. See [§6](#the-version-spine-what-landed-and-where-it-landed).
+>
 > **Where the conversion happens was also decided the wrong way first.** An
 > earlier draft put it in the emitter, at the `Style 1` seam in `emit_node`, as a
 > pass over a not-yet-emitted body. It belongs in **lichen evaluation** — the
@@ -416,7 +424,7 @@ So "allow it" is one ruling and two model changes, and they are not the same siz
 clear refusal into two less clear ones, which is a worse reading of the same
 program. The measured table above is the reason.
 
-### The version spine: what landed, and the one layer still refusing
+### The version spine: what landed, and where it landed
 
 **Landed (the emitter's half), measured on `dev`:**
 
@@ -436,19 +444,42 @@ program. The measured table above is the reason.
 - The control program — one plain write — answers `[2.0, 2.0]`, and the whole
   `lichen-compute` suite is green (222/0/1).
 
-**Still refused one layer up, and it is the checker's**: a kernel body whose value
-*is* the loop (`fold (c.taps, c.out.y)`) reaches the fragment compiler with the
-codomain's position already bound to `c.out.y` — the state's **entering** buffer —
-so `parallel_output_nodes` returns that field read instead of the loop, and the
-lowering places an index chain into the config where the loop should be. The
-binding happens where the body's value is evaluated (`evaluate_node_deep` on the
-function's return, `compile_parallel_fragment`): the marked apply reduces, and its
-value cell unifies with the carried buffer. Skipping that evaluation was measured
-and is **not** enough — the body's value is already the field read before the
-fragment compiler runs, so the fix is in the checker/apply path (the type system's
-line), not in the emitter. `crates/lichen-compute/tests/lichen_compute/zz_loop_write_probe.rs`
-prints the reading: the position is an `Index` chain ending at the config with index
-`3` (`.out`), not an apply.
+**The layer above was not the checker's.** This section used to say that a kernel
+body whose value *is* the loop (`fold (c.taps, c.out.y)`) reaches the fragment
+compiler with its codomain position bound to `c.out.y` — the state's **entering**
+buffer — so `parallel_output_nodes` returns that field read instead of the loop.
+**Measured, that is not where it stopped**: the body's return *is* the apply (the
+return's value half is a `value_of` peel of the apply, and the apply shares the
+peel's equality class), so `is_loop_position` answers true and the walk **enters
+the nest**. What the walk then refused was *inside* the nest, and the `Index` chain
+ending at the config with index `3` (`.out`) was the **state's entering buffer read
+as a value** — a buffer is named, never emitted.
+
+**Landed (the walk's half), the three gaps that chain named:**
+
+- **A buffer slot is carried as a version.** The entering state of a loop whose
+  state holds an output buffer cannot be lowered as *values*: a buffer is named,
+  never emitted. The slot is carried as a **token of that buffer's element class**
+  — the same token a write's own value is — and which buffer the slot names is the
+  state read's *identity*, not the value carried (`Lower::loop_state`).
+- **A state read in the template names the marked function's parameter**, not the
+  entering call's argument, so the identity is read through the conversion's own
+  state paths (`parameter_value_path`), and the entering element is the argument's
+  **value** — the tuple of slots — rather than the pair (`Lower::version_identity`).
+- **A write's value operand is a routed call's result pair**, which is not a value
+  a body can emit; the pair's value half — the call — is (`Lower::write_call`).
+
+**Measured after them**: the loop program answers **`[1.0, 1.0]`** on the cpu (three
+iterations store 3.0, 2.0 and 1.0 at each lane's own index, and the last store
+wins), the control still answers `[2.0, 2.0]`, and the gpu reading gets past the
+refusal to *"no compute backend is installed"* — the device is not here, so the
+device's own refusal of a write inside a loop body
+([`spirv.rs`](../../crates/lichen-compute-gpu/src/spirv.rs)'s
+`SpirvRefusal::WriteInsideLoop`) is not reached. The lowered body carries the
+`BufferWriteCall` in the nest's **step** block. The probe
+`crates/lichen-compute/tests/lichen_compute/zz_loop_write_probe.rs` prints the
+readings, and `crates/lichen-compute/tests/lichen_compute/loop_write.rs` pins
+them.
 
 **Read-back is a separate step and is not needed for a loop write**: a loop's
 step only *stores*, so the output's binding is enough. A body that wants to read

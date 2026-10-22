@@ -1452,6 +1452,17 @@ where
                     .element_value_node(element.into())
                     .and_then(|node| node.dynamic())
                     .unwrap_or(element);
+                // **A buffer slot is carried as a token of its element's class**: a
+                // buffer is named, never emitted, so the state holds the *version* the
+                // write fills — the same token the write's own value is. Which buffer
+                // the slot names is the state read's identity
+                // ([`Lower::version_identity`]), not the value carried.
+                if let Some(ordinal) =
+                    super::write_chain_output_pos(self.module, self.params, value)?
+                {
+                    let class = self.declared_output_class(ordinal, value);
+                    return Ok(self.emit_const(class, 0));
+                }
                 self.value(value)
             })
             .collect()
@@ -2113,9 +2124,32 @@ where
     /// output: the version's identity is the entering value's, and a write into it is a
     /// write into that output.
     fn version_identity(&self, node: NodeId) -> Option<AnyNodeId> {
+        // A write's target arrives as the `Write` struct's **slot**: the value the
+        // slot holds is the state read, and a slot is not a read of anything.
+        let node = self
+            .module
+            .element_value_node(AnyNodeId::Dynamic(node))
+            .and_then(|node| node.dynamic())
+            .unwrap_or(node);
         let index = self.loop_owner(node)?;
         let active = &self.loops[index];
-        let path = self.module.entry_state_path(active.state, node)?;
+        // **The slot the read names**: the marked function's own parameter path
+        // (`s(1)` in the template), or the entering call's element list. The
+        // conversion's state is the list of paths, so the slot is where the path is.
+        let path = self
+            .module
+            .parameter_value_path(active.function, node)
+            .or_else(|| {
+                self.module
+                    .node_origin(node)
+                    .and_then(|origin| self.module.parameter_value_path(active.function, origin))
+            })
+            .or_else(|| self.module.entry_state_path(active.state, node))
+            .or_else(|| {
+                self.module
+                    .node_origin(node)
+                    .and_then(|origin| self.module.entry_state_path(active.state, origin))
+            })?;
         let slot = active
             .conversion
             .state
@@ -2127,8 +2161,11 @@ where
                 .pair_value_half(active.state)
                 .map(AnyNodeId::Dynamic);
         }
-        // SAFETY: `active.state` is a live node of the module being lowered.
-        let elements = unsafe { self.module.array_items(active.state) }?;
+        // The entering state is the argument's **value**: a tuple of the slots, so the
+        // element at the slot is the node the call bound there.
+        let value = self.module.pair_value_half(active.state)?;
+        // SAFETY: `value` is a live node of the module being lowered.
+        let elements = unsafe { self.module.array_items(value) }?;
         let element = elements.get(slot)?.node.dynamic()?;
         Some(
             self.module
@@ -2162,6 +2199,15 @@ where
         }
         let index = dynamic(items[1].node)?;
         let value_node = dynamic(items[2].node)?;
+        // **A record stores the call's pair**: the value written is the pair's value
+        // half — the call — and the pair itself is not a value this body can emit.
+        let value_node = if self.module.node_operation(value_node).is_none() {
+            self.module
+                .pair_value_half(value_node)
+                .unwrap_or(value_node)
+        } else {
+            value_node
+        };
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target))?;
         if let Some(previous) = peeled
             .dynamic()

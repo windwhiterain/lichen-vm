@@ -29,6 +29,7 @@ mod helper_refuses_a_parallel_refusal;
 mod identity_from_body;
 mod lane_coordinates;
 mod ln_domain;
+mod loop_write;
 mod mark_anchor;
 mod mixed_group;
 mod nested_config;
