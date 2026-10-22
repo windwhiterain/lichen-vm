@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The stub's record is the test's own thread: compute 219/7 → 222/4.** `51e2e3b9`: the tests in
+one binary run in parallel, and a test that runs a program *without* installing a stub dispatches
+into whatever backend is installed — so a `calls()[before..]` delta could hold another test's
+dispatches. That is why `fuse_licence` and `nested_config`'s device test passed alone and failed
+in the suite: their counts were someone else's. The stub now keys each call by the thread that
+made it and `calls()` answers only the current thread's, and **three consecutive runs are
+identical at 222 passed / 4 failed**. Two further attempts on the nested tuple's offset were
+measured and reverted: retrying the shape walk without its leading position broke the paths that
+are right (220/6), and making the walk strict so the retry could fire broke three more (219/7).
+
 **The wrapper render follows the full-width slot, and the width reading is back: 219/7 → 221/5.**
 `63e4af5d`: the render test's expected strings were the two-position pair; slots are `2 +
 attributes` wide now, so the render is five positions per pair with the wildcard attributes
