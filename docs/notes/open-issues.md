@@ -94,6 +94,17 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The two "instances" are wildcard applications, where an open element is right.** Read one level
+further: `576` and `822` are clones of nodes `564` and `810`, and those are **Apply** nodes; the
+clone's own value is an **array** — a struct — so `576`/`822` are themselves `Buf`-*of*-something,
+not `Buf Float`. Their element cells (`609`, `855`) are structs with no `LowShape` class because a
+**buffer is not a low shape**, and the program that produces them writes the field's argument as a
+wildcard: `(compute.Read _)` and `(compute.Write _)` in
+`buf_element_class_recorded.lichen`, whose `.from (Buf T)`/`.to (Buf T)` therefore keep `T` open.
+The eight `Buf Float` instances in the same program (`160`, `175`, `430`, `475`, `669`, `715`,
+`1545`, `1644`) all read `Float`. So the remaining failure is **the assertion, not the class**: a
+`Buf` whose argument is `_` has no declared element class to read.
+
 **No checked apply carries the element cell: it is cloned as part of the struct.** Probing
 `apply_parameter_check` on the recorded program shows eight applies, each with its own cloned
 parameter and argument — `282/203`, `319/203`, `476/399`, `513/399`, `784/673`, `832/673`,
