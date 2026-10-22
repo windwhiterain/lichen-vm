@@ -594,23 +594,19 @@ where
                 .module
                 .class_value(*target)
                 .and_then(|value| AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value));
-            let dereference = matches!(
-                self.module.class_low_type(*target),
-                Some(lichen_lowlevel::LowShape::Tuple(items))
-                    if items.len() == 2 && items[1].is_none()
-            ) || matches!(
-                // An array's element is a slot, so a read of it names the slot's own
-                // positions (`docs/notes/compound-element-slots.md`).
-                self.module.class_low_type(*target),
-                Some(lichen_lowlevel::LowShape::Array(..))
-            ) || matches!(
-                class_value,
-                Some(lichen_lowlevel::LowValue::Array(ref array))
-                    if array.layout() != 0
-                        && (unsafe { array.items() }).len()
-                            == lichen_lowlevel::PAIR_ATTR_BASE
-                                + self.module.attribute_layout(array.layout()).len()
-            );
+            // A pair states its type in its second position
+            // (`docs/notes/compound-element-slots.md`).
+            let type_position = class_value.as_ref().and_then(|value| match value {
+                lichen_lowlevel::LowValue::Array(array) if array.layout() != 0 => {
+                    // SAFETY: the array is a value of a live node of this module.
+                    let items = unsafe { array.items() };
+                    items.get(1).map(|item| item.node)
+                }
+                _ => None,
+            });
+            let dereference = type_position.is_some_and(|node| {
+                lichen_highlevel::shape::low_type_of_slot(self.module, node).is_some()
+            });
             if std::env::var("DBG_DEREF").is_ok() {
                 eprintln!(
                     "DEREF target {target:?} step {step} deref {dereference} class {class_value:?} shape {:?}",
