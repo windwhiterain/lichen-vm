@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The four open `element` cells split in two, and only one half is a bug.** Probing each `Buf`
+wrapper struct's `element` node with its `origin` and function: the four that read `None` are
+- **`520` and `763`**, `origin: None` — the **definition's own** structs, where `element` is the
+  parameter `T` of `Buf = T => struct{…}`. An open `T` is the truth there, so a test that demands
+  `Float` of them over-asserts;
+- **`576` and `822`**, `origin: Some(564)` / `Some(810)` — the **instances** `compute.Buf Float`,
+  whose element cell is a clone and yet is **its own class root** with no shape: the apply's
+  parameter unify does not reach a clone one generation down, which is the real defect.
+
+So the remaining failure is one real unification gap plus one over-strict assertion, and the
+test's scope question — whether the definition's own `T` should read `Float` — needs a ruling.
+
 **The projection is the leading zero: compute 223/4 → 225/1.** The probe that settled it compares
 the five paths: the good ones are two positions for a two-level parameter (`[0,0]`, `[1,0]`), and
 the two that got offset 0 where 1 was right are **three** (`[0,0,1]`) — one extra, at the front.
