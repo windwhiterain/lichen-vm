@@ -94,10 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
-**The pair unify wires every position now, and the attribute's arrival is not measured yet.**
-`5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
-widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The parameter type is not an annotation, so the attributes ride the parameter itself.** The
+**Settled: the runtime compares the value and the type; the attribute comparison is the
+checker's.** Every expression's attributes carry the default (`1` is `[1, Int, 0, 0, 0]`), so no
+slot is ever missing and no hole needs filling. `apply_parameter_check` unifies `0..2`: the
+attribute positions state `0` (the lattice identity) on one side and a requirement such as `32` on
+the other, and `32 | 0 = 32` is an order fact the lowlevel does not have, so widening that loop
+refused six perspective programs with `expected Int, found Int`. The requirement is judged where
+the order lives — `unify_declared_value` plus the deferred requirement replayed at the apply — and
+all four suites measure green (compute 219, highlevel 136, lowlevel 164 with 1 ignored, language
+275). **The parameter type is not an annotation, so the attributes ride the parameter itself.** The
 probe that settles it: at `lambda.rs:127` the parameter's **type cell** is empty and the
 **denotation** is an array (a pair), and `parameter_type`'s kind is neither `Annotation` — which is
 why the "inner type" candidate was neutral: there is no inner annotation to unwrap. The attributes
