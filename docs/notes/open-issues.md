@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The call arm takes the same gate, and the sub-tuple program still reaches no dispatch.**
+`6ad0e53f` gives `ComputeOperator::Call` the same `argument_decided` gate the launch has; measured
+**neutral (219/7)**. The reason is the next layer down: `k1 = compute.jit (r => k0 r(1))`'s outer
+`compute.launch k1 (…)` evaluates the jit body, whose `k0 r(1)` is a **`Call` whose kernel operand
+is not a `ComputeValue::Kernel` yet** — `k0` is the jit's own value, decided only when the outer
+launch runs the kernel — so the call arm's first `let … else { return None }` defers it and the
+outer launch never sees a result. Rewriting that test as a dispatch assertion was measured wrong
+(the stub stays empty) and reverted, again.
+
 **An undecided kernel argument defers the launch now: compute 219/7.** The wrapper's inner
 launch was refused by name before its parameter could be supplied; `argument_decided` walks the
 argument and separates an **empty** position (undecided → the launch stays lazy) from a **wrong
