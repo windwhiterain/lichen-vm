@@ -611,12 +611,21 @@ impl<P: Program> Module<P> {
             assert_clones.push(instantiated);
         }
         // Re-stamp the closure's clones after the entry walks, so a capture is
-        // not re-owned by the closure.
+        // not re-owned by the closure.  The return pair and the parameter belong
+        // to the closure itself, so they are stamped beside the scope: a pair left
+        // under the enclosing owner's tag reads as a template fact and its apply
+        // references it in place, and the body then keeps reading the parameter
+        // node the call clones away from.
         let mut own = Vec::with_capacity(scope.len());
         for &node in &scope {
             let clone = self.static_node_apply(node, ctx);
             self.nodes[clone].function = Some(fresh);
             own.push(clone);
+        }
+        for clone in [ret_clone, param_clone, return_type_clone] {
+            if self.nodes.contains_key(clone) {
+                self.nodes[clone].function = Some(fresh);
+            }
         }
         ctx.branch_top = outer_top;
         let fresh_function = &mut self.functions[fresh];

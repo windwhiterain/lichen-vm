@@ -284,35 +284,6 @@ fn link_arity() {
     }
 }
 
-/// One call on one path, named by `LICHEN_PATH` and `LICHEN_BODY`, so a traced
-/// run is one module's trace.
-#[test]
-fn one_case() {
-    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
-    let frozen = std::env::var("LICHEN_PATH").as_deref() != Ok("spliced");
-    let body = std::env::var("LICHEN_BODY")
-        .unwrap_or_else(|_| "voxels Float (\"assets/cube.vdb\", \"ls_cube\")".to_string());
-    let answer = if frozen {
-        show_frozen(FAMILIES, &format!("p.{body}"))
-    } else {
-        show_spliced(FAMILIES, &body)
-    };
-    println!("### {body} -> {answer}");
-}
-
-/// One frozen two-item type-first call, so a trace run is one module's trace.
-#[test]
-fn one_frozen() {
-    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
-    println!(
-        "### frozen -> {}",
-        show_frozen(
-            FAMILIES,
-            "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")"
-        )
-    );
-}
-
 /// The same two-item type-first shape, once per wrapper content.
 #[test]
 fn wrapper_content() {

@@ -477,8 +477,9 @@ The finding that shaped the op, and its resolution:
 
 The single-operand ABI the loader adopted while the defect was open is gone; the
 family entry takes the argument array, and no argument shape is privileged.
-**§19 measures where that stops being reliable:** a two-item operand is the
-largest that answers on both paths.
+**§19 measures the arity that stopped being reliable** and closes the join behind
+it: a curried chain of any length now answers on both paths, and what remains is
+one per-module coin toss on the frozen path with a type argument.
 
 ## 12. The `link` directive
 
@@ -758,14 +759,16 @@ identical documents, so the gate refuses a foreign library without gating the
 document. The three consequences, and the unbuilt `build.rs` that would remove
 them, are in the note.
 
-## 19. The operand arity: measured, open
+## 19. The operand arity: the join, measured and fixed
 
-**Status: open.** §17 made the entry's safety rule — an entry runs only on a
-decided operand — and that rule is measured working. What it did **not** fix is
-that a legitimate operand is *decided late*: the entry's operand array holds one
-item per `$` argument, and the item for the **last** parameter is still an open
-cell at the moment the entry's node is first reached. §17 then answers
-`ran_undecided`, and no later application of the same family gets its turn.
+**Status: the arity defect is closed; one residue is open.** §17 made the entry's
+safety rule — an entry runs only on a decided operand — and that rule is measured
+working and **kept**. What was open underneath it was that a legitimate operand
+is decided *late*: the entry's operand array holds one item per `$` argument, and
+the item that reads a parameter belonging to an **enclosing closure** was still an
+open cell when the entry's node was reached. §17 then answers `ran_undecided`, the
+node burns its one attempt, and no later application of the same family gets its
+turn.
 
 ### The surface
 
@@ -795,7 +798,7 @@ it is kept in the probe only as a regression reading of the same root cause.
 Each case runs twice: over the **frozen** wrapper (a native package the program
 imports) and over the **spliced** wrapper (the `link` directive's shape, the
 wrapper's source joined in front of the program and compiled in the program's own
-module). Ten consecutive processes:
+module). Ten consecutive processes, **before** the fix:
 
 | wrapper shape | operand | frozen | spliced |
 |---|---|---|---|
@@ -806,7 +809,7 @@ module). Ten consecutive processes:
 | `three = a => b => c => …`, `p.three 1 2 3` | 3 items | entry runs, every run | **never runs**, answers `none` |
 | `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | **never runs**, answers `none: Int` | **never runs**, answers `none` |
 
-What the readings settle, and what they do not:
+What the readings settled, and what they did not:
 
 - **The operand shape is right.** It is a `LowValue::Array` of exactly N items,
   every item `shallow = false`, in source order, and whenever the entry runs it
@@ -814,47 +817,124 @@ What the readings settle, and what they do not:
 - **The refusal is §17's own.** An item that evaluates to `None` takes
   `evaluation.rs:462-469` to `ran_undecided`: no entry call, no value, no
   diagnostic. Nothing downstream mistakes a preview for an answer — the safety
-  invariant is intact.
-- **The open item is a parameter read that the apply has not bound.** Each item
-  is an `Index([pair, 0])` node; its target is the parameter's `[value, type]`
-  pair, and its **cell 0** is empty. The item is a clone of the template's read,
-  and the apply's `apply_parameter_check` (`apply.rs:36`) writes the argument
-  into a *different* clone of the same pair.
-- **The parameter check does not fail.** Instrumenting
-  `apply_parameter_check` records no unify error, so the body is not skipped for
-  a mismatch — it is skipped because the body is never reached.
-- **A later application never gets its turn.** In every failing run the trace
-  ends with the apply that binds the last argument
-  (`[apply] fn=… cloned_param=… argument=…`) followed by **no further entry
-  trace at all**. The fresh `External` clone that apply mints is never
-  evaluated, so nothing re-reads the operand once the last bind has landed.
-- **The frozen path's failure is a coin toss, not a rule.** Five processes of
-  the same binary gave different answers for the same case, so at least one
-  ordering decision on the path is hash-seeded.
+  invariant is intact, and it is still what answers an operand that really is open.
+- **The frozen path's failure is a coin toss, and it is per *module*, not per
+  process.** `same_process_repeats` builds the frozen case **40 times in one
+  process**: six processes answered 24, 19, 20, 18, 19 and 16 of 40. So the
+  deciding value is re-drawn per module instance — a `HashMap`'s own `RandomState`
+  — and no wrapper content can remove it (below).
 
-### Where the search stopped
+### The deterministic reproducer, and what content cannot do
 
-The measured shape is an equality-class question, not a syntax one: the first
-`External` clone the deep walk reaches shares a class with the clones a later
-apply mints (`regroup_clones`/`unify_clone_groups`, `wire_apply_result`'s
-`self.unify(node, applied)`, and `Index`'s `alias_read` are the three joins), and
-the first one to be reached has already taken its attempt. **Which** join does
-it was not isolated.
+Adding the linked workbench's own content to the wrapper — its three `struct`
+type bindings, its three further families, and both together — does **not** make
+the two-item type-first shape fail 10 runs of 10. `wrapper_content` measures the
+four contents over ten processes and the frozen path answers 4–6 of 10 for every
+one of them, so **there is no minimal wrapper that turns the coin toss into a
+rule**: the outcome is decided per module instance, not by the wrapper's text.
 
-One candidate was **measured and rejected**: `regroup_clones` (`apply.rs:186`)
-documents that "a group's clones keep the walk's insertion order", and its input
-is `ctx.remap.iter()` over a `HashMap` — which has no insertion order to keep.
-Forcing the walk's own order through a new ordered-pairs helper left the
-4-runs-of-10 failure rate **unchanged**, so that defect is real but is not this
-one, and the change was not kept.
+What *is* deterministic is the curried chain, and it is the same defect at one
+more parameter: `three = a => b => c => …` never ran on the spliced path and
+`four = a => b => c => d => …` never ran on the frozen path, 10 runs of 10 each.
+Those two were the instrument, and they are what the fix is measured on.
+
+### The join
+
+The pair nodes say it directly. Every operand item is an `Index([pair, 0])` read
+whose target is a `[value, type]` pair; printing the `NodeId` of the pair the read
+targets and of the pair `apply_parameter_check` writes, per application:
+
+```text
+spliced, three 1 2 3, FAILING          spliced, two 1 2, PASSING
+  item 1: read 889 -> target 737         item 0: read 783 -> target 688
+  apply_parameter_check cloned_param=844  apply_parameter_check cloned_param=688
+  844 is a *clone* of 737                 688 is the pair the read names
+```
+
+`737` is the **enclosing closure's own parameter node**; `844` is the per-call
+clone the check writes into. The two are in different equality classes, so cell 0
+of `737` stays empty, the item is undecided, and §17's guard answers
+`ran_undecided` — correctly, on a cell no bind ever reaches. In the passing run
+the read names the very node the check writes.
+
+The reason the read names the *node* is a membership question in
+`crates/lichen-lowlevel/src/function.rs`'s `node_apply`: a node is a member of
+the template a call instantiates when its owner chain reaches that function.
+A **minted closure's own id is in no chain** — `parent` points outward, and the
+template's lexical chain never names a clone — so two links were missing:
+
+1. **`Function::template` (`lib.rs`) and the membership test (`function.rs`).**
+   A closure is instantiated *from its template*, so a node owned by a function
+   nested in that template is reached through the template as well. Without it,
+   the node holding the nested closure's value was referenced **in place**: the
+   nested closure was never re-instantiated per call, so its body kept reading
+   the enclosing closure's parameter node. Measured in the failing spliced run:
+   `node_apply IN PLACE 751 owner=FunctionId(10) chain=10<-9<-8 anchor=19`,
+   while the enclosing apply cloned that very parameter to `844`.
+2. **The template link is transitive.** A closure cloned from a closure recorded
+   the intermediate per-call id as its template, which no lexical chain names
+   either; `template` now reads `functions[function].template.unwrap_or(function)`
+   so it is always the original.
+3. **The call's parameter is cloned before the body walk** (`instantiate_stamped`),
+   so a nested closure the body mints captures *this call's* parameter clone
+   rather than the node the call is about to clone away from.
+4. **The frozen mirror stamps its own shell** (`static_module/apply.rs`,
+   `static_clone_function`): a re-homed closure's return pair and parameter were
+   left under the enclosing owner's tag, so its apply read a template fact in
+   place and its parameter check never ran.
+
+`regroup_clones`/`unify_clone_groups`, `wire_apply_result` and `Index`'s
+`alias_read` are **not** the join: the pair a read targets and the pair a check
+writes are different nodes in different classes, which no order of unify repairs.
+One candidate from the earlier reading was also measured and stays rejected:
+`regroup_clones` (`apply.rs:186`) documents that "a group's clones keep the walk's
+insertion order" while its input is `ctx.remap.iter()` over a `HashMap` — forcing
+the walk's own order left the failure rate unchanged.
+
+### After
+
+Ten consecutive processes of the same probe, every case on both paths:
+
+| wrapper shape | operand | frozen | spliced |
+|---|---|---|---|
+| `sphere = args => …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | `0: Int`, 10 of 10 | `0: Int`, 10 of 10 |
+| `voxels Float (path, name)` | 2 items, type first | **4 of 10 still answer `none: Int`** | `0: Int`, 10 of 10 |
+| `voxels Int (1, 2)` | 2 items, type first | **6 of 10 still answer `none: Int`** | `0: Int`, 10 of 10 |
+| `one = (a : Int) => …`, `p.one 1` | 1 item | `1: Int`, 10 of 10 | `1: Int`, 10 of 10 |
+| `two = a => b => …`, `p.two 1 2` | 2 items | `3: Int`, 10 of 10 | `3: Int`, 10 of 10 |
+| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | `6: Int`, 10 of 10 | **`6: Int`, 10 of 10** |
+| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | **`10: Int`, 10 of 10** | **`10: Int`, 10 of 10** |
+
+§17's guard is untouched: an operand that is genuinely open still answers
+`ran_undecided`, and no entry runs on it.
+
+### What is still open: the frozen two-item type-first coin toss
+
+The frozen `voxels` case remains a per-module coin toss, and the instrument says
+exactly what is still missing. In a failing run the enclosing closure's own
+parameter and return pair are **both** tagged with the enclosing owner and
+referenced in place:
+
+```text
+instantiate function=FunctionId(3) parameter=166 return=149
+  node_apply IN PLACE 166 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
+  node_apply IN PLACE 149 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
+```
+
+so `ctx.remap.get(&parameter)` finds nothing, **no parameter check runs at all**,
+and the two closures are two re-homes of the same frozen function sharing one
+clone that carries whichever re-home stamped it last. Two re-homes of one frozen
+function must each instantiate the closure's own shell; making the shared remap
+release the re-home's own entries was measured and **rejected** — it breaks the
+`Function::nodes` scope invariant (`function.rs:301`, `return … not in scope`) and
+turned 8 failures into 50 of 140. The fix that keeps that invariant is the open
+item.
 
 ### What §11 does and does not claim
 
 §11's measured sentence — `kind=Some(TypeValue(TypeFloat))
 arg=Some(LowValue(Float(1.5)))` for `sample Float 1.5` — is a **two-item**
-operand, and it holds: `p.two 1 2` runs on both paths in every process, and so
-does `voxels Float (path, name)` on the spliced path. What is **not** claimed
-there, and is corrected here: a two-item operand is the largest that is reliable
-on **both** paths, and the frozen (native-package) path is not reliable even at
-two items. §17's guard is what makes the refusal safe; it is not what makes the
-argument decided.
+operand, and it holds on the spliced path in every process. What is **not** claimed
+there: the frozen (native-package) path with a type argument beside a parameter is
+not reliable even at two items, and the residue above is why. §17's guard is what
+makes the refusal safe; it is not what makes the argument decided.
