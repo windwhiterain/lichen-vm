@@ -11,7 +11,6 @@ mod compute;
 
 mod consumer_guard;
 mod cooperative_product;
-mod decode_step_graph;
 mod elementwise_chain;
 mod fan_in_merge;
 mod fan_out_merge;
