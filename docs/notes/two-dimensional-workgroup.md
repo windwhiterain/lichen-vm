@@ -63,7 +63,7 @@ pair could. This list is re-derived against `991e59bb`, not inherited.
 | `lichen-compute/src/compute/body.rs:767` | `ComputeOperator::Range => self.parameter(domain_arity(self.params))` — **one** scalar, always, and the operator's own argument is still never read. |
 | `lichen-kernel-ir/src/lib.rs:1052-1061` | "**The index is the last leaf** and is not a launch value". `scalar_leaves() = flat_arity() - 1` is the count a launch supplies; with two indices the last-leaf rule is not "the index", it is "the indices", and `spirv.rs:819-822`'s `index_local` reads one number. |
 | `lichen-kernel-ir/src/plan.rs:14-21, 110-137, 186-191` | `Staging { name, space, group_width: u32 }`, and `check_plan` refuses `entry.group_width != lane_width`. The refusal's own sentence — "a group narrower than the workgroup needs a barrier narrower than the block, which lichen does not have" — has **no word** for a group that is narrower in one axis and equal in the other. |
-| `lichen-compute/src/compute/wasm/lower.rs:519-531` | "`run_parallel_range` calls a kernel body **once per index, never per workgroup**". The host has no workgroup at all, in any number of axes. Unchanged by a 2-D launch; still the reason a 2-D workgroup is device-only. |
+| `lichen-runtime/src/wasm/lower.rs:519-531` | "`run_parallel_range` calls a kernel body **once per index, never per workgroup**". The host has no workgroup at all, in any number of axes. Unchanged by a 2-D launch; still the reason a 2-D workgroup is device-only. |
 
 ### 1.2 By convention — nineteen
 

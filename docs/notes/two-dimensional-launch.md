@@ -87,7 +87,7 @@ dimension is an additive field plus whoever reads that field.
 | `lichen-compute-gpu/src/spirv.rs:179-186` — `LOCAL_SIZE_X` | "A run of `count` indices is `ceil(count / LOCAL_SIZE_X)` workgroups". |
 | `lichen-compute-gpu/src/spirv.rs:1212-1215` | a fragment whose `lane_width` is not `LOCAL_SIZE_X` is refused (`UnsupportedLaneWidth`). |
 | **`lichen-compute-gpu/src/spirv.rs:3190-3193` and `:1255-1278`** | **the emitter binds `SpvBuiltInGlobalInvocationId` — a `vec3<u32>` — and reads component `0`**. `LocalInvocationId` and `WorkgroupId` are not bound at all. The second and third components are already there. |
-| `lichen-compute/src/compute/wasm/lower.rs:519-531` — `staging_refusal` | "`run_parallel_range` calls a kernel body **once per index**, never per workgroup**, so no barrier has a group to synchronise". A host-side 2-D launch would *not* change this sentence; a 2-D *workgroup* still would not exist on wasm. |
+| `lichen-runtime/src/wasm/lower.rs:519-531` — `staging_refusal` | "`run_parallel_range` calls a kernel body **once per index**, never per workgroup**, so no barrier has a group to synchronise". A host-side 2-D launch would *not* change this sentence; a 2-D *workgroup* still would not exist on wasm. |
 | `lichen-compute-gpu/src/dispatch.rs:841-855`, `:864+`; `lichen-kernel-ir/src/lib.rs:432-466` | `ParallelBackend::run` / `submit` / `run_batch` and `GpuContext::run` / `submit` / `run_over_device_extent` all take one `count: usize`. **There is no compute-side `spawn`** — these are the launch signatures. |
 
 **The short form.** By construction: `KernelShape`, the parallel `param_shape`, `scalar_leaves` /

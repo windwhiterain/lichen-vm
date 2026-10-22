@@ -18,13 +18,14 @@ use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
     Module, NodeId, Program,
 };
+use lichen_runtime::wasm::param_classes;
 use lichen_utils::extend::AsEnum;
 
 use super::{
     ComputeOperator, ComputeValue, ParamSlot, Positions, TypeOperator, const_bits, conv_of,
     float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class, node_class_in,
-    parallel_buffer_pos, param_classes, peeled_argument, scalar_literal, unary_class,
-    write_chain_output_pos, write_node,
+    parallel_buffer_pos, peeled_argument, scalar_literal, unary_class, write_chain_output_pos,
+    write_node,
 };
 
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.

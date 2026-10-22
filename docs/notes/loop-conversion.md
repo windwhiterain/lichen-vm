@@ -865,7 +865,7 @@ done** — the acceptance case at item 5 runs on both backends:
     **not written** — `waffle` owns the slot-first pipeline
     ([wasm-control-flow](wasm-control-flow.md) §5), so the step was its
     control-flow mapping, and the SSA rewrite folded that mapping into the single
-    walk in `crates/lichen-compute/src/compute/wasm/lower.rs`: the header's carried
+    walk in `crates/lichen-runtime/src/wasm/lower.rs`: the header's carried
     tuple is the block's parameters, `CondBr` is the test, `Br` the backedge.
     `type_values` then made a **carried state the entry block computes** — a
     buffer read, a call's constants — typeable from the entry edge instead of
@@ -1147,7 +1147,7 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
     control-flow mapping.
 
     **What changed since:** that mapping lived in
-    `crates/lichen-compute/src/compute/wasm/flow.rs`, and it **no longer exists**.
+    `crates/lichen-runtime/src/wasm/flow.rs`, and it **no longer exists**.
     `flow.rs` and the stack-based `lower.rs` were replaced by a single walk of the
     SSA body (`lower.rs`), the operand stack replaced by a
     `ValueId -> (Value, Type)` map. `Flow`, `BlockId` and

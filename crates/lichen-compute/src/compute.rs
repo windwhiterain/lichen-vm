@@ -32,10 +32,11 @@ use body::{Lower, MAX_KERNEL_BODY_DEPTH};
 pub mod fused;
 pub mod graph;
 pub mod graph_pass;
-pub(crate) mod wasm;
 
 use graph::{Extent, Placed, RunArgument, RunResult};
-use wasm::assemble_module;
+use lichen_runtime::wasm::{
+    assemble_module, buffer_import_name, param_classes, run_kernel as run_on_engine,
+};
 
 pub use fused::{
     FusedKernel, FusedRefusal, LandingRefusal, land_fused_kernel, malformed_at, read_fused_kernel,
@@ -2915,29 +2916,9 @@ where
 
 /// A fragment's parameter leaves, as classes, in flattening order.
 ///
-/// # Invariant
-/// A leaf's own class, not the fragment's: an `array{Float, 3}` position is one
-/// `f32` local inside a body that may compute integers, and the argument encoding
-/// follows the same per-leaf answer.
-pub(crate) fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
-    fragment.param_shape.leaf_classes()
-}
 
 /// The host import name a buffer call of `class` resolves to.
 ///
-/// # Invariant
-/// A wasm import has one signature, so one `read` could not serve both classes:
-/// the pair is declared per class, and this is where the name is spelled. A
-/// `BFloat16` is spelled its own name and not `f32`'s, so a module in the class
-/// fails to link rather than bind the float host import to a half's payload.
-pub(crate) fn buffer_import_name(class: ScalarClass, kind: &str) -> String {
-    let class = match class {
-        ScalarClass::Int => "i64",
-        ScalarClass::Float => "f32",
-        ScalarClass::BFloat16 => "bf16",
-    };
-    format!("{kind}_{class}")
-}
 
 /// The reason a `jit` reports when the parameter's domain is not decided.
 ///
@@ -4617,40 +4598,6 @@ impl ScalarValue {
             ScalarClass::Float => LowValue::Float(f32::from_bits(self.bits as u32)),
             ScalarClass::BFloat16 => LowValue::Float(f32::from_bits(self.bits as u32 & !0xFFFF)),
         }
-    }
-
-    /// The value as the class's wasm value.
-    ///
-    /// # Invariant
-    /// wasm has no 16-bit float, so a bf16 takes the `F32` lane
-    /// [`crate::compute::wasm::assemble::value_type`] declares for it: the pattern is
-    /// the half's own, and a module carrying one cannot link the host's import pair.
-    fn wasmi(self) -> wasmi::Val {
-        match self.class {
-            ScalarClass::Int => wasmi::Val::I64(self.bits),
-            ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32)),
-            ScalarClass::BFloat16 => {
-                wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32 & !0xFFFF))
-            }
-        }
-    }
-
-    /// The zero a run's result vector starts from — `wasmi` sizes its result
-    /// slots, it does not fill them.
-    fn wasmi_zero(class: ScalarClass) -> wasmi::Val {
-        ScalarValue { class, bits: 0 }.wasmi()
-    }
-
-    /// The value `v` holds, read as `class` — the read-back half of [`Self::wasmi`].
-    fn from_wasmi(class: ScalarClass, v: &wasmi::Val) -> Option<Self> {
-        let bits = match class {
-            ScalarClass::Int => v.i64()?,
-            ScalarClass::Float => i64::from(v.f32()?.to_bits()),
-            // The lane carries the half in the high bits, so the word is that
-            // pattern at the width the class holds.
-            ScalarClass::BFloat16 => i64::from(v.f32()?.to_bits() & !0xFFFF),
-        };
-        Some(ScalarValue { class, bits })
     }
 }
 
@@ -6336,34 +6283,15 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
     }
     // A fragment's result arity is at least one: the guard states that rather than
     // resting on the emitter.
-    let outputs = results.max(1);
-    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
-    let mut store = wasmi::Store::new(&engine, ());
-    let linker = wasmi::Linker::new(&engine);
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|e| e.to_string())?;
-    let main = instance
-        .get_func(&store, "main")
-        .ok_or_else(|| "kernel has no export `main`".to_string())?;
-    let inputs: Vec<wasmi::Val> = args.iter().map(|argument| argument.wasmi()).collect();
-    let mut results: Vec<wasmi::Val> = (0..outputs)
-        .map(|_| ScalarValue::wasmi_zero(class))
-        .collect();
-    main.call(&mut store, &inputs, &mut results)
-        .map_err(|e| e.to_string())?;
-    results
+    let pairs: Vec<(ScalarClass, i64)> = args
         .iter()
-        .enumerate()
-        .map(|(position, value)| {
-            ScalarValue::from_wasmi(class, value).ok_or_else(|| {
-                format!(
-                    "kernel `main` returned a non-{class:?} value at result {position}, against \
-                     the {class:?} signature this crate emitted"
-                )
-            })
-        })
-        .collect()
+        .map(|argument| (argument.class, argument.bits))
+        .collect();
+    let bits = run_on_engine(id, || assemble_launch_set(id), class, results, &pairs)?;
+    Ok(bits
+        .into_iter()
+        .map(|bits| ScalarValue { class, bits })
+        .collect())
 }
 
 /// The fragments of a kernel's relative launch set, in BFS order, and where each

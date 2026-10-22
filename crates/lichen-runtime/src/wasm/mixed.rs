@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{KernelBin, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId};
 
-use crate::compute::param_classes;
+use super::param_classes;
 
 /// The class a value has, as far as a walk of the lowered body can see it.
 ///

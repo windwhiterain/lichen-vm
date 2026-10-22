@@ -777,7 +777,7 @@ need a node-local producer for `r`.
   fell back to `operand_class(op, 0)` — which for a call reads the callee's **first parameter leaf**
   (`spirv.rs:2200-2203`) while the emission gives the call's result slot the callee's **result** class. Four
   reasons settled it: **both emitters already type a call by its callee's `result_classes`** — the GPU one at
-  `spirv.rs:1901`/`:1920`, and the wasm backend at `lichen-compute/src/compute/wasm/lower.rs:308-316`, whose
+  `spirv.rs:1901`/`:1920`, and the wasm backend at `lichen-runtime/src/wasm/lower.rs:308-316`, whose
   own `# Invariant` says *"a cross-kernel call is typed by its callee's own `result_classes`"* — so **only
   `value_class` dissented**; `operand_class`'s own contract is *"an operator's operands are the class it
   names"*, a fact about the value in the position asked of a **different** value; `own_class` returning

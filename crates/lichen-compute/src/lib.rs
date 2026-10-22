@@ -10,9 +10,6 @@ pub mod packs;
 pub mod placement_pack;
 pub mod region_merge;
 
-#[cfg(test)]
-mod waffle_spike;
-
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 pub use compute::{

@@ -18,6 +18,8 @@ pub mod module_cache;
 pub mod packs;
 pub mod placement_pack;
 pub mod region_merge;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 pub use automatic_tiling::tiling_pass;
 pub use device::{DeviceFacts, DeviceFactsSource, DeviceRefusal};

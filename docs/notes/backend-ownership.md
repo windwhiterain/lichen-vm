@@ -27,6 +27,14 @@
    that crate writes it once.
 5. **The serve crate's instances are examples.** A program that stands up a
    session is a demonstration, not a shipped binary.
+6. **A crate generates the IR; the backend turns it into a program.** The wasm
+   assembler and the engine that runs what it assembles are the runtime's, behind
+   its `wasm` feature, because the runtime's own rule says so: a thing that
+   takes only IR types — a `KernelFragment`, an `Artifact`, a `KernelId` — belongs
+   there, and a thing that takes a `Module` belongs to the language-integration
+   side. The assembler took a `KernelFragment` and named a `Module` nowhere, so
+   it was in the wrong crate, and `lichen-compute` now names no assembler at
+   all: it lowers a body to an IR and asks a backend to run it.
 
 ## Why the rules are one rule
 
@@ -72,6 +80,7 @@ to read, because no pass was there to report. The product's own path
 | crate | verifies | starts a backend |
 | --- | --- | --- |
 | `lichen-compute` | the IR: fragments, classes, plans, graph shape, refusals | no |
+| `lichen-runtime` | the wasm backend: the assembler and the engine, behind its `wasm` feature | the wasm one, when the feature is on |
 | `lichen-compute-gpu` | the device: what a dispatched kernel answers | yes |
 | `lichen-serve` | the serving path: scheduling, refusals, tokenizer, sampler | no |
 | `lichen-compiler` | the compiler: what it installs, what it refuses | no |

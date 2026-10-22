@@ -59,7 +59,7 @@ carried two unresolved type questions and had to be thrown away.
 ### 3.1 The instruction map — **done, on `feature/waffle-spike`**
 
 Lower every body as **one block**, `KernelInstr` → `Operator`. What landed is
-`crates/lichen-compute/src/compute/wasm/`:
+`crates/lichen-runtime/src/wasm/`:
 
 | file | the question it answers |
 |---|---|

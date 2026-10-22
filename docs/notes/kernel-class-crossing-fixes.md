@@ -8,7 +8,7 @@
 > obeys, on both backends.
 >
 > Points at: `crates/lichen-compute/src/compute/body.rs` (the lowering that
-> assigns `KernelInstr` classes), `crates/lichen-compute/src/compute/wasm/mixed.rs`
+> assigns `KernelInstr` classes), `crates/lichen-runtime/src/wasm/mixed.rs`
 > (the shared class check), `crates/lichen-compute-gpu/src/spirv.rs` (the SPIR-V
 > module contract), and `crates/lichen-compute/tests/lichen_compute/compute.rs` (the
 > end-to-end pins).

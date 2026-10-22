@@ -16,7 +16,7 @@ use waffle::{
 
 use super::lower::{ModuleCtx, lower_body};
 use super::mixed::refuse_mixed_classes;
-use crate::compute::{buffer_import_name, param_classes};
+use super::{buffer_import_name, param_classes};
 
 /// The wasm value type a class is lowered to.
 ///
@@ -48,7 +48,7 @@ pub(super) struct BufferImports {
 /// # Invariant
 /// `ordered[i]` becomes function index `base + i` and the root is exported as `main`; `index`
 /// maps each callee to its position, so a cross-kernel call lowers to an in-module `call`.
-pub(crate) fn assemble_module(
+pub fn assemble_module(
     ordered: &[KernelFragment],
     index: &HashMap<KernelId, u32>,
 ) -> Result<Vec<u8>, String> {

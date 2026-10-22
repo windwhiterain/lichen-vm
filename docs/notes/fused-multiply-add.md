@@ -389,8 +389,8 @@ which is §7's own test and this one fails it.
 | `crates/lichen-compute-gpu/src/spirv.rs`, `emit_function` | one `OpExtInst %float %glsl_std_450 Fma %a %b %c`, all three operands forced to `Float` through `as_class`, and the result decorated like any other float result | §11.2 |
 | `crates/lichen-compute-gpu/src/spirv.rs`, `assemble` | `%glsl_std_450 = OpExtInstImport "GLSL.std.450"`, **section 2, ahead of `OpMemoryModel`**, and **only when a body emitted an `OpExtInst`** | §11.2 |
 | `crates/lichen-compute-gpu/src/spirv.rs`, `operand_class` | `Some(ScalarClass::Float)` at all three positions, so a block parameter an `Fma` reads is classed `Float` | the emitter builds |
-| `crates/lichen-compute/src/compute/wasm/lower.rs` | **refused by name**, with the reason in the error | §11.5 |
-| `crates/lichen-compute/src/compute/wasm/mixed.rs` | all three operands checked against `Float` before that | §11.5 |
+| `crates/lichen-runtime/src/wasm/lower.rs` | **refused by name**, with the reason in the error | §11.5 |
+| `crates/lichen-runtime/src/wasm/mixed.rs` | all three operands checked against `Float` before that | §11.5 |
 | `crates/lichen-fusion-bridge/src/lower.rs` | **`BridgeRefusal::FusedMultiplyAdd`** | §11.5 |
 | `crates/lichen-runtime/src/fused/schema.rs` + `convert.rs` | `#[facet(rename = "fma")] Fma`, and two arms in the two-way conversion | §11.6 |
 
