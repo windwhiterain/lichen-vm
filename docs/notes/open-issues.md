@@ -97,7 +97,17 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **A one-line candidate is neutral, so the denotation rule itself is the decision.**
+`lambda.rs:127` unifies the parameter's **type cell** with
+`type_denotation(parameter_type, Some(parameter))`, which for `Int # 32` is the **annotated
+value's term** — a pair — and the apply then compares the argument's `Int` with that pair, which
+is the `expected Int, found Int` at the apply's span. Changing that call to
+`type_denotation(parameter_type, None)` — the plain type — was measured **neutral** (the same six
+fail), because the denotation path returns the same node for this shape. So the fix is the
+**denotation rule** (or the apply's type check, not the parameter's *type slot*), and that is a
+design decision in the session that wrote `29692f39`.
+
+**The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
 type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) => f i`,
 span line 3 col 3), and the probe that reads both sides of `unify_declared_value` shows them equal
 (`declared USize(32)`, `found` the pair whose value is `32`), so the attribute compare is not the
