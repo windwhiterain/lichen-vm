@@ -94,6 +94,19 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The pair unify wires every position now, and the attribute's arrival is not measured yet.**
+`5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
+widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
+Green: compute 218/0, lowlevel 164/0 (1 ignored). What a probe program that *should* refuse on a
+flowed attribute still does **not** refuse shows the second half is missing: the **check-time**
+attribute reconciliation is called only for element pairs (`unify_element_attributes`) and the
+struct instantiation (`structs.rs:816`), never for a plain function application, where the
+callee's parameter slot meets the caller's argument. Making a flowed attribute *reach* a
+requirement means reconciling the attributes of the apply's parameter and argument, in the same
+walk those two call sites use. The **default attribute array** is *not* part of it: a hole is
+**undecided**, and undecided is what unification propagates — a default would hide the
+unification instead of doing it (the superior's correction).
+
 **`.element` holds a type, or nothing: compute is green at 226/0.** The user's reading settled the
 last failure: **"既然 Float在element的类型位置上，那么 .element当然只应当读到空 cell"** — and the
 probe agrees with it exactly. Reading `.element`'s **value position**:
