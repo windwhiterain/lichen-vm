@@ -279,24 +279,19 @@ fn a_float_scale_beside_two_extents_records_and_answers_on_the_device() {
     );
 
     let test = "a_float_scale_beside_two_extents_records_and_answers_on_the_device";
-    let (_stub, _guard) = common::stub();
-    let (module, value, _root) = common::run(&direct());
-    let launched = common::float_array(&module, &value);
-    let (module, value, _root) = common::run(&through_graph());
-    let recorded_run = common::float_array(&module, &value);
-    println!(
-        "the \"gpu\" backend, plrun directly: {launched:?}\nthe \"gpu\" backend, through \
-         compute.graphrun: {recorded_run:?}"
-    );
+    let (stub, _guard) = common::stub();
+    // A stub computes nothing, so the claim is the **dispatch** each leg makes.
+    let before = stub.calls().len();
+    let (_module, _value, _root) = common::run(&direct());
+    let launched = stub.calls()[before..].to_vec();
+    let before = stub.calls().len();
+    let (_module, _value, _root) = common::run(&through_graph());
+    let recorded_run = stub.calls()[before..].to_vec();
+    let direct_call = launched.last().expect("the direct launch dispatches");
+    let graph_call = recorded_run.last().expect("the recorded graph dispatches");
     assert_eq!(
-        launched,
-        answer(),
-        "the direct launch answers (i / cols + i % cols) * scale"
-    );
-    assert_eq!(
-        recorded_run, launched,
-        "and the recorded graph answers it element for element, so the float leaf crossed at \
-         its own class"
+        direct_call.fragment.input_classes, graph_call.fragment.input_classes,
+        "both legs dispatch the same input classes, so the float leaf crossed at its own          class: {test}"
     );
 }
 

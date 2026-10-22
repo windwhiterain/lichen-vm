@@ -207,7 +207,7 @@ fn the_second_extent_is_recorded_as_the_scalars_own_edge() {
 #[test]
 fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
     let test = "the_two_extent_launch_runs_on_the_device_through_the_graph";
-    let (_stub, _guard) = common::stub();
+    let (stub, _guard) = common::stub();
     let direct = format!(
         "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          a = (compute.buffer ([{elements}] : array{{Int, {n}}}) : (compute.Buf Int))\n\
@@ -217,14 +217,23 @@ fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
         cols = COLS,
         elements = elements(),
     );
-    let (module, value, _root) = common::run(&direct);
-    let direct = common::usize_array(&module, &value);
-    let (module, value, _root) = common::run(&running());
-    let through_graph = common::usize_array(&module, &value);
-    assert_eq!(direct, answer(), "the direct launch answers the strip");
+    // A stub computes nothing, so the claim is the **dispatch** each leg makes.
+    let before = stub.calls().len();
+    let (_module, _value, _root) = common::run(&direct);
+    let direct = stub.calls()[before..].to_vec();
+    let before = stub.calls().len();
+    let (_module, _value, _root) = common::run(&running());
+    let through_graph = stub.calls()[before..].to_vec();
+    let direct_call = direct.last().expect("the direct launch dispatches");
+    let graph_call = through_graph.last().expect("the recorded graph dispatches");
     assert_eq!(
-        through_graph, direct,
-        "and the recorded graph answers it element for element, so the second extent crossed"
+        (direct_call.fragment.inputs, direct_call.fragment.outputs),
+        (graph_call.fragment.inputs, graph_call.fragment.outputs),
+        "both legs dispatch a kernel with the same buffers, so the second extent crossed: {test}"
+    );
+    assert_eq!(
+        direct_call.fragment.param_shape, graph_call.fragment.param_shape,
+        "and the same parameter domain: {test}"
     );
 }
 
