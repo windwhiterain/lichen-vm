@@ -1,11 +1,6 @@
-//! Probe: a linked family's entry runs at every argument arity.
+//! Probe: at what arity does a linked family's entry run? Prints; asserts nothing.
 //!
-//! Prints; asserts nothing. One `NativeOp` shaped exactly like
-//! `link::LinkOp::build` — `External` over the call's argument array — and one
-//! installed entry that reports the operand it received. Each case runs twice:
-//! once over the **frozen** wrapper (a native package the program imports) and
-//! once over the **spliced** wrapper (the `link` directive's shape, compiled in
-//! the program's own module). See `docs/notes/native-link-library.md` §19.
+//! Reads native-link-library.md §19; the measured readings are beside it.
 
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
@@ -136,7 +131,10 @@ impl NativeOp<HostProgram> for ArityOp {
         _loc: Loc,
     ) -> NativeApply {
         let values: Vec<lichen_lowlevel::NodeId> = args.iter().map(|arg| arg.value).collect();
-        println!("    build: {} argument value nodes", values.len());
+        println!(
+            "    build: {} arguments, value nodes {values:?}",
+            values.len()
+        );
         let operand = ctx.array_node(&values);
         NativeApply {
             value: ctx.op_node(
@@ -155,16 +153,19 @@ static ARITY: ArityOp = ArityOp;
 static ARITY_OPS: [(&str, &dyn NativeOp<HostProgram>); 1] = [("probe_family", &ARITY)];
 
 /// The wrapper's own bindings, once per form.
+///
+/// # Invariant
+/// `sphere` and `voxels` are the documented surface — one parameter holding a
+/// tuple, a type argument beside it (`docs/language-spec.md` §442–448).
+/// `one`..`four` are regression readings for an operand of N items.
 const FAMILIES: &str = "scalars = set(Float, Int)\n\
-    arity_kind = t => t @in scalars\n\
+    grid_kind = t => t @in scalars\n\
+    sphere = args => { r = $probe_family(args); r : Int; r }\n\
+    voxels = (t ! grid_kind) => args => { r = $probe_family(t, args); r : Int; r }\n\
     one = (a : Int) => { r = $probe_family(a); r : Int; r }\n\
     two = (a : Int) => (b : Int) => { r = $probe_family(a, b); r : Int; r }\n\
     three = (a : Int) => (b : Int) => (c : Int) => { r = $probe_family(a, b, c); r : Int; r }\n\
-    four = (a : Int) => (b : Int) => (c : Int) => (d : Int) => { r = $probe_family(a, b, c, d); r : Int; r }\n\
-    floats = (a : Float) => (b : Float) => (c : Float) => { r = $probe_family(a, b, c); r : Float; r }\n\
-    strings = (a : string) => (b : string) => (c : string) => { r = $probe_family(a, b, c); r : string; r }\n\
-    mixed = (a : Float) => (b : string) => (c : Int) => { r = $probe_family(a, b, c); r : Int; r }\n\
-    typed = (t ! arity_kind) => (path : string) => (name : string) => { r = $probe_family(t, path, name); r : Int; r }\n";
+    four = (a : Int) => (b : Int) => (c : Int) => (d : Int) => { r = $probe_family(a, b, c, d); r : Int; r }\n";
 
 fn new_store() -> PackageStore<HostProgram> {
     let mut store = PackageStore::<HostProgram>::new();
@@ -231,14 +232,19 @@ fn show_spliced(body: &str) -> String {
 fn link_arity() {
     lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
     let cases = [
+        (
+            "one tuple parameter",
+            "p.sphere (6.0, 0.25, \"out/sphere.vdb\", \"ls_sphere\")",
+        ),
+        (
+            "a type argument and a tuple",
+            "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")",
+        ),
+        ("a type argument and a tuple, Int", "p.voxels Int (1, 2)"),
         ("one int", "p.one 1"),
         ("two ints", "p.two 1 2"),
         ("three ints", "p.three 1 2 3"),
         ("four ints", "p.four 1 2 3 4"),
-        ("three floats", "p.floats 1.0 2.0 3.0"),
-        ("three strings", "p.strings \"a\" \"b\" \"c\""),
-        ("a mixed triple", "p.mixed 1.0 \"b\" 3"),
-        ("a type argument first", "p.typed Float \"path\" \"name\""),
     ];
     for (what, body) in cases {
         let spliced_body = body.strip_prefix("p.").unwrap_or(body);

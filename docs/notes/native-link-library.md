@@ -7,7 +7,8 @@
 > through a `link` directive); §10 records the proof and the defect it found,
 > §11 the loader and the operand shape it settles, §12 the directive, §13 the
 > recorder, §14 the manifest writer and the position map, §15 the builder and the
-> program gate, §16 the editor's check path, §17 the defect resolved.
+> program gate, §16 the editor's check path, §17 the defect resolved, **§19 the
+> operand-arity defect, measured and not yet fixed.**
 > Points at: `crates/lichen-highlevel/src/native.rs` (the `$name` boundary),
 > `crates/lichen-highlevel/src/checker/native_call.rs`, `crates/lichen-highlevel/src/program.rs`
 > (`TypeValue`, `ValueType`, `Ctx`), `crates/lichen-lowlevel/src/function.rs`
@@ -476,6 +477,8 @@ The finding that shaped the op, and its resolution:
 
 The single-operand ABI the loader adopted while the defect was open is gone; the
 family entry takes the argument array, and no argument shape is privileged.
+**§19 measures where that stops being reliable:** a two-item operand is the
+largest that answers on both paths.
 
 ## 12. The `link` directive
 
@@ -754,3 +757,104 @@ the tag changed, after it changed, and after the vertical moved — produced
 identical documents, so the gate refuses a foreign library without gating the
 document. The three consequences, and the unbuilt `build.rs` that would remove
 them, are in the note.
+
+## 19. The operand arity: measured, open
+
+**Status: open.** §17 made the entry's safety rule — an entry runs only on a
+decided operand — and that rule is measured working. What it did **not** fix is
+that a legitimate operand is *decided late*: the entry's operand array holds one
+item per `$` argument, and the item for the **last** parameter is still an open
+cell at the moment the entry's node is first reached. §17 then answers
+`ran_undecided`, and no later application of the same family gets its turn.
+
+### The surface
+
+lichen has **no multi-parameter lambda**, and its documented multi-argument
+idiom is **one parameter holding a tuple** — `docs/language-spec.md` §442–448
+(`add = operands => { operands : array{(_ ! in_num), 2}; operands[0] + operands[1] }`,
+"one argument rather than a curried pair because lichen has no multi-parameter
+lambda"; the repository README's "No Curry"). The documented family shape is
+therefore a type argument beside **one** parameter:
+
+```lichen
+voxels = (t ! grid_kind) => args => { r = $voxels(t, args); r : Int; r }
+```
+
+called as `voxels Float ("assets/cube.vdb", "ls_cube")`, whose operand holds
+**two items** — the type value and one tuple. `write_sphere (6.0, 0.25,
+"out/sphere.vdb", "ls_sphere")` is the same shape with one item, and it works.
+A curried chain `a => b => c => $f(a, b, c)` is **not** the documented surface;
+it is kept in the probe only as a regression reading of the same root cause.
+
+### What is measured
+
+`crates/lichen-language/tests/language/link_arity.rs` builds a `LinkOp`-shaped
+`NativeOp` (`LowOperator::External` over `ctx.array_node(&args…)`, exactly
+`link::LinkOp::build`), installs one entry with
+`lichen_lowlevel::install_process_external`, and prints the operand it received.
+Each case runs twice: over the **frozen** wrapper (a native package the program
+imports) and over the **spliced** wrapper (the `link` directive's shape, the
+wrapper's source joined in front of the program and compiled in the program's own
+module). Ten consecutive processes:
+
+| wrapper shape | operand | frozen | spliced |
+|---|---|---|---|
+| `sphere = args => …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | entry runs, every run | entry runs, every run |
+| `voxels = (t ! grid_kind) => args => …`, `voxels Float (path, name)` | 2 items, **type argument first** | **4 runs of 10 answer `none: Int`**, no entry trace | entry runs, every run, reads `TypeValue(TypeFloat)` and the tuple |
+| `voxels Int (1, 2)` | 2 items, type first | 4 runs of 10 answer `none: Int` | entry runs, every run |
+| `two = a => b => …`, `p.two 1 2` | 2 items | entry runs, every run | entry runs, every run |
+| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | entry runs, every run | **never runs**, answers `none` |
+| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | **never runs**, answers `none: Int` | **never runs**, answers `none` |
+
+What the readings settle, and what they do not:
+
+- **The operand shape is right.** It is a `LowValue::Array` of exactly N items,
+  every item `shallow = false`, in source order, and whenever the entry runs it
+  reads exactly the arguments the caller passed (§11's contract holds).
+- **The refusal is §17's own.** An item that evaluates to `None` takes
+  `evaluation.rs:462-469` to `ran_undecided`: no entry call, no value, no
+  diagnostic. Nothing downstream mistakes a preview for an answer — the safety
+  invariant is intact.
+- **The open item is a parameter read that the apply has not bound.** Each item
+  is an `Index([pair, 0])` node; its target is the parameter's `[value, type]`
+  pair, and its **cell 0** is empty. The item is a clone of the template's read,
+  and the apply's `apply_parameter_check` (`apply.rs:36`) writes the argument
+  into a *different* clone of the same pair.
+- **The parameter check does not fail.** Instrumenting
+  `apply_parameter_check` records no unify error, so the body is not skipped for
+  a mismatch — it is skipped because the body is never reached.
+- **A later application never gets its turn.** In every failing run the trace
+  ends with the apply that binds the last argument
+  (`[apply] fn=… cloned_param=… argument=…`) followed by **no further entry
+  trace at all**. The fresh `External` clone that apply mints is never
+  evaluated, so nothing re-reads the operand once the last bind has landed.
+- **The frozen path's failure is a coin toss, not a rule.** Five processes of
+  the same binary gave different answers for the same case, so at least one
+  ordering decision on the path is hash-seeded.
+
+### Where the search stopped
+
+The measured shape is an equality-class question, not a syntax one: the first
+`External` clone the deep walk reaches shares a class with the clones a later
+apply mints (`regroup_clones`/`unify_clone_groups`, `wire_apply_result`'s
+`self.unify(node, applied)`, and `Index`'s `alias_read` are the three joins), and
+the first one to be reached has already taken its attempt. **Which** join does
+it was not isolated.
+
+One candidate was **measured and rejected**: `regroup_clones` (`apply.rs:186`)
+documents that "a group's clones keep the walk's insertion order", and its input
+is `ctx.remap.iter()` over a `HashMap` — which has no insertion order to keep.
+Forcing the walk's own order through a new ordered-pairs helper left the
+4-runs-of-10 failure rate **unchanged**, so that defect is real but is not this
+one, and the change was not kept.
+
+### What §11 does and does not claim
+
+§11's measured sentence — `kind=Some(TypeValue(TypeFloat))
+arg=Some(LowValue(Float(1.5)))` for `sample Float 1.5` — is a **two-item**
+operand, and it holds: `p.two 1 2` runs on both paths in every process, and so
+does `voxels Float (path, name)` on the spliced path. What is **not** claimed
+there, and is corrected here: a two-item operand is the largest that is reliable
+on **both** paths, and the frozen (native-package) path is not reliable even at
+two items. §17's guard is what makes the refusal safe; it is not what makes the
+argument decided.
