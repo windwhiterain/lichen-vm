@@ -220,46 +220,37 @@ fn reports_a_tiling(lines: &[String]) -> bool {
         .any(|line| line.contains("tiled") && line.contains(BinaryOp::Add.name()))
 }
 
-/// A fold whose algebra is unreadable is refused by name, and its node keeps its own body.
+/// A fold whose bound is a literal tiles like any other, and its seed survives the expansion.
 ///
 /// # Invariant
-/// The refusal is the derivation's, carried into the run report with the node it is about, and
-/// the registered fragment is the one the module dispatched: nothing landed.
-///
-/// A literal bound is what makes the algebra unreadable — the expansion folds the marked seed
-/// away — so the half the refusal names is the mark the lowering could not keep.
+/// The **counterpart of the unreadable-algebra case**, stated where it can be told apart: this
+/// body keeps its marked seed through the expansion, so the floor reads the algebra and tiles.
+/// A literal bound was the one shape that used to make the algebra unreadable.
 #[test]
-fn a_fold_whose_bound_is_a_literal_is_refused_by_name_and_nothing_lands() {
+fn a_fold_whose_bound_is_a_literal_tiles_with_the_seed_its_marks_name() {
     let (_stub, _guard) = common::stub();
     let source = literal();
     let (module, _value, _root) = common::run(&source);
-    let registered_before = registered(&module);
     assert_eq!(
         claim_of(dispatched(&module))
             .expect("the kernel claims an interface")
             .interface,
         "Reduction",
-        "the literal-bound program claims the same interface, so it is the algebra that is \
-         unreadable and not the role lookup"
+        "the literal-bound program claims the same interface, so the algebra is what decides"
     );
 
     install_tiling(&module);
-    let (refused_module, _value, _root) = common::run(&source);
-    let report = pass_report(&refused_module);
+    let (tiled_module, _value, _root) = common::run(&source);
+    let report = pass_report(&tiled_module);
     assert!(
-        report.iter().any(|line| line.contains("refused")
-            && line.contains("identity")
-            && line.contains("no mark")),
-        "the refusal names the node and the half of the algebra its body did not keep: {report:?}"
+        report
+            .iter()
+            .any(|line| line.contains("tiled") && line.contains(BinaryOp::Add.name())),
+        "the floor tiles the fold and names the operator its marks declare: {report:?}"
     );
     assert!(
-        report.iter().all(|line| !line.contains("tiled")),
-        "and no line reports a tiling, because none happened: {report:?}"
-    );
-    assert_eq!(
-        fragment_digest(&registered(&refused_module)),
-        fragment_digest(&registered_before),
-        "a refused node's registered fragment is unchanged, so nothing landed in it"
+        report.iter().all(|line| !line.contains("refused")),
+        "and nothing is refused, because the body kept the seed its mark names: {report:?}"
     );
 }
 
