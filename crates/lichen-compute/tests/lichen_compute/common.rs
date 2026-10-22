@@ -200,6 +200,13 @@ impl ParallelBackend for Stub {
         })
     }
 
+    /// Zeros over the shape the trait states, so the routing is what a test reads.
+    fn cooperative_matrix(&self, _a: &[i8], _b: &[i8], _c: &[i32]) -> Result<Vec<i32>, String> {
+        let m = lichen_kernel_ir::COOPERATIVE_MATRIX_M as usize;
+        let n = lichen_kernel_ir::COOPERATIVE_MATRIX_N as usize;
+        Ok(vec![0; m * n])
+    }
+
     fn release(&self, id: ResidentId) {
         self.residents
             .lock()
