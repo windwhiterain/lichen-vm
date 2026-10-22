@@ -500,6 +500,15 @@ where
             let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
+        // **The body's own requirements are replayed here**, where the caller's slot
+        // exists (`docs/notes/array-attribute-view.md`).
+        if let Some(AnyFunctionId::Dynamic(fid)) = callee
+            && let Some(required) = self.deferred_requirements.get(&fid).cloned()
+        {
+            for (marker, declared) in required {
+                self.unify_declared_value(argument, &marker, declared, self.loc(e, 2));
+            }
+        }
         // The apply's attribute equality: the signature pair's stated requirement
         // against the argument's provided slot.
         if let (Some(declared), Some(marker)) = (requirement, parameter_marker) {

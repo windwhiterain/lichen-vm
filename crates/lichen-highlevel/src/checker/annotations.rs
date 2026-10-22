@@ -303,6 +303,17 @@ where
         if self.node_value(declared).is_none() {
             return;
         }
+        // **A requirement on a parameter is replayed at the apply**: the read that states
+        // it consumes it here, where the parameter's cell is still a hole
+        // (`docs/notes/array-attribute-view.md`).
+        if matches!(self.ir[argument].kind, ExprKind::Parameter)
+            && let Some(function) = self.current_function()
+        {
+            self.deferred_requirements
+                .entry(function)
+                .or_default()
+                .push((*marker, declared));
+        }
         let found = self.provided_slot(argument, marker, ext);
         ext.unify_slots(self, found, declared, loc);
     }

@@ -127,3 +127,34 @@ fn a_write_returns_the_input_buffer_perspective() {
         "{messages:?}"
     );
 }
+
+/// The body's requirement is judged against what the caller provides.
+///
+/// # Invariant
+/// The requirement a body states is recorded where its read consumes it and replayed
+/// at the apply, so a caller whose attribute is below it is refused
+/// (`docs/notes/array-attribute-view.md`).
+#[test]
+fn a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it() {
+    let source = "---
+  order = \"30\"
+  compute = import \"compute.lichen\"
+---
+use = (b : (compute.Buf Int)) => compute.read ((compute.Read _)(.from b, .at 1))
+b = (compute.buffer ([1, 2, 3] : array{Int, 3}))
+use (b # 1)
+";
+    let report = compile(source);
+    assert!(!report.ok(), "the body's warp requirement sees the caller's `1`");
+    let messages: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected 32, found 1")),
+        "{messages:?}"
+    );
+}

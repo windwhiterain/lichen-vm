@@ -169,6 +169,13 @@ where
     /// # Invariant
     /// The IR stays the frontend's: only this table carries the merged tail.
     merged_tails: HashMap<ExprId, Vec<P::Attr>>,
+    /// The attributes a body requires of its own parameter, replayed at each apply.
+    ///
+    /// # Invariant
+    /// The requirement is consumed by the read that states it, so a caller's slot is
+    /// only compared with it where the apply supplies one
+    /// (`docs/notes/array-attribute-view.md`).
+    deferred_requirements: HashMap<FunctionId, Vec<(P::Attr, NodeId)>>,
     /// The checker's own check sequence, attributed for diagnostics.
     ///
     /// # Invariant
@@ -560,6 +567,7 @@ where
             gc_scopes: Vec::new(),
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
+            deferred_requirements: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,
             arrows: HashSet::new(),
