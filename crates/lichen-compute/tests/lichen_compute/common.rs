@@ -3,6 +3,7 @@
 
 #![allow(dead_code, unused_imports)]
 
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lichen_compute::language::{LangProgram, LangValue, new_store};
@@ -10,12 +11,31 @@ use lichen_kernel_ir::{
     BufferSlot, KernelFragment, LaunchSet, ParallelBackend, ResidentId, ScalarClass, ScalarData,
     install_parallel_backend,
 };
+use lichen_language::package::PackageStore;
 use lichen_lowlevel::{Module, NodeId};
 
 pub use lichen_language::testing::{
     array_values, float_array, float_of, run_at, type_head, type_is_float, type_is_int,
     type_is_undecided, usize_array, usize_of, values_eq,
 };
+
+/// The store this thread's programs share.
+///
+/// # Invariant
+/// The store is per thread, so a test that registers a package of its own does not reach
+/// another test's, and the embedded compute package registers once for the thread rather
+/// than once for every program: `register_embedded` reuses an already-registered path,
+/// which a fresh store per program never gets to.
+thread_local! {
+    static STORE: RefCell<PackageStore<LangProgram>> = RefCell::new(
+        new_store(None).expect("the embedded compute package registers")
+    );
+}
+
+/// The shared store, borrowed for one program.
+fn with_store<T>(body: impl FnOnce(&mut PackageStore<LangProgram>) -> T) -> T {
+    STORE.with(|store| body(&mut store.borrow_mut()))
+}
 
 /// The one fragment a module compiled, whatever value of its own the root carries.
 ///
@@ -94,19 +114,25 @@ pub fn evaluate(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
 /// Compile and run `source` through a fresh store with `compute.lichen`
 /// registered.
 pub fn run(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    run_at(source, None, &mut store)
+    with_store(|store| run_at(source, None, store))
 }
 
 /// `source` compiled and checked, never run.
 ///
 /// # Invariant
-/// The store is fresh per call, so the embedded compute package registers once for this
-/// program and the report is the program's own: a test that asserts a refusal reads the
-/// diagnostics without panicking on the check.
+/// The check is the program's own: it compiles the source again whatever the store
+/// holds, so a test that asserts a refusal reads the diagnostics without panicking on
+/// the check.
 pub fn check(source: &str) -> lichen_language::Report<LangProgram> {
-    let mut store = new_store(None).expect("the embedded compute package registers");
-    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
+    with_store(|store| check_in(source, store))
+}
+
+/// The check of `source`, in the store it is given.
+fn check_in(
+    source: &str,
+    store: &mut PackageStore<LangProgram>,
+) -> lichen_language::Report<LangProgram> {
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, store);
     assert!(diags.is_empty(), "the program's imports resolve: {diags:?}");
     lichen_language::compile_with_imports_at::<LangProgram>(
         preprocessed.code,
