@@ -97,15 +97,16 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). What a probe program that *should* refuse on a
-flowed attribute still does **not** refuse shows the second half is missing: the **check-time**
-attribute reconciliation is called only for element pairs (`unify_element_attributes`) and the
-struct instantiation (`structs.rs:816`), never for a plain function application, where the
-callee's parameter slot meets the caller's argument. Making a flowed attribute *reach* a
-requirement means reconciling the attributes of the apply's parameter and argument, in the same
-walk those two call sites use. The **default attribute array** is *not* part of it: a hole is
-**undecided**, and undecided is what unification propagates — a default would hide the
-unification instead of doing it (the superior's correction).
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **Correction to the first reading**: the check-time flow *does* exist —
+`check_app` builds the argument pair with the caller's provided slot
+(`lambda.rs` `argument_attr` / `attribute_pair`) and compares it with the stated requirement
+(`unify_declared_value`). What it does **not** do is read the *argument* when the **callee states
+nothing**: `parameter_marker` comes from the callee's parameter pair's *first stated* attribute, so
+a parameter written without one (`(b : (compute.Buf Int))`) yields `None`, the pair is a plain
+`slot_pair`, and the caller's own `# 1` never enters the callee's cells — the *undecided* cell is
+simply never propagated to. That is the gap the isomorphism still has, and the superior's rule
+names the fix: **a hole is undecided, and undecided is what unification propagates**. The
+**default attribute array** is not part of it: it would hide the unification instead of doing it.
 
 **`.element` holds a type, or nothing: compute is green at 226/0.** The user's reading settled the
 last failure: **"既然 Float在element的类型位置上，那么 .element当然只应当读到空 cell"** — and the
