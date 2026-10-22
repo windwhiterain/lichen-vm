@@ -97,7 +97,18 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **Correction to the first reading**: the check-time flow *does* exist —
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The caller's attribute reaches the apply's pair now, and the refusal needs a deferred body
+check.** `2c809363`: `check_app` reads the argument's provided slot only when the callee's
+parameter paired a marker; a parameter written without one left the cell undecided. The marker now
+falls back to the **caller's own merged tail** (measured: an `# 1` argument's annotation carries
+`merged_tails = [Perspective]` and `state[].attr` is set), so the apply's argument pair carries
+the caller's slot. Green: compute 218/0, highlevel 136/0, lowlevel 164/0. The observable refusal
+is one structural step further: the callee's **body** is checked before the apply unifies the pair
+with the parameter, so a requirement written in the body (`compute.read`'s `# warp`) never sees the
+caller's value — that needs the attribute reconciliation **deferred to the apply**, not a reader
+change.
+
+**Correction to the first reading**: the check-time flow *does* exist —
 `check_app` builds the argument pair with the caller's provided slot
 (`lambda.rs` `argument_attr` / `attribute_pair`) and compares it with the stated requirement
 (`unify_declared_value`). What it does **not** do is read the *argument* when the **callee states
