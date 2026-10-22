@@ -599,6 +599,11 @@ where
                 Some(lichen_lowlevel::LowShape::Tuple(items))
                     if items.len() == 2 && items[1].is_none()
             ) || matches!(
+                // An array's element is a slot, so a read of it names the slot's own
+                // positions (`docs/notes/compound-element-slots.md`).
+                self.module.class_low_type(*target),
+                Some(lichen_lowlevel::LowShape::Array(..))
+            ) || matches!(
                 class_value,
                 Some(lichen_lowlevel::LowValue::Array(ref array))
                     if array.layout() != 0
