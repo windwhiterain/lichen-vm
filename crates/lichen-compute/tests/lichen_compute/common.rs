@@ -56,11 +56,11 @@ pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFr
 ///
 /// This is `walk_role`'s read restated: a `Buf`-shaped type term's `.element` field
 /// through `low_type_of_slot`, which is the call the element class is taken by.
-pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(String, String)> {
+pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> {
     use lichen_highlevel::shape::{TypeRef, field_names, field_type, low_type_of_slot};
     use lichen_lowlevel::AnyNodeId;
 
-    let mut reads: Vec<(String, String)> = Vec::new();
+    let mut reads: Vec<(NodeId, String)> = Vec::new();
     for (id, _node) in module.nodes.iter() {
         let slot = AnyNodeId::Dynamic(id);
         let Some(ty) = [TypeRef::Term(slot), TypeRef::Slot(slot)]
@@ -81,7 +81,7 @@ pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(String, String)> 
             Some(element) => format!("{:?}", low_type_of_slot(module, element)),
             None => "<no element field>".to_string(),
         };
-        reads.push((format!("{id:?}"), read));
+        reads.push((id, read));
     }
     reads
 }

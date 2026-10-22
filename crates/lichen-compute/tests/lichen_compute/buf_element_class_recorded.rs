@@ -44,10 +44,19 @@ fn the_module_holds_a_decided_float_element_type() {
         decided > 0,
         "`compute.Buf Float` is declared, so the module holds a decided `Float` type value"
     );
-    let reads = common::buf_element_reads(&module);
+    // **The definition keeps its parameter**: an application supplies `T`; only an
+    // instance is asked for a decided class.
+    let reads: Vec<_> = common::buf_element_reads(&module)
+        .into_iter()
+        .filter(|(node, _read)| module.node_origin(*node).is_some())
+        .collect();
+    assert!(
+        !reads.is_empty(),
+        "the module has instances of `compute.Buf Float`"
+    );
     assert!(
         reads.iter().all(|(_node, read)| read == "Float"),
-        "and once the module has run, every `Buf` element cell reads `Float`: {reads:?}"
+        "and every instance's element cell reads `Float`: {reads:?}"
     );
 }
 
