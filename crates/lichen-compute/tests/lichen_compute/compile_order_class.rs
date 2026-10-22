@@ -168,7 +168,9 @@ fn the_recorded_consumer_carries_the_programs_float_class() {
     ))
     .build
     .expect("the program checks");
-    let module = build.module;
+    let mut module = build.module;
+    // The graph is recorded while the module's own deep pass runs, so it runs here.
+    let _ = module.evaluate_node_deep(build.root_val, None);
     let value = module
         .node_value(AnyNodeId::Dynamic(build.root_val))
         .expect("the root is decided");
