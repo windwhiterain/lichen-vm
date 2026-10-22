@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The tiling family proves its report: compute 201 / 25.** `c6c2ab69`: the two pipeline tests
+kept their own subject — the claim, the tiling report, the registry's digest, the
+counterfactual's report — and dropped the per-lane and closed-form answers a stub cannot
+compute; the refusal test now installs the stub its run needs (it was failing with "no compute
+backend is installed"). Measured: **automatic_tiling 1/4 → 3/4**, compute **199/27 → 201/25**.
+One case remains there for a behaviour question, not a record one: the literal-bound fold is
+now **tiled** ("its own marks declare `+` over 64 lane(s), seeding the fold with `0.0`") while
+the test expects a refusal naming a missing mark, so either the pass over-accepts or the test's
+premise drifted.
+
 **The decode step's numbers leave the crate: compute 199 / 27, suite 80 s → 48 s.** With the
 superior's word (`0edbe8b1`), `decode_step_graph` is deleted: its tests assert what
 `lichen_language::run::evaluate_raw` answers, and that path never reaches an installed backend
