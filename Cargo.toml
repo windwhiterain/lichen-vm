@@ -114,3 +114,17 @@ wasmi = "2.0.0"
 lichen-utils = { path = "crates/lichen-utils" }
 lichen-lowlevel = { path = "crates/lichen-lowlevel" }
 lichen-highlevel = { path = "crates/lichen-highlevel" }
+
+# The test profile is optimized, the build profile is not: `cargo build` keeps the
+# debuggable code a developer reads, and `cargo test` pays for speed instead. On
+# this machine the compute suite runs 4.2 s optimized and 55.7 s unoptimized, the
+# same 222 tests either way, and the whole workspace's test run goes from 106.6 s
+# to 43.2 s.
+#
+# The cost is the build: 183 s unoptimized, 872 s at this setting, so a cold
+# build is about ten minutes longer and a warm one is a quarter of the run. The
+# line tables stay, so a failure still says where it broke; the variable values
+# do not, which is the trade this setting makes.
+[profile.test]
+opt-level = 2
+debug = 1
