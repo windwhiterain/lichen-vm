@@ -97,7 +97,18 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The six language failures are `29692f39`'s own, and their diagnostic names the side that is a
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
+type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) => f i`,
+span line 3 col 3), and the probe that reads both sides of `unify_declared_value` shows them equal
+(`declared USize(32)`, `found` the pair whose value is `32`), so the attribute compare is not the
+one failing. The failing unify is the apply's **type** check: `f`'s parameter type is written
+`Int # 32`, and `type_denotation`'s stated rule returns **the annotated value's own term** for a
+type expression that carries attributes — a pair — so the argument's `Int` is compared with a pair
+and the message prints the pair's type twice. Whether that denotation rule or the apply's type
+check should change is the parallel session's design call, and it is the only thing between the six
+and green.
+
+**The six language failures are `29692f39`'s own, and their diagnostic names the side that is a
 type.** The parallel commit added `self.state[parameter].attr = Some(declared)` ("the body sees
 the parameter's declared slot") and six tests; the tests `f = (x : Int # 32) => x` /
 `g = (i : Int # 32) => f i` / `g 0` and `f = x # 4 => x; f 5` are refused with **`expected Int,
