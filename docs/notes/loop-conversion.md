@@ -416,6 +416,46 @@ So "allow it" is one ruling and two model changes, and they are not the same siz
 clear refusal into two less clear ones, which is a worse reading of the same
 program. The measured table above is the reason.
 
+### The version spine: what landed, and the one layer still refusing
+
+**Landed (the emitter's half), measured on `dev`:**
+
+- **A write's value is a token of the element's class**, not the store's own
+  (value-less) SSA id (`WriteCall`'s lowering). The token is a placeholder the SSA
+  rules require; *which buffer* the write filled is the node's identity
+  (`write_target_node`), never an SSA value. That is the "version" in the pure
+  reading: a version is an identity, not data.
+- **A state read's identity is the entering call's value at that slot**
+  (`Lower::version_identity`), so a write whose target is a carried version still
+  names its output ordinal.
+- **The codomain's checks widened**: the element class comes from the parameter's
+  own `.out` declaration where it states one (`roles.output_classes` is the
+  authority; a carried version has no write to read a class from), and a `@loop`'s
+  position is left to the walk like a conditional's, so the write inside the step
+  is emitted where it belongs.
+- The control program — one plain write — answers `[2.0, 2.0]`, and the whole
+  `lichen-compute` suite is green (222/0/1).
+
+**Still refused one layer up, and it is the checker's**: a kernel body whose value
+*is* the loop (`fold (c.taps, c.out.y)`) reaches the fragment compiler with the
+codomain's position already bound to `c.out.y` — the state's **entering** buffer —
+so `parallel_output_nodes` returns that field read instead of the loop, and the
+lowering places an index chain into the config where the loop should be. The
+binding happens where the body's value is evaluated (`evaluate_node_deep` on the
+function's return, `compile_parallel_fragment`): the marked apply reduces, and its
+value cell unifies with the carried buffer. Skipping that evaluation was measured
+and is **not** enough — the body's value is already the field read before the
+fragment compiler runs, so the fix is in the checker/apply path (the type system's
+line), not in the emitter. `crates/lichen-compute/tests/lichen_compute/zz_loop_write_probe.rs`
+prints the reading: the position is an `Index` chain ending at the config with index
+`3` (`.out`), not an apply.
+
+**Read-back is a separate step and is not needed for a loop write**: a loop's
+step only *stores*, so the output's binding is enough. A body that wants to read
+what it wrote needs `read` to accept an output binding, which the ABI does not have
+yet ([shared-memory-and-barriers](shared-memory-and-barriers.md) §3's retraction is
+about exactly that).
+
 ## 7. Why a marker, and not a `loop` builtin
 
 [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md) argues — correctly — that
