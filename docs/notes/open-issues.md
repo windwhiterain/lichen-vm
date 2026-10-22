@@ -97,7 +97,17 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **Three candidates measured, all neutral: the six's source is not the parameter's type cell.**
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The parameter type is not an annotation, so the attributes ride the parameter itself.** The
+probe that settles it: at `lambda.rs:127` the parameter's **type cell** is empty and the
+**denotation** is an array (a pair), and `parameter_type`'s kind is neither `Annotation` — which is
+why the "inner type" candidate was neutral: there is no inner annotation to unwrap. The attributes
+of `i : Int # 32` are the **parameter's** schema tail, so `type_denotation(parameter_type,
+Some(parameter))` combines them with `Int` into a pair for the *type slot*, and the failing
+`expected Int, found Int` must be the unify that meets that pair later. That unify has not been
+found from outside in four probes (the denotation, the inner type, the attribute cell, the guard),
+and locating it needs the design intent of the session that wrote `29692f39`.
+
+**Three candidates measured, all neutral: the six's source is not the parameter's type cell.**
 `type_denotation(parameter_type, None)` (neutral), and the annotated parameter's **inner type**
 (`ExprKind::Annotation { type: Some(inner) }` → `type_denotation(inner, None)`) — both measured
 **neutral**: the six still fail identically. So the pair the apply compares with is built on
