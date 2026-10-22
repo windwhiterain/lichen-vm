@@ -3,10 +3,26 @@
 //! # Invariant
 //!
 //! Print-only. Each variant differs from the others in one spelling of the `if`, and the
-//! reading is four things: the refusal the check recorded, the `Gt` nodes the graph holds,
-//! the operand shape of each of those nodes, and the count of comparison instructions the
-//! lowered body carries. A body count higher than the source's is the emitter doubling a
-//! comparison; equal counts move the question into the graph.
+//! reading is five things: the refusal the check recorded, the comparison nodes the graph
+//! holds, each one's operand classes, the step at which `Module::parameter_value_path`'s
+//! walk stops, and the count of comparison instructions the lowered body carries.
+//!
+//! **Where the doubling is, measured.** The graph is not where it lives: the refusing
+//! spellings and the clean control hold the same 13 comparison nodes in the same classes.
+//! The body is: with the selector wrapped in an addition (`(s(0) > 1) + 0`) the walk
+//! lowers, and the surface operator emits `Gt` over **the routed call's own result** —
+//! `Bin(Gt)[block parameter, 1]` then `Bin(Gt)[that, 1]`. The four order comparisons
+//! are routed through the prelude's bindings, so one source `>` is two nodes (an
+//! operator and an `Apply` of a frozen callee) and both emit; only the state case takes
+//! the second one over the first.
+//!
+//! **Why the second emission ranges over the first, measured.** The surface operator's
+//! operand is the state read, and `parameter_value_path` cannot walk it: the walk reaches
+//! that `Index` node and `operands_of` fails on it (`walk … -> no operands`), so the
+//! reading is [`None`]. `Lower::loop_value` therefore cannot place the read as a block
+//! parameter, `Lower::value_inner` falls through to `define_in`, and `define_in` answers
+//! the class member that already computed — the routed comparison. A clone's operand
+//! array being unreadable is the defect; the `None` is its symptom.
 
 use super::common;
 use lichen_compute::language::LangProgram;
@@ -73,6 +89,106 @@ fn node_name(module: &Module<LangProgram>, node: NodeId) -> String {
         Some(operation) => operation_name(&operation),
         None => "a value node".to_string(),
     }
+}
+
+/// Whether an operand array the walk could not read is still a node of the module,
+/// and whether it still holds an array value.
+///
+/// # Invariant
+///
+/// The walk stopping at an unreadable operand is a fact about **when** it is asked:
+/// the clone walk answered the same operand as a readable two-element array when it
+/// made it. Whether the node is still present, and whether its value is still an
+/// array, tells the two apart — a released node from a replaced one.
+fn operand_fate(module: &Module<LangProgram>, node: NodeId) -> String {
+    let operation = module.node_operation(node);
+    let operand = operation.as_ref().and_then(|operation| operation.operand);
+    match operand {
+        None => format!("{node:?} has no operand at all"),
+        Some(operand) => {
+            let present = module.nodes.contains_key(operand);
+            let holds = unsafe { module.array_items(operand) }
+                .map(|items| {
+                    let elements: Vec<String> = items
+                        .iter()
+                        .map(|item| match item.node {
+                            AnyNodeId::Dynamic(node) => format!("dynamic({node:?})"),
+                            AnyNodeId::Static(reference) => {
+                                format!("STATIC({reference:?})")
+                            }
+                        })
+                        .collect();
+                    format!("{} element(s) [{}]", items.len(), elements.join(", "))
+                })
+                .unwrap_or_else(|| match module.node_value(AnyNodeId::Dynamic(operand)) {
+                    Some(value) => format!("a non-array value ({value:?})"),
+                    None => "no value".to_string(),
+                });
+            format!(
+                "{node:?} -> operand {operand:?}: node present {present}, holds {holds}, \
+                 operand root {:?}, operand origin {:?}, node root {:?}",
+                module.class_root(operand),
+                module.node_origin(operand),
+                module.class_root(node)
+            )
+        }
+    }
+}
+
+/// The `Index` chain `Module::parameter_value_path` walks, step by step, so the step a
+/// clone's read stops at is named rather than inferred.
+///
+/// # Invariant
+///
+/// One line per step, in the order the walk takes them: the node, whether its class
+/// root is the parameter value's, and the position its subscript reads. The walk stops
+/// where the reading stops, and the step it stops at is the whole question.
+fn walk_state_read(module: &Module<LangProgram>, node: NodeId) -> String {
+    let function = match looping_function(module) {
+        Some(function) => function,
+        None => return "no marked function".to_string(),
+    };
+    let parameter = module.functions[function].parameter;
+    let value_cell = module.pair_value_half(parameter).unwrap_or(parameter);
+    let value_class = module.class_root(value_cell);
+    let mut steps = Vec::new();
+    let mut current = node;
+    for _ in 0..16 {
+        let at_value = module.class_root(current) == value_class;
+        steps.push(format!(
+            "{current:?}({}, origin {:?}, subscript {})",
+            node_name(module, current),
+            module.node_origin(current),
+            module
+                .operands_of(current)
+                .ok()
+                .and_then(|operands| operands.get(1).copied())
+                .and_then(|selector| module.usize_value(selector))
+                .map(|position| position.to_string())
+                .unwrap_or_else(|| "<undecided>".to_string()),
+        ));
+        if at_value {
+            return format!("{} -> reaches the state's value", steps.join(" -> "));
+        }
+        let Some(operation) = module.node_operation(current) else {
+            return format!("{} -> no operation, origin hop", steps.join(" -> "));
+        };
+        if operation_name(&operation) != "Index" {
+            return format!("{} -> not an Index", steps.join(" -> "));
+        }
+        let Some(operands) = module.operands_of(current).ok() else {
+            return format!(
+                "{} -> no operands; {}",
+                steps.join(" -> "),
+                operand_fate(module, current)
+            );
+        };
+        let Some(target) = operands.first().copied() else {
+            return format!("{} -> no target", steps.join(" -> "));
+        };
+        current = target;
+    }
+    format!("{} -> depth cut", steps.join(" -> "))
 }
 
 /// How many `Gt` nodes the graph holds, and how many comparison instructions the lowered
@@ -229,6 +345,10 @@ fn dump_comparisons(source: &str) -> String {
                         "            surface operand {}, kind {}, state path {path:?}",
                         read(leaf),
                         node_name(module, leaf)
+                    ));
+                    lines.push(format!(
+                        "            walk {}",
+                        walk_state_read(module, leaf)
                     ));
                 }
             }
