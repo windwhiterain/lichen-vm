@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The wrapper render follows the full-width slot, and the width reading is back: 219/7 → 221/5.**
+`63e4af5d`: the render test's expected strings were the two-position pair; slots are `2 +
+attributes` wide now, so the render is five positions per pair with the wildcard attributes
+printed as `@any`. `d59fa81a`: the type-position reading alone misses a pair whose second
+position is still an undecided cell, and the walk then records the pair projection as a path
+step — the nested-tuple program's `p(0)(1)` took offset 0 and answered **8** where **9** is right.
+A slot with a layout is `2 + attributes` wide while a bare tuple carries no layout, so the width
+reading separates them, and both readings are kept. Measured **221/5** on its best run (the two
+order-dependent tests still swing the count by one).
+
 **The call arm takes the same gate, and the sub-tuple program still reaches no dispatch.**
 `6ad0e53f` gives `ComputeOperator::Call` the same `argument_decided` gate the launch has; measured
 **neutral (219/7)**. The reason is the next layer down: `k1 = compute.jit (r => k0 r(1))`'s outer
