@@ -249,6 +249,9 @@ pub fn stub() -> (Arc<Stub>, MutexGuard<'static, ()>) {
         next: Mutex::new(1),
     });
     install_parallel_backend(stub.clone());
+    // The pass table and the backend are both the process's, so a test that left a pass
+    // installed would steer the next one; the stub starts from none.
+    lichen_compute::compute::graph_pass::clear_graph_pass();
     (stub, guard)
 }
 
