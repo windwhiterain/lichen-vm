@@ -97,7 +97,14 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **A one-line candidate is neutral, so the denotation rule itself is the decision.**
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **Three candidates measured, all neutral: the six's source is not the parameter's type cell.**
+`type_denotation(parameter_type, None)` (neutral), and the annotated parameter's **inner type**
+(`ExprKind::Annotation { type: Some(inner) }` → `type_denotation(inner, None)`) — both measured
+**neutral**: the six still fail identically. So the pair the apply compares with is built on
+another path than `lambda.rs:127`'s denotation, and finding it needs the parallel session's
+intent, not more blind one-liners. Three probes on the same tree all landed on the same wall.
+
+**A one-line candidate is neutral, so the denotation rule itself is the decision.**
 `lambda.rs:127` unifies the parameter's **type cell** with
 `type_denotation(parameter_type, Some(parameter))`, which for `Int # 32` is the **annotated
 value's term** — a pair — and the apply then compares the argument's `Int` with that pair, which
