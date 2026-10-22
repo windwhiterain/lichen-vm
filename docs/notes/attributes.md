@@ -168,16 +168,20 @@ clone's return pair, materialized per call (`Checker::check_app`, `Module::appli
 So a false claim is refused:
 `(compute.range k.n # 64)` answers `expected 64, found 1`.
 
-**Why the attribute slot is not yet a type slot.** The type slot holds the type's
-*term*: the clone and the artifact materialize it, so a call's type is always read from
-the applied clone. The attribute slot holds only a *cell* — the annotation's value is
-unified into it, and the attribute's expression is not an item of the pair — so nothing
-in the pair can be re-evaluated at a call site, and a reference such as
-`perspective_of x.to` cannot name its field from the pair. That is the root of the
-non-isomorphism the superior measured: a frozen callee's field reference falls back to
-the argument's whole provided slot. Restoring the field-level reading isomorphically
-means putting the attribute's term in the slot as the type's term is: the clone then
-carries the expression and the call site evaluates it with the parameter bound.
+**The attribute slot is a type-shaped slot now, and the isomorphism is where that landed.**
+The paragraph this replaces said the slot held only a *cell*, that nothing in the pair
+could be re-evaluated at a call site, and that a reference such as `perspective_of x.to`
+therefore could not name its field. **The slot isomorphism changed the representation**:
+every expression's pair is full width, every attribute position carries a value (the
+perspective's default is `0`, the lattice identity), the checker compares the attribute
+where the order lives, and a requirement stated about a **parameter** inside a body is
+recorded and replayed at each apply (`Checker::deferred_requirements`). Measured at
+`c3eefe04`: a read's certificate is the meet of its operands (`(r # 32)` over a `# 32`
+buffer at a `# 1` index is refused `expected 32, found 1`), and **a write's certificate is
+its `.to` field alone** — `(w # 32)` checks and `(w # 0)` is refused `expected 0, found
+32`, which is only possible if the field, not the whole argument's meet, is what the call
+site took. The design record is [array-attribute-view](array-attribute-view.md) §"The
+isomorphism: every expression carries the default, the order is the checker's".
 
 **A compound's elements are complete slots.** The superior's verdict: a struct's
 fields — and an array's, a set's or a tuple's elements — are the complete `[value, type,
@@ -190,13 +194,17 @@ its own slot, so an apply binds it and a certificate reads it. `Module::element_
 is the one element read for consumers: a slot's value position, the node itself for a
 bare value. Measured: `write_persp` reads `?a # 0`, `read_persp`/`read_persp2` `?a # 32`.
 
-**The remaining seam is the certificate's class.** A frozen callee's certificate is a
-clone of the callee's own cell; the frozen field read's attribute projection is a node of
-the frozen module, so the applied certificate cell has no done operation to read and the
-call falls back to the argument's whole provided slot (`write_persp2` reads `?a # 0`
-where the `.to` slot states `warp`). The fix is the apply's clone binding the frozen
-field read's container to the applied parameter's value, which is the same binding the
-value slots already carry.
+**The certificate's class: what is measured now.** The paragraph this replaces said a
+frozen field read's attribute projection was a node of the frozen module whose applied
+certificate cell had no done operation to read, so the call fell back to the argument's
+whole provided slot (`write_persp2` read `?a # 0` where the `.to` slot stated `warp`).
+**That reading does not reproduce at `c3eefe04`**, and the field-level answer is what the
+`write` test pins: a write through a `# 32` buffer at a `# 1` index certifies `32`, not the
+meet (`1`) and not the absent top (`0`) — `(w # 0)` prints `expected 0, found 32`. What is
+**not** measured is the shape the old probe used: a *body-internal* field read of a
+parameter (`x.to`) through a frozen callee. The probe that read it (`write_persp2`) is not
+in the tree, so that half is an open question with no reading behind it rather than a known
+seam; anyone re-measuring it should restore the probe first.
 
 **An attribute slot is unified like any other slot.** The superior's verdict: if an
 attribute is right in the type slot it is right in *any* attribute slot, so a pair's
@@ -362,13 +370,26 @@ then carries no attribute and its value reads as the absent form.
 | `g = x => (x # 2); (g 3) # 2` | `2 \| 2` ✓ |
 | `g = x => (x # 2); (g 3) # 1` | `1 \| 2` ✓ |
 | `h = y => (g y); (h 3) # 4` | ✗ — the certificate is copied at each hop |
-| `g = x => x; (g 3) # 4` | ✓ — no return attribute is stated, so the call states none |
+| `g = x => x; (g 3) # 4` | ✓ — a plain argument provides the absent top |
+| `id = x => x; (id (5 # 1)) # 32` | ✗ — a markerless parameter takes the caller's slot (`expected 32, found 1`) |
+| `id = x => x; (id (5 # 4)) # 4` | ✓ — the same reading, accepted |
+
+**A markerless parameter takes the caller's slot, so an identity is transparent.**
+`2c809363`: `check_app` read the argument's provided slot only when the callee's parameter
+paired a marker, and a parameter written `(x : T)` left the cell undecided, so a body that
+returned it dropped the caller's certificate. The marker now falls back to the **caller's
+own merged tail**, so `id (5 # 1)`'s result is `# 1`. Measured at `c3eefe04`, which is
+what the last two rows above pin: a *plain* argument cannot tell the two readings apart,
+and a subject-carrying one can.
 
 **A parameter's requirement is not a return attribute.** `f = x # 4 => x` checks
 every argument against `4` at the call, but its result states nothing: a perspective
 on a parameter is a requirement on the caller's value, not a promise about what the
 body returns. The body's reference to `x` is the parameter's own slot, and copying it
-to the call would restate the caller's value as the callee's answer.
+to the call would restate the caller's value as the callee's answer. **The two slots are
+different**: a requirement is the callee's *declared* `# 4`, which is checked and never
+copied; a markerless parameter's slot is the *caller's own*, which a body returning it
+does restate, because that is the caller's value and not the callee's promise.
 
 **What it does not do.** The certificate reaches the call site, not through a
 compound the caller builds: `h = y => (g y) + 1` states nothing, because its returned

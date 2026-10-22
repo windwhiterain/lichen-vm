@@ -223,6 +223,14 @@ the relation holds (`checker/diagnostics.rs`). That is why `0` against `32` is a
 against `32` is refused without the lowlevel ever knowing the lattice. Measured: compute 219,
 highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
 
+**And one language test's count moved with it.** A failed apply no longer narrows the checked set, so
+the body is checked under the mismatched argument and records its own refusal:
+`pipeline::an_apply_argument_mismatch_reports_expected_and_found_at_the_argument` now sees **two**
+diagnostics — the apply's (span `(2, 4)`, `Runtime`, `expected tuple{Int, Int}, found Int`) and the
+body's (`RuntimeIndexTarget` at `(1, 6)`, `this value is not a container — it has no element to
+read`) — and asserts both. Its old `d.len() == 1` was the one red left at the isomorphism's tip,
+because the change that made the body check is the change that added the second line.
+
 ## Open questions
 
 Nothing blocks the design. The runtime attribute *flow* — a caller's provided slot

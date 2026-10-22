@@ -4,7 +4,9 @@ This note is the decision record between the `Perspective` work that is landed a
 MMA item on the roadmap. It states what is enforced today, what the GPU path reads, why
 the kernel-config annotation fails (a separate diagnostic-quality finding, not the MMA
 path), and the register-side shape the author has ruled is the right home. The verdicts
-are recorded in §6. Measurements are on dev at `3231542a`.
+are recorded in §6. Measurements are on dev at `c3eefe04`, the slot isomorphism's tip;
+the first round was taken at `3231542a`, and §4 keeps both readings because the
+isomorphism is what moved it.
 
 ## 1. What is enforced today
 
@@ -84,23 +86,47 @@ the operands would be wrong — a fragment is lane-varying — which is why
 
 ## 4. The kernel-config annotation, measured
 
-`even_raw = (k : ParA # 4) => …`, where `ParA = compute.P (compute.KT Float)(…)`:
+`even_raw = (k : ParA # 4) => …`, where `ParA = compute.P (compute.KT Float)(…)`.
+**Re-measured at `c3eefe04`**, on the same shape the first round used:
 
-- **without** the `#`, the program checks and runs (`[2.0, 4.0, 6.0, 8.0]`);
-- **with** it, the build fails with a **runtime** diagnostic: the generic apply-time
-  parameter-check rendering (`diagnostic.rs::mismatch`'s apply arm), located at the
-  argument's expression with descent path `Attr(0)`, whose two sides are function types —
-  `raw[?a, raw[?b, ?c]] -> raw[?d, ?e]` against `struct{…} -> ?j`. The kernel-type merge
-  is what sees the annotation, not an attribute check.
+| program | reading at `c3eefe04` |
+|---|---|
+| `(k : ParA)` | checks |
+| `(k : ParA # compute.warp)` | checks |
+| `(k : ParA # 4)` | **refused at check**: `expected 32, found 4`, once per `compute.read`/`compute.write` in the body |
+| `(k : ParA # 1)` | refused at check: `expected 32, found 1`, the same two sites |
 
-What was ruled out by instrumentation: the annotation provider path, the element-pair and
-type-attribute reconciliations, and the frozen-parameter tail check do not fire for it;
-disabling the frozen return-attribute propagation does not change it; `check_unify` and
-`check_unify_relaxed` never see the failing pair. A computed type with a perspective
-works in the bare language (`A = T 5; f = (s : A # 4) => s.n`), so "computed type +
-perspective" is not the trigger — the kernel path is.
+So the annotation is a **value-uniformity fact** and the attribute check reads it: it
+narrows what the body's operators may assume, and the body's `Read`/`Write` field
+requirements (`# warp`) then refuse a config declared less uniform than a warp. The
+config is uniform by construction, so every `# p` is true *of the config*; what the
+annotation changes is what the body is allowed to rely on. Nothing was added to make this
+work — the slot isomorphism (§ of [array-attribute-view](array-attribute-view.md)) is what
+made the pair the annotation builds merge like any other.
+
+**The earlier reading, kept because the isomorphism is what removed it.** At `3231542a`
+the same program failed with a **runtime** diagnostic: the generic apply-time
+parameter-check rendering (`diagnostic.rs::mismatch`'s apply arm), located at the
+argument's expression with descent path `Attr(0)`, whose two sides were function types —
+`raw[?a, raw[?b, ?c]] -> raw[?d, ?e]` against `struct{…} -> ?j`. What was ruled out by
+instrumentation then: the annotation provider path, the element-pair and type-attribute
+reconciliations, and the frozen-parameter tail check did not fire; disabling the frozen
+return-attribute propagation did not change it; `check_unify` and `check_unify_relaxed`
+never saw the failing pair. A computed type with a perspective worked in the bare language
+(`A = T 5; f = (s : A # 4) => s.n`), so "computed type + perspective" was not the trigger
+— the apply's pair unify was, and the isomorphism removed that arm
+(`apply_parameter_check` now compares the value and the type only, and the order is the
+checker's).
 
 ## 5. Options
+
+**Superseded: the isomorphism settled this without any of the three.** What landed is
+option 3's reading — the annotation is a value uniformity, checked where every other
+attribute is — and it needed none of option 2's merge tolerance, because the pair the
+annotation builds is the same pair every expression carries. Option 1 (a named refusal)
+has nothing left to refuse: the check already answers by name, in the lattice's own
+words. The list below is the shape the question had before the measurement moved, kept so
+the answer can be read against it.
 
 1. **Refuse by name at check time.** Recognize the kernel-config parameter (the
    `compute.P`-shaped type is plugin knowledge, or is recognized by the parameter's type
@@ -118,9 +144,8 @@ perspective" is not the trigger — the kernel path is.
    the claim is vacuous and it still needs option 2's merge tolerance.
 
 **Recommendation.** None of the three is needed for MMA (§6): the config annotation is a
-diagnostic-quality question. If it is pursued, option 1 (a named message) is the only low
--cost one and does not change semantics; option 2 stays parked with the kernel-type
-merge.
+diagnostic-quality question, and the diagnostic it gets now is the honest one. Option 2's
+scope reading stays parked with the kernel-type merge, and no operator needs it.
 
 ## 6. The author's verdicts
 
@@ -186,7 +211,10 @@ merge.
 
 ## Open questions
 
-- Is the config annotation's named refusal worth a check-side hook now, or does the
-  runtime raw message wait until the kernel-type merge is visited for its own sake?
+- ~~Is the config annotation's named refusal worth a check-side hook now, or does the
+  runtime raw message wait until the kernel-type merge is visited for its own sake?~~
+  **Answered by the measurement**: no hook is needed and the runtime raw message is gone.
+  The annotation is a value uniformity, the attribute check reads it, and the refusal
+  names the body's own requirement (`expected 32, found 4`). See §4.
 - Should Axis C stay parked as an optimization, or be scheduled as a performance item
   when a uniform-heavy shape exists to measure?
