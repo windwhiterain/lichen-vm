@@ -61,7 +61,11 @@ impl<P: Program> Module<P> {
                 let supplieds: Vec<_> = unsafe { self.array_items(argument) }
                     .map(|items| items.iter().map(|item| item.node).collect())
                     .unwrap_or_default();
-                for slot in 0..2 {
+                // **Every position is wired**, the attribute slots included: the pair is
+                // isomorphic to the type slot, so a caller's attribute value reaches the
+                // callee's cell (`docs/notes/array-attribute-view.md`).
+                let width = parameters.len().max(supplieds.len());
+                for slot in 0..width {
                     let (Some(&left), Some(&right)) = (parameters.get(slot), supplieds.get(slot))
                     else {
                         continue;
