@@ -403,11 +403,12 @@ impl<P: Program> Module<P> {
         }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
-        let (undecided, _runned, evaluated_deep, template_operation) = (
+        let (undecided, _runned, evaluated_deep, template_operation, template_shape) = (
             node.undecided(),
             node.runned,
             node.evaluated_deep,
             node.operation,
+            node.low_shape.clone(),
         );
         // Reserve the clone id before recursing: diamonds then resolve to one clone,
         // and a value cycle to the clone's own id.
@@ -416,6 +417,10 @@ impl<P: Program> Module<P> {
         // are not this module's, so it is never the origin.
         self.nodes[clone].origin = Some(ctx.origin);
         ctx.remap.insert(local, clone);
+        // A clone keeps its template's class (`docs/notes/compound-element-slots.md`).
+        if let Some(shape) = template_shape {
+            self.seed_class_low_type(clone, shape);
+        }
         if undecided {
             // A residual clone joins the caller's template; unowned it is read
             // in place forever (`apply-clone-ownership.md` §1).
