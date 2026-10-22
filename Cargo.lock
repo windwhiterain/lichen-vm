@@ -1047,6 +1047,7 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-perspective",
  "lichen-runtime",
+ "lichen-testkit",
  "lichen-utils",
  "waffle",
  "wasm-encoder 0.248.0",

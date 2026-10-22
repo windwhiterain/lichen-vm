@@ -37,6 +37,10 @@ wasmi.workspace = true
 # runtime reads, so the edge costs nothing to link.
 lichen-fusion.workspace = true
 lichen-fusion-bridge.workspace = true
+
+# The harness the suite writes its programs with, instead of compiling them from
+# source: one dev-dependency, the one the workspace allows.
+lichen-testkit.workspace = true
 # The device backend and the README generator, both optional: the examples that
 # dispatch a kernel to a device need them and nothing in the library does, so a
 # build that never dispatches never links a GPU loader and never reads the
