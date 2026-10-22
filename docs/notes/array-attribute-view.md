@@ -200,16 +200,20 @@ exists (`Checker::deferred_requirements`; measured by
 `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`,
 which fails without the change and refuses with `expected 32, found 1`).
 
-## The split that makes it green
+## The isomorphism, landed
 
-**The runtime compares the value and the type; the checker compares the attribute.** Widening
-`apply_parameter_check`'s pair unify to every position (the natural reading of "the pair is
-isomorphic to the type slot") made the runtime compare attribute slots, which carry no order the
-lowlevel can read there, and the six tests that pair an attributed parameter with a caller were
-refused with `expected Int, found Int`. Narrowing it back to `0..2` and leaving the attribute to
-the checker — its `unify_declared_value` sites plus the **deferred requirement** replayed at the
-apply — makes all four suites green: compute 219, highlevel 136, lowlevel 164 (1 ignored),
-language 275.
+**Every position is compared, and the pair carries the requirement.** Two changes together:
+
+1. `apply_parameter_check` unifies **every position** of the pair, the attribute slots included —
+   the isomorphism the design asks for.
+2. The pair the checker builds for the apply carries **the requirement the parameter states**, not
+   the caller's raw slot. A caller that provides nothing states the lattice **top** (`0`), and a
+   structural compare of `0` against `32` refused programs the perspective order admits
+   (`expected Int, found Int`); with both sides stating the requirement, the structural compare is
+   exact, and the perspective *order* stays where it belongs — the checker's
+   `unify_declared_value` sites and the **deferred requirement** replayed at the apply.
+
+Measured: compute 219, highlevel 136, lowlevel 164 (1 ignored), language 275 — all green.
 
 ## Open questions
 
