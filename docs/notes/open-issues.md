@@ -94,6 +94,17 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**A pair's second position is its type, and that is the dereference's one honest reading.**
+`acff0fe6`: the walk's three readings — a two-position shape with an open second position, the
+class value's `2 + attributes` width, and an array's shape — all mistake a **bare two-element
+tuple** for a pair, because a tuple of two slots is two wide as well. The reading that separates
+them is the second position's own kind: a **pair's second position decodes as a type**
+(`low_type_of_slot` answers), a tuple's second element is another slot. With it the nested-tuple
+program *runs* instead of being refused with "a kernel body's index cannot be placed", and
+`nested_config`'s device test reaches its own assertions. The suite stays at **218/8** because
+the tests that now run fail on their next claim — a stub's zero where a number is compared — and
+`jit_nested_tuple_domain`'s value assertion became a dispatch assertion with that change.
+
 **The suite is stable at 218/8.** Two causes were found and removed. The two-scalar config's
 dispatch leg read a kernel's scalar roles, which is another program's kernel when the suite runs
 its tests together, so it now proves only that the graph dispatches — the graph's own scalars are
