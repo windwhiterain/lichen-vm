@@ -94,6 +94,14 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The suite is stable at 218/8.** Two causes were found and removed. The two-scalar config's
+dispatch leg read a kernel's scalar roles, which is another program's kernel when the suite runs
+its tests together, so it now proves only that the graph dispatches — the graph's own scalars are
+asserted above it from the recorded graph (`d9e58b44`). The fusion triple sliced its legs by a
+length taken from another run, so a test that dispatched before the helper began shifted both
+legs (`97175e68`); each leg now takes its own delta. Measured: **three consecutive runs give the
+same eight failures**, 218 passed, 1 ignored.
+
 **The pass table was cleared and the swing stayed: it is between two record tests.**
 `common::stub()` clears the installed graph pass, because the table is the process's; the suite
 still reads 217/9 then 218/8 on one tree, and the two runs differ by exactly one test —
