@@ -52,10 +52,14 @@ profile change touches.
 | lever | reading | cost |
 |---|---|---|
 | **the 24 `zz_*` probes** | `--skip zz_` takes the compute suite from **54.8 s to 24.8 s** | deleting settled probes |
-| **four probes, deleted** | the suite's own line goes **55.7 s → 35.7 s** (222 tests) | the note rows that named them |
+| **nine probes, deleted** | the suite's own line goes **55.7 s → 35.7 s** for four of them, at the same profile | the note rows that named them |
 | **`opt-level = 2` in the workspace profile** | compute suite **55.7 s → 4.2 s**; whole workspace **106.6 s → 43.2 s** | build **183 s → 872 s** |
 | **one store per thread** | the suite's wall clock **27.1 s → 23.8 s** | none; already landed |
-| **24 empty harnesses** | ~90 ms of startup each | a manifest change per crate |
+| **17 empty lib harnesses** | 51 test executables become **34**; ~90 ms of startup each | a manifest change per crate |
+
+All of them together, on the same tree: the compute suite is **218 tests in 2.70 s**
+where it was 226 in 55.7 s, and the whole workspace's warm run is **12.6 s** where
+it was 106.6 s.
 
 ### The profile trade, in the units that decide it
 
@@ -68,11 +72,11 @@ numbers are why `opt-level = 3` is not the answer: it buys 0.8 s over
 
 ### The floor, whatever the profile
 
-`[lib] test = false` on the crates with no inline tests removes 24 binaries at
-~90 ms each, and the remaining suites still pay their own startup: cargo's own
-scheduling over 51 binaries is ~24 s of a 106 s run. The floor for a whole
-workspace run on this machine is therefore tens of seconds no matter how fast
-the tests themselves are.
+`[lib] test = false` on the crates with no inline tests removes 17 of the 51 test
+executables, at ~90 ms of startup each, and the remaining suites still pay their
+own startup: cargo's own scheduling over the binaries is ~24 s of a 106 s run.
+Even after all of that, the warm whole-workspace run is 12.6 s, of which the
+device suite is 4.3 s and cargo's own overhead is a large share of the rest.
 
 ### Which probes, and on what grounds
 
@@ -92,6 +96,15 @@ cannot run:
 | `zz_clamp_grouping_probe` | `writing-a-solver.md` §"What may sit where, measured" records the three readings |
 | `zz_plain_leg_probe` | `llm-operators.md` — "It is now diagnosed, and the premise is stale rather than the behaviour wrong" |
 | `zz_phase_timing_probe` | **broken**: its program names the `"gpu"` backend, which the check refuses with no backend installed, so it prints nothing |
+
+Two more were deleted on the owner's word, against the reading that a note's
+hedge should keep them: `zz_append_slot_probe` (the note said its pre-guard
+readings "are kept as the evidence" — the readings are kept, in the note that
+records them) and `zz_fold_buffer_probe` (still listed in a command line, with no
+row behind it). And the three the notes never named: `zz_conv2d_probe` and
+`zz_pool_probe`, whose readings the examples `examples/convolution2d.lichen` and
+`examples/pooling.lichen` carry — both run bit-exact on the device — and
+`zz_phase_timing_probe`, whose question this note answers.
 
 The three the notes do not name — `zz_conv2d_probe`, `zz_pool_probe`,
 `zz_phase_timing_probe` — need one sentence from the owner, not a re-run: their
