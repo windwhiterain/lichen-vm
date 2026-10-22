@@ -97,7 +97,15 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The apply's pair carries the caller's slot; the body's requirement is checked too early.**
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The body's requirement is consumed by its own read, never recorded in the parameter.** A third
+probe settles the shape: a parameter that states no tail has `@any` at its attribute position, so
+unifying the caller's slot against it succeeds (any unifies with anything) — and the body's own
+`compute.read` requirement is consumed by *that* read's pair, a `provided_slot(b)` built inside the
+body, never written into the parameter's cell. So there is nothing for the apply to compare
+against: the requirement would have to be **recorded at the body's check and replayed at the
+apply**, which is a deferred-requirement table rather than a reader or marker change.
+
+**The apply's pair carries the caller's slot; the body's requirement is checked too early.**
 Probing `check_app` on the isomorphism program shows the shape exactly: `param_marker: None`,
 `caller_marker: Some(Perspective)`, `argument_attr: true`, **`requirement: false`**, and the pair
 built with the caller's slot (`2c809363`). The requirement is `false` because a parameter that
