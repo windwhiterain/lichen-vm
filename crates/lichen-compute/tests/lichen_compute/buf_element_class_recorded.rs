@@ -12,6 +12,7 @@ use super::common;
 
 use lichen_compute::ComputeValue;
 use lichen_highlevel::program::TypeValue;
+use lichen_highlevel::shape::{TypeRef, field_type};
 use lichen_kernel_ir::ScalarClass;
 use lichen_lowlevel::AnyNodeId;
 use lichen_utils::extend::AsEnum;
@@ -44,20 +45,31 @@ fn the_module_holds_a_decided_float_element_type() {
         decided > 0,
         "`compute.Buf Float` is declared, so the module holds a decided `Float` type value"
     );
-    // **The definition keeps its parameter**: an application supplies `T`; only an
-    // instance is asked for a decided class.
-    let reads: Vec<_> = common::buf_element_reads(&module)
-        .into_iter()
-        .filter(|(node, _read)| module.node_origin(*node).is_some())
-        .collect();
+    // `.element` states its type: a type constant, or nothing for a `_` argument.
+    let reads = common::buf_element_reads(&module);
     assert!(
         !reads.is_empty(),
-        "the module has instances of `compute.Buf Float`"
+        "the module carries `Buf`-shaped type terms"
     );
-    assert!(
-        reads.iter().all(|(_node, read)| read == "Float"),
-        "and every instance's element cell reads `Float`: {reads:?}"
-    );
+    for (id, _read) in &reads {
+        let slot = AnyNodeId::Dynamic(*id);
+        let element = [TypeRef::Term(slot), TypeRef::Slot(slot)]
+            .into_iter()
+            .find_map(|ty| field_type(&module, ty, 1));
+        let Some(element) = element else {
+            continue;
+        };
+        let value = module
+            .element_value_node(element)
+            .and_then(|node| node.dynamic())
+            .and_then(|node| module.node_value(AnyNodeId::Dynamic(node)));
+        if let Some(value) = value {
+            assert!(
+                AsEnum::<TypeValue>::as_enum(&value).is_some(),
+                "`{id:?}`'s `.element` names a type or nothing, not a value: {value:?}"
+            );
+        }
+    }
 }
 
 /// The compiled fragment names the element class the parameter declares.
