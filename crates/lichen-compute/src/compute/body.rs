@@ -319,6 +319,9 @@ where
             && let Some(value) = self.loop_value(index, node)?
         {
             self.publish_mark(node, value);
+            // **The node's value is this block parameter**, so a reader that asks what
+            // class the node was declared in gets the parameter's (`emitted_class`).
+            self.values.insert(node, value);
             return Ok(value);
         }
         if let Some(&value) = self.values.get(&node) {
@@ -1234,6 +1237,17 @@ where
         for _ in 0..slots.len() {
             self.body.add_param(header);
         }
+        // **A block parameter's class is its incoming argument's**: the state arrives as
+        // the entering call's values, and an operator over a state read must see the
+        // class it was entered with, not the one a node happened to carry.
+        for (&slot, &param) in slots
+            .iter()
+            .zip(self.body.blocks[header].params.clone().iter())
+        {
+            if let Some(class) = self.value_classes.get(&slot).copied() {
+                self.value_classes.insert(param, class);
+            }
+        }
         let tests: Vec<usize> = (0..conversion.tests.len())
             .map(|position| {
                 if position == 0 {
@@ -1294,11 +1308,48 @@ where
         self.lower_loop_steps(index)?;
         let result = self.lower_loop_exit(index)?;
         self.loops.pop();
+        // The nest's other blocks take their parameters' classes from the branches that
+        // reach them, so a state read outside the header is classed too.
+        self.propagate_param_classes();
         // The caller's remaining instructions go in the merge block, which is
         // where the nest leaves its result.
         self.block = merge;
         self.values.insert(node, result);
         Ok(result)
+    }
+
+    /// Give every block parameter the class of the branch arguments that reach it.
+    ///
+    /// # Invariant
+    /// A parameter has one class because every branch into its block passes one, so a
+    /// fixed point over the branches is the whole answer; a parameter no branch fills
+    /// stays unclassified and its readers fall back to the node's own class.
+    fn propagate_param_classes(&mut self) {
+        for _ in 0..self.body.blocks.len() {
+            let mut changed = false;
+            for block in &self.body.blocks {
+                for branch in block.branches() {
+                    let Some(target) = self.body.blocks.get(branch.target) else {
+                        continue;
+                    };
+                    for (offset, &param) in target.params.iter().enumerate() {
+                        if self.value_classes.contains_key(&param) {
+                            continue;
+                        }
+                        let Some(argument) = branch.args.get(offset) else {
+                            continue;
+                        };
+                        if let Some(class) = self.value_classes.get(argument).copied() {
+                            self.value_classes.insert(param, class);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// The carried state the entering call binds, one value per slot, in the
@@ -1683,11 +1734,15 @@ where
         // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
         // re-derive.
         let narrow = self.emit(KernelInstr::I32WrapI64, vec![selector], ScalarClass::Int);
-        Ok(self.emit(
-            KernelInstr::Select,
-            vec![then, otherwise, narrow],
-            node_class(self.module, node),
-        ))
+        // **A selection's class is its arms'**, read off what they emitted: both arms are
+        // computed here, so the node's own class is the fallback and not the answer.
+        let class = self
+            .value_classes
+            .get(&then)
+            .or_else(|| self.value_classes.get(&otherwise))
+            .copied()
+            .unwrap_or_else(|| node_class(self.module, node));
+        Ok(self.emit(KernelInstr::Select, vec![then, otherwise, narrow], class))
     }
 
     fn conversion(
