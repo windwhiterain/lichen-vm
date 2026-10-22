@@ -190,6 +190,16 @@ the type-value encoding rather than an attribute change.
 Measured: language 275, highlevel 136, lowlevel 164 (1 ignored), compute 252 plus the
 pre-existing `pack_placement` failure; the four perspective probes answer as before.
 
+## Landed: the requirement is replayed at the apply
+
+The read that states a requirement consumes it against the parameter's hole, and a hole
+unifies with anything, so a caller's attribute was never compared with the body's own
+requirement. A requirement on an expression that **is a Parameter** is recorded against the
+function being checked and **replayed at every apply** of it, where the caller's provided slot
+exists (`Checker::deferred_requirements`; measured by
+`perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it`,
+which fails without the change and refuses with `expected 32, found 1`).
+
 ## Open questions
 
 Nothing blocks the design. The runtime attribute *flow* — a caller's provided slot
