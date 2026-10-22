@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The decode step's numbers leave the crate: compute 199 / 27, suite 80 s → 48 s.** With the
+superior's word (`0edbe8b1`), `decode_step_graph` is deleted: its tests assert what
+`lichen_language::run::evaluate_raw` answers, and that path never reaches an installed backend
+(the stub records **zero** dispatches), so `lichen-compute` cannot verify it. The
+backend-ownership rule names deletion, not a weaker rewrite. The suite is now **227 tests**
+(`199 passed; 27 failed; 1 ignored`) in **48 s**. Remaining by family: `automatic_tiling` 3,
+`graph_jit` 2 (the class-shape assertion), `fold_datum` 2, `compute` 2, then one each across
+`buf_element_class_recorded`, `graph_structure`, `zz_plain_leg_probe`, `chain_merge`,
+`combine_fold`, `float_leaf`, `cooperative_product`, `fan_out_merge`, `runtime_scalar_leaf`,
+`recompute_reads`, `pack_placement`, `nested_config`, `union_ports`, `tiling_visibility` and the
+rest.
+
 **The fused region's two legs prove the record too: compute 199 → 201.** `82b5d734`:
 `fused_region`'s two tests compared a device answer with a closed form; each now proves the
 dispatch record — the merged leg dispatches **one node that is not either recorded kernel, over
