@@ -148,6 +148,10 @@ struct ActiveLoop {
 /// A `write` in a conditional's arm is refused (see §6 of the loop-conversion note).
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
 
+/// A comparison over a comparison's own result: the doubling a `@loop`'s carried state
+/// produces, refused where its value would be used.
+const DOUBLED_COMPARISON: &str = "a comparison over a comparison: an order comparison over a `@loop`'s carried state is emitted twice inside a lowered body, so its value ranges over the first comparison's `0`/`1` and cannot answer. Compare the state inside an arm instead (an `==` test is clean), or use the comparison's `0`/`1` as a number (`1 * (a > b)`); `docs/notes/operator-gaps.md` rows the defect";
+
 /// Refusal: a cross-kernel callee returns exactly one value, in the caller's class.
 ///
 /// # Invariant
@@ -1002,11 +1006,20 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
-        // **An order comparison over a comparison's own result is refused**: the four order
-        // comparisons are routed through the prelude's bindings, and inside a lowered template
-        // the routed body and the surface node both emit, so the second comparison ranges over
-        // the first's `0`/`1` and its answer is always the same. Refused rather than answered
-        // (`docs/notes/operator-gaps.md`, the `if`-in-fold row).
+        // **A doubled comparison is refused where its value is used**: an order comparison
+        // over the `@loop`'s carried state is emitted twice (the second ranges over the
+        // first's `0`/`1`), so a use computes a constant. Refused rather than answered
+        // (`docs/notes/operator-gaps.md`, the `if`-in-fold row). A loop test's own
+        // comparison is not caught here: its doubled value feeds only a dead selection.
+        for operand in [left_operand, right_operand] {
+            if let Some(produced) = operand
+                .dynamic()
+                .and_then(|node| self.values.get(&node).copied())
+                && self.value_is_doubled_comparison(produced)
+            {
+                return Err(DOUBLED_COMPARISON.into());
+            }
+        }
         Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class))
     }
 
@@ -1019,6 +1032,23 @@ where
                 ..
             }) if bin.is_comparison()
         )
+    }
+
+    /// Whether a value is an order comparison **over another comparison's result** — the
+    /// doubled emission a `@loop`'s carried state produces.
+    fn value_is_doubled_comparison(&self, value: ValueId) -> bool {
+        let Some(ValueDef::Instr {
+            op: KernelInstr::Bin(_, bin),
+            args,
+            ..
+        }) = self.body.values.get(value.0 as usize)
+        else {
+            return false;
+        };
+        matches!(
+            bin,
+            KernelBin::Lt | KernelBin::Gt | KernelBin::Leq | KernelBin::Geq
+        ) && args.iter().any(|&arg| self.value_is_comparison(arg))
     }
 
     /// The operator a routed apply names, read from its frozen callee body, or `None`.
@@ -1760,32 +1790,8 @@ where
                 .iter()
                 .any(|test| test.condition == node)
         });
-        if !is_loop_test
-            && self.value_is_comparison(selector)
-            && self
-                .body
-                .values
-                .get(selector.0 as usize)
-                .is_some_and(|value| match value {
-                    ValueDef::Instr {
-                        op: KernelInstr::Bin(_, bin),
-                        args,
-                        ..
-                    } => {
-                        bin.is_comparison() && args.iter().any(|&arg| self.value_is_comparison(arg))
-                    }
-                    _ => false,
-                })
-        {
-            return Err(
-                "a conditional whose selector compares a comparison: an order comparison over a \
-                 `@loop`'s carried state is emitted twice inside a lowered body, so this selector \
-                 ranges over the first comparison's `0`/`1` and takes one arm every time. Compare \
-                 the state inside an arm instead (an `==` test is clean), or use the comparison's \
-                 `0`/`1` as a number (`1 * (a > b)`); `docs/notes/operator-gaps.md` rows the \
-                 defect"
-                    .to_string(),
-            );
+        if !is_loop_test && self.value_is_doubled_comparison(selector) {
+            return Err(DOUBLED_COMPARISON.into());
         }
         // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
         // re-derive.
