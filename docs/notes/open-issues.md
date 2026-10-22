@@ -102,8 +102,8 @@ inner launch lazy when an operand array's element has no value. What is missing 
 the outer `compute.launch` evaluates the wrapper's body, meets the deferred inner launch, and
 refuses instead of **re-running** it once its own argument (`x = 5`) is known. The second is
 refused by name — "argument element 0 is no value, not a concrete Int or Float" — because that
-inner `compute.launch k0 (x, 1)` runs while
-that supplies `x`. The first dispatches nothing at all for the same reason: `k1 = compute.jit
+inner `compute.launch k0 (x, 1)` runs while `x` is still the wrapper's undecided argument cell.
+The first dispatches nothing at all for the same reason: `k1 = compute.jit
 (r => k0 r(1))` is a cross-kernel *call*, and the outer `compute.launch k1 (…)` never reaches a
 dispatch. That is the deferral machinery's line, and rewriting the first test as a dispatch
 assertion was measured wrong (`stubs.calls()` stays empty) and reverted.
