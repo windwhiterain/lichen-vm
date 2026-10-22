@@ -112,12 +112,13 @@ Some(parameter))` combines them with `Int` into a pair for the *type slot*, and 
 found from outside in four probes (the denotation, the inner type, the attribute cell, the guard),
 and locating it needs the design intent of the session that wrote `29692f39`.
 
-**Three candidates measured, all neutral: the six's source is not the parameter's type cell.**
-`type_denotation(parameter_type, None)` (neutral), and the annotated parameter's **inner type**
-(`ExprKind::Annotation { type: Some(inner) }` → `type_denotation(inner, None)`) — both measured
-**neutral**: the six still fail identically. So the pair the apply compares with is built on
-another path than `lambda.rs:127`'s denotation, and finding it needs the parallel session's
-intent, not more blind one-liners. Three probes on the same tree all landed on the same wall.
+**Resolved: the six came from widening the runtime's pair unify, not from the parameter type.**
+The probes on the type cell were neutral because the type slot was never the site. The
+`DiagKind::Runtime` reading, then the mismatch values (`value_a = USize(32)`,
+`value_b = USize(0)`), named it: `apply_parameter_check` was comparing the attribute positions
+structurally in the lowlevel, where the perspective order does not exist, so `32` against the
+default `0` refused. Narrowing that loop to `0..2` and leaving the order to the checker's
+`is_subtype` (the mechanism `AttrExt` documents) is what makes the six pass.
 
 **A one-line candidate is neutral, so the denotation rule itself is the decision.**
 `lambda.rs:127` unifies the parameter's **type cell** with
@@ -150,13 +151,13 @@ sides reach `slot_value_node`, so one side's slot is a type term instead of the 
 **provided** side — `provided_slot`/`state[argument].attr` — as the one that answers a type. That
 is the next edit, in the same path this session has been working.
 
-**The body's requirement is consumed by its own read, never recorded in the parameter.** A third
-probe settles the shape: a parameter that states no tail has `@any` at its attribute position, so
-unifying the caller's slot against it succeeds (any unifies with anything) — and the body's own
-`compute.read` requirement is consumed by *that* read's pair, a `provided_slot(b)` built inside the
-body, never written into the parameter's cell. So there is nothing for the apply to compare
-against: the requirement would have to be **recorded at the body's check and replayed at the
-apply**, which is a deferred-requirement table rather than a reader or marker change.
+**Resolved: the body's requirement is recorded and replayed at the apply.** The read that states a
+requirement consumes it against the parameter's hole, which unifies with anything, so a caller was
+never compared with the body's own requirement. `4dfe3e36` records a requirement stated about a
+`Parameter` against the function being checked (`Checker::deferred_requirements`) and replays it at
+every apply of it; the test
+`perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it` fails
+without the change and refuses with `expected 32, found 1` with it.
 
 **The apply's pair carries the caller's slot; the body's requirement is checked too early.**
 Probing `check_app` on the isomorphism program shows the shape exactly: `param_marker: None`,
