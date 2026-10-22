@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The literal-bound ruling landed, and the class propagation's first step is neutral: 223/3.**
+`d39273e1`: the literal-bound fold tiles and the test proves the tiling line naming `+` with no
+refusal. `bd900910`: a static clone now keeps its template's class — the class is the
+declaration's fact — measured **neutral**, because the four `Buf` wrapper structs the class test
+names (`520`, `576`, `763`, `822`) are **not** clones: their `element` field is a fresh cell
+created somewhere else in the instantiation, which is the next place to look.
+
 **Rulings on the two open questions (kept verbatim).** `automatic_tiling`'s literal-bound fold:
 **"让 tiling 继续并更新测试为「字面量 bound 可 tiling」（推荐）"** — the bound is not what decides,
 the algebra's readability is, so the test now proves the tiling line naming `+` and that nothing
