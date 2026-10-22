@@ -62,3 +62,4 @@ lichen-utils      shared extension plumbing (enum_ext!, disjoint, compose)
 - The source language and the `---…---` preprocessor block:
   [the spec](../language-spec.md) and [packages](packages.md).
 - The evaluator's hot path, and what its measurements are: [evaluation-performance](evaluation-performance.md).
+- When a plugin package's wrapper is compiled: [lazy-plugin-registration](lazy-plugin-registration.md).

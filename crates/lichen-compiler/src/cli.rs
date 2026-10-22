@@ -197,12 +197,9 @@ where
     };
     let mut diags = stage_depends::<P>(&mut store, source);
     for &(virtual_path, wrapper, native_ops) in native {
-        if let Err(e) = store.register_native(virtual_path, wrapper, native_ops) {
-            diags.push(lichen_language::diag::Diag::unattributed(
-                lichen_language::diag::Stage::Preprocess,
-                format!("cannot register native package {virtual_path}: {e}"),
-            ));
-        }
+        // Deferred: a program that imports none of these never compiles them, and a
+        // broken wrapper is still reported once, at the import that names it.
+        store.register_native_deferred(virtual_path, wrapper, native_ops);
     }
     (store, diags)
 }

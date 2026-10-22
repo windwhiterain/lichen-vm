@@ -97,12 +97,16 @@ pub fn wiring() -> Wiring<'static> {
 
 /// Register this sub-language's own package on `store`, as the virtual
 /// `compute.lichen` a program imports.
+///
+/// # Invariant
+/// The registration is **deferred**: the wrapper is checked and frozen when a program
+/// first imports it, so a run that imports no compute package compiles none of it.
 pub fn register_compute(store: &mut PackageStore<LangProgram>) -> Result<(), String> {
-    store.register_native(
+    store.register_native_deferred(
         COMPUTE_PATH,
         WRAPPER_SOURCE,
         compute_native_ops!(LangProgram),
-    )?;
+    );
     Ok(())
 }
 

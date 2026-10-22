@@ -145,6 +145,36 @@ fn main() {
         .collect();
     files.sort();
 
+    // The store's own stages, so the fixed per-run cost is attributed rather than measured
+    // whole: the plugin's wrapper and the core prelude are two separate compiles.
+    if std::env::var("STAGES").is_ok() {
+        fn stage(label: &str, started: Instant, allocs: usize, bytes: usize) {
+            println!(
+                "{label:<24} {:>7.2} ms {:>8} allocs {:>9.1} KiB",
+                started.elapsed().as_secs_f64() * 1.0e3,
+                ALLOCS.load(Ordering::Relaxed) - allocs,
+                (BYTES.load(Ordering::Relaxed) - bytes) as f64 / 1024.0,
+            );
+        }
+        let mut store =
+            lichen_language::package::PackageStore::<lichen_compute::language::LangProgram>::new();
+        let (allocs, bytes) = (
+            ALLOCS.load(Ordering::Relaxed),
+            BYTES.load(Ordering::Relaxed),
+        );
+        let started = Instant::now();
+        lichen_compute::language::register_compute(&mut store).expect("the wrapper compiles");
+        stage("register_compute", started, allocs, bytes);
+        let (allocs, bytes) = (
+            ALLOCS.load(Ordering::Relaxed),
+            BYTES.load(Ordering::Relaxed),
+        );
+        let started = Instant::now();
+        let import = store.prelude_import();
+        stage("prelude_import", started, allocs, bytes);
+        println!("  (prelude ok {})", import.is_ok());
+    }
+
     let mut readings: Vec<Reading> = Vec::new();
     for _ in 0..repeats {
         for file in &files {

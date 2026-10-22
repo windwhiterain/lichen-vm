@@ -257,13 +257,31 @@ pub struct PackageHandle {
 ///
 /// The registry is shared with every package and importer, so a package loaded
 /// once is used in place by all of them. Generic over the program type `P`.
-pub struct PackageStore<P: ProgramCodecOf> {
+/// A native package registered but not compiled: the wrapper, its private ops, and the
+/// names a linked library binds. See [`PackageStore::register_native_deferred`].
+struct PendingNative<P: ProgramCodecOf + 'static> {
+    virtual_path: PathBuf,
+    source: String,
+    native_ops: NativeOps<P>,
+    bindings: Vec<String>,
+}
+
+pub struct PackageStore<P: ProgramCodecOf + 'static> {
     pub registry: Arc<RwLock<Registry<P>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,
     /// The in-flight load stack; a re-entry closes an import cycle.
     loading: Vec<PathBuf>,
     /// Native virtual packages, keyed by the import path they are served at.
     native: HashMap<PathBuf, PackageHandle>,
+    /// Native packages registered but not compiled yet, in registration order.
+    ///
+    /// # Invariant
+    /// A wrapper is a whole program to check and freeze, so a deferred registration
+    /// compiles nothing until an import names it: [`Self::load_package`] materializes
+    /// the entry whose file name the import resolves to. A store whose programs import
+    /// no native package therefore never pays for one, and one store compiles each
+    /// wrapper once because materializing moves the entry into `native`.
+    pending_native: Vec<PendingNative<P>>,
     /// Vendored dependency directories, keyed by the import alias they resolve
     /// through (see [`Self::register_vendored`]).
     vendored: HashMap<String, PathBuf>,
@@ -294,6 +312,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             packages: HashMap::new(),
             loading: Vec::new(),
             native: HashMap::new(),
+            pending_native: Vec::new(),
             vendored: HashMap::new(),
             cache_dir: None,
             device: None,
@@ -485,10 +504,21 @@ where
     /// refs are absolute from birth and the freeze sees their keys registered.
     pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         // A registered native virtual package: served by its file name, no disk file.
-        if let Some(file_name) = path.file_name()
-            && let Some(handle) = self.native.get(Path::new(file_name))
-        {
-            return Ok(handle.clone());
+        // One still pending is compiled here, so a program that imports none never pays
+        // for one.
+        if let Some(file_name) = path.file_name() {
+            let file_name = Path::new(file_name);
+            if self
+                .pending_native
+                .iter()
+                .any(|entry| entry.virtual_path.file_name() == file_name.file_name())
+            {
+                self.materialize_pending_native(file_name)
+                    .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
+            }
+            if let Some(handle) = self.native.get(file_name) {
+                return Ok(handle.clone());
+            }
         }
         // The built-in `core` module, self-registering the same way.
         if path.file_name().is_some_and(|n| n == CORE_PATH) {
@@ -1139,6 +1169,72 @@ where
         native_ops: NativeOps<P>,
     ) -> Result<PackageHandle, String> {
         self.register_embedded(virtual_path, source, native_ops, &[])
+    }
+
+    /// Register a native virtual package whose wrapper compiles when a program first
+    /// imports it.
+    ///
+    /// # Invariant
+    /// Nothing is compiled or validated here, and the wrapper's diagnostics surface at
+    /// the import that names it, so a failure is still reported once. [`Self::register_native`]
+    /// is the eager form, for a host that wants the failure at registration.
+    pub fn register_native_deferred(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<P>,
+    ) {
+        self.register_deferred(virtual_path, source, native_ops, &[]);
+    }
+
+    /// [`Self::register_native_deferred`] with the names a linked library binds.
+    pub fn register_linked_deferred(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<P>,
+        bindings: &[String],
+    ) {
+        self.register_deferred(virtual_path, source, native_ops, bindings);
+    }
+
+    fn register_deferred(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<P>,
+        bindings: &[String],
+    ) {
+        let virtual_path = PathBuf::from(virtual_path);
+        self.pending_native
+            .retain(|entry| entry.virtual_path != virtual_path);
+        self.pending_native.push(PendingNative {
+            virtual_path,
+            source: source.to_string(),
+            native_ops,
+            bindings: bindings.to_vec(),
+        });
+    }
+
+    /// Compile the pending native package `path` names, if one is pending; a no-op
+    /// otherwise, so the caller can ask unconditionally.
+    fn materialize_pending_native(&mut self, path: &Path) -> Result<(), String> {
+        let Some(index) = self
+            .pending_native
+            .iter()
+            .position(|entry| entry.virtual_path.file_name() == path.file_name())
+        else {
+            return Ok(());
+        };
+        let pending = self.pending_native.remove(index);
+        let virtual_path = pending.virtual_path.to_string_lossy().into_owned();
+        self.register_embedded(
+            &virtual_path,
+            &pending.source,
+            pending.native_ops,
+            &pending.bindings,
+        )
+        .map(|_| ())
     }
 
     /// Register a linked library's wrapper and answer the names it binds.

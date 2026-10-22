@@ -129,7 +129,7 @@ semantics.
   111 250 are still at depth ≥ 15. The surviving pair is *(dynamic node, frozen ref)*,
   which no current guard names; a path guard over `AnyNodeId` pairs would cut it. It is
   a candidate, not a landed change.
-- **The per-run fixed cost**: `new_store` compiles the embedded compute wrapper against
-  the core prelude and freezes it — 4.2–5.5 ms, 18 703 allocations and 6 747 KiB on
-  **every** run, which is now 73 % of a 91-byte program's 6.6 ms. It is the next target
-  (checkpoint B).
+- **The per-run fixed cost** was the next target, and it landed:
+  [lazy-plugin-registration](lazy-plugin-registration.md) makes the compute sub-language's
+  wrapper compile on the import that names it, which took a 91-byte program from 6.9 ms to
+  2.4 ms and its peak live from 3 727 KiB to 1 017 KiB.
