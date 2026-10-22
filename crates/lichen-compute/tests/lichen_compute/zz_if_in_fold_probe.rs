@@ -9,7 +9,12 @@
 //! comparison; equal counts move the question into the graph.
 
 use super::common;
+use lichen_compute::language::LangProgram;
 use lichen_highlevel::program::TypeOperator;
+use lichen_lowlevel::{
+    AnyFunctionId, AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Operation,
+    Selection,
+};
 use lichen_utils::extend::AsEnum;
 
 /// The program, with the `if`'s condition and arms spelled by the caller.
@@ -49,6 +54,27 @@ fn is_order_comparison(name: &str) -> bool {
     matches!(name, "Gt" | "Lt" | "Geq" | "Leq")
 }
 
+/// The operator's own name, structural operators included — `Index` and `Apply`
+/// are where the clone's own kind differs from what the refusal hinges on.
+fn operation_name(operation: &Operation<LangProgram>) -> String {
+    if let Some(operator) = AsEnum::<TypeOperator>::as_enum(&operation.operator) {
+        return operator_name(&operator);
+    }
+    match AsEnum::<LowOperator>::as_enum(&operation.operator) {
+        Some(LowOperator::Index) => "Index".to_string(),
+        Some(LowOperator::Apply) => "Apply".to_string(),
+        _ => "structural".to_string(),
+    }
+}
+
+/// A node's own operation name, or "a value node".
+fn node_name(module: &Module<LangProgram>, node: NodeId) -> String {
+    match module.node_operation(node) {
+        Some(operation) => operation_name(&operation),
+        None => "a value node".to_string(),
+    }
+}
+
 /// How many `Gt` nodes the graph holds, and how many comparison instructions the lowered
 /// body carries — through a refusal as much as through a clean check.
 ///
@@ -84,8 +110,7 @@ fn counts(source: &str) -> String {
             continue;
         };
         if is_order_comparison(&operator_name(
-            &AsEnum::<TypeOperator>::as_enum(&operation.operator)
-                .unwrap_or(TypeOperator::Add),
+            &AsEnum::<TypeOperator>::as_enum(&operation.operator).unwrap_or(TypeOperator::Add),
         )) {
             graph_gts += 1;
         }
@@ -101,7 +126,8 @@ fn counts(source: &str) -> String {
     let mut body_gts = 0;
     for block in &body.blocks {
         for &instr in &block.instrs {
-            let Some(lichen_kernel_ir::ValueDef::Instr { op, .. }) = body.values.get(instr.0 as usize)
+            let Some(lichen_kernel_ir::ValueDef::Instr { op, .. }) =
+                body.values.get(instr.0 as usize)
             else {
                 continue;
             };
@@ -121,16 +147,21 @@ fn counts(source: &str) -> String {
             }
         }
     }
-    format!("{refusal}; graph: {graph_gts} order-comparison node(s); body: {body_gts} comparison(s)")
+    format!(
+        "{refusal}; graph: {graph_gts} order-comparison node(s); body: {body_gts} comparison(s)"
+    )
 }
 
-/// Every order-comparison node of the graph, with the operands it actually holds.
+/// The node every route of a comparison shares: its own operands, the routed call that
+/// also carries them, and the conditional that selects on it.
 ///
 /// # Invariant
 ///
-/// A node is printed against the class root its operands resolve to, because a doubled
-/// comparison is a node whose operand reads back as the node itself — a fact about the
-/// equality classes, not about the operand array.
+/// The four order comparisons are **routed through the prelude's bindings**, so one source
+/// `>` is two nodes in the graph — a `TypeOperator` operator and an `Apply` of a frozen
+/// callee — and both emit a comparison when the body walk meets them. A doubled comparison
+/// is therefore a question about which operands each of the two routes reads, so all three
+/// are printed together, each against its class root.
 fn dump_comparisons(source: &str) -> String {
     let report = common::check(source);
     let Some(build) = report.build else {
@@ -142,50 +173,313 @@ fn dump_comparisons(source: &str) -> String {
         let Some(operation) = module.node_operation(id) else {
             continue;
         };
-        let Some(operator) = AsEnum::<TypeOperator>::as_enum(&operation.operator) else {
-            continue;
+        let read = |node: NodeId| {
+            format!(
+                "{node:?}[root {:?}{}]",
+                module.class_root(node),
+                match module.node_origin(node) {
+                    Some(origin) => format!(", origin {origin:?}"),
+                    None => String::new(),
+                }
+            )
         };
-        let name = operator_name(&operator);
-        if !is_order_comparison(&name) && name != "Eq" {
-            continue;
-        }
-        let items = operation
-            .operand
-            .and_then(|operand| module.operand_items(operand).ok())
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|item| match item.node {
-                        lichen_lowlevel::AnyNodeId::Static(reference) => {
-                            format!("static({reference:?})")
-                        }
-                        lichen_lowlevel::AnyNodeId::Dynamic(node) => format!(
-                            "{node:?}{}{}",
-                            if module.class_root(node) == module.class_root(id) {
-                                " [SAME CLASS AS THE COMPARISON]"
-                            } else {
-                                ""
-                            },
-                            match module.node_origin(node) {
-                                Some(origin) => format!(" <- {origin:?}"),
-                                None => String::new(),
+        let operator = AsEnum::<TypeOperator>::as_enum(&operation.operator);
+        let low = AsEnum::<LowOperator>::as_enum(&operation.operator);
+        if let Some(operator) = operator {
+            let name = operator_name(&operator);
+            if !is_order_comparison(&name) && name != "Eq" {
+                continue;
+            }
+            let items = operation
+                .operand
+                .and_then(|operand| module.operand_items(operand).ok())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| match item.node {
+                            lichen_lowlevel::AnyNodeId::Static(reference) => {
+                                format!("static({reference:?})")
                             }
-                        ),
+                            lichen_lowlevel::AnyNodeId::Dynamic(node) => read(node),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|| "<no operand array>".to_string());
+            lines.push(format!("operator  {name} {}", read(id)));
+            lines.push(format!("            operands [{items}]"));
+            // The surface operator's own operands are where the clone's state read
+            // has to be recognised; a template that answers and a clone that does not
+            // is the whole difference between the two lowerings.
+            if is_order_comparison(&name) {
+                for item in operation
+                    .operand
+                    .and_then(|operand| module.operand_items(operand).ok())
+                    .unwrap_or_default()
+                {
+                    let Some(leaf) = item.node.dynamic() else {
+                        continue;
+                    };
+                    let path = looping_function(module).and_then(|function| {
+                        module
+                            .parameter_value_path(function, leaf)
+                            .map(|path| format!("{path:?}"))
+                    });
+                    lines.push(format!(
+                        "            surface operand {}, kind {}, state path {path:?}",
+                        read(leaf),
+                        node_name(module, leaf)
+                    ));
+                }
+            }
+        } else if low == Some(LowOperator::Apply) {
+            let items = operation
+                .operand
+                .and_then(|operand| module.operand_items(operand).ok());
+            let callee = items
+                .and_then(|items| items.first())
+                .map(|item| item.node)
+                .and_then(|node| node.dynamic());
+            // A routed call is one whose callee is a frozen prelude binding.
+            let routed = callee
+                .and_then(|callee| {
+                    module
+                        .static_function_of_callee(callee)
+                        .is_some()
+                        .then_some(true)
+                        .or_else(|| {
+                            module
+                                .node_value(AnyNodeId::Dynamic(callee))
+                                .filter(|value| is_static_function_value(value))
+                                .is_some()
+                                .then_some(true)
+                        })
+                })
+                .unwrap_or(false);
+            if !routed {
+                continue;
+            }
+            let operands = items
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| match item.node {
+                            lichen_lowlevel::AnyNodeId::Static(reference) => {
+                                format!("static({reference:?})")
+                            }
+                            AnyNodeId::Dynamic(node) => read(node),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            // The routed call's argument: its value half's leaves are what it emits over.
+            let argument_leaves = items
+                .and_then(|items| items.get(1).map(|item| item.node))
+                .and_then(|node| node.dynamic())
+                .map(|argument| {
+                    let value = module.pair_value_half(argument).unwrap_or(argument);
+                    format!("{:?}", module.value_leaves(value))
+                })
+                .unwrap_or_else(|| "<no argument>".to_string());
+            lines.push(format!("routed    Apply {}", read(id)));
+            lines.push(format!("            operands [{operands}]"));
+            lines.push(format!("            leaves   {argument_leaves}"));
+            // The comparison's own operands are the reading: a leaf that names a
+            // state slot must lower to a block parameter, and one that does not is
+            // what the doubling ranges over. A two-leaf routed call is the
+            // comparison's own route; the one-leaf ones are the index reads.
+            let state = module.nodes.iter().find_map(|(candidate, _)| {
+                (module.callee_function(candidate) == looping_function(module))
+                    .then(|| module.operands_of(candidate).ok())
+                    .flatten()
+                    .and_then(|operands| operands.get(1).copied())
+            });
+            for leaf in items
+                .and_then(|items| items.get(1).map(|item| item.node))
+                .and_then(|node| node.dynamic())
+                .map(|argument| {
+                    let value = module.pair_value_half(argument).unwrap_or(argument);
+                    module.value_leaves(value).unwrap_or_default()
+                })
+                .unwrap_or_default()
+            {
+                let members: Vec<String> = module
+                    .nodes
+                    .iter()
+                    .filter(|(member, _)| module.class_root(*member) == module.class_root(leaf))
+                    .map(|(member, _)| match module.node_operation(member) {
+                        Some(own) => match AsEnum::<TypeOperator>::as_enum(&own.operator) {
+                            Some(operator) => format!("{member:?}={}", operator_name(&operator)),
+                            None => format!("{member:?}=Apply"),
+                        },
+                        None => format!("{member:?}="),
                     })
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            })
-            .unwrap_or_else(|| "<no operand array>".to_string());
-        let selection = match module.selection_of(id) {
-            Some(lichen_lowlevel::Selection::Computed) => " computed-selection",
-            Some(lichen_lowlevel::Selection::Views(_)) => " view",
-            None => "",
-        };
-        lines.push(format!(
-            "{name} {id:?}{selection}: [{items}]",
-        ));
+                    .collect();
+                let belongs = looping_function(module)
+                    .and_then(|function| module.belongs_to(leaf, function).ok());
+                let paths = looping_function(module).and_then(|function| {
+                    let direct = module
+                        .parameter_value_path(function, leaf)
+                        .map(|path| format!("{path:?}"));
+                    let through_origin = module.node_origin(leaf).and_then(|origin| {
+                        module
+                            .parameter_value_path(function, origin)
+                            .map(|path| format!("{path:?}"))
+                    });
+                    let entry = state.and_then(|state| module.entry_state_path(state, leaf));
+                    Some((direct, through_origin, entry))
+                });
+                lines.push(format!(
+                    "            operand {}, kind {}, belongs {belongs:?}, paths {paths:?}",
+                    read(leaf),
+                    node_name(module, leaf)
+                ));
+                lines.push(format!(
+                    "            operand's class [{}]",
+                    members.join(", ")
+                ));
+            }
+        } else if low == Some(LowOperator::Index)
+            && module.selection_of(id) == Some(lichen_lowlevel::Selection::Computed)
+        {
+            let operands = operation
+                .operand
+                .and_then(|operand| module.operand_items(operand).ok())
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| match item.node {
+                            lichen_lowlevel::AnyNodeId::Static(reference) => {
+                                format!("static({reference:?})")
+                            }
+                            lichen_lowlevel::AnyNodeId::Dynamic(node) => read(node),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            lines.push(format!("if        Index {}", read(id)));
+            lines.push(format!(
+                "            operands [arms, selector] = [{operands}]"
+            ));
+            // The selector is what the refusal names, so its own definition and its
+            // class are printed with it.
+            let selector = operation
+                .operand
+                .and_then(|operand| module.operand_items(operand).ok())
+                .and_then(|items| items.get(1).map(|item| item.node))
+                .and_then(|node| node.dynamic());
+            if let Some(selector) = selector {
+                let own = match module.node_operation(selector) {
+                    Some(own) => match AsEnum::<TypeOperator>::as_enum(&own.operator) {
+                        Some(operator) => operator_name(&operator),
+                        None => "an Apply".to_string(),
+                    },
+                    None => "no operation of its own".to_string(),
+                };
+                let members: Vec<String> = module
+                    .nodes
+                    .iter()
+                    .filter(|(member, _)| module.class_root(*member) == module.class_root(selector))
+                    .map(|(member, _)| match module.node_operation(member) {
+                        Some(own) => match AsEnum::<TypeOperator>::as_enum(&own.operator) {
+                            Some(operator) => format!("{member:?}={}", operator_name(&operator)),
+                            None => format!("{member:?}=Apply"),
+                        },
+                        None => format!("{member:?}="),
+                    })
+                    .collect();
+                let path = looping_function(module).and_then(|function| {
+                    module
+                        .parameter_value_path(function, selector)
+                        .map(|path| format!("{path:?}"))
+                });
+                lines.push(format!(
+                    "            selector {}, own operator {own}, state path {path:?}",
+                    read(selector)
+                ));
+                lines.push(format!(
+                    "            selector's class [{}]",
+                    members.join(", ")
+                ));
+                // A routed selector emits over its argument's leaves, so each leaf is
+                // read with the operator it carries of its own. A routed apply may be
+                // reached through its type side, so the value side is followed too.
+                if own == "an Apply" {
+                    let mut frontier = vec![selector];
+                    if let Some(value_side) = module.apply_pairs.get(&selector).copied() {
+                        frontier.push(value_side);
+                        lines.push(format!(
+                            "            selector's value-side apply {}",
+                            read(value_side)
+                        ));
+                    }
+                    for apply in frontier {
+                        let Some(apply_operation) = module.node_operation(apply) else {
+                            continue;
+                        };
+                        let Some(items) = apply_operation
+                            .operand
+                            .and_then(|operand| module.operand_items(operand).ok())
+                        else {
+                            continue;
+                        };
+                        for (position, item) in items.iter().enumerate() {
+                            let Some(container) = item.node.dynamic() else {
+                                continue;
+                            };
+                            let value = module.pair_value_half(container).unwrap_or(container);
+                            let leaves = module.value_leaves(value).unwrap_or_default();
+                            lines.push(format!(
+                                "            apply {position} {}, leaves {leaves:?}",
+                                read(container)
+                            ));
+                            for leaf in leaves {
+                                let leaf_operator = match module.node_operation(leaf) {
+                                    Some(leaf_operation) => {
+                                        match AsEnum::<TypeOperator>::as_enum(
+                                            &leaf_operation.operator,
+                                        ) {
+                                            Some(operator) => operator_name(&operator),
+                                            None => "an Apply".to_string(),
+                                        }
+                                    }
+                                    None => "no operation".to_string(),
+                                };
+                                let leaf_path = looping_function(module).and_then(|function| {
+                                    module
+                                        .parameter_value_path(function, leaf)
+                                        .map(|path| format!("{path:?}"))
+                                });
+                                lines.push(format!(
+                                    "                leaf {}, operator {leaf_operator}, state path {leaf_path:?}",
+                                    read(leaf)
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     lines.join("\n    ")
+}
+
+/// Whether a value names a frozen function, the marker of a routed prelude binding.
+fn is_static_function_value(value: &lichen_compute::language::LangValue) -> bool {
+    matches!(
+        value.as_enum(),
+        Some(LowValue::Function(AnyFunctionId::Static(_)))
+    )
+}
+
+/// The module's one `@loop`-marked function, the fold the probe programs all carry.
+fn looping_function(module: &Module<LangProgram>) -> Option<FunctionId> {
+    module
+        .functions
+        .keys()
+        .find(|function| module.functions[*function].looping.is_some())
 }
 
 /// What the program answers, or what it refused with.
@@ -207,6 +501,41 @@ fn run_answer(source: &str) -> String {
     format!("answered {:?}", common::float_array(&module, &value))
 }
 
+/// The lowered body, instruction by instruction, so the two comparisons the order
+/// comparison emits are read with the operands each of them was given.
+///
+/// # Invariant
+///
+/// Only a clean check has a body, so this is the control's reading; it names what a
+/// correct lowering looks like for the same shape the refusing variants have in the graph.
+fn dump_body(source: &str) -> String {
+    let report = common::check(source);
+    if !report.ok() {
+        return "refused, so no body".to_string();
+    }
+    let build = report.build.expect("a checked program builds");
+    let body = common::sole_fragment(&build.module).body;
+    let mut lines = Vec::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        lines.push(format!(
+            "block {index} params {:?} terminator {:?}",
+            block.params, block.terminator
+        ));
+        for &instr in &block.instrs {
+            let Some(def) = body.values.get(instr.0 as usize) else {
+                continue;
+            };
+            match def {
+                lichen_kernel_ir::ValueDef::Instr { op, args, .. } => {
+                    lines.push(format!("  v{} = {op:?}{args:?}", instr.0));
+                }
+                other => lines.push(format!("  v{} = {other:?}", instr.0)),
+            }
+        }
+    }
+    lines.join("\n    ")
+}
+
 #[test]
 fn probe_the_body_an_if_in_a_fold_lowers_to() {
     let _slot = common::slot();
@@ -219,12 +548,27 @@ fn probe_the_body_an_if_in_a_fold_lowers_to() {
         ("one_lt_state", "1 < s(0)", "1.0", "0.0"),
         ("state_gt_1_equal_arms", "s(0) > 1", "1.0", "1.0"),
         ("state_eq_2", "s(0) == 2", "1.0", "0.0"),
+        // **The selector is an addition, not the comparison**: `value_is_comparison`
+        // is false for `Add`, so the body walk lowers and the body's own instructions
+        // are readable. What the comparison itself emitted is one of those
+        // instructions' arguments.
+        ("state_gt_1_plus_zero", "(s(0) > 1) + 0", "1.0", "0.0"),
+        ("leaf_gt_1_plus_zero", "(c.taps > 1) + 0", "1.0", "0.0"),
+        ("state_eq_2_plus_zero", "(s(0) == 2) + 0", "1.0", "0.0"),
     ] {
         let source = program(condition, then, otherwise);
         println!("[{label}] {}", counts(&source));
         println!("    {}", dump_comparisons(&source));
+        println!("    body: {}", dump_body(&source));
     }
-    println!("[run state_gt_1] {}", run_answer(&program("s(0) > 1", "1.0", "0.0")));
+    println!(
+        "[run state_gt_1] {}",
+        run_answer(&program("s(0) > 1", "1.0", "0.0"))
+    );
+    println!(
+        "[run state_gt_1_plus_zero] {}",
+        run_answer(&program("(s(0) > 1) + 0", "1.0", "0.0"))
+    );
     println!(
         "[run leaf_gt_1] {}",
         run_answer(&program("c.taps > 1", "1.0", "0.0"))
