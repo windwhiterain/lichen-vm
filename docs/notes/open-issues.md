@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The graphrun's returned tuple is built from plain nodes, not slots, and two fixes were
+measured and rejected.** `run_graph` builds its multi-result array with
+`module.add_node(block, None, Some(value))` per result — a plain node holding a buffer, where the
+standing ruling says **every compound element is a complete `[value, type, attrs…]` slot**. So
+`r[0]` reads the element's *value position*, finds no slot, and answers the empty value the
+collect refuses. Two reader-side fixes were measured: a general "an element that is not a slot is
+its own value" fallback in `slot_read` broke the suite (**52/174**), because a slot's own layout
+and width are not the only way an element can look; narrowing it was not tried yet. The
+writer-side fix is the right one and it has a blocker: `run_graph` is generic over `Program`, so
+`P::Attr::ORDER` — hence the full-width layout a slot needs — is not available there, and the
+layout must come from the `GraphRun` apply, which *is* `HighProgram`.
+
 **The pack placement, the body identity and the fan out join: compute 209/17 → 211/15.** `97a570dd`:
 `pack_placement` keeps the plan's own evidence — the floor's schema line, the landed slice and
 staging mark, the digest difference, and the report naming the pack that fired — and
