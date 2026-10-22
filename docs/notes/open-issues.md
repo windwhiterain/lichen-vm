@@ -94,6 +94,17 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The projection retry is exactly half right, and the class cells are fresh.** Two measurements
+this round. The four `Buf` wrapper structs that read `None` (`520`, `576`, `763`, `822`) have an
+`element` node whose class root **is itself** — a fresh cell with no shape, not a clone of `Buf`'s
+own `T` (the clone seeding is neutral for them), so the declaration's class reaches them by some
+other path. And an `offset_of` that retries with the innermost position dropped, **only when the
+shape walk outran the shape**, fixes **both** remaining compute placement tests —
+`jit_cross_kernel_passes_a_sub_tuple_through` and `jit_nested_tuple_domain` — and breaks three
+others (`a_runtime_scalar_reaches_the_body_beside_the_extent`, `jit_lowers_the_arithmetic…`,
+`jit_tuple_codomain_returns_several_values`), so the retry is too eager for a scalar path that
+legitimately outran a one-position shape. Net 222/4 against 223/3, reverted.
+
 **The literal-bound ruling landed, and the class propagation's first step is neutral: 223/3.**
 `d39273e1`: the literal-bound fold tiles and the test proves the tiling line naming `+` with no
 refusal. `bd900910`: a static clone now keeps its template's class — the class is the
