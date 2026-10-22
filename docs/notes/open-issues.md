@@ -94,6 +94,22 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The seed now runs after the inference and states only what it decides — the class-shape
+conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the pair seeds, runs
+`infer_template_low_types` **first**, and seeds only a class the inference left shapeless; an
+undecided pair (`Tuple([None, None])`) states nothing. Measured **200/26** against the previous
+**201/25**, and the difference is exact: **five fixed** — including
+`graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`, the test that asserted the
+class-shape invariant, plus the two tiling tests, one fusion test and `zz_plain_leg_probe` — and
+**four broken**: `compute::jit_nested_tuple_domain`,
+`compute::jit_cross_kernel_passes_a_sub_tuple_through`,
+`nested_config::a_nested_config_records_each_leaf_for_what_it_is` and
+`fuse_licence::a_read_at_a_computed_address…`. All four are the nested-tuple **placement**: the
+body's path walk still ends refusing with "a kernel body's index cannot be placed", now reaching
+the parameter's own pair (NodeId 49, class 795) before refusing. So the remaining work on that
+line is the walk's dereference rule, which cannot tell a pair from a two-element tuple whose
+type is still open.
+
 **The tiling family proves its report: compute 201 / 25.** `c6c2ab69`: the two pipeline tests
 kept their own subject — the claim, the tiling report, the registry's digest, the
 counterfactual's report — and dropped the per-lane and closed-form answers a stub cannot
