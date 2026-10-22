@@ -1281,6 +1281,11 @@ where
                     else {
                         return None;
                     };
+                    // An undecided argument defers the launch
+                    // (`docs/notes/compound-element-slots.md`).
+                    if !argument_decided(module, operands[1].node) {
+                        return None;
+                    }
                     // A scalar for an arity-1 kernel, an `Array` for a tuple-domain
                     // one; anything else stays lazy, and records why.
                     let args = match kernel_arguments(module, operands[1].node) {
@@ -4701,10 +4706,39 @@ where
                 format!("argument element {path} is {kind}")
             };
             Err(format!(
-                "{refusal}, not a concrete Int or Float, so the kernel's parameters could not be \
-                 filled"
+                "{refusal}, not a concrete Int or Float, so the kernel's parameters could not be filled"
             ))
         }
+    }
+}
+
+/// Whether every element of a kernel argument holds a value.
+///
+/// # Invariant
+/// A value that is present is **decided**, even when it is the wrong class: the refusal names
+/// that case, and only an empty position is undecided.
+fn argument_decided<P>(module: &Module<P>, node: AnyNodeId) -> bool
+where
+    P: Program,
+    P::Value: AsEnum<LowValue>,
+{
+    let Some(value) = module.node_value(node) else {
+        return false;
+    };
+    let Some(low) = AsEnum::<LowValue>::as_enum(&value) else {
+        return true;
+    };
+    let LowValue::Array(array) = low else {
+        return true;
+    };
+    // SAFETY: the array is a value of a live node of `module`.
+    let items = unsafe { array.items() };
+    match array.layout() == 0 {
+        true => items.iter().all(|item| argument_decided(module, item.node)),
+        // A slot states its value in its first position.
+        false => items
+            .first()
+            .is_some_and(|item| argument_decided(module, item.node)),
     }
 }
 
