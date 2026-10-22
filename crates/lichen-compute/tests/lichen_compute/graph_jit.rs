@@ -411,9 +411,8 @@ compute.graphrun built (3,)
     );
     let joined = messages.join(" | ");
     assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("names no backend")),
+        messages.iter().any(|message| message
+            .contains("this function's return is not a value a graph can hand back")),
         "and it says what is missing rather than picking a backend: {joined}"
     );
 }
