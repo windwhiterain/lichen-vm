@@ -176,6 +176,13 @@ where
     /// only compared with it where the apply supplies one
     /// (`docs/notes/array-attribute-view.md`).
     deferred_requirements: HashMap<FunctionId, Vec<(P::Attr, NodeId)>>,
+    /// The attribute each pair's **attribute slot node** belongs to.
+    ///
+    /// # Invariant
+    /// Recorded where the pair is built, so a failed unify names its own attribute and
+    /// the order consulted for it is that attribute's and no other
+    /// (`docs/notes/array-attribute-view.md`).
+    attribute_nodes: HashMap<NodeId, P::Attr>,
     /// The checker's own check sequence, attributed for diagnostics.
     ///
     /// # Invariant
@@ -568,6 +575,7 @@ where
             state: vec![ExprState::default(); n],
             merged_tails: HashMap::new(),
             deferred_requirements: HashMap::new(),
+            attribute_nodes: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,
             arrows: HashSet::new(),
@@ -740,6 +748,36 @@ where
         // A released scope takes the edges into it.
         if !checker.gc_scopes.is_empty() {
             checker.prune_released();
+        }
+        // **Every failed unify asks its own attribute's order**: an error whose pair
+        // position belongs to an attribute is pardoned when that attribute's `is_subtype`
+        // admits the found side (`docs/notes/array-attribute-view.md`).
+        let mut pardoned = Vec::new();
+        for index in 0..checker.module.unify_errors.len() {
+            let error = &checker.module.unify_errors[index];
+            let attribute = checker
+                .attribute_nodes
+                .get(&error.root_a)
+                .or_else(|| checker.attribute_nodes.get(&error.root_b))
+                .copied();
+            let Some(marker) = attribute else {
+                continue;
+            };
+            let admitted = checker
+                .attribute_extension(&marker)
+                .is_some_and(|ext| ext.is_subtype(&checker, error.root_b, error.root_a));
+            if admitted {
+                pardoned.push(index);
+            }
+        }
+        if !pardoned.is_empty() {
+            let errors = std::mem::take(&mut checker.module.unify_errors);
+            checker.module.unify_errors = errors
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _error)| !pardoned.contains(index))
+                .map(|(_index, error)| error)
+                .collect();
         }
         // A build is not ok when a unification failed or a guard was recorded.
         let ok = !checker.check_failed()
@@ -1191,6 +1229,7 @@ where
             });
         }
         let layout = self.full_width_layout();
+        self.attribute_nodes.insert(slot, *marker);
         self.array_node_with_layout(block, &items, layout)
     }
 
