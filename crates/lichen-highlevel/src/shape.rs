@@ -785,6 +785,7 @@ pub fn prepare_template_low_types<P: Program>(
 ) where
     P::Value: ValueType,
 {
+    let mut seeds: Vec<(lichen_lowlevel::NodeId, lichen_lowlevel::LowShape)> = Vec::new();
     for node in module.functions[function].nodes.clone() {
         let Some(LowValue::Array(array)) = module
             .node_value(AnyNodeId::Dynamic(node))
@@ -819,11 +820,21 @@ pub fn prepare_template_low_types<P: Program>(
         ) {
             continue;
         }
-        // A pair has a type slot, so it takes no seed
-        // (`docs/notes/lowlevel-low-types.md`).
-        module.seed_class_low_type(value, shape);
+        seeds.push((value, shape));
     }
+    // The inference runs first, so a seed is only for what it left shapeless
+    // (`docs/notes/compound-element-slots.md`).
     module.infer_template_low_types(function);
+    for (value, shape) in seeds {
+        // An open pair is an undecided type: it states nothing to seed.
+        let states_nothing = match &shape {
+            lichen_lowlevel::LowShape::Tuple(items) => items.iter().all(Option::is_none),
+            _ => false,
+        };
+        if !states_nothing && module.class_low_type(value).is_none() {
+            module.seed_class_low_type(value, shape);
+        }
+    }
 }
 
 /// The shape of the value at `node`, as the graph recorded it for its class.

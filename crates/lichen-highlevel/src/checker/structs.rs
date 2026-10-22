@@ -266,6 +266,14 @@ where
                 )
             }
         };
+        // The read states its value's type node
+        // (`docs/notes/compound-element-slots.md`).
+        for node in [element, value_node] {
+            if node != ty_node {
+                self.module
+                    .record_element_type(node, AnyNodeId::Dynamic(ty_node));
+            }
+        }
         (element, value_node, ty_node)
     }
 
