@@ -94,6 +94,20 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Two distinct refusals wear the same message, and the read-container map does not reach the
+kernel body's reads.** `f6ab07e6`'s note said the root check refuses the nested base; a second
+probe shows the message has two sources. In `compute::jit_nested_tuple_domain` the chain ends on
+the inner tuple and the root check refuses. In `nested_config::a_nested_config_records_each_leaf_
+for_what_it_is` the chain ends on the parameter's **own pair** (NodeId 250, class 2981, whose
+value is the domain 248/class 334), so `on_a_slot` is true and the root check passes — what
+answers `None` there is the **offset**: `offset_of` cannot walk `positions` over the parameter's
+shape. A read-container map (`read_containers`, recorded in `slot_read`) was built to give the
+root check a principled acceptance, and it was measured **neutral (200/26)** because the kernel
+body's reads (671, 669) are **not** any `slot_read` result: the recorded ids stop at the
+template's own reads (223, 422, 424, …) while the body's clones sit between them. That is
+reverted; the finding is that the offset path is the second defect and it is testable through
+`nested_config`.
+
 **The nested base's refusal is the root check alone, and accepting on the shape walk is too
 wide.** Probing the walk on `compute::jit_nested_tuple_domain` with the narrow seed
 (`f6ab07e6`): `667 → 669` is a slot so its step 0 dereferences, `669 → 671` is a bare array (a
