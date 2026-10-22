@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The pack placement, the body identity and the fan out join: compute 209/17 → 211/15.** `97a570dd`:
+`pack_placement` keeps the plan's own evidence — the floor's schema line, the landed slice and
+staging mark, the digest difference, and the report naming the pack that fired — and
+`identity_from_body` keeps the tiling line that names `max` and the identity its marks declared.
+`ee0c7e82`: `fan_out_merge`'s triple proves its record too, and it stays red on a **check**
+refusal, not on a number: `r = graphrun built (count, data) : array{(compute.Buf Float), 2}`
+then `collect r[0]` is refused with "a `compute.collect` reads every element of one buffer, and
+its buffer position holds nothing" — the graphrun's returned tuple of buffers is not readable
+element-wise. That is a **real gap**, and it is the next functional target. The suite's counts
+also wobble by one between runs (211/15 then 210/16 with only this file touched), which is the
+order-dependence recorded above.
+
 **Three more record rewrites: compute 206/20 → 209/17.** `21c17f97` (`recompute_reads`'s triple:
 the pack's licence line, the merged leg's last dispatch not being a recorded node, and the shared
 address dispatching a different fragment) and `81697d08` (`graph_runtime_scalar` proves both legs
