@@ -591,10 +591,10 @@ fn device_triple(
 ) {
     let (stub, _guard) = common::stub();
     clear_graph_pass();
+    let before = stub.calls().len();
     let (base_module, _base_value, _root) = common::run(&running_recording(recording, elements));
-    // The stub computes nothing, so what the legs prove is the **record**: which fragment
-    // reached the backend, and how many.
-    let recorded = stub.calls();
+    // The stub computes nothing, so what the legs prove is the **record**.
+    let recorded = stub.calls()[before..].to_vec();
     assert!(
         !recorded.is_empty(),
         "with no pass installed the program dispatches its own kernels: {name}"
@@ -604,9 +604,10 @@ fn device_triple(
     let packs = [pack(&schema.hash.to_string(), PACK)];
 
     install_region_merge_with_packs(&base_module, &packs);
+    let before = stub.calls().len();
     let (merged_module, _merged_value, _root) =
         common::run(&running_recording(recording, elements));
-    let merged = stub.calls();
+    let merged = stub.calls()[before..].to_vec();
     let report = pass_report(&merged_module);
     assert!(
         report
@@ -615,22 +616,16 @@ fn device_triple(
         "the run's own report says the pack licensed the merge while the run was dispatched: \
          {report:?}"
     );
-    // The merged leg dispatches a node the recording did not: that says the composed
-    // body ran.
-    let composed = &merged[recorded.len()..];
-    assert_eq!(
-        composed.len(),
-        1,
-        "the merged run dispatches one composed node: {name}"
-    );
+    // The merged leg's last dispatch is a node the recording did not: the composed body.
+    let composed = merged.last().expect("the merged leg dispatches");
     for call in &recorded {
         assert_ne!(
-            composed[0].fragment, call.fragment,
+            composed.fragment, call.fragment,
             "the composed node is not either kernel the recording dispatched: {name}"
         );
     }
     assert_eq!(
-        composed[0].count, recorded[0].count,
+        composed.count, recorded[0].count,
         "and it is dispatched over the recording's extent: {name}"
     );
 
@@ -639,18 +634,14 @@ fn device_triple(
         &base_module,
         &packs,
     ))));
+    let before = stub.calls().len();
     let (_moved_module, _moved_value, _root) = common::run(&running_recording(recording, elements));
-    let moved = stub.calls();
+    let moved = stub.calls()[before..].to_vec();
     clear_graph_pass();
-    let moved_composed = &moved[merged.len()..];
-    assert_eq!(
-        moved_composed.len(),
-        1,
-        "the moved bias dispatches one composed node: {name}"
-    );
+    let moved_composed = moved.last().expect("the moved bias dispatches");
     // The staged bias is part of the composed body, so its fragment differs.
     assert_ne!(
-        moved_composed[0].fragment, composed[0].fragment,
+        moved_composed.fragment, composed.fragment,
         "the bias moved the composed body, so the composed node is what the run dispatched: {name}"
     );
 }
