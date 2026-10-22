@@ -105,9 +105,19 @@ unsafe extern "C" fn probe_entry(
                 let low = read
                     .as_ref()
                     .and_then(|value| AsEnum::<lichen_lowlevel::LowValue>::as_enum(value));
+                // The pair the item reads: an `Index` read names it as its operand.
+                let pair = match item.node {
+                    lichen_lowlevel::AnyNodeId::Dynamic(node) => module
+                        .node_operation(node)
+                        .and_then(|operation| operation.operand),
+                    _ => None,
+                };
                 println!(
-                    "    entry: item {k}: shallow={} node={:?} read={:?}",
-                    item.shallow, item.node, read
+                    "    entry: item {k}: shallow={} node={:?} reads_pair={pair:?} owner={:?} read={:?}",
+                    item.shallow,
+                    item.node,
+                    pair.and_then(|pair| module.node_function(pair)),
+                    read
                 );
                 if let Some(lichen_lowlevel::LowValue::USize(n)) = low {
                     sum += n;
@@ -205,19 +215,69 @@ fn new_store(families: &str) -> PackageStore<HostProgram> {
 
 /// The **frozen** path: the wrapper is a native package the program imports.
 fn show_frozen(families: &str, body: &str) -> String {
+    match build_frozen(families, body) {
+        Ok((mut build, _store)) => {
+            let value = build.module.evaluate_node_deep(build.root_val, None);
+            match value {
+                None => "none".to_string(),
+                Some(value) => {
+                    let (value_text, type_text) = lichen_language::render::print_answer_lang(
+                        &build.module,
+                        value,
+                        build.root_ty,
+                    );
+                    format!("{value_text}: {type_text}")
+                }
+            }
+        }
+        Err(message) => format!("<refused> {message}"),
+    }
+}
+
+/// The frozen build, kept whole: the module carries the probe's readings.
+fn build_frozen(
+    families: &str,
+    body: &str,
+) -> Result<
+    (
+        lichen_highlevel::checker::Build<HostProgram>,
+        PackageStore<HostProgram>,
+    ),
+    String,
+> {
     let mut store = new_store(families);
     let source = format!("--- p = import \"arity.lichen\" ---\n({body})");
-    match lichen_language::run::evaluate_raw(&source, None, &mut store) {
-        Ok(output) => output,
-        Err(diags) => format!(
-            "<refused> {}",
-            diags
-                .iter()
-                .map(|diag| diag.message.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        ),
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(&source, None, &mut store);
+    if !diags.is_empty() {
+        return Err(diags
+            .iter()
+            .map(|diag| diag.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "));
     }
+    let ops = if preprocessed.links.is_empty() {
+        lichen_highlevel::no_native_ops()
+    } else {
+        store.linked_ops()
+    };
+    let line_starts = lichen_language::lex::line_starts(&source);
+    let report = lichen_language::compile_with_imports_at::<HostProgram>(
+        preprocessed.code,
+        &preprocessed.imports,
+        Some(store.registry()),
+        preprocessed.code_base,
+        &line_starts,
+        ops,
+    );
+    if !report.ok() {
+        return Err(report
+            .diagnostics
+            .iter()
+            .map(|diag| diag.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "));
+    }
+    Ok((report.build.unwrap(), store))
 }
 
 /// The **spliced** path: the wrapper's source is joined in front of the program
@@ -313,6 +373,7 @@ fn same_process_repeats() {
     const REPEATS: usize = 40;
     for path in ["frozen", "spliced"] {
         let mut ran = 0;
+        let mut failed: Vec<usize> = Vec::new();
         for index in 0..REPEATS {
             let answer = if path == "frozen" {
                 show_frozen(
@@ -322,11 +383,91 @@ fn same_process_repeats() {
             } else {
                 show_spliced(FAMILIES, "voxels Float (\"assets/cube.vdb\", \"ls_cube\")")
             };
-            println!("BUILD {path} {index} -> {answer}");
             if !answer.starts_with("none") {
                 ran += 1;
+            } else {
+                failed.push(index);
             }
         }
-        println!("### {path}: {ran} of {REPEATS} answered");
+        println!("### {path}: {ran} of {REPEATS} answered; failed at {failed:?}");
+    }
+}
+
+/// The frozen two-item type-first case, with the node ids its answer turns on.
+///
+/// # Invariant
+///
+/// Every reading is a node id or an owner tag the module itself holds: the pair an
+/// operand item reads, the parameter the apply's check writes, the closure the apply
+/// read, and the owner tag on the return pair. Two applies that read the same closure
+/// read the same shell, so the owner tag names both.
+#[test]
+fn frozen_readings() {
+    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
+    let body = "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")";
+    let Ok((mut build, _store)) = build_frozen(FAMILIES, body) else {
+        println!("### the frozen build was refused");
+        return;
+    };
+    let value = build.module.evaluate_node_deep(build.root_val, None);
+    let answer = match value {
+        None => "none".to_string(),
+        Some(value) => {
+            let (value_text, type_text) =
+                lichen_language::render::print_answer_lang(&build.module, value, build.root_ty);
+            format!("{value_text}: {type_text}")
+        }
+    };
+    println!("### frozen answer: {answer}");
+    for rehome in build.module.rehomed_functions() {
+        println!(
+            "  rehome {:?} of {:?}: parent={:?} return_pair={:?} owner={:?} parameter={:?} owner={:?}",
+            rehome.function,
+            rehome.origin,
+            rehome.parent,
+            rehome.r#return,
+            rehome.return_owner,
+            rehome.parameter,
+            rehome.parameter_owner,
+        );
+    }
+    let mut applies: Vec<(lichen_lowlevel::NodeId, lichen_lowlevel::NodeId)> = build
+        .module
+        .applied_parameters
+        .iter()
+        .map(|(&apply, &parameter)| (apply, parameter))
+        .collect();
+    applies.sort_by_key(|&(apply, _)| apply);
+    for (apply, parameter) in applies {
+        let pair = build.module.applied_pairs.get(&apply).copied();
+        // The closure the apply read: the callee is the operand array's first item.
+        let callee = build
+            .module
+            .node_operation(apply)
+            .and_then(|operation| operation.operand)
+            .and_then(|operand| {
+                build
+                    .module
+                    .node_value(lichen_lowlevel::AnyNodeId::Dynamic(operand))
+            })
+            .and_then(|value| {
+                AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value).and_then(|low| match low {
+                    lichen_lowlevel::LowValue::Array(array) => {
+                        // SAFETY: the payload is the operand array's own, live in the module.
+                        let items = unsafe { array.items() };
+                        items.first().map(|item| item.node)
+                    }
+                    _ => None,
+                })
+            })
+            .and_then(|node| build.module.node_value(node))
+            .and_then(|value| {
+                AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value).map(|low| format!("{low:?}"))
+            });
+        println!(
+            "  apply {apply:?}: closure={callee:?} parameter={parameter:?} owner={:?} return_pair={pair:?} owner={:?}",
+            build.module.node_function(parameter),
+            pair.and_then(|pair| build.module.node_function(pair)),
+        );
     }
 }
