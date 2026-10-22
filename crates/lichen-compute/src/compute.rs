@@ -2663,17 +2663,28 @@ where
     // Read through the slots like the emission ([`node_class_in`]), or a consumer
     // would refuse the chain.
 
-    // **An undecided class is refused by name, never an invented `Int`.**
-    let class = match outputs.iter().find_map(|output| {
-        write_value_node(module, *output).map(|value| node_class_in(module, &params, value))
-    }) {
+    // **The class a buffer read is declared in**: the parameter's own `.out` declaration
+    // where it states one, else the first write's element. A loop's output is a carried
+    // version, so the declaration is the only reader of it before any index runs.
+    let class = match roles
+        .output_classes
+        .iter()
+        .copied()
+        .flatten()
+        .next()
+        .or_else(|| {
+            outputs.iter().find_map(|output| {
+                write_value_node(module, *output).map(|value| node_class_in(module, &params, value))
+            })
+        }) {
         Some(class) => class,
         None => {
             return Err(RoleUnread::Refusal(format!(
                 "no output of this parallel index function carries a decided scalar class: its \
-                 codomain names {} output(s) and none of them is a `compute.write` of a decided \
-                 scalar, so the element class a `compute.Buf` read carries cannot be read. An \
-                 undecided class is not an `Int` (`docs/notes/compile-order-class.md` §3)",
+                 codomain names {} output(s) and neither its `.out` declaration nor a \
+                 `compute.write` of a decided scalar states one, so the element class a \
+                 `compute.Buf` read carries cannot be read. An undecided class is not an `Int` \
+                 (`docs/notes/compile-order-class.md` §3)",
                 outputs.len()
             )));
         }
@@ -2693,7 +2704,10 @@ where
             ),
             _ => false,
         };
-        if !conditional && write_value_node(module, *output).is_none() {
+        // **A `@loop`'s result is left to the walk too**: the write is inside the loop's
+        // step, and the walk emits it there (`docs/notes/loop-conversion.md` §6).
+        let looping = is_loop_position(module, *output);
+        if !conditional && !looping && write_value_node(module, *output).is_none() {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
                  (an index function must write every output it declares)"
@@ -2701,7 +2715,7 @@ where
             .into());
         }
         // **A write fills the output it names**, not the position it is walked at.
-        if !conditional {
+        if !conditional && !looping {
             let named = write_chain_output_pos(module, &params, AnyNodeId::Dynamic(*output))?;
             if named != Some(position) {
                 return Err(match named {
@@ -2777,6 +2791,41 @@ where
         slices: Vec::new(),
         marks: std::mem::take(&mut tally.marks),
     })
+}
+
+/// Whether `node` is a `@loop`'s result, through the wrappers a position arrives in.
+///
+/// # Invariant
+/// A codomain position arrives wrapped exactly as [`write_node`] peels it, so the same
+/// peel is tried before the node is asked who its callee is; the answer is the
+/// conversion's own — a marked function whose recursion converts.
+fn is_loop_position<P>(module: &Module<P>, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut node = AnyNodeId::Dynamic(
+        value_of_node(module, node)
+            .or_else(|| pair_value(module, node))
+            .unwrap_or(node),
+    );
+    for _ in 0..8 {
+        let Some(current) = node.dynamic() else {
+            return false;
+        };
+        if module
+            .callee_function(current)
+            .is_some_and(|callee| module.loop_conversion(callee).is_ok())
+        {
+            return true;
+        }
+        match concrete_element(module, current) {
+            Some(next) => node = next,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// The `compute.write` node a position reaches, if it reaches one.

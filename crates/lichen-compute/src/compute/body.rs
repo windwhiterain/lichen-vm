@@ -2098,6 +2098,39 @@ where
         apply.then_some(defined)
     }
 
+    /// The entering node a `@loop` state read stands for: the call's own value at that slot.
+    ///
+    /// # Invariant
+    /// A `@loop`'s carried state is the entering call's element list, so a state read's
+    /// **identity** — which buffer it is, not what it holds — is the node the call bound
+    /// at that slot. That is what lets a write whose target is a carried version name its
+    /// output: the version's identity is the entering value's, and a write into it is a
+    /// write into that output.
+    fn version_identity(&self, node: NodeId) -> Option<AnyNodeId> {
+        let index = self.loop_owner(node)?;
+        let active = &self.loops[index];
+        let path = self.module.entry_state_path(active.state, node)?;
+        let slot = active
+            .conversion
+            .state
+            .iter()
+            .position(|candidate| *candidate == path)?;
+        if active.conversion.state.len() == 1 && active.conversion.state[0].is_empty() {
+            return self
+                .module
+                .pair_value_half(active.state)
+                .map(AnyNodeId::Dynamic);
+        }
+        // SAFETY: `active.state` is a live node of the module being lowered.
+        let elements = unsafe { self.module.array_items(active.state) }?;
+        let element = elements.get(slot)?.node.dynamic()?;
+        Some(
+            self.module
+                .element_value_node(element.into())
+                .unwrap_or(element.into()),
+        )
+    }
+
     fn write_call(&mut self, operand: NodeId, atomic: bool) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
@@ -2106,7 +2139,21 @@ where
                 items.len()
             ));
         }
-        let target = dynamic(items[0].node)?;
+        let mut target = dynamic(items[0].node)?;
+        // **A carried version names the buffer it was entered with**: follow the state
+        // read to the entering value before resolving the output ordinal.
+        for _ in 0..8 {
+            let Some(entering) = self.version_identity(target) else {
+                break;
+            };
+            let Some(entering) = entering.dynamic() else {
+                break;
+            };
+            if entering == target {
+                break;
+            }
+            target = entering;
+        }
         let index = dynamic(items[1].node)?;
         let value_node = dynamic(items[2].node)?;
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target))?;
@@ -2150,7 +2197,13 @@ where
         } else {
             KernelInstr::BufferWriteCall(element)
         };
-        Ok(self.emit(instruction, vec![position, index, value], element))
+        self.emit(instruction, vec![position, index, value], element);
+        // **A write's value is a token of the element's class.** A write fills an output
+        // position, so what a reader of its value needs is *which buffer* — and that is the
+        // node's identity (`write_target_node`), not an SSA value. The token exists because
+        // the value may be carried: a `@loop`'s state slot, or a selection's arm
+        // (`docs/notes/loop-conversion.md` §6, the version spine).
+        Ok(self.emit_const(element, 0))
     }
 
     /// The element class the parameter declares for write ordinal `ordinal`.
