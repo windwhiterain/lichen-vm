@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**No checked apply carries the element cell: it is cloned as part of the struct.** Probing
+`apply_parameter_check` on the recorded program shows eight applies, each with its own cloned
+parameter and argument — `282/203`, `319/203`, `476/399`, `513/399`, `784/673`, `832/673`,
+`984/885`, `1032/885` — and **none is `609`**, the instance's `element` cell. So the cell is not
+a parameter of any apply: it is cloned as part of the **struct**, and no unification ever sees it
+as a parameter that needs an argument. The substitution therefore has to be made where the struct
+is instantiated, and that path is `checker/structs.rs`'s instantiation against the lowlevel clone
+walk.
+
 **The argument of a type application has no value class, so the seeding cannot happen in
 `lowlevel`.** Attempting the propagation at the apply — seeding every clone of the parameter from
 `class_low_type(argument)` — is measured **neutral**: `argument` is `Float` the *type*, a static
