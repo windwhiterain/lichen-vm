@@ -11,10 +11,10 @@ bracket-matching, not semantic correctness.  It:
 
 - models the current surface syntax — the keyword-led braced types (`tuple{…}`,
   `struct{…}`, `array{T, n}`, `set{E}`, `table{K, V}`), the parenthesised
-  `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`, `X{n}`,
-  `X::a`), the infix `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix
-  keyword operators.  The retired angle forms (`<…>`, `struct<…>`,
-  `array<…, n>`) do not parse; `tests/samples.rs` pins that;
+  `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`), the infix
+  `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix keyword operators.
+  The retired angle forms (`<…>`, `struct<…>`, `array<…, n>`) do not parse;
+  `tests/samples.rs` pins that;
 - models the `--- ... ---` preprocessor block, Lichen's only "prose" home, as a
   node so doc strings can be highlighted;
 - keeps a light operator-precedence ladder for readable trees, in the language's

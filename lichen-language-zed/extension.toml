@@ -90,10 +90,9 @@ languages = ["Lichen"]
 # touching `tree-sitter-lichen/grammar.js`, `tree-sitter-lichen/queries/` or
 # `lichen-language-zed/languages/lichen/`, so it must be bumped in the same
 # commit as any grammar, query or highlight change.  The current rev is the
-# braced-type-form migration: `tuple{…}`, `struct{…}`, `array{…}`, `set{…}` and
-# `table{K, V}` replaced the retired angle forms, and the glued `X{n}`/`X::a`
-# reads, `t <== k`, `set(…)`/`table(…)` values, the prefix keyword operators and
-# `@any` were added.
+# type-access removal: `X{n}` and `X::a` are gone, so `{` is always a block and
+# `::` is not a token; the braced-type-form migration and the prefix keyword
+# operators are in earlier commits.
 #
 # The `repository` is the public HTTPS remote and `rev` is a commit pushed to
 # `origin/dev`, so a registry install (or any machine without a local clone) can

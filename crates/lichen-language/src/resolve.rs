@@ -417,18 +417,11 @@ impl Resolver {
                 self.resolve_expr(array);
                 self.resolve_expr(index);
             }
-            Expr::TypeAccess {
-                container, index, ..
-            } => {
-                self.resolve_expr(container);
-                self.resolve_expr(index);
-            }
             Expr::FieldRead { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.resolve_expr(container),
-            Expr::NamedTypeAccess { container, .. } => self.resolve_expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);
@@ -553,7 +546,6 @@ fn is_tree_expr(e: &Expr) -> bool {
             | Expr::TypeSet(..)
             | Expr::TypeTable { .. }
             | Expr::TypeArray { .. }
-            | Expr::TypeAccess { .. }
             | Expr::TypeConst(..)
             | Expr::Arrow { .. }
     )

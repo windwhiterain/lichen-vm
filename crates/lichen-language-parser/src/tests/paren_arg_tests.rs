@@ -33,7 +33,6 @@ fn a_parenthesised_value_is_an_argument_in_every_argument_position() {
             "(R _)(.from (s (0) - 1))",
         ),
         ("index", "e[s (0) - 1]", "e[(s (0) - 1)]"),
-        ("type access", "(X{s (0) - 1})", "(X{(s (0) - 1)})"),
         ("application", "f (s (0) - 1)", "f ((s (0) - 1))"),
         ("native call", "$n(s (0) - 1)", "$n((s (0) - 1))"),
         ("array element", "[s (0) - 1]", "[(s (0) - 1)]"),

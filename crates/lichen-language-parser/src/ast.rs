@@ -159,13 +159,6 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
-    /// `X{n}` — a type access: component `n` of `X`'s value, a tuple type
-    /// (`docs/notes/type-access.md`).
-    TypeAccess {
-        container: Box<Expr>,
-        index: Box<Expr>,
-        span: Span,
-    },
     /// `a(k)` — a positional slot read; the `(` is adjacent and holds one
     /// expression (`a(1,)` is an instantiation).
     FieldRead {
@@ -176,13 +169,6 @@ pub enum Expr {
     /// `a.name` — a named field read; the name resolves through the struct
     /// type's name table to a positional index.
     NamedFieldRead {
-        container: Box<Expr>,
-        name: String,
-        span: Span,
-    },
-    /// `X::a` — a named type access: field `a` of a **TypeStruct value**
-    /// (`docs/notes/type-access.md`).
-    NamedTypeAccess {
         container: Box<Expr>,
         name: String,
         span: Span,
@@ -392,10 +378,8 @@ impl Expr {
             Expr::Prefix { span, .. } => *span,
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
-            Expr::TypeAccess { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::NamedFieldRead { span, .. } => *span,
-            Expr::NamedTypeAccess { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
             Expr::Arrow { span, .. } => *span,

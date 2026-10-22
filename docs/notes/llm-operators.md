@@ -500,7 +500,7 @@ need a node-local producer for `r`.
   `.at (s(0) - 1)` fails to parse **was wrong**: the grammar of record
   (`docs/language-spec.md:96-97`, `farg := '.' name expr | expr`, implemented at `parse.rs:1153-1168` with
   the value read at full-expression level) accepts a parenthesised value in **every** argument position
-  measured — instantiation fields, indexes, type access, native calls, arrays, one-operand keywords and slot
+  measured — instantiation fields, indexes, native calls, arrays, one-operand keywords and slot
   reads — and `examples/decode.lichen:248` already uses the parenthesised spelling. What the slice hit was
   **one missing `)`**. The measured facts about that: an unclosed delimiter is reported **where parsing
   stops, never where it was opened** (general, not specific to `.at`), and a deep cascade can put a *later*

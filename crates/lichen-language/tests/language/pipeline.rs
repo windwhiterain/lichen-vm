@@ -619,32 +619,14 @@ fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
     assert_eq!(usize_of(&evaluate("(x => float2int x) 4.5")), 4);
 }
 
-/// `<`/`>` compare alone; `X{n}` reads a tuple type value and `X::a` a struct
-/// type value by name.
+/// `<`/`>` compare alone, and a struct field is read by name.
 #[test]
-fn comparisons_and_the_type_accesses_are_spelled_apart() {
+fn comparisons_and_the_struct_field_read_are_spelled_apart() {
     // An expression before the token, and an expression after it: a comparison
     // (`1 < 2 > 0` is `(1 < 2) > 0`).
     assert_eq!(usize_of(&evaluate("2 > 1")), 1);
     assert_eq!(usize_of(&evaluate("2 >= 2")), 1);
     assert_eq!(usize_of(&evaluate("1 < 2 > 0")), 1);
-    // A glued `{` reads the component out of the value it follows — here a
-    // tuple type value, so the read is positional.
-    assert_eq!(
-        usize_of(&evaluate("f = x => x; f (tuple{Int, string}){1} == string")),
-        1
-    );
-    // The struct form states the *tuple* kind, so a struct type value is read
-    // by name (`::a`) rather than positionally.
-    assert_eq!(usize_of(&evaluate("tuple{Int, string}{1} == string")), 1);
-    assert_eq!(
-        usize_of(&evaluate("struct{.a Int, .b string}::a == Int")),
-        1
-    );
-    assert_eq!(
-        usize_of(&evaluate("a = tuple{Int, string}; a{0} == Int")),
-        1
-    );
     // The field is read by name `s.a`; the positional `s(0)` is the tuple read.
     assert_eq!(
         usize_of(&evaluate(
@@ -655,11 +637,6 @@ fn comparisons_and_the_type_accesses_are_spelled_apart() {
     // The keyword-led array type checks and runs.
     let (module, value, _) = common::evaluate("[1, 2] : array{Int, 2}");
     assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
-    // `<` is nothing but less-than, so no comparison needs a space.
-    assert_eq!(
-        usize_of(&evaluate("f = x => x; f (tuple{Int, string}){0} == Int")),
-        1
-    );
 }
 
 #[test]
@@ -930,7 +907,7 @@ fn a_self_nested_struct_is_refused() {
 #[test]
 fn a_self_referential_field_read_is_refused() {
     // The same rule by every spelling a name can take inside a value.
-    for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a", "a = a::x; a"] {
+    for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a"] {
         assert_self_reference_is_refused(source);
     }
 }
@@ -1223,146 +1200,6 @@ fn a_named_field_read_on_a_non_struct_is_rejected() {
         .expect("a named-field read on an int is a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
     assert_eq!(d[0].message, "expected TypeStruct, found Type");
-}
-
-#[test]
-fn a_named_type_access_requires_a_type_struct_container() {
-    // `X::a` requires a TypeStruct container kind, the counterpart of
-    // what `X{n}` states.
-    let d = diags("a = 5; a::x");
-    let check = d[0]
-        .check
-        .as_ref()
-        .expect("a named type access on a non-struct is a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(d[0].message, "expected TypeStruct, found Int");
-}
-
-#[test]
-fn a_type_access_of_a_type_value_reads_the_components_pair() {
-    // `X{n}` reads a component of a *type-as-value*, whose elements are
-    // themselves `[value, type]` pairs.
-
-    // The positional read yields the element's value and its type.
-    assert_eq!(
-        evaluate("tuple{Int, string}{0}"),
-        LangValue::TypeValue(TypeValue::TypeInt)
-    );
-    assert_eq!(usize_of(&evaluate("tuple{Int, string}{0} == Int")), 1);
-    // A struct type value states the *tuple* kind for `X{n}`, so its
-    // components are read by name (`X::a`).
-    assert_eq!(
-        usize_of(&evaluate("struct{.a Int, .b string}::b == string")),
-        1
-    );
-    // The element's own *value* slot, which a `Type`-valued element carries.
-    assert_eq!(usize_of(&evaluate("tuple{Int, string}{1} == string")), 1);
-    // A read result is a container too: the element type states what `p(0)`
-    // is, so the component read checks.
-    assert_eq!(
-        usize_of(&evaluate("p = (tuple{Int, string}, 1)\np(0){0} == Int")),
-        1
-    );
-}
-
-#[test]
-fn a_type_access_of_a_non_tuple_container_is_refused_by_kind() {
-    // `X{n}` reads a *type value* component, so the container's type
-    // must be the tuple kind.
-    let d = diags("[1, 2]{0}");
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
-    // A span, too — the container is what the user wrote.
-    assert_eq!(d[0].span, Some((1, 1)));
-    // The same read through a bound name is refused at the name.
-    let d = diags("x = [1, 2]; x{0}");
-    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
-    assert_eq!(d[0].span, Some((1, 5)));
-    // A parameter container states the same requirement once its type is
-    // decided, which is what the written annotation does.
-    let d = diags("f = (k : array{Int, 2}) => k{0}; f [1, 2]");
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(d[0].message, "expected TypeTuple, found array{Int, 2}");
-    assert_eq!(d[0].span, Some((1, 6)), "the caret is the container");
-    // A scalar is not a container at all, and gets the same kind refusal.
-    let d = diags("5{0}");
-    assert_eq!(d[0].message, "expected TypeTuple, found Int");
-    assert_eq!(d[0].span, Some((1, 1)));
-}
-
-#[test]
-fn a_named_type_access_yields_the_field_type() {
-    // `S::a` reads field `a`'s *type* as a value; `s.a` reads field `a`'s
-    // *value* from the instance.
-    assert_eq!(
-        evaluate("S = struct{.a Int, .b string}; S::a"),
-        LangValue::TypeValue(TypeValue::TypeInt)
-    );
-    assert_eq!(
-        evaluate("S = struct{.a Int, .b string}; S::b"),
-        LangValue::TypeValue(TypeValue::TypeString)
-    );
-    assert_eq!(
-        usize_of(&evaluate(
-            "S = struct{.a Int, .b string}; s = S(.a 1, .b \"h\"); s.a"
-        )),
-        1
-    );
-    // The instance read is an Int, so `s.a == 1` is a valid int comparison.
-    assert_eq!(
-        usize_of(&evaluate(
-            "S = struct{.a Int, .b string}; s = S(.a 1, .b \"h\"); s.a == 1"
-        )),
-        1
-    );
-    // `==` is generalized: a `Type`-typed value compares against a type
-    // constant by value.
-    assert_eq!(
-        usize_of(&evaluate("S = struct{.a Int, .b string}; S::a == Int")),
-        1
-    );
-    assert_eq!(
-        usize_of(&evaluate("S = struct{.a Int, .b string}; S::a == string")),
-        0
-    );
-    // Comparing values of different types is still rejected.
-    assert!(
-        diags("S = struct{.a Int, .b string}; S::a == 1")
-            .iter()
-            .any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::BinOp))
-    );
-}
-
-#[test]
-fn a_type_access_of_a_deferred_non_tuple_is_refused_at_the_read() {
-    // The container is a parameter whose type is not decided where the read
-    // is checked, so the read has none at all.
-    let d = diags("f = s => s{0}; f (1)");
-    assert_eq!(d.len(), 1);
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::UndecidedContainer);
-    assert_eq!(check.field.as_deref(), Some("positional type access"));
-    assert_eq!(
-        d[0].message,
-        "this positional type access cannot be checked: the container's type \
-         is not decided here — annotate the container's type"
-    );
-    assert_eq!(d[0].span, Some((1, 5)), "the caret is on the container");
-}
-
-#[test]
-fn a_type_access_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error() {
-    // A string subscript is not a check-time diagnostic: the lowlevel
-    // records it as `RuntimeIndexSubscript`.
-
-    // The caret is on the subscript, the one node the type access gives an edge.
-    let d = diags("a = tuple{Int, string}\ni = \"x\"\na{i}");
-    assert_eq!(d.len(), 1);
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::RuntimeIndexSubscript);
-    assert_eq!(d[0].span, Some((2, 5)), "the caret is on the subscript `i`");
 }
 
 #[test]

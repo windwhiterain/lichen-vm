@@ -23,7 +23,8 @@ two `Int`s, while `x : (Int, Int)` is a *value* tuple whose elements are the
 type-values `Int` and `Int` (so `x : tuple{Type, Type}`). Every type form is
 keyword-led: `struct{T1, T2}` is a struct type and the array type is
 `array{T, n}`. `<` is no longer a delimiter at all — it is only the less-than
-comparison, and the positional type access is `X{n}` ([type-access](type-access.md)).
+comparison.  A type value's component is not read at all: the positional type
+access `X{n}` was removed with its named sibling ([type-access](type-access.md)).
 
 ## Why
 

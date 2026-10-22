@@ -6,7 +6,8 @@
 > readers, the printers, the element-attribute and value-pin reconciliation, the
 > wildcard literal `@any`, a value-less annotation `: T # a`, `ShapeElements`
 > gone, the angle spellings retired (`tuple{…}` / `struct{…}` / `array{T, n}`),
-> the type-component read back as `X{n}` with the table read at `e <== key`, and
+> the type-component read briefly returned as `X{n}` (since removed —
+> [type-access](type-access.md)) with the table read at `e <== key`, and
 > set/table types spelled `set{E}` / `table{K, V}` against their `set(…)` /
 > `table(…)` values. What remains is in the open list below.
 >
@@ -135,10 +136,10 @@ t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in t
 
 The angle spellings this note was written against (`<a, b>`, `struct<.f a>`,
 `array<T, n>`) were retired afterwards. The raw index `X<e>` was removed with them
-and then brought back as the **type access** `X{n}` — the table read gave up
-`e{key}` for `e <== key`, so `{…}` reads a type component and `<`/`>` are
-comparisons alone ([type-access.md](type-access.md)). Measurements recorded before
-those changes keep their spelling.
+and briefly returned as the type access `X{n}`, itself now removed — the table
+read gave up `e{key}` for `e <== key`, and `<`/`>` are comparisons alone
+([type-access.md](type-access.md)). Measurements recorded before those changes
+keep their spelling.
 
 A pin cannot be enforced by the lowlevel compare — a value's element slots hold
 the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)

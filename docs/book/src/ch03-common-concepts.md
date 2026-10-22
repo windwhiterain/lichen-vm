@@ -354,7 +354,7 @@ The operators, from loosest to tightest, are:
 | product | `*` `/` `%` | left |
 | prefix keywords | `@assert`, `@gc`, `int2float`, `float2int`, `max`, `min`, `exp`, `sqrt`, `floor`, `sin`, `cos`, `ln` | — |
 | application | `f x` | left |
-| postfix reads | `a[i]`, `a.name`, `X{n}`, `X::a`, `a(k)` | left |
+| postfix reads | `a[i]`, `a.name`, `a(k)` | left |
 | atoms | literals, names, `( … )`, `[ … ]`, `{ … }`, the type forms | — |
 
 A few readings of the table are worth checking against the compiler:

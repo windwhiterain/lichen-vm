@@ -74,30 +74,6 @@ fn a_table_arrow_separates_a_table_entry() {
 }
 
 #[test]
-fn a_glued_double_colon_is_a_named_type_access_postfix() {
-    // `S::a` is glued, so a Glue marker precedes `::`; `kinds_all` keeps it.
-    assert_eq!(
-        kinds_all("S::a"),
-        vec![
-            TokenKind::Name("S".to_string()),
-            TokenKind::Glue,
-            TokenKind::DoubleColon,
-            TokenKind::Name("a".to_string()),
-            TokenKind::Eof,
-        ]
-    );
-    assert_eq!(
-        kinds_all("S :: a"),
-        vec![
-            TokenKind::Name("S".to_string()),
-            TokenKind::DoubleColon,
-            TokenKind::Name("a".to_string()),
-            TokenKind::Eof,
-        ]
-    );
-}
-
-#[test]
 fn arrows_and_punctuation() {
     assert_eq!(
         kinds("(a, b) : A -> B <3>"),

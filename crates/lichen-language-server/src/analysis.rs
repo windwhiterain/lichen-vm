@@ -1537,7 +1537,6 @@ fn classify_token_kind(
         | TokenKind::TableArrow
         | TokenKind::TableFindArrow
         | TokenKind::Colon
-        | TokenKind::DoubleColon
         | TokenKind::Hash
         | TokenKind::Question
         | TokenKind::Bang
@@ -1698,7 +1697,6 @@ impl<'a> NameClass<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -1763,12 +1761,6 @@ impl<'a> NameClass<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::TypeAccess {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -2008,7 +2000,6 @@ impl Walk {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -2073,12 +2064,6 @@ impl Walk {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::TypeAccess {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -2347,7 +2332,6 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
-            Expr::NamedTypeAccess { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -2412,12 +2396,6 @@ impl<'a> ScopeCapture<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
-            }
-            Expr::TypeAccess {
-                container, index, ..
-            } => {
-                self.expr(container);
-                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..

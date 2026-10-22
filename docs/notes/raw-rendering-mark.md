@@ -183,11 +183,9 @@ means no form was recognised at all.
   backend a run dispatches to is a property of the program, not of one value.
 - **Raw layout behind the reads.** A struct type value's raw shape is
   `[Int, Type]` — the positional field-type list, the lowlevel data layout — and
-  read against its kind it prints as the code that produced it. `X{n}` reads a
-  component of a tuple type value's component list (the container's kind must be
-  `TypeTuple`, refused otherwise); `X::a` reads a named field's *type* from a
-  `TypeStruct` value (the name table lies at `container_ty[0][1]`); `.a` reads a
-  field *value* from a struct instance. A **released** node
+  read against its kind it prints as the code that produced it. `.a` reads a
+  field *value* from a struct instance; the retired type reads (`X{n}` and
+  `X::a`) are recorded in [type-access](type-access.md). A **released** node
   (`Module::node_value` on a dropped dynamic ref) is a documented state rather
   than an error: the printer answers `?` rather than indexing a node table that no
   longer holds it. A single-field struct instance's value renders the one-element

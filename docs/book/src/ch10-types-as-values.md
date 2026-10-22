@@ -68,52 +68,37 @@ constructor with one parameter already supplied.
 `type_of` (Chapter 5) is the smallest useful example: it is a function
 whose result is the argument's type expression.
 
-## Reading a type apart
+## Type values are not read apart
 
-A **type access** `X{n}` reads component `n` of a tuple **type value**:
+A type value can be printed, compared, passed and returned, but its
+**components are not readable by a runtime access**: there is no `X{n}` for
+a tuple type's component type and no `X::a` for a struct type's field type.
+The rule is the language's own: a read reads a **value**, and a type's
+component is not a value the program can ask for at run time.
+
+There are two replacements, and they cover the two ways a type reaches a
+function:
+
+- when the type arrives in a **parameter's type slot**, read the value's
+  element and take its type — `type_of s.a`, not a read of the type's field
+  type;
+- when the type arrives in a **value slot** and one of its components is
+  needed, the program is higher-order: pass the type's *parameters* and build
+  the type at the call site with a type function, so the parameter is an
+  ordinary value (a struct instance, a tuple) whose elements are readable.
 
 ```lichen
-tuple{Int, string}{0}
+S = struct{.a Int, .b string}
+s = S(.a 1, .b "h")
+type_of s.a
 ```
 
 ```text
 Int: Type
 ```
 
-The index is a full expression, so a computed component works too:
-
-```lichen
-tuple{Int, string}{0 + 1}
-```
-
-```text
-string: Type
-```
-
-The container must be a tuple type value: its type must be the tuple kind.
-A tuple *value* is refused (`expected TypeTuple, found tuple{Int, Int}`),
-and so is an array type value (`expected TypeTuple, found TypeArray`). An
-index past the components is refused like any other out-of-bounds read:
-
-```lichen
-tuple{Int, string}{2}
-```
-
-```text
-error: index 2 out of bounds (array length 2)
-  --> 1:20
-   |
- 1 | tuple{Int, string}{2}
-   |                    ^
-```
-
-A component that is itself a type value has the kind of that type
-(Chapter 5's kinds), so `tuple{struct{.a Int}, Int}{0}` is a struct type
-value whose type is `TypeStruct`.
-
-The named sibling is `X::a` (Chapter 8): a struct **type value**'s field
-type, read by name. `X{n}` and `X::a` are the type-level reads; `.name` and
-`a(k)` are the value-level reads.
+A struct instance's field type is read from the **value**, never from the
+type value `S`.
 
 ## Slots, and pinning a value
 
@@ -203,8 +188,9 @@ a different length fails rather than silently resizing.
 ## Types are checked by their kind
 
 A compound type value's type is its kind, never `Type`
-(Chapter 5). So the forms for reading a type are forms for reading a value
-of one particular kind, and a wrong container is an ordinary type error.
+(Chapter 5). A kind says which type expression a value is, so a wrong
+container is an ordinary type error; no read inspects a type value's
+component at run time.
 `tuple{Int, Int}` is `TypeTuple`, `array{Int, 3}` is `TypeArray`, a struct
 type is `TypeStruct`, a table type is `TypeTable`, and a set type is
 `SetType`. The one type that is not a value of a kind type is a function's:
@@ -217,22 +203,23 @@ self-referential node.
   array of types has type `array{Type, n}`.
 - A type constructor is an ordinary function; `Box Int` and `Pair Int
   string` are applications.
-- `X{n}` reads component `n` of a tuple type value; `X::a` reads a struct
-  type value's field type. The container's kind is required, and a
-  computed index works.
+- A type value is not read apart: read a value's element and take its type
+  (`type_of s.a`), or pass a type's parameters and build the type at the
+  call site with a type function.
 - A compound type's positions are slots; `v : T` pins a slot's value, the
   pin rides in the type value, and a value that disagrees is refused.
 - `array{T, n}`'s length may be an expression; an annotation pins it, and
   the pin is enforced per application.
-- A type value's kind is what makes a type-level read meaningful, and a
-  wrong kind is an ordinary type error.
+- A type value's kind is what makes a type expression a value of that kind,
+  and a wrong kind is an ordinary type error.
 
 ## Exercises
 
 1. Write `Pair = T => U => tuple{T, U}` and print `Pair Int string` and
    `Pair Type Int`.
-2. Read the first and second components of `tuple{Int, string}` with
-   `{0}` and `{1}`, and explain why `{2}` is refused.
+2. Write `Pair = T => tuple{T, T}`, apply it to `Int` at the call site, and
+   explain why a generic function takes the element type rather than reading
+   it out of a tuple type value.
 3. Write a type `t = tuple{5 : Int, Int}` and check that `(5, 2) : t`
    holds while `(6, 2) : t` does not.
 4. Write a function that takes a length `n` and returns `array{Int, n}`,

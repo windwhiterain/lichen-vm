@@ -455,18 +455,6 @@ five = 5 # 8 ? Doc(.tag 7)
 five # 4
 ```
 
-### `type_access.lichen`
-
-```text
----
-  order = "11"
-  output = "(Int, string, Int, string, 1): tuple{Type, Type, Type, Type, Int}"
----
-S = struct{.a Int, .b string}
-s = S(.a 1, .b "h")
-(tuple{Int, string}{0}, tuple{Int, string}{1}, S::a, S::b, s.a)
-```
-
 ### `gcd.lichen`
 
 ```text

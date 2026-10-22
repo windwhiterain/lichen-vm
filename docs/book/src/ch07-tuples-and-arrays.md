@@ -269,8 +269,6 @@ refusal.
 | tuple | `TypeTuple` | `a(k)` | this chapter |
 | array | `TypeArray` | `a[i]` | this chapter |
 | struct instance | `TypeStruct` | `a.name` | Chapter 8 |
-| struct type value | `TypeStruct` | `X::a` | Chapter 8 |
-| tuple type value | `TypeTuple` | `X{n}` | Chapter 10 |
 | table | `TypeTable` | `t <== k` | Chapter 9 |
 | set | `SetType` | `x @in s` | Chapter 9 |
 

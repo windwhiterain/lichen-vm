@@ -166,7 +166,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a = ; 5");
     assert_eq!(
         err.message,
-        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(err.span, Some((1, 5)));
 }
@@ -500,30 +500,6 @@ fn named_field_read_is_dot_postfix() {
 }
 
 #[test]
-fn named_type_access_is_glued_double_colon_postfix() {
-    // `S::a` — a named type access; the `::` must be glued to the container.
-    let Expr::NamedTypeAccess {
-        container, name, ..
-    } = parse_ok("S::a")
-    else {
-        panic!("expected a named type access")
-    };
-    assert!(matches!(*container, Expr::Name(n, _, _) if n == "S"));
-    assert_eq!(name, "a");
-    // The glued `::` reads through a struct type value too.
-    let Expr::NamedTypeAccess {
-        container, name, ..
-    } = parse_ok("struct{.a Int, .b string}::a")
-    else {
-        panic!("expected a named type access")
-    };
-    assert_eq!(name, "a");
-    assert!(matches!(*container, Expr::StructType(..)));
-    // The spaced `::` is not a postfix, so it is a parse error.
-    let _ = parse_err("S :: a");
-}
-
-#[test]
 fn struct_instantiation_is_adjacent_parens() {
     // `C(f1, f2)` — the `(` directly after the callee (no space) is
     // struct instantiation, not a function apply.
@@ -628,8 +604,7 @@ fn struct_type_errors_carry_spans() {
 
 #[test]
 fn the_array_type_keyword() {
-    // `array{T, n}` — the keyword-led array type, distinct from the glued
-    // `X{n}` type access.
+    // `array{T, n}` — the keyword-led array type.
     let Expr::TypeArray {
         element_type,
         length,
@@ -651,34 +626,6 @@ fn the_array_type_keyword() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::Array(..)));
-}
-
-#[test]
-fn the_type_access_postfix() {
-    // `X{n}` — the glued `{` reads component `n` of `X`'s value, unvalidated.
-    let Expr::TypeAccess {
-        container, index, ..
-    } = parse_ok("tuple{Int, string}{0}")
-    else {
-        panic!("expected a type access")
-    };
-    assert!(matches!(*container, Expr::TypeTuple(..)));
-    assert!(matches!(*index, Expr::Int(0, _)));
-    let Expr::TypeAccess { container, .. } = parse_ok("struct{Int, string}{1}") else {
-        panic!("expected a type access")
-    };
-    assert!(matches!(*container, Expr::StructType(..)));
-    // chained postfix: Int{2}{3} = (Int{2}){3} — the outer type access's
-    // container is the inner type access.
-    let Expr::TypeAccess { container, .. } = parse_ok("Int{2}{3}") else {
-        panic!("expected a type access")
-    };
-    assert!(matches!(*container, Expr::TypeAccess { .. }));
-    // A glued `{` after an expression is the type access (never a block).
-    let Expr::TypeAccess { container, .. } = parse_ok("f{3}") else {
-        panic!("expected a type access")
-    };
-    assert!(matches!(*container, Expr::Name(..)));
 }
 
 #[test]
@@ -708,7 +655,7 @@ fn index_errors_carry_spans() {
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '@shallow', '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found ']'"
+        "expected '@shallow', '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
@@ -725,7 +672,7 @@ fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -960,7 +907,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
+        "expected '@assert', '@gc', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'sin', 'cos', 'ln', 'max', 'min', 'table', 'set', an expression, ':', '#', '!', '?', or '~', found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));

@@ -135,45 +135,12 @@ fn a_named_struct_and_a_named_block_read_by_name() {
     );
 }
 
-// --- the type accesses state their kind too -------------------------------
-
-/// `X{n}` reads a tuple type value, so a `TypeStruct` container is refused.
-#[test]
-fn a_type_access_of_a_struct_type_value_is_refused() {
-    let (message, kind) = refused("struct{.a Int, .b string}{0}");
-    assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeTuple, found TypeStruct");
-}
-
-/// A tuple *value*'s type is the tuple shape, not the kind `TypeTuple`.
-#[test]
-fn a_type_access_of_a_tuple_value_is_refused() {
-    let (message, kind) = refused("(1, 2){0}");
-    assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeTuple, found tuple{Int, Int}");
-}
-
-/// `.a` states the container's kind, `::a` its whole type; an array is
-/// neither.
+/// `.a` states the container's kind; an array is not a struct.
 #[test]
 fn a_named_read_of_an_array_is_refused() {
     let (message, kind) = refused("l = [10, 20]\nl.a");
     assert_eq!(kind, DiagKind::Guard);
     assert_eq!(message, "expected TypeStruct, found TypeArray");
-    let (message, kind) = refused("l = [10, 20]\nl::a");
-    assert_eq!(kind, DiagKind::Guard);
-    assert_eq!(message, "expected TypeStruct, found array{Int, 2}");
-}
-
-/// A deferred container has no read at all: the type access is refused where
-/// it is checked, before the apply.
-#[test]
-fn a_named_type_access_of_a_deferred_array_is_refused_at_the_read() {
-    assert_eq!(
-        undecided_read("f = x => x::a\nf [10, 20]", "named type access"),
-        Some((1, 5)),
-        "the caret is the container, not the access"
-    );
 }
 
 // --- the deferred `.a`: no read until the container's type is decided ------

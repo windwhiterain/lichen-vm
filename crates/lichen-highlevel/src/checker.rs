@@ -1006,10 +1006,9 @@ where
             return true;
         }
         let container = match self.ir[e].kind {
-            ExprKind::Field { container, .. }
-            | ExprKind::NamedField { container, .. }
-            | ExprKind::NamedTypeAccess { container, .. }
-            | ExprKind::TypeAccess { container, .. } => Some(container),
+            ExprKind::Field { container, .. } | ExprKind::NamedField { container, .. } => {
+                Some(container)
+            }
             ExprKind::Index { array, .. } => Some(array),
             _ => None,
         };
@@ -1447,10 +1446,8 @@ where
             | ExprKind::Assert { .. }
             | ExprKind::Gc { .. }
             | ExprKind::Index { .. }
-            | ExprKind::TypeAccess { .. }
             | ExprKind::Field { .. }
             | ExprKind::NamedField { .. }
-            | ExprKind::NamedTypeAccess { .. }
             | ExprKind::Find { .. }
             | ExprKind::Annotation { .. }
             | ExprKind::TypeFunction { .. }
@@ -1598,14 +1595,8 @@ where
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
-            ExprKind::TypeAccess { container, index } => {
-                self.check_type_access(e, container, index)
-            }
             ExprKind::Field { container, key } => self.check_field(e, container, key),
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
-            ExprKind::NamedTypeAccess { container, name } => {
-                self.check_named_type_access(e, container, name)
-            }
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
             ExprKind::TypeFunction {

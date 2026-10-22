@@ -1,5 +1,5 @@
-//! Arrays, tables, and indexing: the array instance and type, the element
-//! read with its bounds, and the type accesses.
+//! Arrays, tables, and indexing: the array instance and type, and the element
+//! read with its bounds.
 
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
@@ -136,98 +136,6 @@ where
                     .module
                     .node_value(AnyNodeId::Dynamic(self.markers.tuple_type_marker));
         tuple || shape::is_struct_marker_any(&self.module, AnyNodeId::Dynamic(marker))
-    }
-
-    /// A positional type access `X{n}` — element `index` of the container's
-    /// value. See `docs/notes/type-access.md`.
-    ///
-    /// # Invariant
-    /// The container must be a tuple type value, stated once as a unify against
-    /// the tuple kind: pinned when undecided, refused where it is decided and
-    /// different. Beyond that the read validates nothing. Its term is the
-    /// element's own `[value, type]` pair, never the bare element.
-    pub(super) fn check_type_access(
-        &mut self,
-        e: ExprId,
-        container: ExprId,
-        index: ExprId,
-    ) -> NodeId {
-        self.check_expr(container);
-        self.check_expr(index);
-        // The tuple-kind requirement, a unify on the container's kind: decided
-        // here, deferred to the apply otherwise.
-        let container_ty = self.state[container].ty.unwrap();
-        self.module.evaluate_node_deep(container_ty, None);
-        if !self.type_is_concrete(container_ty) {
-            return self.refuse_undecided_container(
-                e,
-                container,
-                container_ty,
-                "positional type access",
-            );
-        }
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        // A decided container of another kind is refused and not read:
-        // its element's type slot would be the container's type.
-        if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
-            return self.refused_pair(e);
-        }
-        let container_value = self.value_of(container);
-        let index_value = self.value_of(index);
-        self.node_edges.insert(index_value, self.loc(index, 0));
-        let (pair, element, ty_node) = self.element_read(container_value, index_value);
-        // Both slot reads target the element, so this edge gives a failed one
-        // a span and names it the element.
-        self.node_edges.insert(element, self.loc(e, 1));
-        self.state[e].term = Some(pair);
-        // Left to `value_of`: it reads the same node `element_read` built.
-        self.state[e].val = None;
-        self.state[e].ty = Some(ty_node);
-        pair
-    }
-
-    /// The element read shared by `X{n}` and `X::a`; see
-    /// `docs/notes/type-access.md`. Returns `(pair, element, type)`.
-    ///
-    /// # Invariant
-    /// A **type value** container's component is `[type value, kind]`, so the
-    /// read's type is the component's kind; an **element** is a slot, so its
-    /// component is the slot's type position. The read is computed here, so an
-    /// undecided container stays lazy, which the per-apply re-check relies on.
-    pub(super) fn element_read(
-        &mut self,
-        container_value: NodeId,
-        subscript: NodeId,
-    ) -> (NodeId, NodeId, NodeId) {
-        let element_ops = self.array_node(self.current_block, &[container_value, subscript]);
-        let element = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(element_ops),
-        );
-        // The component is the slot's own type position.
-        let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
-        let component = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(slot_ops),
-        );
-        let value_ops = self.array_node(self.current_block, &[component, self.zero()]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[component, self.one()]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
-        // Run the slot read now, so its type is decided before any check asks.
-        // `evaluate_node` follows the edges it needs.
-        self.module.evaluate_node(AnyNodeId::Dynamic(ty_node), None);
-        (self.pair_of(value_node, ty_node), element, ty_node)
     }
 
     /// A table read `t <== k`: the lowlevel `TableGet` reads the entry whose

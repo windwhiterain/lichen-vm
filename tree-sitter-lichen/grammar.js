@@ -6,7 +6,7 @@
 // accepts anything the frontend accepts.  Grammar: `docs/language-spec.md` §2,
 // the precedence ladder `docs/notes/operators.md` §3.
 //
-// Postfix forms (`(k)`, `[i]`, `{n}`, `::a`) exist only when *glued* to the
+// Postfix forms (`(k)`, `[i]`) exist only when *glued* to the
 // preceding token (`docs/language-spec.md` §2.1), so the grammar spells the
 // glued delimiter `token.immediate`; a spaced delimiter is a fresh atom and so
 // an argument of `application`.
@@ -215,8 +215,6 @@ module.exports = grammar({
     _postfix: $ => choice(
       $.field_read,
       $.index,
-      $.type_access,
-      $.named_type_access,
       $.call,
     ),
 
@@ -225,12 +223,6 @@ module.exports = grammar({
 
     // `a[i]` — an index; the `[` must be glued, else it opens an array atom.
     index: $ => seq(token.immediate('['), field('index', $.expression), ']'),
-
-    // `X{n}` — a type access: component `n` of a tuple type value's value.
-    type_access: $ => seq(token.immediate('{'), field('index', $.expression), '}'),
-
-    // `X::a` — a named type access over a TypeStruct value.
-    named_type_access: $ => seq(token.immediate('::'), field('name', $.identifier)),
 
     // `a(k)` — a positional slot read, or `C(.x 1, …)` / `C(1,)` — an
     // instantiation; a single bare expression in a glued paren is the read.

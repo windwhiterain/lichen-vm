@@ -4,7 +4,7 @@
 > (`4cb42d3f`), the preprocessor's missing span is fixed (§7), the `NamedField` miss now blames the
 > read (P2), the report's check-level assert now heads its runtime consequences (P3), an unknown
 > field no longer also reports the gap it explains (P4), and a type access's miss now names its
-> struct type (P1) — all in the
+> struct type (P1, since retired with the type accesses — [type-access](type-access.md)) — all in the
 > corrections below; the offender list below is
 > **parser-heavy and under-covers the checker and the module
 > layers**, which is the first thing to close before another diagnostics slice — the two cases above are
@@ -145,7 +145,8 @@ reproduction-verified since is `IndexTarget` below; the gap is **narrowed, not c
   keyed by the error's resolved **location**, so one mistake is one diagnostic — the
   two `an_apply_of_a_deferred_*` tests pass, and the language suite went 7 red to 5.
 
-* **A type access's miss named no struct, and it is fixed with the renderer fallback it needed.**
+* **A type access's miss named no struct, and it is fixed with the renderer fallback it needed.** *(Retired
+  with the type accesses — [type-access](type-access.md); kept as the record of the fix.)*
   `S = struct{.a Int, .sub Int}` ; `S::sux` reported `table lookup missed — no entry for key "sux"`
   at `1:1` — naming neither the struct type nor a close field — while the instance form `s.sux`
   reports `no field with this name in the struct type struct{…}, did you mean 'sub'?`. That is P1.

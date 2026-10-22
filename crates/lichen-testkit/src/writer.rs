@@ -268,28 +268,6 @@ impl<A: AttrSpec, L> Writer<A, L> {
         )
     }
 
-    /// `name = X::<field>` — a *named type access*, yielding the field's **type**
-    /// as a value.
-    ///
-    /// # Invariant
-    /// Distinct from [`Self::named_field`]: this reads the name table off the
-    /// container's own **type**, which must be a `TypeStruct`.
-    pub fn named_type_access(&self, name: &str, container: ExprId, field: &'static str) -> ExprId {
-        self.named(
-            name,
-            ExprKind::NamedTypeAccess {
-                container,
-                name: field,
-            },
-        )
-    }
-
-    /// `name = X{n}` — a positional *type* access, read without index
-    /// validation.
-    pub fn type_access(&self, name: &str, container: ExprId, index: ExprId) -> ExprId {
-        self.named(name, ExprKind::TypeAccess { container, index })
-    }
-
     /// `name = a <== k` — a table read.
     pub fn find(&self, name: &str, container: ExprId, key: ExprId) -> ExprId {
         self.named(name, ExprKind::Find { container, key })

@@ -971,8 +971,7 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     }
 }
 
-/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `X{n}`, `X::a`, and
-/// `C(...)`.
+/// The atoms, with their postfix forms: `e[i]`, `a(k)`, and `C(...)`.
 fn atom_parser<'a, Er: GrammarError<'a>>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
@@ -1035,8 +1034,8 @@ fn postfix_atom<'a, Er: GrammarError<'a>>(
         })
 }
 
-/// The postfix forms, chained left: `[` is an index, a glued `{` is `X{n}`,
-/// and a glued `::name` is `X::a`.
+/// The postfix forms, chained left: `[` is an index and `(` a slot read or an
+/// instantiation.
 fn postfix_parser<'a, Er: GrammarError<'a>>(
     expr: impl Parser<'a, In<'a>, Expr, Ex<'a, Er>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Postfix, Ex<'a, Er>> + Clone {
@@ -1050,15 +1049,6 @@ fn postfix_parser<'a, Er: GrammarError<'a>>(
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RBracket))
             .map(Postfix::Index),
-        glue.clone()
-            .ignore_then(token(TokenKind::LBrace))
-            .ignore_then(expr.clone())
-            .then_ignore(token(TokenKind::RBrace))
-            .map(Postfix::TypeAccess),
-        glue.clone()
-            .ignore_then(token(TokenKind::DoubleColon))
-            .ignore_then(name())
-            .map(|(field_name, _)| Postfix::NamedTypeAccess(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LParen))
             .ignore_then(struct_inst_fields(expr))
@@ -1079,16 +1069,6 @@ fn apply_postfix(acc: Expr, p: Postfix) -> Expr {
         Postfix::Index(index) => Expr::Index {
             array: Box::new(acc),
             index: Box::new(index),
-            span,
-        },
-        Postfix::TypeAccess(index) => Expr::TypeAccess {
-            container: Box::new(acc),
-            index: Box::new(index),
-            span,
-        },
-        Postfix::NamedTypeAccess(name) => Expr::NamedTypeAccess {
-            container: Box::new(acc),
-            name,
             span,
         },
         Postfix::Paren((fields, saw_comma)) => {
@@ -1171,8 +1151,6 @@ fn primary_parser<'a, Er: GrammarError<'a>>(
 enum Postfix {
     DotName(String),
     Index(Expr),
-    TypeAccess(Expr),
-    NamedTypeAccess(String),
     Paren((Vec<StructInstArg>, bool)),
 }
 

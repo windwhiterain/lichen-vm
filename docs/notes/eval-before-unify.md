@@ -5,7 +5,9 @@
 > design landed (§2.2, §6.2 option 1) were withdrawn with the rest of the
 > deferral tier. See [undecided-reads](undecided-reads.md). The measurements
 > below still record the facts that led there; passages that describe a deferral
-> as current are history.
+> as current are history.  The type accesses `X{n}`/`X::a` measured below were
+> removed after this note ([type-access](type-access.md)); their programs no
+> longer parse, and the readings are kept as the record.
 
 > Status: **historical for the deferral tier.** §2.1 is fixed and the container
 > reads with it: unification merges a class and carries the class's decided value

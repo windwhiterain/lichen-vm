@@ -164,11 +164,11 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
 }
 
 #[test]
-fn a_package_whose_last_statement_is_a_type_access_reports_the_package_own_failure() {
-    // A type access of a runtime array fails where it stands: its element
-    // is not the `[value, type]` pair a term is.
-    let dir = temp_dir("type-access-export");
-    write(&dir, "access.lichen", "[1, 2]{0}\n");
+fn a_package_whose_last_statement_fails_reports_the_package_own_failure() {
+    // The package's last statement reads past its array, so the package's own
+    // build refuses it.
+    let dir = temp_dir("failing-export");
+    write(&dir, "access.lichen", "[1, 2][9]\n");
     let main = "---x = import \"access.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
@@ -260,33 +260,6 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
             && err[0].message.contains("could not be attributed"),
         "the import diagnostic carries the failing build's own message: {}",
         err[0].message
-    );
-}
-
-#[test]
-fn a_type_access_of_a_non_tuple_container_in_a_package_is_refused_by_kind() {
-    // `[[1]]{0}` reads a component of an array — not of a type value —
-    // so the package's own build refuses it.
-
-    // The out-of-bounds *slot* read this replaced is now unreachable.
-
-    // A container's type must be the tuple kind, whose components are
-    // always `[value, type]` pairs.
-    let dir = temp_dir("short-export");
-    write(&dir, "short.lichen", "[[1]]{0}\n");
-    let main = "---x = import \"short.lichen\"---x\n";
-    let mut store = PackageStore::<LangProgram>::new();
-    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
-    assert!(
-        err.iter().any(|d| d
-            .message
-            .contains("expected TypeTuple, found array{array{Int, 1}, 1}")),
-        "the package's own failure is the one reported: {err:?}"
-    );
-    assert_eq!(
-        err[0].span,
-        Some((1, 4)),
-        "the caret is on the import directive"
     );
 }
 

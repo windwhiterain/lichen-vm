@@ -116,8 +116,6 @@ pub enum TokenKind {
     FatArrow,
     /// ':' -- an annotation.
     Colon,
-    /// '::' -- the named type access on a TypeStruct value (`X::a`).
-    DoubleColon,
     /// '==>' -- the table entry's key/value separator (`table(k ==> v)`).
     TableArrow,
     /// '<==' -- the table read's container/key separator (`t <== k`).
@@ -179,8 +177,8 @@ pub enum TokenKind {
     Tilde,
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
-    /// A zero-width marker: the next '(' '{' '[' or '::' is glued to the
-    /// previous token, so it is a postfix form.
+    /// A zero-width marker: the next '(' or '[' is glued to the previous
+    /// token, so it is a postfix form.
     Glue,
     Eof,
 }
@@ -235,7 +233,6 @@ impl TokenKind {
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::Colon => "':'",
-            TokenKind::DoubleColon => "'::'",
             TokenKind::TableArrow => "'==>'",
             TokenKind::TableFindArrow => "'<=='",
             TokenKind::Hash => "'#'",
@@ -370,8 +367,6 @@ enum RawToken {
     Arrow,
     #[token("=>")]
     FatArrow,
-    #[token("::")]
-    DoubleColon,
     #[token("==>")]
     TableArrow,
     #[token("<==")]
@@ -438,10 +433,7 @@ impl RawToken {
     /// Whether this kind is one of the postfix-capable delimiters that a Glue
     /// marker can precede.
     fn is_postfix_delim(&self) -> bool {
-        matches!(
-            &self,
-            RawToken::LParen | RawToken::LBracket | RawToken::LBrace | RawToken::DoubleColon
-        )
+        matches!(&self, RawToken::LParen | RawToken::LBracket)
     }
 }
 
@@ -819,7 +811,6 @@ fn raw_to_kind(
         RawToken::KwLn => Some(TokenKind::KwLn),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
-        RawToken::DoubleColon => Some(TokenKind::DoubleColon),
         RawToken::TableArrow => Some(TokenKind::TableArrow),
         RawToken::TableFindArrow => Some(TokenKind::TableFindArrow),
         RawToken::Colon => Some(TokenKind::Colon),

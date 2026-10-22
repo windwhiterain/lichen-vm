@@ -620,7 +620,8 @@ workstream's, for cost 1).
    type-position spelling, and a set is a *value*); `$domain(Int, Float)` (no new
    syntax, but `$` is the *plugin-private* sigil, so it works only for a source
    the host embeds); and reusing `{…}` (a bare glued `{` was the table lookup then,
-   and is the positional type access now). Two
+   and briefly the positional type access afterwards; the type accesses are now
+   removed — [type-access](type-access.md)). Two
    consequences of "a set is a value" are in §3.2.
 8. *(Closed — the two targets are green, and what remains is a recorded
    dependency.)* **The kernel boundary is not this feature's to fix.** Making `+`
@@ -722,10 +723,9 @@ line rather than the application — [core-prelude](core-prelude.md) §5).
     spaced paren is function application.  (The two zero-field spellings are the
     one part no note recorded.)
   - `a.name` is the named field read, `a[i]` the array read, `t <== k` the table read
-    (the infix arrow is the distinction), `X{n}` the positional type access
-    and `X::a` the named one.
-  - A struct *instance* reads a field **value** with `.a`; a positional component of
-    a type-as-value reads with `X{n}`; a named one with `X::a`.
+    (the infix arrow is the distinction).
+  - A struct *instance* reads a field **value** with `.a`; a type value's component
+    is not read at all — the removed accesses are [type-access](type-access.md).
   - The refusals follow from the same principle: a struct type reaching `a(k)` is
     refused like any other non-tuple, and a set reaching `s[i]` is refused because
     the read pins its container to an array type.

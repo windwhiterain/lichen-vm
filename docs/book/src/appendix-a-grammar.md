@@ -81,8 +81,6 @@ primary   := int | string | 'Int' | 'Float' | 'string' | 'Type' | '_'
            | 'table' '{' expr ',' expr '}' | 'if' expr 'then' expr 'else' expr
 postfix   := glued '[' expr ']'        -- array read
            | glued '(' fields ')'      -- tuple read, or struct instantiation
-           | glued '{' expr '}'        -- type access X{n}
-           | glued '::' name           -- named type access X::a
            | '.' name                  -- struct field read
 element   := ['@shallow' ['(' n ')']] glued-expr
 pair      := expr '==>' expr
@@ -121,7 +119,7 @@ ignored and prose inside it is the only prose a file can carry.
 | tuples and arrays | 7 |
 | structs and records | 8 |
 | tables and sets, `@in` | 9 |
-| `X{n}`, `X::a`, pins, dependent lengths | 10 |
+| pins, dependent lengths | 10 |
 | refinements, classes | 11 |
 | recursive and dependent types | 12 |
 | `#`, `?`, `~` | 13 |

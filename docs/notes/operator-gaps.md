@@ -9,7 +9,8 @@ that decides the reading — most of these are not the operator line's to fix.
 `the :: chains root at the pair, so a deferred type access resolves`. **Nothing moved**, and the reason
 is worth keeping: that fix resolves a **type access** through a deferred chain, while rows two and
 three are an unannotated recursion's own cells and row one is the kernel template. Two mechanisms that
-look adjacent from the outside and are not.
+look adjacent from the outside and are not.  The type accesses themselves were removed later
+([type-access](type-access.md)); the comparison is kept as the record of that fix.
 
 At `dev@1713ed00` the whole inventory was read in **one run** (six probes, `6 passed`), so that tip is
 the baseline every later check compares against; at `dev@f1bce423` the same run answered the same six

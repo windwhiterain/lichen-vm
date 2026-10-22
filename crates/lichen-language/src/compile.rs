@@ -737,15 +737,6 @@ impl Compiler {
                 let index = self.compile_expr(index);
                 self.alloc(ExprKind::Index { array, index }, span)
             }
-            Expr::TypeAccess {
-                container,
-                index,
-                span,
-            } => {
-                let container = self.compile_expr(container);
-                let index = self.compile_expr(index);
-                self.alloc(ExprKind::TypeAccess { container, index }, span)
-            }
             Expr::TableFind {
                 container,
                 key,
@@ -772,15 +763,6 @@ impl Compiler {
                 let container = self.compile_expr(container);
                 let name = self.intern_str(name);
                 self.alloc(ExprKind::NamedField { container, name }, span)
-            }
-            Expr::NamedTypeAccess {
-                container,
-                name,
-                span,
-            } => {
-                let container = self.compile_expr(container);
-                let name = self.intern_str(name);
-                self.alloc(ExprKind::NamedTypeAccess { container, name }, span)
             }
             Expr::Arrow {
                 parameter_type,
@@ -851,10 +833,8 @@ impl Compiler {
                         | Expr::Prefix { .. }
                         | Expr::NativeCall { .. }
                         | Expr::Index { .. }
-                        | Expr::TypeAccess { .. }
                         | Expr::FieldRead { .. }
                         | Expr::NamedFieldRead { .. }
-                        | Expr::NamedTypeAccess { .. }
                         | Expr::TableFind { .. }
                         | Expr::Annotation { .. }
                         | Expr::Arrow { .. }

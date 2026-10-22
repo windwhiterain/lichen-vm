@@ -346,8 +346,8 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - The example programs `examples/operators.lichen` and `examples/gcd.lichen` are
   the user-visible statement of the set, and `tests/lichen_compute/examples.rs` runs them.
 - Editor grammar: `tree-sitter-lichen`'s own tests, which parse every
-  example — `operators.lichen`, `gcd.lichen`, `type_access.lichen` and
-  `table.lichen` included — and assert no ERROR node, plus the
+  example — `operators.lichen`, `gcd.lichen` and `table.lichen` included — and
+  assert no ERROR node, plus the
   `grammar-consistency` guard that every `.scm` query still compiles. See §10.
 
 ## 10. The editor grammar
@@ -380,17 +380,13 @@ three changes, and the first is the interesting one.
 - **The retired syntax is gone.** The grammar models the current surface: the
   keyword-led braced types `tuple{…}`, `struct{…}`, `array{T, n}`, `set{E}` and
   `table{K, V}` ([no-type-mode](no-type-mode.md)); the parenthesised values
-  `set(a, b)` and `table(k1 ==> v1)`; the glued postfix reads `a(k)`, `a[i]`,
-  `X{n}` and `X::a`; the infix `t <== k`; `@in`, `@any`, `@shallow` and `@loop`;
+  `set(a, b)` and `table(k1 ==> v1)`; the glued postfix reads `a(k)` and `a[i]`;
+  the infix `t <== k`; `@in`, `@any`, `@shallow` and `@loop`;
   and §7's and §11's seven prefix keywords (`int2float`, `float2int`, `max`,
   `min`, `exp`, `sqrt`, `floor`). `struct<…>`, `array<…, n>`, the bare `<…>`
-  tuple type and the raw index `X<e>` no longer parse at all.
-
-The one reading an editor still cannot take from the grammar is the *semantic*
-half of a glued brace: `X{n}` and `t{k}` are the same token sequence, so both are
-a `type_access` to the tree even though only a tuple **type value** can be read
-positionally (§2.1, `docs/notes/type-access.md`). Which container a `{n}` is read
-on is a unify the checker owns, not a spelling, so no grammar can decide it.
+  tuple type and the raw index `X<e>` no longer parse at all.  The type accesses
+  `X{n}` and `X::a` were removed after the grammar migration
+  ([type-access](type-access.md)); the grammar has no braced postfix.
 
 Verified with `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` and
 `cargo test -p lichen-language-zed --features grammar-consistency`; see

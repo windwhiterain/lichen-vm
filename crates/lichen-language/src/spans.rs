@@ -94,11 +94,6 @@ pub(crate) fn shift_expr(
             }
         }
         Expr::Index { array, index, span }
-        | Expr::TypeAccess {
-            container: array,
-            index,
-            span,
-        }
         | Expr::FieldRead {
             container: array,
             key: index,
@@ -114,9 +109,6 @@ pub(crate) fn shift_expr(
             shift_expr(index, old_starts, new_starts, delta);
         }
         Expr::NamedFieldRead {
-            container, span, ..
-        }
-        | Expr::NamedTypeAccess {
             container, span, ..
         } => {
             shift(span, old_starts, new_starts, delta);

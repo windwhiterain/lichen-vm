@@ -36,8 +36,6 @@ below.
 | `a(k)` | tuple value | the slot's value | index is a full expression |
 | `a[i]` | array value | the element | out of bounds is refused |
 | `a.name` | struct instance | the field's value | missing name is refused with a suggestion |
-| `X::a` | struct type value | the field's type, as a value | container must be a struct type |
-| `X{n}` | tuple type value | component `n` of the type | container must be a tuple type |
 | `t <== k` | table value | the value stored under `k` | a miss is a diagnostic |
 | `x @in s` | value, set | `Int` (0/1) | set membership |
 

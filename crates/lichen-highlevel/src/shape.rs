@@ -184,14 +184,6 @@ pub const STRUCT_TYPE_NAMES_PATH: [usize; 4] = [
     STRUCT_MARKER_NAMES_SLOT,
 ];
 
-/// The lazy index path from a TypeStruct **kind** to its name table; the
-/// `X::a` read walks it (`container_ty[0][0][1]`).
-pub const STRUCT_KIND_NAMES_PATH: [usize; 3] = [
-    KIND_MARKER_SLOT,
-    STRUCT_MARKER_PAYLOAD_SLOT,
-    STRUCT_MARKER_NAMES_SLOT,
-];
-
 /// The lazy index path from a TypeStruct **kind** to its definition-order
 /// names: the direct read of the kind node.
 ///
@@ -491,7 +483,7 @@ where
 }
 
 /// Whether `ty` is a TypeStruct **kind** rather than a struct *type* — the
-/// form a named type access `X::a` requires.
+/// struct-kind requirement a field read's container states.
 pub fn is_type_struct_kind_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,

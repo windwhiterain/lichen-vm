@@ -61,8 +61,8 @@ expression exists.
 order**, because the order is load-bearing rather than incidental:
 
 1. the node's own entry — the map is `node_edges` **then** the slots, so a
-   deliberately registered caret (`indexing.rs` puts a type-access element at the
-   read's own type slot) structurally wins over the slot's default;
+   deliberately registered caret (a read registers its subscript's caret, for
+   example) structurally wins over the slot's default;
 2. the node's `origin`'s `node_edges` entry;
 3. `apply_edges[origin]` — the caller's argument, for a clone of a **frozen**
    template, whose origin is the apply that materialized it;

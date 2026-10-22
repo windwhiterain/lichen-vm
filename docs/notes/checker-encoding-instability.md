@@ -343,24 +343,18 @@ child list.
 ### The read forms and the tables they walk
 
 `NamedField` (`a.name`) reads the name table out of the container type's
-**kind** (`container_ty[1][0][1]`); `NamedTypeAccess` (`X::a`) reads it directly
-from the container's **type**, which must be a TypeStruct (`container_ty[0][1]`),
-and yields the field's *type* as a value — `S::a` on
-`struct{.a Int, .b string}` is `Int : Type`. That requirement is a
-check-time unify (a concretely non-TypeStruct container is a diagnostic), unlike
-`TypeAccess` (`X{n}`), the genuinely unvalidated read — no array-type pinning, no
-guard, no bounds assert — reading a component of a type-as-value or of any
-expression's value,
-both lazily, so an undecided container resolves at the apply; this is the form
-the `T<e>` array-type postfix used to be, and the array type is now `TypeArray`,
-spelled `array{T, n}`. `Field` (`a(k)`) works over a tuple element or a struct
+**kind** (`container_ty[1][0][1]`).  The retired type reads (`X::a` from a
+struct type value's **type**, and `X{n}` from a tuple type value's value) walked
+the same tables one level over, and their removal is recorded in
+[type-access](type-access.md); nothing reads a type value's component now.
+`Field` (`a(k)`) works over a tuple element or a struct
 field because both shapes are positional type lists and the nominal struct id
 lives in the kind. The read *forms* are distinguished syntactically and the
 source spelling is the whole rule: the adjacent single-expression paren
 (`a(1)`) is a slot read, the glued comma-disciplined paren (`a(1,)`, `a(1,1)`,
-`a()`, `a(,)`) is an instantiation, a spaced paren is an application, the
-adjacent brace (`X{n}`) is a type access, and the infix `<==` (`t <== k`) is a
-table read whose entry has a key deep-content-equal to the given one.
+`a()`, `a(,)`) is an instantiation, a spaced paren is an application, and the
+infix `<==` (`t <== k`) is a table read whose entry has a key deep-content-equal
+to the given one.
 `Instantiate` checks the value's element types against the
 struct's field list and the expression's type is the struct type itself; a
 non-struct callee is an `InstantiateCallee` diagnostic. `Record` is its

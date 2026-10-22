@@ -87,13 +87,12 @@ which `build.rs` finds as a fallback); `build.rs` prints exactly that if it is a
 - `tree-sitter-lichen/grammar.js` is the source of truth, and it models the
   language's current surface: the keyword-led braced types (`tuple{…}`,
   `struct{…}`, `array{T, n}`, `set{E}`, `table{K, V}`), the parenthesised
-  `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`, `X{n}`,
-  `X::a`), the infix `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix
+  `set(…)`/`table(…)` values, the glued postfix reads (`a(k)`, `a[i]`), the
+  infix `t <== k`, `@in`/`@any`/`@shallow`/`@loop`, and the prefix
   keyword operators.  The retired angle forms (`<…>`, `struct<…>`, `array<…, n>`,
-  the raw index `X<e>`) no longer parse.  See
-  [operators §10](operators.md#10-the-editor-grammar) for the `<`/`>` history and
-  the one reading the grammar still cannot take (the container of a glued `{n}`,
-  which is a checker unify rather than a spelling).
+  the raw index `X<e>`) no longer parse, and the type accesses `X{n}`/`X::a`
+  were removed with their rules ([type-access](type-access.md)).  See
+  [operators §10](operators.md#10-the-editor-grammar) for the `<`/`>` history.
 - `tree-sitter-lichen/queries/highlights.scm` colours every operator and keyword
   in that set, and is mirrored in
   `lichen-language-zed/languages/lichen/highlights.scm`.

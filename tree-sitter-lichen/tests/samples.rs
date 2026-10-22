@@ -91,8 +91,6 @@ fn edge_cases_parse_without_error_nodes() {
         "x = @any\nx",
         "y = : T # a\ny",
         "z = [1, @shallow 2, @shallow(3) 4]\nz",
-        "n = tuple{Int, string}{0}\nn",
-        "m = S::a\nm",
         "o = t <== k\no",
         "g = v @in set(Int, Float)\ng",
         "h = v ! (p => p > 3)\nh",

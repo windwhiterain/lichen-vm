@@ -22,9 +22,10 @@ here — annotate the container's type
 ```
 
 and the container must be annotated. The forms are the tuple slot `a(k)`, the
-array element `a[i]`, the struct field `a.name`, the type accesses `X{n}` and
-`X::a`, and (see §4) the table read and set membership. The forms whose
-container's type is decided are unchanged.
+array element `a[i]`, the struct field `a.name`, and (see §4) the table read and
+set membership. The forms whose container's type is decided are unchanged.  The
+type accesses `X{n}` and `X::a` were among these forms while they existed; they
+have since been removed ([type-access](type-access.md)).
 
 The author's ruling: *a read on a container whose type is not decided cannot
 be checked there, and the apply applies the value and type slots separately,
@@ -51,15 +52,15 @@ f = x => { a = x[0]; a : Int; a }
 f ["a"]                       -- "a": Int
 f = x => { a = x(0); a : string; a }
 f (1, 2)                      -- 1: string
-f = x => { a = x{0}; a : Int; a }
-f (tuple{string, Int})        -- string: Int
-f = x => { a = x::a; a : Int; a }
-f (struct{.a string})         -- string: Int
 f = x => { a = x.a; a : Int; a }
 f (S(.a "s"))                 -- "s": Int     (S = struct{.a string})
 f = x => { a = (g x)(0); a : Int; a }; g = x => ("s", 2); f 1
                               -- "s": Int     the container is a call result
 ```
+
+The two type-read programs measured here (`x{0}` over `tuple{string, Int}` and
+`x::a` over `struct{.a string}`) were removed with the forms themselves; the
+value reads above witness the same mechanism.
 
 The mechanism: the read's type is a lazy `Index` path, and an annotation or a
 use decides it **before** the apply binds the container. The apply then binds
@@ -79,8 +80,7 @@ The access-caused `raw` answers were the same failure: before the ruling,
 
 ## 3. What the checker does now
 
-- `check_field` / `check_index` / `check_named_field` /
-  `check_named_type_access` / `check_type_access` / `check_table_find` and the
+- `check_field` / `check_index` / `check_named_field` / `check_table_find` and the
   `@in` arm test the container's type
   for being decided (a type-function annotation is *deep-evaluated* first, so
   a written `(k : K _)` is decided), and refuse otherwise with

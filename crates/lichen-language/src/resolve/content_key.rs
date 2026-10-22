@@ -327,13 +327,6 @@ impl KeyWriter<'_> {
                 self.expr(array);
                 self.expr(index);
             }
-            Expr::TypeAccess {
-                container, index, ..
-            } => {
-                self.u(27);
-                self.expr(container);
-                self.expr(index);
-            }
             Expr::FieldRead { container, key, .. } => {
                 self.u(14);
                 self.expr(container);
@@ -343,13 +336,6 @@ impl KeyWriter<'_> {
                 container, name, ..
             } => {
                 self.u(32);
-                self.expr(container);
-                self.str(name);
-            }
-            Expr::NamedTypeAccess {
-                container, name, ..
-            } => {
-                self.u(28);
                 self.expr(container);
                 self.str(name);
             }
