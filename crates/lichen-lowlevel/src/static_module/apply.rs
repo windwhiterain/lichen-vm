@@ -586,6 +586,7 @@ impl<P: Program> Module<P> {
             // The materialization's dynamic↔static identity: this closure names
             // the frozen function it came from.
             static_origin: Some(sref),
+            template: None,
             asserts: Vec::new(),
             parent: ctx.branch_top,
             block: ctx.target,

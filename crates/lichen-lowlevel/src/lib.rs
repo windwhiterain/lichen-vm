@@ -800,6 +800,14 @@ pub struct Function {
     pub return_field: Option<u32>,
     /// The static function this closure was materialized from; `None` for a source closure.
     pub static_origin: Option<StaticFunctionRef>,
+    /// The template a minted closure was made from; `None` for a template itself.
+    ///
+    /// # Invariant
+    /// A node owned by a function nested in this template belongs to this template's body
+    /// graph, so the membership test reads this id beside [`Self::parent`]: a closure
+    /// instantiated per call must walk its template's body, and the template's own
+    /// lexical chain never names the clone.
+    pub template: Option<FunctionId>,
     /// The lexical parent function, or `None` at top level; not a keep-alive edge.
     pub parent: Option<FunctionId>,
     /// The body's assert conditions, cloned and re-registered per apply.

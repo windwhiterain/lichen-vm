@@ -357,6 +357,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         return_marker: None,
         return_field: None,
         static_origin: None,
+        template: None,
         asserts: vec![condition],
         parent: None,
         block: body,

@@ -678,6 +678,7 @@ impl<P: Program> Module<P> {
             return_marker: None,
             return_field: None,
             static_origin: None,
+            template: None,
             parent,
             asserts: Vec::new(),
             block,

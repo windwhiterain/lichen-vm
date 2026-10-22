@@ -483,7 +483,15 @@ impl<P: Program> Module<P> {
             return self.add_node(ctx.target, None, None);
         }
         // Membership is the anchor chain test or a closure-scope hit; else in place.
+        // A closure is instantiated from its **template**, so a node owned by a function
+        // nested in that template is reached through the template as well: the clone's own
+        // id is not in any lexical chain, and a body node left outside the walk would keep
+        // reading the template's cells instead of this call's.
+        let anchor_template = self.functions[ctx.anchor].template;
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
+            || anchor_template.is_some_and(|template| {
+                self.function_descends_from(self.nodes[node].function, template)
+            })
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
@@ -683,6 +691,7 @@ impl<P: Program> Module<P> {
                     // A clone of a materialized static closure is still that
                     // logical function, so the static origin travels with it.
                     static_origin,
+                    template: Some(function),
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
                     block: target,

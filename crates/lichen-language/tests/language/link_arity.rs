@@ -167,17 +167,45 @@ const FAMILIES: &str = "scalars = set(Float, Int)\n\
     three = (a : Int) => (b : Int) => (c : Int) => { r = $probe_family(a, b, c); r : Int; r }\n\
     four = (a : Int) => (b : Int) => (c : Int) => (d : Int) => { r = $probe_family(a, b, c, d); r : Int; r }\n";
 
-fn new_store() -> PackageStore<HostProgram> {
+/// Three struct types, as the linked workbench's wrapper carries them.
+const STRUCTS: &str = "GridName = struct{.path string, .name string}\n\
+    WriteSphere = struct{.radius Float, .voxel Float, .path string, .name string}\n\
+    Voxels = struct{.kind Type, .path string, .name string}\n";
+
+/// Three more families, as the linked workbench's wrapper carries them.
+const MORE_FAMILIES: &str = "grid_count = path: string => { r = $probe_family(path); r : Int; r }\n\
+    write_sphere = args => { r = $probe_family(args); r : Int; r }\n\
+    vdb_stats = args => { r = $probe_family(args); r : Int; r }\n";
+
+/// The wrapper contents the type-first shape is measured against.
+///
+/// # Invariant
+/// Each entry keeps [`FAMILIES`] whole and only adds content the linked
+/// workbench's wrapper carries, so the one difference between two entries is
+/// the additions named.
+const VARIANTS: &[(&str, &[&str])] = &[
+    ("base", &[]),
+    ("structs", &[STRUCTS]),
+    ("families", &[MORE_FAMILIES]),
+    ("both", &[STRUCTS, MORE_FAMILIES]),
+];
+
+/// The wrapper a variant runs: the base bindings plus what the variant adds.
+fn variant_wrapper(additions: &[&str]) -> String {
+    format!("{FAMILIES}{}", additions.concat())
+}
+
+fn new_store(families: &str) -> PackageStore<HostProgram> {
     let mut store = PackageStore::<HostProgram>::new();
     store
-        .register_native("arity.lichen", &format!("{{\n{FAMILIES}}}\n"), &ARITY_OPS)
+        .register_native("arity.lichen", &format!("{{\n{families}}}\n"), &ARITY_OPS)
         .expect("the wrapper must compile and register");
     store
 }
 
 /// The **frozen** path: the wrapper is a native package the program imports.
-fn show_frozen(body: &str) -> String {
-    let mut store = new_store();
+fn show_frozen(families: &str, body: &str) -> String {
+    let mut store = new_store(families);
     let source = format!("--- p = import \"arity.lichen\" ---\n({body})");
     match lichen_language::run::evaluate_raw(&source, None, &mut store) {
         Ok(output) => output,
@@ -194,8 +222,8 @@ fn show_frozen(body: &str) -> String {
 
 /// The **spliced** path: the wrapper's source is joined in front of the program
 /// and the spliced text compiles — the shape a `link` directive takes.
-fn show_spliced(body: &str) -> String {
-    let source = format!("{FAMILIES}\n({body})\n");
+fn show_spliced(families: &str, body: &str) -> String {
+    let source = format!("{families}\n({body})\n");
     let line_starts = lichen_language::lex::line_starts(&source);
     let report = lichen_language::compile_with_imports_at::<HostProgram>(
         &source,
@@ -250,8 +278,83 @@ fn link_arity() {
         let spliced_body = body.strip_prefix("p.").unwrap_or(body);
         println!("\n=== {what}: {body}");
         println!("  -- frozen --");
-        println!("  -> {}", show_frozen(body));
+        println!("  -> {}", show_frozen(FAMILIES, body));
         println!("  -- spliced --");
-        println!("  -> {}", show_spliced(spliced_body));
+        println!("  -> {}", show_spliced(FAMILIES, spliced_body));
+    }
+}
+
+/// One call on one path, named by `LICHEN_PATH` and `LICHEN_BODY`, so a traced
+/// run is one module's trace.
+#[test]
+fn one_case() {
+    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
+    let frozen = std::env::var("LICHEN_PATH").as_deref() != Ok("spliced");
+    let body = std::env::var("LICHEN_BODY")
+        .unwrap_or_else(|_| "voxels Float (\"assets/cube.vdb\", \"ls_cube\")".to_string());
+    let answer = if frozen {
+        show_frozen(FAMILIES, &format!("p.{body}"))
+    } else {
+        show_spliced(FAMILIES, &body)
+    };
+    println!("### {body} -> {answer}");
+}
+
+/// One frozen two-item type-first call, so a trace run is one module's trace.
+#[test]
+fn one_frozen() {
+    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
+    println!(
+        "### frozen -> {}",
+        show_frozen(
+            FAMILIES,
+            "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")"
+        )
+    );
+}
+
+/// The same two-item type-first shape, once per wrapper content.
+#[test]
+fn wrapper_content() {
+    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
+    let cases = [
+        ("float", "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")"),
+        ("int", "p.voxels Int (1, 2)"),
+    ];
+    for (what, body) in cases {
+        let spliced_body = body.strip_prefix("p.").unwrap_or(body);
+        for (name, additions) in VARIANTS {
+            let wrapper = variant_wrapper(additions);
+            println!(
+                "\n### {what} wrapper={name}\n  frozen -> {}\n  spliced -> {}",
+                show_frozen(&wrapper, body),
+                show_spliced(&wrapper, spliced_body)
+            );
+        }
+    }
+}
+
+/// The same case repeated inside one process: a per-process flip answers once,
+/// a per-module flip answers differently across the repeats.
+#[test]
+fn same_process_repeats() {
+    lichen_lowlevel::install_process_external(LIBRARY, INSTANCE, probe_entry);
+    const REPEATS: usize = 40;
+    for path in ["frozen", "spliced"] {
+        let mut ran = 0;
+        for _ in 0..REPEATS {
+            let answer = if path == "frozen" {
+                show_frozen(
+                    FAMILIES,
+                    "p.voxels Float (\"assets/cube.vdb\", \"ls_cube\")",
+                )
+            } else {
+                show_spliced(FAMILIES, "voxels Float (\"assets/cube.vdb\", \"ls_cube\")")
+            };
+            if !answer.starts_with("none") {
+                ran += 1;
+            }
+        }
+        println!("### {path}: {ran} of {REPEATS} answered");
     }
 }

@@ -32,6 +32,7 @@ fn function_homed_in(
         return_marker: None,
         return_field: None,
         static_origin: None,
+        template: None,
         asserts: Vec::new(),
         parent: None,
         block: home,
