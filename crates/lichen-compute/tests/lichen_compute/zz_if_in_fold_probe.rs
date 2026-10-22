@@ -45,6 +45,7 @@ fn ran(source: &str) -> String {
 
 #[test]
 fn probe_the_body_an_if_in_a_fold_lowers_to() {
+    let _slot = common::slot();
     let report = common::check(IF_IN_FOLD);
     println!("[check] ok={} {:?}", report.ok(), report.diagnostics);
     let build = report.build.expect("the program builds");

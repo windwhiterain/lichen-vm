@@ -358,6 +358,16 @@ each pass alone and fail in the suite, so the next target is the **process-globa
 leaves behind — the backend slot, the graph registry and the installed pass are all one per
 process.
 
+**The swing has a name at the isomorphism's tip, and it is older than the operator line's probes.**
+Four runs of `lichen-compute` at `fde8d15c` (the base, before the operator line's two probes) read
+**219 / 218 / 218 / 218**, the failure always
+`graph_jit::a_dispatch_the_body_closed_over_is_refused_rather_than_recorded`; four runs with the
+probes added read **221 / 221 / 220 / 221**, the same test. It passes alone. So the probes change how
+often the race is hit and not whether it exists: the test holds `common::stub()`'s slot for its whole
+run, yet the message it reads depends on process-global state another test can still be holding (the
+graph registry, or the pass table `stub()` clears). That is the next target on this line, and it is
+not the attribute work's.
+
 **Two drifted expectations and one unevaluated root: compute 215/11 → 217/9.** `555910dd`:
 `graph_jit`'s dispatch-nothing test looked for "names no backend", while the refusal that answers
 it now reads "this function's return is not a value a graph can hand back" — the behaviour is

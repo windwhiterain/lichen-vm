@@ -9,6 +9,8 @@
 
 use lichen_compute::language::new_store;
 
+use super::common;
+
 /// The kernels and the input buffer the three cases below share.
 const KERNEL: &str = r#"
 XIn  = struct{.x (compute.Buf Float)}
@@ -76,6 +78,7 @@ fn rendered(body: &str) -> String {
 
 #[test]
 fn probe_the_fold_type() {
+    let _slot = common::slot();
     for (label, body) in [
         ("straight", STRAIGHT),
         ("loop", LOOP),
