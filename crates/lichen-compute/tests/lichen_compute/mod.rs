@@ -55,9 +55,7 @@ mod zz_gc_panic_probe;
 
 mod zz_append_slot_probe;
 mod zz_argmax_probe;
-mod zz_clamp_grouping_probe;
 mod zz_conv2d_probe;
-mod zz_dispatch_timing_probe;
 mod zz_dynamic_trip_probe;
 mod zz_fold_buffer_probe;
 mod zz_fold_struct_probe;
@@ -69,8 +67,6 @@ mod zz_graph_scalar_probe;
 mod zz_graph_step_shape_probe;
 mod zz_masked_conv_probe;
 mod zz_operator_floor_probe;
-mod zz_phase_timing_probe;
-mod zz_plain_leg_probe;
 mod zz_pool_probe;
 mod zz_replicate_address_probe;
 mod zz_store_loop_probe;

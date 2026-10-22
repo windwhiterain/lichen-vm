@@ -578,7 +578,7 @@ need a node-local producer for `r`.
     (`crates/lichen-lowlevel/src/module.rs`) means an operator asked before its operand was decided is
     never asked again. Only `build_graph`'s `evaluate_until_the_return_is_nameable` re-drives, because it
     calls `reopen_stalled` (`compute.rs:5350-5379`). The readings, from
-    `crates/lichen-compute/tests/lichen_compute/zz_plain_leg_probe.rs`: every applied program's
+    a probe that has since been deleted: every applied program's
     `ParLaunch` is `owed=true value=no-value verdict=never-walked` — the kernel's own `Parallel`
     definitions among them — the depth-2 clones of the body that the apply instantiated **are never
     walked**, and `extension diagnostics: 0 recorded, has_failures=false`. So it is not "a collect that

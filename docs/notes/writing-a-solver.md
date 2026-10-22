@@ -93,8 +93,9 @@ caller-supplied border, and a 1D body needs none of them.
 zero-bordered grid, and the replicate clamp over a value on the edge — because that pair is the
 cheapest way to see what a boundary decision costs.
 
-**What may sit where, measured** (all three in `zz_clamp_grouping_probe.rs` and
-`zz_masked_conv_probe.rs`):
+**What may sit where, measured** (all three measured on the device; the two
+grouping cases were taken by a probe that has since been deleted, and
+`zz_masked_conv_probe.rs` still carries the third):
 
 - **An application binds tighter than `+` and `*`**, so `min (max i lo) hi * cols` is
   `(min (max i lo) hi) * cols`. Three spellings of one clamp, only the first parenthesised, answer the

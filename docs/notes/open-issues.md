@@ -396,7 +396,7 @@ conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the pair s
 undecided pair (`Tuple([None, None])`) states nothing. Measured **200/26** against the previous
 **201/25**, and the difference is exact: **five fixed** — including
 `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches`, the test that asserted the
-class-shape invariant, plus the two tiling tests, one fusion test and `zz_plain_leg_probe` — and
+class-shape invariant, plus the two tiling tests, one fusion test and a plain-leg probe (since deleted) — and
 **four broken**: `compute::jit_nested_tuple_domain`,
 `compute::jit_cross_kernel_passes_a_sub_tuple_through`,
 `nested_config::a_nested_config_records_each_leaf_for_what_it_is` and
@@ -423,7 +423,7 @@ superior's word (`0edbe8b1`), `decode_step_graph` is deleted: its tests assert w
 backend-ownership rule names deletion, not a weaker rewrite. The suite is now **227 tests**
 (`199 passed; 27 failed; 1 ignored`) in **48 s**. Remaining by family: `automatic_tiling` 3,
 `graph_jit` 2 (the class-shape assertion), `fold_datum` 2, `compute` 2, then one each across
-`buf_element_class_recorded`, `graph_structure`, `zz_plain_leg_probe`, `chain_merge`,
+`buf_element_class_recorded`, `graph_structure`, a plain-leg probe (since deleted), `chain_merge`,
 `combine_fold`, `float_leaf`, `cooperative_product`, `fan_out_merge`, `runtime_scalar_leaf`,
 `recompute_reads`, `pack_placement`, `nested_config`, `union_ports`, `tiling_visibility` and the
 rest.
@@ -526,7 +526,7 @@ was measured **neutral** (222) in both forms, because the walk reaches the same 
 suite twice and diffing the failure lists: with the value seed **225 passed / 29 failed**,
 without it **222 / 32**. Removing the seed **fixes** two —
 `graph_jit::a_graph_dispatches_exactly_what_the_program_dispatches` (the class-shape assertion)
-and `zz_plain_leg_probe::probe_the_plain_leg` — and **breaks five**, all nested shapes:
+and a plain-leg probe (since deleted) — and **breaks five**, all nested shapes:
 `compute::jit_cross_kernel_passes_a_sub_tuple_through`, `compute::jit_nested_tuple_domain`,
 `mixed_group::a_mixed_group_answers_what_the_flat_control_answers`,
 `nested_config::a_nested_config_records_each_leaf_for_what_it_is`,

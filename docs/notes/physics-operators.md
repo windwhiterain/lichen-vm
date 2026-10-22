@@ -184,10 +184,10 @@ of a pair it does not have.
 
 ## What a step costs
 
-The ladder has had correctness readings only; this is the first cost reading it records. A print-only
-probe, `crates/lichen-compute/tests/lichen_compute/zz_dispatch_timing_probe.rs`, dispatches the same
-stencil kernel 1 and 101 times through the annotated loop and takes the difference, so the compile and
-the seed are paid by both runs and what is left is 100 dispatches. Wall clock around the whole run, on
+The ladder has had correctness readings only; this is the first cost reading it records. It was taken
+by dispatching the same stencil kernel 1 and 101 times through the annotated loop and taking the
+difference, so the compile and the seed are paid by both runs and what is left is 100 dispatches. Wall
+clock around the whole run, on
 this machine's RTX 3060 and its host:
 
 | backend | lanes | `steps = 1` | `steps = 101` | per extra dispatch |
@@ -208,7 +208,7 @@ Three readings, and the third is the one that matters:
 - **The array-state loop's cost is its per-step `compute.collect`**, which round-trips the answer
   through the host every iteration. That is measurable, because the **buffer** state exists and does
   not collect: `zz_fold_buffer_probe.rs` shows a fold threading the kernel's buffer answers the same
-  three steps, typed, and `zz_dispatch_timing_probe.rs` times both states. Per extra dispatch:
+  three steps, typed, and the dispatch timing read both states. Per extra dispatch:
 
   | backend | lanes | buffer state | array state |
   |---|---|---|---|
