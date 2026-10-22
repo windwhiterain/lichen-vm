@@ -94,6 +94,15 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The array element's slot read is now dereferenced, and it was not the blocker.** Probing the
+walk with the widths: a read of an array's element (`2582 → 2566`, class shape
+`Array(Some(USize), 2)`) has steps 0 and 1 *onto the element's slot*, so both are the slot's own
+positions and the walk must dereference step 0 and refuse step 1. That rule is added
+(`e6f9eb19`-era work) and measured **neutral (202/24)**: the nested-config refusal is the
+**offset**, not the dereference — the chain reaches the parameter's own pair (250, class 2981)
+and passes the root check, then `offset_of` answers `None`. The `[0,0,1]`-against-a-two-element
+shape reading from the previous round is that same offset defect.
+
 **The fold datum's stage lines are the test: compute 202 / 24.** `fold_datum`'s two tests
 compared folded values with their closed forms; they now keep the pass's report — the refusal by
 `DatumIsNotAReadableFunction` for the datum and for the subtraction, and the tiling line that
