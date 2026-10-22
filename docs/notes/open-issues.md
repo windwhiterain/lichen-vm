@@ -99,8 +99,10 @@ map, or the **checker** unifying each element's value class with its type node's
 `class_low_type(argument)` — is measured **neutral**: `argument` is `Float` the *type*, a static
 reference with no value and therefore no `LowShape` class, so there is nothing to copy. The
 type-to-shape reading is `liche_highlevel::shape::low_type_of_slot`'s, which is a **highlevel**
-function, so the element class an instance's field cell needs must be seeded where the checker
-seeds every other class — `prepare_template_low_types` — not at the apply.
+function, so the class must be seeded where the checker seeds every other class. But the probe
+that read the cell's own **value** says the deeper thing: the instance's `element` cell (609, 855)
+holds **`Any`**, not the argument `Float` — the struct instance's field is a **fresh cell**, so
+this is a **substitution** gap in the struct instantiation, not a class-seeding one.
 
 **The four open `element` cells split in two, and only one half is a bug.** Probing each `Buf`
 wrapper struct's `element` node with its `origin` and function: the four that read `None` are
