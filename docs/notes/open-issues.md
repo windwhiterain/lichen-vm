@@ -97,7 +97,18 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The caller's attribute reaches the apply's pair now, and the refusal needs a deferred body
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The apply's pair carries the caller's slot; the body's requirement is checked too early.**
+Probing `check_app` on the isomorphism program shows the shape exactly: `param_marker: None`,
+`caller_marker: Some(Perspective)`, `argument_attr: true`, **`requirement: false`**, and the pair
+built with the caller's slot (`2c809363`). The requirement is `false` because a parameter that
+states nothing declares no tail — the body's own `compute.read` `# warp` lives in the **body's**
+check, which runs before the apply unifies the pair with the parameter cell. Two attempts to write
+the observable test failed for *program* reasons rather than semantic ones (`perspective_of` needs
+a `Read`/`Write` struct, not a buffer; the buffer route is refused earlier), so the observable
+demonstration still waits on one thing: **deferring the body's attribute requirement to the
+apply**.
+
+**The caller's attribute reaches the apply's pair now, and the refusal needs a deferred body
 check.** `2c809363`: `check_app` reads the argument's provided slot only when the callee's
 parameter paired a marker; a parameter written without one left the cell undecided. The marker now
 falls back to the **caller's own merged tail** (measured: an `# 1` argument's annotation carries
