@@ -207,8 +207,8 @@ Three readings, and the third is the one that matters:
   costs.
 - **The array-state loop's cost is its per-step `compute.collect`**, which round-trips the answer
   through the host every iteration. That is measurable, because the **buffer** state exists and does
-  not collect: `zz_fold_buffer_probe.rs` shows a fold threading the kernel's buffer answers the same
-  three steps, typed, and the dispatch timing read both states. Per extra dispatch:
+  not collect: a fold threading the kernel's buffer answers the same three steps, typed, and the
+  dispatch timing read both states. Per extra dispatch:
 
   | backend | lanes | buffer state | array state |
   |---|---|---|---|

@@ -65,6 +65,10 @@ correction to the brief itself.**
 | a 2D convolution under a 3x3 coefficient buffer, over a zero-bordered grid and again with clamped (replicate) taps | `convolution2d.lichen` | **runs, bit-exact** | **0** (of 50 elements) |
 | a 3x3 max-pooling over a caller-padded grid, with the seed as a leaf | `pooling.lichen` | **runs, bit-exact** | **0** (of 25 elements) | not checked in this note's run | not checked in this note's run | not checked in this note's run |
 
+> **The two rows that read a boundary — the flat wrap and the seed as a leaf — were measured by
+> probes that have since been deleted, because the examples carry those readings: `convolution2d.lichen`
+> and `pooling.lichen` are the record of them, and both run bit-exact above.**
+
 > **Every row of that table was measured on a device with no `NoContraction`, and two of them
 > have since moved. [operator-reverification](operator-reverification.md) §2 re-ran each of these
 > eight examples through the shipped emitter on two devices. What changed is recorded in that

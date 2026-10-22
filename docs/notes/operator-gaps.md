@@ -52,7 +52,6 @@ them:
 cargo test -p lichen-compute --test lichen_compute -j 3 -- --exact \
   lichen_compute::zz_fold_struct_probe::probe_the_struct_annotation \
   lichen_compute::zz_fold_type_probe::probe_the_fold_type \
-  lichen_compute::zz_fold_buffer_probe::probe_the_fold_state \
   lichen_compute::zz_masked_conv_probe::probe_the_masked_window \
   lichen_compute::zz_operator_floor_probe::probe_the_floor_on_a_real_operator \
   lichen_compute::zz_replicate_address_probe::probe_the_replicate_addresses --nocapture

@@ -647,7 +647,7 @@ need a node-local producer for `r`.
     `[1.0, 100.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]`, in both cache halves, with no refusal and no report
     line. The graph leg reproduces the direct chain exactly, so the graph is not implicated. **The
     mechanism is the tail-lane obligation, not this operator**, and it is now **fixed**
-    (`zz_append_slot_probe.rs`, and `lichen-compute-gpu.md` §"A computed write address is not protected
+    (measured on the device; see `lichen-compute-gpu.md` §"A computed write address is not protected
     by the padding"): a surplus lane ran the whole body unguarded, its fabricated `(column, position)`
     put its write at `position · dim + column`, which is **inside `[0, count)`**, and when its
     `position` equalled `t` it took the fresh arm and wrote `nk[column]` there. A `nk` with eight

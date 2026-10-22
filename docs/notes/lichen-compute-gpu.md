@@ -578,8 +578,8 @@ of the body, so a surplus lane never computes a write address at all. The readin
 below are what the probe measured **before** the guard and are kept as the
 evidence; the reading after the fix is at the end of this subsection.
 
-**Measured (`zz_append_slot_probe.rs`), and it falsified the sentence above for a
-kernel whose write address is data**: `examples/kvcache.lichen`'s append writes at
+**Measured on the device, and it falsified the sentence above for a kernel whose
+write address is data**: `examples/kvcache.lichen`'s append writes at
 `slot = position · dim + column`, where `position` and `column` come from
 `compute.row`/`compute.col`. A surplus lane ran the whole body with no guard, so
 its fabricated coordinates are `(column, position) = (i / cap, i % cap)` for an `i`
