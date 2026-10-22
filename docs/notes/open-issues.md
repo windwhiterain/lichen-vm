@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The pass table was cleared and the swing stayed: it is between two record tests.**
+`common::stub()` clears the installed graph pass, because the table is the process's; the suite
+still reads 217/9 then 218/8 on one tree, and the two runs differ by exactly one test —
+`runtime_scalar_leaf::the_merged_diamond…` in one, `nested_config::a_two_scalar_config…` in the
+other, both record tests this campaign wrote. Neither installs a backend outside the stub's
+slot, so the leak is elsewhere: the graph and fragment registries are one per process too.
+
 **A position past a scalar is a projection: the nested-config pair passes.** `161032fe`: the
 offset walk refused when the parameter's shape was exhausted before the positions were, which is
 exactly what a pair projection looks like from the shape's side; the offset it reached stands.
