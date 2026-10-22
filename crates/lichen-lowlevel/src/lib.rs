@@ -952,6 +952,12 @@ pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
+    /// The **full-width layout**: the attribute order's own
+    /// (`docs/notes/compound-element-slots.md`).
+    ///
+    /// # Invariant
+    /// One layout per program, because the attribute order is the program's.
+    pub full_width_layout: Option<u32>,
     /// The **type node** of each element value, keyed by the value node.
     ///
     /// # Invariant

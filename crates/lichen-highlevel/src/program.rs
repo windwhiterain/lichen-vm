@@ -158,6 +158,10 @@ pub trait Ctx<P: Program> {
     fn value_node(&mut self, value: P::Value) -> NodeId;
     /// An array node of the given element nodes — a structural shape.
     fn array_node(&mut self, ids: &[NodeId]) -> NodeId;
+    /// The attribute order's own layout (`docs/notes/compound-element-slots.md`).
+    fn full_width_layout(&mut self) -> u32;
+    /// State the program's full-width layout.
+    fn record_full_width_layout(&mut self, layout: u32);
     /// An operation node with the given operator and optional operand.
     fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
     /// A `[value, type]` pair node — the encoding of an expression's term.

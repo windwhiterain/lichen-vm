@@ -6166,6 +6166,9 @@ where
             }
         }
     } else {
+        // **Every compound element is a complete slot**
+        // (`docs/notes/compound-element-slots.md`).
+        let width = <P::Value as From<LowValue>>::from(LowValue::Any);
         let items: Vec<ArrayItem> = produced
             .iter()
             .map(|result| {
@@ -6183,7 +6186,25 @@ where
                         <P::Value as From<LowValue>>::from(LowValue::Float(*number))
                     }
                 };
-                let node = module.add_node(block, None, Some(value));
+                let value = module.add_node(block, None, Some(value));
+                let r#type = module.add_node(block, None, Some(width));
+                let slot: Vec<ArrayItem> = std::iter::once(value)
+                    .chain(std::iter::once(r#type))
+                    .chain(std::iter::repeat_n(
+                        module.add_node(block, None, Some(width)),
+                        lichen_lowlevel::PAIR_ATTR_BASE,
+                    ))
+                    .map(|node| ArrayItem::new(AnyNodeId::Dynamic(node)))
+                    .collect();
+                let handle = module.alloc_array(&slot, block);
+                let layout = module.full_width_layout().unwrap_or(0);
+                let node = module.add_node(
+                    block,
+                    None,
+                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                        lichen_lowlevel::ArrayValue::with_layout(handle, layout),
+                    ))),
+                );
                 ArrayItem::new(AnyNodeId::Dynamic(node))
             })
             .collect();
@@ -8111,6 +8132,10 @@ where
         let a = &args[1];
         let operands = ctx.array_node(&[g.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::GraphRun), Some(operands));
+        // The full width is stated where the attribute order is known
+        // (`docs/notes/compound-element-slots.md`).
+        let full_width = ctx.full_width_layout();
+        ctx.record_full_width_layout(full_width);
         NativeApply {
             value: op,
             decided: false,

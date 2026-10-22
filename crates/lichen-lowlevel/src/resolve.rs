@@ -472,6 +472,20 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// State the program's **full-width layout**.
+    ///
+    /// # Invariant
+    /// One layout per program, because the attribute order is the program's
+    /// (`docs/notes/compound-element-slots.md`).
+    pub fn record_full_width_layout(&mut self, layout: u32) {
+        self.full_width_layout.get_or_insert(layout);
+    }
+
+    /// The program's full-width layout, once a compound has stated it.
+    pub fn full_width_layout(&self) -> Option<u32> {
+        self.full_width_layout
+    }
+
     /// State the **type node** of an element's value.
     ///
     /// # Invariant

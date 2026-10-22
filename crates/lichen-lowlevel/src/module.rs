@@ -64,6 +64,7 @@ impl<P: Program> Module<P> {
             nodes: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
+            full_width_layout: None,
             element_types: HashMap::new(),
             applied_pairs: HashMap::new(),
             apply_pairs: HashMap::new(),

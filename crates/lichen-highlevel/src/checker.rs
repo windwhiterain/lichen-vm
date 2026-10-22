@@ -1731,6 +1731,14 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
+    fn full_width_layout(&mut self) -> u32 {
+        Checker::full_width_layout(self)
+    }
+
+    fn record_full_width_layout(&mut self, layout: u32) {
+        self.module.record_full_width_layout(layout);
+    }
+
     /// A raw value's node: a built-in type marker reuses the installed shared
     /// marker node; anything else allocates one.
     fn value_node(&mut self, value: P::Value) -> NodeId {
