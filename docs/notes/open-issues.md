@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Rulings on the two open questions (kept verbatim).** `automatic_tiling`'s literal-bound fold:
+**"让 tiling 继续并更新测试为「字面量 bound 可 tiling」（推荐）"** — the bound is not what decides,
+the algebra's readability is, so the test now proves the tiling line naming `+` and that nothing
+was refused (`223/3`). `buf_element_class_recorded`: **"要修的目标：把元素类从声明传播到这些单元格"**
+— the four `Buf` wrapper structs whose `element` field reads `None` are a **target**, not a
+standing diagnostic: the element class must propagate from the parameter's declaration.
+
 **The stub's record is the test's own thread: compute 219/7 → 222/4.** `51e2e3b9`: the tests in
 one binary run in parallel, and a test that runs a program *without* installing a stub dispatches
 into whatever backend is installed — so a `calls()[before..]` delta could hold another test's
