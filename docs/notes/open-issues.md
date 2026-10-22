@@ -94,6 +94,14 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**Two record rewrites with the delta discipline: compute 202/24 → 204/22.** `b58a8489`:
+`graph_argument`'s two-buffer chain compares the **last dispatch's** shape — two inputs, one
+output, two classes — because the program builds its graph and then runs it, so two dispatches
+are normal and only the last one is the chain's own. `e9d6db2c`: `runtime_scalar_leaf`'s merged
+diamond proves the merged leg's **last dispatch is not any node the recording dispatched**, and
+that the moved bias dispatches a **different fragment**. Both read a **delta** (`calls()[before..]`)
+from the same stub, which is the discipline the order-dependence finding requires.
+
 **The suite's stub tests are order-dependent, and the offset sees extra positions.** Two
 measurements this round. First: `nested_config`'s tests move between runs — three fail in one
 run and two in the next with an unchanged tree — because `common::stub()` installs a backend in a
