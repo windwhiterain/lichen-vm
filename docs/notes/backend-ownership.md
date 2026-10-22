@@ -36,6 +36,16 @@
    it was in the wrong crate, and `lichen-compute` now names no assembler at
    all: it lowers a body to an IR and asks a backend to run it.
 
+   The IR is compute's own and backend-independent, so the line between them is
+   drawn where the engine stops being generic: **everything crossing it is an
+   index and a word.** `HostWords` is that line — `read`, `write` and
+   `atomic_add` — and it is the whole of what the engine needs to know about the
+   IR's semantics. The atomic add stays on the compute side because only the
+   state holds the word it read-modify-writes, and only the state knows whether
+   that word is an integer or a float's bits. What moved with it: the workers,
+   the chunking, the linker, the `read`/`write`/`atomic` imports, the engine
+   call, the fan-out threshold, and the engine's own value conversions.
+
 ## Why the rules are one rule
 
 The device is one device: a process may hold it, and holding two at once is

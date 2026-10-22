@@ -6743,11 +6743,6 @@ fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarDat
     }
 }
 
-
-
-
-
-
 // --- The parallel run: the worker rule, the partition, the fan-out ---
 
 #[cfg(test)]
@@ -7135,16 +7130,6 @@ mod parallel_launch_tests {
             "the refusal quotes the value and the accepted names: {refusal}"
         );
     }
-
-    /// The threshold is a count boundary: a run below it must not spawn.
-    #[test]
-
-    /// ...and at or above it the fan-out is the machine's, never more.
-    #[test]
-
-    /// The chunk bounds tile `[0, count)` with no gap or overlap, and differ in
-    /// length by at most one.
-    #[test]
 
     /// The host buffers of a "cpu" run: a resident outcome here is a routing bug.
     fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {

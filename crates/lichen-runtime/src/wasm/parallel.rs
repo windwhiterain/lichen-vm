@@ -17,27 +17,33 @@ use crate::module_cache::cached_module;
 ///
 /// # Invariant
 ///
-/// A read is by a global index into the buffer the IR's role walk named, and a
-/// write is a store into the output at its own ordinal — the engine holds neither
-/// the roles nor the buffers, so everything crossing this boundary is an index
-/// and a word. An atomic add is the state's own: only the state holds the word
-/// the add read-modify-writes, and only the state knows whether that word is an
-/// integer or a float's bits.
+/// Everything crossing this boundary is an index and a word: the engine holds
+/// neither the roles nor the buffers. An atomic add is the state's own, because
+/// only the state holds the word it read-modify-writes and knows whether that
+/// word is an integer or a float's bits.
 pub trait HostWords {
     /// The word the input at `position` holds at the global `index`.
     fn read(&self, position: usize, index: usize) -> i64;
 
-    /// The word the output at `position` holds at the global `index`, if it has
-    /// one: a write past the end is dropped rather than grown into.
+    /// The word the output at `position` holds at the global `index`.
     ///
-    /// The store is the whole of a write: disjointness is the kernel's contract,
-    /// so the engine asks for no stronger ordering than the caller's.
+    /// # Invariant
+    /// A write past the end is dropped rather than grown into, and the store is
+    /// the whole of a write: disjointness is the kernel's contract, so the engine
+    /// asks for no stronger ordering than the caller's.
     fn write(&self, position: usize, index: usize, value: i64);
 
     /// The word the output at `position` holds at the global `index`, added to.
+    ///
+    /// # Invariant
+    /// The add is read-modify-write over the word the state owns, so a lane that
+    /// added twice has both adds.
     fn atomic_add(&self, position: usize, index: usize, value: i64);
 }
 
+/// The element count at or above which a parallel run spreads over worker threads.
+///
+/// # Invariant
 /// Below it the run keeps its own latency: every worker costs a spawn plus its own
 /// store, linker and instantiation, repaid only once a worker owns enough indices for
 /// the interpreted calls to dominate. A few thousand indices cost milliseconds of
@@ -48,11 +54,10 @@ pub const SEQUENTIAL_PARALLEL_ELEMENTS: usize = 1 << 12;
 ///
 /// # Invariant
 /// The module is the one `assemble` writes, cached by the kernel's id and shared by
-/// every worker; a refusal to assemble is the launch's refusal, so it is reported
-/// before any worker starts. The first chunk is the calling thread's own work, so a
-/// run is never only ever other threads'. Each worker builds its own state from
-/// `state` over the buffers the caller keeps, which is what lets the lanes write
-/// into one set of outputs without sharing a store.
+/// every worker, and a refusal to assemble is reported before any worker starts. The
+/// first chunk is the calling thread's own work, and each worker builds its own state
+/// over the buffers the caller keeps, which is what lets the lanes write into one set
+/// of outputs without sharing a store.
 pub fn run_parallel<State, Make>(
     id: KernelId,
     assemble: impl FnOnce() -> Result<Vec<u8>, String>,
@@ -63,7 +68,7 @@ pub fn run_parallel<State, Make>(
     count: usize,
 ) -> Result<usize, String>
 where
-    State: HostWords + 'static,
+    State: HostWords,
     Make: Fn() -> State + Send + Sync,
 {
     let (engine, module) = cached_module(id, assemble)?;
@@ -166,7 +171,7 @@ fn parallel_worker_count(count: usize) -> usize {
 /// function is a function of the full extent, not of the chunk. The host functions
 /// read the store's own state and capture nothing, which is what lets one module
 /// run under every worker.
-fn run_range<State: HostWords + 'static>(
+fn run_range<State: HostWords>(
     engine: &wasmi::Engine,
     module: &wasmi::Module,
     state: State,
