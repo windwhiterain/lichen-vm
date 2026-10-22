@@ -313,7 +313,7 @@ fn same_process_repeats() {
     const REPEATS: usize = 40;
     for path in ["frozen", "spliced"] {
         let mut ran = 0;
-        for _ in 0..REPEATS {
+        for index in 0..REPEATS {
             let answer = if path == "frozen" {
                 show_frozen(
                     FAMILIES,
@@ -322,6 +322,7 @@ fn same_process_repeats() {
             } else {
                 show_spliced(FAMILIES, "voxels Float (\"assets/cube.vdb\", \"ls_cube\")")
             };
+            println!("BUILD {path} {index} -> {answer}");
             if !answer.starts_with("none") {
                 ran += 1;
             }

@@ -37,6 +37,7 @@ impl<P: Program> Module<P> {
                 // The caller-side node every clone is attributed through: the apply or
                 // the template it was cloned from.
                 origin: self.nodes[node].origin.unwrap_or(node),
+                label: "static_function_apply",
             };
             let applied = self.static_node_apply(r#return, &mut ctx);
             // The parameter is a walk entry point: an ignored one is still satisfied.
@@ -56,6 +57,12 @@ impl<P: Program> Module<P> {
             }
             // The parameter unify, as in `function_apply`: regroup clones by their
             // static reps, then unify against the argument.
+            eprintln!(
+                "TRACE static_apply fn={function:?} parameter={parameter:?} return={:?} remap_has_parameter={} remap_len={}",
+                r#return,
+                ctx.remap.contains_key(&parameter),
+                ctx.remap.len()
+            );
             if let Some(&cloned_param) = ctx.remap.get(&parameter) {
                 if ctx.remap.len() > 1 {
                     let groups = crate::apply::regroup_clones(
@@ -132,6 +139,7 @@ impl<P: Program> Module<P> {
                 branch_top: None,
                 tag: self.nodes[node].function,
                 origin: self.nodes[node].origin.unwrap_or(node),
+                label: "static_function_type_apply",
             };
             let applied = self.static_return_type_apply(r#return, &mut ctx);
             self.applied_pairs.insert(node, applied);
@@ -233,6 +241,7 @@ impl<P: Program> Module<P> {
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
+            label: "materialize_static_return_apply",
         };
         // The record states the call's attribute state
         // (`docs/notes/apply-type-side-check.md`).
@@ -265,6 +274,7 @@ impl<P: Program> Module<P> {
             branch_top: None,
             tag: self.nodes[node].function,
             origin: self.nodes[node].origin.unwrap_or(node),
+            label: "register_static_type_asserts",
         };
         for index in 0..ctx.module.functions[function.index.0].asserts.len() {
             let condition = ctx.module.functions[function.index.0].asserts[index];
@@ -401,6 +411,16 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&local) {
             return clone;
         }
+        if let Some(value) = ctx.module.read(local)
+            && let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum()
+        {
+            eprintln!(
+                "TRACE   static_node_apply local={local:?} holds function {:?} in_own_scope={} open_captures={}",
+                sref,
+                ctx.module.functions[sref.index.0].nodes.contains(&local),
+                ctx.module.functions[sref.index.0].open_captures
+            );
+        }
         let node = &ctx.module.nodes[local.index];
         // The clone rule's facts, read together so the borrow ends before the walk mutates.
         let (undecided, _runned, evaluated_deep, template_operation, template_shape) = (
@@ -466,6 +486,10 @@ impl<P: Program> Module<P> {
                 });
             self.stamp_node_ran_if(clone, claimed);
         }
+        eprintln!(
+            "TRACE   static_node_apply local={local:?} clone={clone:?} mapped={:?}",
+            self.nodes[clone].value.as_ref().and_then(|v| v.as_enum())
+        );
         clone
     }
 
@@ -595,6 +619,31 @@ impl<P: Program> Module<P> {
         });
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
+        let shared_ret = ctx.remap.get(&r#return).copied();
+        let shared_param = ctx.remap.get(&parameter).copied();
+        eprintln!(
+            "TRACE rehome ctx={} sref={sref:?} fresh={fresh:?} tag={:?} branch_top={:?} applied={:?} shared_ret={shared_ret:?} shared_param={shared_param:?} frozen_return={:?} frozen_param={:?} scope_len={}",
+            ctx.label,
+            ctx.tag,
+            outer_top,
+            ctx.applied,
+            r#return,
+            parameter,
+            scope.len()
+        );
+        if !crate::static_module::apply::TRACE_DUMP.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            for (index, entry) in ctx.module.functions.iter().enumerate() {
+                eprintln!(
+                    "TRACE   frozen[{index}] return={:?} param={:?} nodes={} open_captures={} origin={:?}",
+                    entry.r#return,
+                    entry.parameter,
+                    entry.nodes.len(),
+                    entry.open_captures,
+                    entry.origin
+                );
+            }
+        }
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
         let return_type_clone = self.static_node_apply(return_type, ctx);
@@ -627,6 +676,12 @@ impl<P: Program> Module<P> {
                 self.nodes[clone].function = Some(fresh);
             }
         }
+        eprintln!(
+            "TRACE   rehome fresh={fresh:?} ret={ret_clone:?} owner={:?} param={param_clone:?} owner={:?} ret_owner={:?}",
+            self.nodes[ret_clone].function,
+            self.nodes[param_clone].function,
+            self.nodes[ret_clone].function
+        );
         ctx.branch_top = outer_top;
         let fresh_function = &mut self.functions[fresh];
         fresh_function.nodes = own;
@@ -638,6 +693,10 @@ impl<P: Program> Module<P> {
         P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
     }
 }
+
+/// Whether the frozen function table was dumped already.
+pub(crate) static TRACE_DUMP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Whether `node` holds a same-module closure with open captures, inside an
 /// array rather than as the value's function.
@@ -678,4 +737,6 @@ struct StaticApplyCtx<P: Program> {
     /// The node the clones record as their origin: the apply node, or its own
     /// template — never a frozen template's node.
     origin: NodeId,
+    /// The pass this context belongs to, for the trace.
+    label: &'static str,
 }
