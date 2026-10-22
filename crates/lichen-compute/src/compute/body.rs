@@ -680,13 +680,21 @@ where
         {
             return Some(slot.base + ordinal);
         }
+        let (offset, outran) = self.walk_offsets(positions)?;
+        // A pair projection is a leading `0` (`docs/notes/compound-element-slots.md`).
+        if outran && positions.first() == Some(&0) {
+            return self.walk_offsets(&positions[1..]).map(|(offset, _)| offset);
+        }
+        Some(offset)
+    }
+
+    /// The offset a path names in the parameter's shape, and whether it outran it.
+    fn walk_offsets(&self, positions: &[usize]) -> Option<(usize, bool)> {
         let mut offset = 0usize;
         let mut shape = self.params.first()?.shape.clone();
         for position in positions {
-            // A position past a scalar names a projection the walk already took
-            // (`docs/notes/compound-element-slots.md`).
             let lichen_lowlevel::LowShape::Tuple(items) = shape else {
-                break;
+                return Some((offset, true));
             };
             let element = items.get(*position)?;
             for skipped in items[..*position].iter().flatten() {
@@ -694,7 +702,7 @@ where
             }
             shape = element.clone()?;
         }
-        Some(offset)
+        Some((offset, false))
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
