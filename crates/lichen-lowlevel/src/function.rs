@@ -134,25 +134,6 @@ impl<P: Program> Module<P> {
         {
             return self.apply_loop(&conversion, function, argument, block, node, cell);
         }
-        if std::env::var("DBG_ARG").is_ok() {
-            let operand = self.nodes[node]
-                .operation
-                .and_then(|operation| operation.operand);
-            let items = operand
-                .and_then(|operand| unsafe { self.array_items_of(AnyNodeId::Dynamic(operand)) });
-            eprintln!(
-                "DBG arg: node={node:?} operand={operand:?} argument={argument:?} origin={:?} value={:?} op={:?} operand_items={:?}",
-                self.nodes[argument].origin,
-                self.nodes[argument].value.map(|value| format!("{value:?}")),
-                self.nodes[argument]
-                    .operation
-                    .map(|operation| format!("{:?}", operation.operator)),
-                items.map(|items| items
-                    .iter()
-                    .map(|item| (format!("{:?}", item.node), item.shallow))
-                    .collect::<Vec<_>>())
-            );
-        }
         let Some(instantiation) =
             self.instantiate(function, argument, block, node, ParameterCheck::Value)
         else {

@@ -48,6 +48,11 @@ impl<K: Copy + Eq + Hash> AncestorNodes<K> {
     pub fn remove(&mut self, node: K) {
         self.nodes.remove(&node);
     }
+
+    /// Drop every entry, keeping the table's capacity.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+    }
 }
 
 /// The unordered node pairs on the current recursion path.
@@ -96,5 +101,10 @@ impl<K: Copy + Eq + Hash> AncestorPairs<K> {
     pub fn remove(&mut self, a: K, b: K) {
         self.pairs.remove((a, b));
         self.pairs.remove((b, a));
+    }
+
+    /// Drop every pair, keeping the table's capacity.
+    pub fn clear(&mut self) {
+        self.pairs.clear();
     }
 }

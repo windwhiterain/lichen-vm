@@ -102,13 +102,21 @@ impl<P: Program> Module<P> {
         if !self.evaluating_classes.insert(representative) {
             return;
         }
-        let members: Vec<NodeId> = self.class_members(representative).collect();
-        for member in members {
+        // A snapshot, because reading a member may merge the class this walk is over;
+        // the buffer is the module's, so a run's reads do not allocate one each. A
+        // nested read takes the module's empty slot and puts back its own.
+        let mut members = std::mem::take(&mut self.class_snapshot);
+        members.clear();
+        members.extend(self.class_members(representative));
+        for index in 0..members.len() {
+            let member = members[index];
             // Only members that still owe an answer: the rest answer from their own slot.
             if member != node && self.has_no_result_yet(member) && !self.nodes[member].visiting {
                 self.evaluate_node(Dyn(member), None);
             }
         }
+        members.clear();
+        self.class_snapshot = members;
         self.evaluating_classes.remove(&representative);
     }
 

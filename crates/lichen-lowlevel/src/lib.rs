@@ -1072,6 +1072,22 @@ pub struct Module<P: Program> {
     /// The guard, not the union-find's finiteness, is what bounds that walk: reading a
     /// member re-enters the same class, so an unguarded walk never returns.
     evaluating_classes: HashSet<NodeId>,
+    /// The unification walk's two recursion buffers, kept between calls.
+    ///
+    /// # Invariant
+    /// [`Module::unify`] takes both with [`std::mem::take`] and puts them back on every
+    /// exit, so the struct never holds a buffer a walk is using, and each walk starts
+    /// from the empty state the recursion requires: the path holds no pair and the step
+    /// stack is empty. Capacity is what is kept, never content.
+    unify_path: crate::ancestors::AncestorPairs<NodeId>,
+    unify_steps: Vec<UnifyStep>,
+    /// The member snapshot one class-first read iterates, kept between reads.
+    ///
+    /// # Invariant
+    /// [`Module::evaluate_class_first`] takes it and puts it back on every exit, empty
+    /// of content at the take and the put-back; a nested read that takes it while a
+    /// frame holds it gets a fresh one and leaves the holder's own to the holder.
+    class_snapshot: Vec<NodeId>,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,
     deep_depth: usize,

@@ -10,17 +10,6 @@ use crate::{
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
-/// The node an array's layout gives canonical attribute `canonical`, or [`None`] for a
-/// hole.
-fn array_attribute_slot(
-    items: &'static [ArrayItem],
-    layout: &[u32],
-    canonical: u32,
-) -> Option<AnyNodeId> {
-    let position = layout.binary_search(&canonical).ok()?;
-    items.get(PAIR_ATTR_BASE + position).map(|item| item.node)
-}
-
 /// One failed-unification step; `index` is authoritative, a static child names the default.
 #[derive(Debug, Clone, Copy)]
 pub struct UnifyStep {
@@ -120,10 +109,13 @@ impl<P: Program> Module<P> {
     /// value or one side is undecided: "one class holds one value" follows from that, not
     /// from writing over anybody. See docs/notes/lowlevel-vm.md.
     pub(crate) fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
-        let members: Vec<NodeId> = self.class_members(representative).collect();
-        for member in members {
-            if self.nodes[member].value.is_none() {
-                self.set_node_value(member, Some(value));
+        // As `propagate_class_value`: the list is walked in place, because a hole fill
+        // changes no member's class.
+        let mut member = Some(representative);
+        while let Some(current) = member {
+            member = self.nodes[current].meta().next();
+            if self.nodes[current].value.is_none() {
+                self.set_node_value(current, Some(value));
             }
         }
     }
@@ -366,9 +358,12 @@ impl<P: Program> Module<P> {
     /// why it is not re-checked here. A merge does not come through this path: it uses
     /// [`Module::fill_class_holes`].
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
-        let members: Vec<NodeId> = self.class_members(representative).collect();
-        for member in members {
-            self.set_node_value(member, Some(value));
+        // Walking the member list itself: a write leaves the topology alone, so no
+        // snapshot is needed and no member buffer is allocated.
+        let mut member = Some(representative);
+        while let Some(current) = member {
+            member = self.nodes[current].meta().next();
+            self.set_node_value(current, Some(value));
         }
     }
 
@@ -414,16 +409,25 @@ impl<P: Program> Module<P> {
 
     /// Structurally unify the classes of `a` and `b`; returns `a`'s class representative.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        let mut path = AncestorPairs::new();
-        let mut steps = Vec::new();
-        self.unify_inner(
-            Side::node(a),
-            Side::node(b),
-            &mut path,
-            0,
-            &mut steps,
-            (a, b),
-        );
+        let mut path = std::mem::take(&mut self.unify_path);
+        let mut steps = std::mem::take(&mut self.unify_steps);
+        path.clear();
+        steps.clear();
+        let representative = self.unify_borrowed(a, b, &mut path, &mut steps);
+        self.unify_path = path;
+        self.unify_steps = steps;
+        representative
+    }
+
+    /// [`Self::unify`] over the module's own recursion buffers.
+    fn unify_borrowed(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        path: &mut AncestorPairs<NodeId>,
+        steps: &mut Vec<UnifyStep>,
+    ) -> NodeId {
+        self.unify_inner(Side::node(a), Side::node(b), path, 0, steps, (a, b));
         disjoint::find(&mut self.nodes, a)
     }
 
@@ -616,24 +620,42 @@ impl<P: Program> Module<P> {
             })
     }
 
-    /// The attribute layout an array carries, read from the registry of the arena
-    /// the array lives in.
-    fn array_layout(&self, array: &ArrayValue) -> Vec<u32> {
+    /// How many canonical attributes the array's layout lists.
+    ///
+    /// # Invariant
+    /// The layout is read one entry at a time rather than borrowed: the walk that
+    /// needs it mutates the module, so a slice of the registry could not be held
+    /// across it.
+    fn layout_len(&self, array: &ArrayValue) -> usize {
         let layout = array.layout() as usize;
         match **array {
             AnyHandle::Dynamic(_) => self
                 .attribute_layouts
                 .get(layout)
-                .map(|layout| &**layout)
-                .unwrap_or_default()
-                .to_vec(),
+                .map_or(0, |layout| layout.len()),
             AnyHandle::Static(handle) => self
                 .static_module(handle.module)
                 .attribute_layouts
                 .get(layout)
-                .map(|layout| &**layout)
-                .unwrap_or_default()
-                .to_vec(),
+                .map_or(0, |layout| layout.len()),
+        }
+    }
+
+    /// The canonical index at `position` of the array's layout.
+    fn layout_entry(&self, array: &ArrayValue, position: usize) -> Option<u32> {
+        let layout = array.layout() as usize;
+        match **array {
+            AnyHandle::Dynamic(_) => self
+                .attribute_layouts
+                .get(layout)
+                .and_then(|layout| layout.get(position))
+                .copied(),
+            AnyHandle::Static(handle) => self
+                .static_module(handle.module)
+                .attribute_layouts
+                .get(layout)
+                .and_then(|layout| layout.get(position))
+                .copied(),
         }
     }
 
@@ -653,6 +675,12 @@ impl<P: Program> Module<P> {
         steps: &mut Vec<UnifyStep>,
         root: (NodeId, NodeId),
     ) -> bool {
+        // One payload compared with itself is one value: nothing to descend and no class
+        // to merge. A frozen array read through two paths is the same handle, which is how
+        // a frozen cycle reaches itself without a pair the path guard could name.
+        if a == b {
+            return true;
+        }
         // SAFETY: both payloads come from live nodes of this module, so their home
         // blocks survive the recursion.
         let (left, right) = (unsafe { a.items() }, unsafe { b.items() });
@@ -660,19 +688,6 @@ impl<P: Program> Module<P> {
         if plain && left.len() != right.len() {
             return false;
         }
-        let layout_a = if plain {
-            Vec::new()
-        } else {
-            self.array_layout(&a)
-        };
-        let layout_b = if plain {
-            Vec::new()
-        } else {
-            self.array_layout(&b)
-        };
-        let mut canonicals: Vec<u32> = layout_a.iter().chain(layout_b.iter()).copied().collect();
-        canonicals.sort_unstable();
-        canonicals.dedup();
         let leading = if plain {
             left.len()
         } else {
@@ -681,6 +696,15 @@ impl<P: Program> Module<P> {
         let mut ok = true;
         let mut descend =
             |this: &mut Self, index: usize, na: AnyNodeId, nb: AnyNodeId, ok: &mut bool| -> bool {
+                // Two views of one frozen node are one value: there is nothing to compare
+                // and no dynamic class to merge. A frozen cycle reaches itself this way
+                // (each read of a static ref is a fresh pair), so without this the descent
+                // regresses to the depth bound instead of cutting.
+                if let (AnyNodeId::Static(left), AnyNodeId::Static(right)) = (na, nb)
+                    && left == right
+                {
+                    return true;
+                }
                 steps.push(UnifyStep {
                     index,
                     a: node_or_default(na),
@@ -706,11 +730,35 @@ impl<P: Program> Module<P> {
                 return false;
             }
         }
-        for canonical in canonicals {
-            let Some(na) = array_attribute_slot(left, &layout_a, canonical) else {
-                continue;
+        // The two layouts are sorted, so their union is merged in place: the walk
+        // allocates nothing per array pair, and an entry's slot is its own position, so
+        // nothing is searched.
+        let (mut position_a, mut position_b) = (0usize, 0usize);
+        let (len_a, len_b) = (self.layout_len(&a), self.layout_len(&b));
+        loop {
+            let entry_a = (position_a < len_a)
+                .then(|| self.layout_entry(&a, position_a))
+                .flatten();
+            let entry_b = (position_b < len_b)
+                .then(|| self.layout_entry(&b, position_b))
+                .flatten();
+            let (canonical, from_a, from_b) = match (entry_a, entry_b) {
+                (None, None) => break,
+                (Some(entry), None) => (entry, true, false),
+                (None, Some(entry)) => (entry, false, true),
+                (Some(left), Some(right)) if left < right => (left, true, false),
+                (Some(left), Some(right)) if right < left => (right, false, true),
+                (Some(entry), Some(_)) => (entry, true, true),
             };
-            let Some(nb) = array_attribute_slot(right, &layout_b, canonical) else {
+            let na = from_a
+                .then(|| left.get(PAIR_ATTR_BASE + position_a).map(|item| item.node))
+                .flatten();
+            let nb = from_b
+                .then(|| right.get(PAIR_ATTR_BASE + position_b).map(|item| item.node))
+                .flatten();
+            position_a += usize::from(from_a);
+            position_b += usize::from(from_b);
+            let (Some(na), Some(nb)) = (na, nb) else {
                 continue;
             };
             descend(self, PAIR_ATTR_BASE + canonical as usize, na, nb, &mut ok);

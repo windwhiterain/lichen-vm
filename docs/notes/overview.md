@@ -61,3 +61,4 @@ lichen-utils      shared extension plumbing (enum_ext!, disjoint, compose)
   worked example.
 - The source language and the `---…---` preprocessor block:
   [the spec](../language-spec.md) and [packages](packages.md).
+- The evaluator's hot path, and what its measurements are: [evaluation-performance](evaluation-performance.md).
