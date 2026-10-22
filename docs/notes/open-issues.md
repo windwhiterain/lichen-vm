@@ -102,15 +102,13 @@ the other, and `32 | 0 = 32` is an order fact the lowlevel does not have, so wid
 refused six perspective programs with `expected Int, found Int`. The requirement is judged where
 the order lives — `unify_declared_value` plus the deferred requirement replayed at the apply — and
 all four suites measure green (compute 219, highlevel 136, lowlevel 164 with 1 ignored, language
-275). **The parameter type is not an annotation, so the attributes ride the parameter itself.** The
-probe that settles it: at `lambda.rs:127` the parameter's **type cell** is empty and the
-**denotation** is an array (a pair), and `parameter_type`'s kind is neither `Annotation` — which is
-why the "inner type" candidate was neutral: there is no inner annotation to unwrap. The attributes
-of `i : Int # 32` are the **parameter's** schema tail, so `type_denotation(parameter_type,
-Some(parameter))` combines them with `Int` into a pair for the *type slot*, and the failing
-`expected Int, found Int` must be the unify that meets that pair later. That unify has not been
-found from outside in four probes (the denotation, the inner type, the attribute cell, the guard),
-and locating it needs the design intent of the session that wrote `29692f39`.
+275). **A measured shape worth keeping: an attributed parameter's type and attributes meet in its own
+pair.** At `lambda.rs:127` the parameter's **type cell** is empty and the denotation is a pair, and
+`parameter_type`'s kind is not `Annotation` — which is why the "inner type" candidate was neutral:
+there is no inner annotation to unwrap. The attributes of `i : Int # 32` are the **parameter's**
+schema tail, and `type_denotation(parameter_type, Some(parameter))` combines them with `Int` into
+the pair the type slot holds. The failure that misled the four probes was not this pair at all: it
+was the runtime's attribute compare (the section above).
 
 **Resolved: the six came from widening the runtime's pair unify, not from the parameter type.**
 The probes on the type cell were neutral because the type slot was never the site. The
