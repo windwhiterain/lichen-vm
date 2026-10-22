@@ -478,8 +478,8 @@ The finding that shaped the op, and its resolution:
 The single-operand ABI the loader adopted while the defect was open is gone; the
 family entry takes the argument array, and no argument shape is privileged.
 **§19 measures the arity that stopped being reliable** and closes the join behind
-it: a curried chain of any length now answers on both paths, and what remains is
-one per-module coin toss on the frozen path with a type argument.
+it: a curried chain of any length now answers on both paths, and the frozen path
+with a type argument beside a parameter answers too.
 
 ## 12. The `link` directive
 
@@ -761,7 +761,7 @@ them, are in the note.
 
 ## 19. The operand arity: the join, measured and fixed
 
-**Status: the arity defect is closed; one residue is open.** §17 made the entry's
+**Status: the arity defect is closed, the residue with it.** §17 made the entry's
 safety rule — an entry runs only on a decided operand — and that rule is measured
 working and **kept**. What was open underneath it was that a legitimate operand
 is decided *late*: the entry's operand array holds one item per `$` argument, and
@@ -898,43 +898,84 @@ Ten consecutive processes of the same probe, every case on both paths:
 | wrapper shape | operand | frozen | spliced |
 |---|---|---|---|
 | `sphere = args => …`, `write_sphere (6.0, 0.25, path, name)` | 1 item | `0: Int`, 10 of 10 | `0: Int`, 10 of 10 |
-| `voxels Float (path, name)` | 2 items, type first | **4 of 10 still answer `none: Int`** | `0: Int`, 10 of 10 |
-| `voxels Int (1, 2)` | 2 items, type first | **6 of 10 still answer `none: Int`** | `0: Int`, 10 of 10 |
+| `voxels Float (path, name)` | 2 items, type first | **`0: Int`, 10 of 10** | `0: Int`, 10 of 10 |
+| `voxels Int (1, 2)` | 2 items, type first | **`0: Int`, 10 of 10** | `0: Int`, 10 of 10 |
 | `one = (a : Int) => …`, `p.one 1` | 1 item | `1: Int`, 10 of 10 | `1: Int`, 10 of 10 |
 | `two = a => b => …`, `p.two 1 2` | 2 items | `3: Int`, 10 of 10 | `3: Int`, 10 of 10 |
-| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | `6: Int`, 10 of 10 | **`6: Int`, 10 of 10** |
-| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | **`10: Int`, 10 of 10** | **`10: Int`, 10 of 10** |
+| `three = a => b => c => …`, `p.three 1 2 3` | 3 items | `6: Int`, 10 of 10 | `6: Int`, 10 of 10 |
+| `four = a => b => c => d => …`, `p.four 1 2 3 4` | 4 items | `10: Int`, 10 of 10 | `10: Int`, 10 of 10 |
 
 §17's guard is untouched: an operand that is genuinely open still answers
 `ran_undecided`, and no entry runs on it.
 
-### What is still open: the frozen two-item type-first coin toss
+### The residue, closed: one closure per frozen function, per pass
 
-The frozen `voxels` case remains a per-module coin toss, and the instrument says
-exactly what is still missing. In a failing run the enclosing closure's own
-parameter and return pair are **both** tagged with the enclosing owner and
-referenced in place:
+The frozen `voxels` case was a per-module coin toss, and the instrument says
+exactly why. A frozen closure is re-homed into a fresh dynamic `Function` by
+`static_clone_function` (`crates/lichen-lowlevel/src/static_module/apply.rs`), and
+**the frozen function's own scope holds its own value node** — the self-reference
+the dynamic path's mint resolves through its `minted` table
+(`crates/lichen-lowlevel/src/function.rs`, `value_apply`). The static pass had no
+such table, so the re-home's scope walk reached that node and re-homed **the same
+frozen closure a second time**, nested inside the first:
 
 ```text
-instantiate function=FunctionId(3) parameter=166 return=149
-  node_apply IN PLACE 166 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
-  node_apply IN PLACE 149 owner=Some(FunctionId(2)) owner_chain=FunctionId(2)
+rehome sref=StaticFunctionId(3) fresh=FunctionId(2) branch_top=None shared_ret=None
+rehome sref=StaticFunctionId(3) fresh=FunctionId(3) branch_top=Some(FunctionId(2))
+          shared_ret=Some(NodeId(149)) shared_param=Some(NodeId(166))
+  rehome fresh=FunctionId(3) ret=NodeId(149) owner=Some(FunctionId(3)) param=NodeId(166) owner=Some(FunctionId(3))
+  rehome fresh=FunctionId(2) ret=NodeId(149) owner=Some(FunctionId(2)) param=NodeId(166) owner=Some(FunctionId(2))
 ```
 
-so `ctx.remap.get(&parameter)` finds nothing, **no parameter check runs at all**,
-and the two closures are two re-homes of the same frozen function sharing one
-clone that carries whichever re-home stamped it last. Two re-homes of one frozen
-function must each instantiate the closure's own shell; making the shared remap
-release the re-home's own entries was measured and **rejected** — it breaks the
-`Function::nodes` scope invariant (`function.rs:301`, `return … not in scope`) and
-turned 8 failures into 50 of 140. The fix that keeps that invariant is the open
-item.
+The nested re-home finds the first one's return pair and parameter already in the
+**shared** `ctx.remap` and reuses them; each then re-stamps them with its own fresh
+id, and the last writer wins. So the two closures **share one shell**, whose owner
+tag names one of them only, and the other reads its own parameter **in place**:
+
+`ctx.remap.get(&parameter)` then finds nothing, **no parameter check runs at all**,
+the argument never binds, the operand item that reads the parameter stays open, and
+§17's guard answers `ran_undecided` → `none: Int`.
+
+**Which** of the two closures the program calls is the coin toss: the two clones of
+the same value sit in one equality class, and the class's representative — and so
+the closure the value side reads — is settled by the `regroup_clones` /
+`unify_clone_groups` pass over `ctx.remap.iter()`, a `HashMap` iteration whose
+order is re-drawn per module instance. That is why the rate moved with the
+process and not with the wrapper's text.
+
+**The fix** is the closure-level counterpart of the node-level remap that
+`apply-clone-ownership.md` §2 already names: `StaticApplyCtx` carries a `minted`
+table (source `StaticFunctionRef` → fresh `FunctionId`), the re-home records its
+fresh id **before** the walk, and a second reach of the same frozen closure reads
+that id back instead of minting a second closure. One frozen closure, one dynamic
+closure, one shell — and the self-reference resolves to the very closure it names.
+The coin toss is gone because there is no second closure to be called.
+
+The fix does **not** touch the `Function::nodes` scope invariant, so the earlier
+rejected experiment stays rejected: making the shared remap release the re-home's
+own entries still breaks `function.rs:301` (`return … not in scope`) and turned 8
+failures into 50 of 140.
+
+Measured on the frozen two-item type-first case, `same_process_repeats` (40 builds
+in one process):
+
+| | before | after |
+|---|---|---|
+| one process, 40 builds | 18–26 of 40 answered | **40 of 40 answered**, ten processes of 40 |
+| ten processes, one build each | 4–6 of 10 answered | **10 of 10 answered** |
+| the same probe, seven shapes, both paths | two shapes flip per module | **ten of ten processes identical on every shape** |
+
+The probe reads the node ids the answer turns on
+(`crates/lichen-language/tests/language/link_arity.rs`, `frozen_readings`): the pair
+an operand item reads, the parameter the apply's check writes, the closure the
+apply read, and the owner tag on the return pair — now always the re-home's own
+id.
 
 ### What §11 does and does not claim
 
 §11's measured sentence — `kind=Some(TypeValue(TypeFloat))
 arg=Some(LowValue(Float(1.5)))` for `sample Float 1.5` — is a **two-item**
-operand, and it holds on the spliced path in every process. What is **not** claimed
-there: the frozen (native-package) path with a type argument beside a parameter is
-not reliable even at two items, and the residue above is why. §17's guard is what
-makes the refusal safe; it is not what makes the argument decided.
+operand, and it holds on the spliced path in every process. It now holds on the
+**frozen** path too: a type argument beside a parameter is reliable at two items,
+in every process and in every one of the forty in-process builds. §17's guard is
+what makes the refusal safe; it is not what makes the argument decided.

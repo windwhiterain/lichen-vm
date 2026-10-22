@@ -124,7 +124,10 @@ Two more carry rules:
   closure beside the one the element walk already cloned — the two then meet in a
   unification as two different functions. One closure per call is enforced by a
   `minted` table (source `FunctionId` → fresh `FunctionId`), the closure-level
-  counterpart of the node-level remap.
+  counterpart of the node-level remap. The **frozen** pass keeps the same rule: a
+  frozen closure is re-homed once per pass (`static_module/apply.rs`'s `minted`), so
+  the closure's own value node — which its scope holds — resolves to the closure it
+  names.
 - **An answer that holds a foreign closure is not carriable either.** The
   concreteness proof cannot see through a function's body, so a value *containing*
   a closure is as per-call as a bare one. The carry side consumes the same
