@@ -606,7 +606,16 @@ where
             });
             let dereference = type_position.is_some_and(|node| {
                 lichen_highlevel::shape::low_type_of_slot(self.module, node).is_some()
-            });
+            }) || matches!(
+                // A slot is `2 + attributes` wide with a layout; a bare tuple's is
+                // empty (`docs/notes/compound-element-slots.md`).
+                class_value,
+                Some(lichen_lowlevel::LowValue::Array(array))
+                    if array.layout() != 0
+                        && unsafe { array.items() }.len()
+                            == lichen_lowlevel::PAIR_ATTR_BASE
+                                + self.module.attribute_layout(array.layout()).len()
+            );
             if std::env::var("DBG_DEREF").is_ok() {
                 eprintln!(
                     "DEREF target {target:?} step {step} deref {dereference} class {class_value:?} shape {:?}",

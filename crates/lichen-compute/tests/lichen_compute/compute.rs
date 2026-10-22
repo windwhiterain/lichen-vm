@@ -360,19 +360,18 @@ compute.launch k 5
 #[test]
 fn jit_nested_tuple_domain() {
     // A nested tuple domain flattens to three wasm locals read at offsets 0, 1, 2.
-    let (stub, _guard) = common::stub();
-    let before = stub.calls().len();
-    let (module, _value, root_ty) = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : tuple{tuple{Int, Int}, Int} => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
-    // A stub computes nothing, so the claim is that the domain dispatches at all.
-    assert!(
-        stub.calls().len() > before,
-        "the nested tuple domain dispatches"
+    // A scalar kernel runs in the wasm interpreter, so the answer is the program's own.
+    assert_eq!(
+        common::usize_of(&value),
+        9,
+        "nested tuple jit+launch produced 9"
     );
     assert!(
         common::type_is_int(&module, root_ty),
