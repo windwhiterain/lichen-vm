@@ -250,8 +250,7 @@ fn a_step_whose_argument_names_two_buffers_records_three_inputs() {
 fn the_two_buffer_chain_runs_on_the_device_and_answers_over_both() {
     let test = "the_two_buffer_chain_runs_on_the_device_and_answers_over_both";
     let (stub, _guard) = common::stub();
-    // A stub computes nothing, so the claim is the **dispatch**: one kernel, over the run's
-    // own extent, reading both of its buffers.
+    // A stub computes nothing, so the claim is the **dispatch**.
     let before = stub.calls().len();
     let (_module, _value, _root) = common::run(&running());
     let found = stub.calls()[before..].to_vec();
