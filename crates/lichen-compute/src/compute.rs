@@ -1327,6 +1327,11 @@ where
                     else {
                         return None;
                     };
+                    // An undecided argument defers the call, as it defers a launch
+                    // (`docs/notes/compound-element-slots.md`).
+                    if !argument_decided(module, operands[1].node) {
+                        return None;
+                    }
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(collected) => collected,
                         Err(reason) => {
