@@ -145,7 +145,10 @@ b = (compute.buffer ([1, 2, 3] : array{Int, 3}))
 use (b # 1)
 ";
     let report = compile(source);
-    assert!(!report.ok(), "the body's warp requirement sees the caller's `1`");
+    assert!(
+        !report.ok(),
+        "the body's warp requirement sees the caller's `1`"
+    );
     let messages: Vec<String> = report
         .diagnostics
         .iter()
