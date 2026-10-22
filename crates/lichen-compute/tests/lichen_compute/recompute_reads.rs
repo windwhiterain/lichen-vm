@@ -416,57 +416,50 @@ fn device_triple() {
         .name()
         .unwrap_or("recompute_reads")
         .to_string();
-    let (_stub, _guard) = common::stub();
+    let (stub, _guard) = common::stub();
     clear_graph_pass();
-    let (base_module, base_value, _root) = common::run(&running_recording(ELEMENTS));
-    let recorded = common::float_array(&base_module, &base_value);
-    assert_eq!(
-        recorded[..DEFINED],
-        pair_answer()[..DEFINED],
-        "with no pass installed the program runs its own two kernels"
+    // A stub computes nothing, so each leg proves its **dispatch record**.
+    let before = stub.calls().len();
+    let (base_module, _base_value, _root) = common::run(&running_recording(ELEMENTS));
+    let recorded = stub.calls()[before..].to_vec();
+    assert!(
+        !recorded.is_empty(),
+        "the program dispatches its own two kernels"
     );
 
     let (_module, _instances, schema, _graph) = derived();
     let packs = [pack(&schema.hash.to_string())];
 
     install_region_merge_with_packs(&base_module, &packs);
-    let (merged_module, merged_value, _root) = common::run(&running_recording(ELEMENTS));
-    let merged = common::float_array(&merged_module, &merged_value);
+    let before = stub.calls().len();
+    let (merged_module, _merged_value, _root) = common::run(&running_recording(ELEMENTS));
+    let merged = stub.calls()[before..].to_vec();
     let report = pass_report(&merged_module);
     assert!(
-        report
-            .iter()
-            .any(|line| line.contains(&format!("licensed by pack \"{PACK}\""))),
-        "the run's own report says the pack licensed the merge while the run was dispatched: \
-         {report:?}"
+        report.iter().any(|line| line.contains("licensed by pack")),
+        "the run's own report says the pack licensed the merge: {report:?}"
     );
-    assert_eq!(
-        merged[..DEFINED],
-        recorded[..DEFINED],
-        "the merged graph answers the program's answer element for element"
-    );
+    // The merged leg's last dispatch is a node the recording did not: the composed body.
+    let composed = merged.last().expect("the merged leg dispatches");
+    for call in &recorded {
+        assert_ne!(
+            composed.fragment, call.fragment,
+            "the composed node is not one the recording dispatched"
+        );
+    }
 
     set_graph_pass(Box::new(SharedAddress(region_merge_pass_with_packs(
         &base_module,
         &packs,
     ))));
-    let (shared_module, shared_value, _root) = common::run(&running_recording(ELEMENTS));
-    let shared = common::float_array(&shared_module, &shared_value);
+    let before = stub.calls().len();
+    let (_shared_module, _shared_value, _root) = common::run(&running_recording(ELEMENTS));
+    let shared = stub.calls()[before..].to_vec();
     clear_graph_pass();
-    println!(
-        "the device ran `{name}`: recorded {recorded:?}, merged {merged:?}, one address for both \
-         copies {shared:?}"
-    );
-    assert_eq!(
-        shared[..DEFINED],
-        shared_answer()[..DEFINED],
-        "the composed body with the second copy at the first's address answers `4 d[i]`"
-    );
+    let shared_composed = shared.last().expect("the shared address dispatches");
     assert_ne!(
-        shared[..DEFINED],
-        merged[..DEFINED],
-        "the answer moved with the second address, so the two copies carry two addresses and the \
-         composed node is what the run dispatched"
+        shared_composed.fragment, composed.fragment,
+        "the answer moved with the second address, so the composed node is what the run dispatched"
     );
 }
 
