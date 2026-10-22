@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**`.element` holds a type, or nothing: compute is green at 226/0.** The user's reading settled the
+last failure: **"既然 Float在element的类型位置上，那么 .element当然只应当读到空 cell"** — and the
+probe agrees with it exactly. Reading `.element`'s **value position**:
+- `compute.Buf Float` instances hold `Value(TypeFloat)` — the **type constant** the declaration
+  supplies;
+- the `_` ones (`Read _` / `Write _` in `buf_element_class_recorded.lichen`) hold **no value** — the
+  empty cell, which is the truth and not a defect.
+So the test asserts what the encoding states — a type or no value, never a data value — instead of
+a class a wildcard definition cannot have. Measured: **compute 226 passed / 0 failed / 1 ignored**.
+
 **The two "instances" are wildcard applications, where an open element is right.** Read one level
 further: `576` and `822` are clones of nodes `564` and `810`, and those are **Apply** nodes; the
 clone's own value is an **array** — a struct — so `576`/`822` are themselves `Buf`-*of*-something,
