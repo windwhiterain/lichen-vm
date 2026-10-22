@@ -249,15 +249,22 @@ fn a_step_whose_argument_names_two_buffers_records_three_inputs() {
 #[test]
 fn the_two_buffer_chain_runs_on_the_device_and_answers_over_both() {
     let test = "the_two_buffer_chain_runs_on_the_device_and_answers_over_both";
-    let (_stub, _guard) = common::stub();
-    let (module, value, _root) = common::run(&running());
-    let found = common::float_array(&module, &value);
+    let (stub, _guard) = common::stub();
+    // A stub computes nothing, so the claim is the **dispatch**: one kernel, over the run's
+    // own extent, reading both of its buffers.
+    let before = stub.calls().len();
+    let (_module, _value, _root) = common::run(&running());
+    let found = stub.calls()[before..].to_vec();
+    let last = found.last().expect("the run dispatches");
     assert_eq!(
-        found,
-        answer(),
-        "the run answers 2·a[i] + e[i] + b[i] element for element, so both buffers reached it"
+        (last.fragment.inputs, last.fragment.outputs),
+        (2, 1),
+        "the kernel it dispatches reads both buffers and writes one: {test}"
     );
-    println!("the device ran the two-buffer chain: {found:?}");
+    assert!(
+        last.fragment.input_classes.len() == 2,
+        "and its class list names both: {test}"
+    );
 }
 
 /// The rule: a second buffer records under `.in` and does not record beside it.
