@@ -94,6 +94,13 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The stub answers a cooperative product, and two records replace two values: compute 214/12.**
+`9cd1778e`: the stub's `cooperative_matrix` answers zeros over the trait's `M × N` shape, so the
+mma test is no longer refused in the check, and its gpu leg proves the answer's **shape** rather
+than comparing it with the host. `graph_structure`'s captured-struct payload is never built —
+the check does not run the struct — so the test proves what the read names: an `Index` whose
+target is the struct's own node.
+
 **The graphrun's tuple is slots now: compute 212/14.** The writer-side fix landed: the
 `GraphRun` apply states the program's **full-width layout** (it is the only `HighProgram` bound
 in the path), through `Ctx::full_width_layout`/`record_full_width_layout` and one module field
