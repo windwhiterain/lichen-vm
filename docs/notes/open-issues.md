@@ -120,15 +120,12 @@ structurally in the lowlevel, where the perspective order does not exist, so `32
 default `0` refused. Narrowing that loop to `0..2` and leaving the order to the checker's
 `is_subtype` (the mechanism `AttrExt` documents) is what makes the six pass.
 
-**A one-line candidate is neutral, so the denotation rule itself is the decision.**
-`lambda.rs:127` unifies the parameter's **type cell** with
-`type_denotation(parameter_type, Some(parameter))`, which for `Int # 32` is the **annotated
-value's term** — a pair — and the apply then compares the argument's `Int` with that pair, which
-is the `expected Int, found Int` at the apply's span. Changing that call to
-`type_denotation(parameter_type, None)` — the plain type — was measured **neutral** (the same six
-fail), because the denotation path returns the same node for this shape. So the fix is the
-**denotation rule** (or the apply's type check, not the parameter's *type slot*), and that is a
-design decision in the session that wrote `29692f39`.
+**Neutral, and it should have been: the type slot is not the site.** Changing `lambda.rs:127`'s
+denotation to the plain type was measured neutral, and so was every other type-side candidate,
+because the failing unify does not involve the type slot at all: the diagnostic is a
+`DiagKind::Runtime` apply-time parameter check, and its two values are `32` and `0` — the
+attribute requirement against the default. That is the lowlevel pair unify, fixed by narrowing it
+to `0..2`.
 
 **The six failures are a type unify at `f i`: an attributed parameter type denotes a term, not a
 type.** The diagnostic is `expected Int, found Int` at the **apply** (`g = (i : Int # 32) => f i`,
@@ -159,17 +156,15 @@ every apply of it; the test
 `perspective_requirements::a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it` fails
 without the change and refuses with `expected 32, found 1` with it.
 
-**The apply's pair carries the caller's slot; the body's requirement is checked too early.**
-Probing `check_app` on the isomorphism program shows the shape exactly: `param_marker: None`,
-`caller_marker: Some(Perspective)`, `argument_attr: true`, **`requirement: false`**, and the pair
-built with the caller's slot (`2c809363`). The requirement is `false` because a parameter that
-states nothing declares no tail — the body's own `compute.read` `# warp` lives in the **body's**
-check, which runs before the apply unifies the pair with the parameter cell. Two attempts to write
-the observable test failed for *program* reasons rather than semantic ones (`perspective_of` needs
-a `Read`/`Write` struct, not a buffer; the buffer route is refused earlier), so the observable
-demonstration still waits on one thing: **deferring the body's attribute requirement to the
-apply**.
-
+**The markerless parameter takes the caller's attribute, and the body's requirement is replayed.**
+`2c809363`: `check_app` reads the argument's provided slot only when the callee's parameter pairs a
+marker; a parameter written without one left the cell undecided, so the marker now falls back to
+the **caller's own merged tail** (measured: an `# 1` argument's annotation carries
+`merged_tails = [Perspective]` and `state[].attr` is set). The body's own requirement is then
+handled by the deferred-requirement table (`4dfe3e36`), which records it where the body's read
+consumes it and replays it at every apply. Together they make the isomorphism observable: the test
+`a_bodys_requirement_refuses_a_caller_whose_attribute_is_below_it` fails without the replay and
+refuses with `expected 32, found 1` with it.
 **The caller's attribute reaches the apply's pair now, and the refusal needs a deferred body
 check.** `2c809363`: `check_app` reads the argument's provided slot only when the callee's
 parameter paired a marker; a parameter written without one left the cell undecided. The marker now
