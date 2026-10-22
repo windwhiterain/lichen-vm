@@ -94,6 +94,11 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The merged chain and the sum of squares join the record group: compute 204/22 → 206/20.**
+`c125c78f`: `chain_merge` proves the merged leg's last dispatch is not a recorded node and that
+the moved bias dispatches a different fragment; `combine_fold` proves the tiling line names the
+operator its marks declared and that nothing refused. Both read a delta from the same stub.
+
 **Two record rewrites with the delta discipline: compute 202/24 → 204/22.** `b58a8489`:
 `graph_argument`'s two-buffer chain compares the **last dispatch's** shape — two inputs, one
 output, two classes — because the program builds its graph and then runs it, so two dispatches
