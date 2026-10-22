@@ -651,34 +651,38 @@ where
         if !(on_a_slot || on_a_leaf) {
             return Ok(None);
         }
-        // **The slot is the path flattened**, summing each skipped element's arity;
-        // the steps are reversed first.
+        // **The slot is the path flattened**, summing each skipped element's arity; the
+        // steps are reversed first.
         positions.reverse();
+        let offset = self.offset_of(&positions);
+        if offset.is_none() {
+            return Ok(None);
+        }
+        Ok(offset)
+    }
+
+    /// The offset a reversed path names in the parameter's own shape.
+    fn offset_of(&self, positions: &[usize]) -> Option<usize> {
         // **A buffer field is elided from `shape` but not from the path**, so the roles answer it.
         if let Some(slot) = self.params.first()
             && let Some(roles) = &slot.roles
-            && let Some(ordinal) = roles.scalar_offset(&positions)
+            && let Some(ordinal) = roles.scalar_offset(positions)
         {
-            return Ok(Some(slot.base + ordinal));
+            return Some(slot.base + ordinal);
         }
         let mut offset = 0usize;
-        let mut shape = match self.params.first() {
-            Some(slot) => Some(slot.shape.clone()),
-            None => return Ok(None),
-        };
-        for position in &positions {
-            let Some(lichen_lowlevel::LowShape::Tuple(items)) = shape.as_ref() else {
-                return Ok(None);
+        let mut shape = self.params.first()?.shape.clone();
+        for position in positions {
+            let lichen_lowlevel::LowShape::Tuple(items) = shape else {
+                return None;
             };
-            let Some(element) = items.get(*position) else {
-                return Ok(None);
-            };
+            let element = items.get(*position)?;
             for skipped in items[..*position].iter().flatten() {
                 offset += super::flat_arity(skipped);
             }
-            shape = element.clone();
+            shape = element.clone()?;
         }
-        Ok(Some(offset))
+        Some(offset)
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.

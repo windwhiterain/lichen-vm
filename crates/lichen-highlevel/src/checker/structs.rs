@@ -221,6 +221,10 @@ where
         self.stamp_read_node(element);
         if lazy {
             let ty_node = self.fresh_cell();
+            if element != ty_node {
+                self.module
+                    .record_element_type(element, AnyNodeId::Dynamic(ty_node));
+            }
             return (element, element, ty_node);
         }
         // A compound's elements are complete slots: the value is the first position.
