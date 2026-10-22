@@ -678,8 +678,10 @@ where
         let mut offset = 0usize;
         let mut shape = self.params.first()?.shape.clone();
         for position in positions {
+            // A position past a scalar names a projection the walk already took
+            // (`docs/notes/compound-element-slots.md`).
             let lichen_lowlevel::LowShape::Tuple(items) = shape else {
-                return None;
+                break;
             };
             let element = items.get(*position)?;
             for skipped in items[..*position].iter().flatten() {
