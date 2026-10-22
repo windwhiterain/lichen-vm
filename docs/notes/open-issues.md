@@ -94,6 +94,16 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**A position past a scalar is a projection: the nested-config pair passes.** `161032fe`: the
+offset walk refused when the parameter's shape was exhausted before the positions were, which is
+exactly what a pair projection looks like from the shape's side; the offset it reached stands.
+Both `nested_config` tests that failed on the offset now pass **in isolation**, and the suite read
+**218/8** on the first run after the change and 217/9 on the next, unchanged tree. That swing is
+now the dominant noise: `nested_config`, `fuse_licence`, `compile_order_class` and `graph_jit`
+each pass alone and fail in the suite, so the next target is the **process-global state** a test
+leaves behind — the backend slot, the graph registry and the installed pass are all one per
+process.
+
 **Two drifted expectations and one unevaluated root: compute 215/11 → 217/9.** `555910dd`:
 `graph_jit`'s dispatch-nothing test looked for "names no backend", while the refusal that answers
 it now reads "this function's return is not a value a graph can hand back" — the behaviour is
