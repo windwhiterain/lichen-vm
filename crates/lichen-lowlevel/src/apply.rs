@@ -83,9 +83,9 @@ impl<P: Program> Module<P> {
             return false;
         }
 
-        // Record the apply context and **continue**: a failed slot must not abort its
-        // siblings, so the value still unifies and the body runs
-        // (`docs/notes/array-attribute-view.md`).  One error per apply node.
+        // Record the apply context and **continue**: a failed unify must not shrink the
+        // checked set, so the body still runs (`docs/notes/array-attribute-view.md`).
+        // One error per apply node.
 
         // SAFETY: `parameter_type_source` is a live node of this module.
         let parameter_type = unsafe { self.array_items(parameter_type_source) }

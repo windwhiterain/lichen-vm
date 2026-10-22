@@ -315,7 +315,14 @@ where
                 .push((*marker, declared));
         }
         let found = self.provided_slot(argument, marker, ext);
+        // **A failure the order admits leaves no error**: otherwise the runtime apply stops
+        // at it, the body never runs, and the result stays undecided
+        // (`docs/notes/array-attribute-view.md`).
+        let before = self.module.unify_errors.len();
         ext.unify_slots(self, found, declared, loc);
+        if self.module.unify_errors.len() > before && ext.is_subtype(self, declared, found) {
+            self.module.unify_errors.truncate(before);
+        }
     }
 
     /// The attribute's *missing* slot node, shared when the attribute opted
