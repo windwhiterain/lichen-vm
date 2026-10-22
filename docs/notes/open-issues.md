@@ -97,7 +97,17 @@ map, or the **checker** unifying each element's value class with its type node's
 **The pair unify wires every position now, and the attribute's arrival is not measured yet.**
 `5ba43e2b`: `apply_parameter_check` unified slots `0..2`; it unifies every position up to the
 widest pair now, its five-wide attribute slots included (measured: `param 5 supplied 5 width 5`).
-Green: compute 218/0, lowlevel 164/0 (1 ignored). **The body's requirement is consumed by its own read, never recorded in the parameter.** A third
+Green: compute 218/0, lowlevel 164/0 (1 ignored). **The six language failures are `29692f39`'s own, and their diagnostic names the side that is a
+type.** The parallel commit added `self.state[parameter].attr = Some(declared)` ("the body sees
+the parameter's declared slot") and six tests; the tests `f = (x : Int # 32) => x` /
+`g = (i : Int # 32) => f i` / `g 0` and `f = x # 4 => x; f 5` are refused with **`expected Int,
+found Int`** — a comparison of two *type* values where the attribute's *numbers* belong. Both
+sides reach `slot_value_node`, so one side's slot is a type term instead of the number: the
+`declared` pair is `state[parameter_attribute].term` (correctly `[32, Int]`), which leaves the
+**provided** side — `provided_slot`/`state[argument].attr` — as the one that answers a type. That
+is the next edit, in the same path this session has been working.
+
+**The body's requirement is consumed by its own read, never recorded in the parameter.** A third
 probe settles the shape: a parameter that states no tail has `@any` at its attribute position, so
 unifying the caller's slot against it succeeds (any unifies with anything) — and the body's own
 `compute.read` requirement is consumed by *that* read's pair, a `provided_slot(b)` built inside the
