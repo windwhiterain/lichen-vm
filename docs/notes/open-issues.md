@@ -94,6 +94,18 @@ package slot can carry, so it was removed rather than shipped. The two ways to f
 **safe lowlevel read** that refuses non-dynamic handles (`slot_items`) feeding a per-fragment
 map, or the **checker** unifying each element's value class with its type node's class.
 
+**The nested base's refusal is the root check alone, and accepting on the shape walk is too
+wide.** Probing the walk on `compute::jit_nested_tuple_domain` with the narrow seed
+(`f6ab07e6`): `667 → 669` is a slot so its step 0 dereferences, `669 → 671` is a bare array (a
+tuple) so its step 1 is pushed, and the walk **ends on 671** — the inner tuple — which is
+exactly right. What refuses it is the **root check**: `671` is not the parameter's pair
+(`49`/class `795`), not one of the domain's leaves, and `element_type_of(671)` is `None` because
+the read that produced it is not one the checker recorded (the lazy branch skipped the
+recording; that is fixed, the lookup still misses). Two acceptance criteria were measured and
+rejected: the shape walk alone accepts **too much** (**112/114**), and the class-shape branch of
+the dereference is not involved. The offset itself would be right: the path `[1]` gives offset
+`1`, which is `p(0)(1)`.
+
 **The seed now runs after the inference and states only what it decides — the class-shape
 conflict is gone.** `e3b8b0ae`: `prepare_template_low_types` collects the pair seeds, runs
 `infer_template_low_types` **first**, and seeds only a class the inference left shapeless; an
