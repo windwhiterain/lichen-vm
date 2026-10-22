@@ -197,6 +197,16 @@ into an output `Buf`.
   the emitter's **existing inline-call limit** fires first; the refusal names that
   cause. It is still a refusal, and what the test pins is the consequence: the
   program does not run, and does not silently produce one output buffer.
+- **The invariant is being withdrawn, and the ruling is measured.**
+  [loop-conversion §6](loop-conversion.md#the-authors-ruling-writes-are-allowed-and-the-fill-is-not-coming-back)
+  records the author's ruling: a loop body may write and may branch, `dispatch`
+  still does not initialise outputs, and a slot the program's own control flow
+  skips keeps whatever the allocation held. Removing the two refusals is **not**
+  enough, and the measurement is in that section: a write under a selection lowers
+  to a `Select` over two buffer *versions*, which the value model refuses ("the
+  body's Select has no type"), and a write in a loop leaves the codomain's position
+  resolving to the loop's result rather than to a write. So the invariant stands
+  until the version spine or the effect model lands.
 
 ## How to use it
 

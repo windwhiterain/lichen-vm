@@ -358,15 +358,20 @@ each pass alone and fail in the suite, so the next target is the **process-globa
 leaves behind — the backend slot, the graph registry and the installed pass are all one per
 process.
 
-**The swing has a name at the isomorphism's tip, and it is older than the operator line's probes.**
-Four runs of `lichen-compute` at `fde8d15c` (the base, before the operator line's two probes) read
+**The swing has a name at the isomorphism's tip, and its mechanism is measured.** Four runs of
+`lichen-compute` at `fde8d15c` (the base, before the operator line's two probes) read
 **219 / 218 / 218 / 218**, the failure always
 `graph_jit::a_dispatch_the_body_closed_over_is_refused_rather_than_recorded`; four runs with the
-probes added read **221 / 221 / 220 / 221**, the same test. It passes alone. So the probes change how
-often the race is hit and not whether it exists: the test holds `common::stub()`'s slot for its whole
-run, yet the message it reads depends on process-global state another test can still be holding (the
-graph registry, or the pass table `stub()` clears). That is the next target on this line, and it is
-not the attribute work's.
+probes added read **221 / 221 / 220 / 221**, the same test. It passes alone. The captured failure is
+the test's last assertion: `stub.saw()` holds **two identical dispatches** —
+`over [0, 3) with 0 input(s) of length 0` twice — where the invariant says one. The strings are
+identical because both are `k1` at extent 3: one is `held` (the closed-over dispatch the refusal
+forces) and the **second is the step's own first `plrun`**, so whether the recording forces the
+step's first dispatch before refusing is what swings. `c3eefe04`'s "a failed unify does not narrow
+the checked set" is the change that made the body run further, and the graph recording's discipline
+("the refusal is raised while the graph is built, so nothing inside the step dispatches") is what
+needs re-establishing — that is the type system's side, not the operator line's. The test is left
+as it stands rather than loosened: the invariant it states is the contract.
 
 **Two drifted expectations and one unevaluated root: compute 215/11 → 217/9.** `555910dd`:
 `graph_jit`'s dispatch-nothing test looked for "names no backend", while the refusal that answers

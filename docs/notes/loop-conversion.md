@@ -149,8 +149,10 @@ would otherwise have expanded:
 > **Superseded by §8.1.** The four rows that stood here were this note's first reading,
 > and §8.1 corrects it: with the marker the recursion is a **loop** whether the count is
 > decidable or not, and the marker is **not** permission to refuse. Measured again since:
-> `500` and `600` trip counts run marked where an unmarked recursion stops at `501`, and
-> `2000` is where the checker's own total-application budget ends it.
+> `500` and `600` trip counts run marked where an unmarked recursion stops at `501`. **The
+> `2000` this line used to name is gone**: [heavy-value-cache §8](heavy-value-cache.md)
+> removed the cumulative bound, so `WorkBudget` is `apply_depth_limit` alone — a converted
+> loop spends no depth and the checker does not bound its trips at all.
 
 | the function | the trip count | what evaluation produces |
 |---|---|---|
@@ -377,6 +379,42 @@ shape to reach for.
 What is *not* withdrawn: rule 6 above, and the fact that a converted loop is
 compiled against a **template** — so a body-local binding the loop would fill in
 at run time is still empty, which is a separate and still-refused case.
+
+### The author's ruling: writes are allowed, and the fill is not coming back
+
+**Ruled:** a loop body may write and may branch, `dispatch` still does not
+initialise outputs, and a slot the program's own control flow skips keeps whatever
+the allocation held — the consequences are the program's. So §6's refusals are
+withdrawn *by the ruling*, and the theorem in
+[compute-buffer-wrapper](compute-buffer-wrapper.md) loses its premise. What the
+**model** still needs was measured by removing both refusals and running the
+programs the old tests pinned:
+
+| program | reading with the refusals removed |
+|---|---|
+| a write in a `Select` arm | **refused elsewhere**: `compute.wasm: the body's Select has no type: nothing in the body defines the value it is` — the arm returns a buffer, so the conditional is a `Select` over two buffer values |
+| a write in a loop body | the step's value is the written buffer, the loop's state carries it, and the codomain's position resolves to the loop's **result**, not to a write — which `output_classes`/`write_value_node` refuse |
+
+So "allow it" is one ruling and two model changes, and they are not the same size:
+
+1. **The buffer-version spine.** `write` returns a **version** of the buffer it
+   wrote, the version threads through the loop's state, and a codomain position
+   resolves *through* the version to the write that produced it. A `Select` over
+   two versions is then legal because a version is not a value. This is the design
+   [shared-memory-and-barriers](shared-memory-and-barriers.md) retracted a token
+   for and restaged as a version (§9 step 4); the ruling makes it the load-bearing
+   item rather than an optimization.
+2. **Write-as-effect.** Reverse [D17](code-audit.md) (a `compute.write` is the
+   value of an output position) and emit a write wherever the body's *code*
+   reaches it, with the codomain naming the writes rather than the final value.
+   Cheaper for the branch case, and it makes a write's order observable — both arms
+   store and the later one wins — which is exactly the semantics the ruling
+   accepts. It reverses an invariant, so it is the author's call recorded in
+   `code-audit.md`, not a code change.
+
+**The refusals stay until one of the two lands**: removing them alone turns a
+clear refusal into two less clear ones, which is a worse reading of the same
+program. The measured table above is the reason.
 
 ## 7. Why a marker, and not a `loop` builtin
 
