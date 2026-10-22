@@ -126,7 +126,9 @@ pub fn check(source: &str) -> lichen_language::Report<LangProgram> {
 /// which fragment reached a backend and over how many elements — and that is this crate's
 /// own subject.
 pub struct Stub {
-    calls: Mutex<Vec<Call>>,
+    /// The calls, each with the thread that made it: the tests in one binary run in
+    /// parallel, so a record is the test's own.
+    calls: Mutex<Vec<(std::thread::ThreadId, Call)>>,
     /// The class each resident was issued as, so a fetch answers the buffer it was
     /// given and not one class for every buffer.
     residents: Mutex<std::collections::HashMap<u64, ScalarClass>>,
@@ -158,10 +160,13 @@ impl ParallelBackend for Stub {
         self.calls
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(Call {
-                fragment: root.clone(),
-                count,
-            });
+            .push((
+                std::thread::current().id(),
+                Call {
+                    fragment: root.clone(),
+                    count,
+                },
+            ));
         let mut next = self
             .next
             .lock()
@@ -257,11 +262,16 @@ pub fn stub() -> (Arc<Stub>, MutexGuard<'static, ()>) {
 /// The calls the stub was handed, in the order they came.
 impl Stub {
     pub fn calls(&self) -> Vec<Call> {
+        let thread = std::thread::current().id();
         let calls = self
             .calls
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        calls.to_vec()
+        calls
+            .iter()
+            .filter(|(made_by, _)| *made_by == thread)
+            .map(|(_, call)| call.clone())
+            .collect()
     }
 }
 
