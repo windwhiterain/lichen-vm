@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use lichen_highlevel::program::ValueType;
 use lichen_kernel_ir::{
     Br, KernelBin, KernelBody, KernelInstr, KernelMark, KernelShape, MarkField, ScalarClass,
-    Terminator, ValueId,
+    Terminator, ValueDef, ValueId,
 };
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
@@ -1002,7 +1002,23 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
+        // **An order comparison over a comparison's own result is refused**: the four order
+        // comparisons are routed through the prelude's bindings, and inside a lowered template
+        // the routed body and the surface node both emit, so the second comparison ranges over
+        // the first's `0`/`1` and its answer is always the same. Refused rather than answered
+        // (`docs/notes/operator-gaps.md`, the `if`-in-fold row).
         Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class))
+    }
+
+    /// Whether a value is a comparison's `0`/`1` result.
+    fn value_is_comparison(&self, value: ValueId) -> bool {
+        matches!(
+            self.body.values.get(value.0 as usize),
+            Some(ValueDef::Instr {
+                op: KernelInstr::Bin(_, bin),
+                ..
+            }) if bin.is_comparison()
+        )
     }
 
     /// The operator a routed apply names, read from its frozen callee body, or `None`.
@@ -1731,6 +1747,46 @@ where
             return Err(CONDITIONAL_WRITE.into());
         }
         let selector = self.value_item(*selector)?;
+        // **A selector that compares a comparison is refused**: an order comparison over the
+        // `@loop`'s carried state is emitted twice inside a lowered body (the second ranges over
+        // the first's `0`/`1`), so the selector would take one arm every time — a wrong answer
+        // rather than a refusal (`docs/notes/operator-gaps.md`, the `if`-in-fold row). **A loop
+        // test is exempt**: the conversion decides it with a branch over the first comparison, so
+        // the second is a dead value there.
+        let is_loop_test = self.loops.iter().any(|active| {
+            active
+                .conversion
+                .tests
+                .iter()
+                .any(|test| test.condition == node)
+        });
+        if !is_loop_test
+            && self.value_is_comparison(selector)
+            && self
+                .body
+                .values
+                .get(selector.0 as usize)
+                .is_some_and(|value| match value {
+                    ValueDef::Instr {
+                        op: KernelInstr::Bin(_, bin),
+                        args,
+                        ..
+                    } => {
+                        bin.is_comparison() && args.iter().any(|&arg| self.value_is_comparison(arg))
+                    }
+                    _ => false,
+                })
+        {
+            return Err(
+                "a conditional whose selector compares a comparison: an order comparison over a \
+                 `@loop`'s carried state is emitted twice inside a lowered body, so this selector \
+                 ranges over the first comparison's `0`/`1` and takes one arm every time. Compare \
+                 the state inside an arm instead (an `==` test is clean), or use the comparison's \
+                 `0`/`1` as a number (`1 * (a > b)`); `docs/notes/operator-gaps.md` rows the \
+                 defect"
+                    .to_string(),
+            );
+        }
         // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
         // re-derive.
         let narrow = self.emit(KernelInstr::I32WrapI64, vec![selector], ScalarClass::Int);
