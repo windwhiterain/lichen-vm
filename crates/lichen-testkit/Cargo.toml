@@ -3,6 +3,12 @@ name = "lichen-testkit"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 [dependencies]
 lichen-highlevel.workspace = true
 lichen-lowlevel.workspace = true

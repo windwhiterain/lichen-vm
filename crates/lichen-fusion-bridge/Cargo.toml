@@ -3,6 +3,12 @@ name = "lichen-fusion-bridge"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 # This crate is the seam docs/notes/graph-fusion.md §6 says is missing: it is the side that
 # pays for the fragment IR, so neither core crate does.  `lichen-fusion` stays dependency-free
 # (its own manifest states why), and `lichen-kernel-ir` stays a backend contract that knows

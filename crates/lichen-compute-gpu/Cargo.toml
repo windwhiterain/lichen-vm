@@ -3,6 +3,12 @@ name = "lichen-compute-gpu"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 # A second backend for the lowered-kernel IR, and deliberately a crate of its
 # own: it depends on `lichen-kernel-ir` (the IR), on `lichen-runtime` (the
 # artifact and the device facts) and on a GPU runtime, and nothing that merely

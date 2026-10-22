@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "A session that owns a compute backend and reports what one run asked the device for."
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 [dependencies]
 axum = "0.8"
 fancy-regex = "0.14"

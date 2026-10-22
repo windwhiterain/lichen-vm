@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "The type-independent half of the device persistence layer: the binary byte codec, the device module key, and the content-addressed artifact registry (open/alloc/publish/verify/gc/remove)."
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 [dependencies]
 lichen-utils.workspace = true
 sha2.workspace = true

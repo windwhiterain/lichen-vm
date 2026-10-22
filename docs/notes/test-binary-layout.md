@@ -102,6 +102,19 @@ For `lichen-compute-gpu` the measured pair is the one the workspace rule quotes:
 **relinked executables 9 → 2**, and the full run's median **9.96 s → 3.23 s**, because
 nine process launches each paid the driver's DLL load and became one.
 
+### The empty harnesses
+
+A crate with no inline test still gets a lib test binary, and that binary reports
+`0 passed`: it exists to cost a link and a process start. On this tree twenty-four
+of the fifty-one test executables were empty, at about **90 ms of startup** each.
+The seventeen crates that carry no inline test now say `[lib] test = false`, so
+cargo builds no lib test binary for them — with the footgun written down in each
+manifest, because an inline `#[test]` added to such a crate afterwards would never
+run.
+
+The rest of the time is in [test-time](test-time.md), which measures where a
+workspace's test run goes and what moves it.
+
 ## Reading the census
 
 `cargo metadata --no-deps` is the census, and it is the authority over the working

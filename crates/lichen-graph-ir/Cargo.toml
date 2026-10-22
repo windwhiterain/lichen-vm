@@ -3,6 +3,12 @@ name = "lichen-graph-ir"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 # One dependency, and it is the contract crate rather than a runtime. This crate
 # is a shape and a scheduler; it names no backend and holds no device. That is
 # the same rule `lichen-kernel-ir` follows for the reason that applies to both:

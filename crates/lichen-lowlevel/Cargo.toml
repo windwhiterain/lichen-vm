@@ -3,6 +3,12 @@ name = "lichen-lowlevel"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 [dependencies]
 bumpalo = "3.20.3"
 slotmap.workspace = true

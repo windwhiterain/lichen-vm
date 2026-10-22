@@ -3,6 +3,12 @@ name = "lichen-kernel-ir"
 version.workspace = true
 edition.workspace = true
 
+# This crate carries no inline test, so cargo builds no lib test binary for it: an
+# empty harness costs a link and a process start, and an inline `#[test]` added
+# here would never run.
+[lib]
+test = false
+
 # No dependencies, and that is an invariant rather than an accident of the
 # current tree: this crate is the contract between a *compiler* stage that
 # lowers a checked lichen graph and one or more *backends* that emit machine
