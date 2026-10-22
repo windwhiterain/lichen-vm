@@ -513,6 +513,26 @@ impl<A: AttrSpec, L> Writer<A, L> {
         self.named(name, ExprKind::NativeCall { op, args: range })
     }
 
+    /// `expr` — a module-level statement.
+    ///
+    /// # Invariant
+    /// A statement is a root of the module, so the expression's own name is the name the module
+    /// binds and a later statement can read.
+    pub fn statement(&self, expr: ExprId) -> ExprId {
+        self.ir.borrow_mut().stmt_roots.push(expr);
+        expr
+    }
+
+    /// `name` — a value imported from a package, named by the export it is.
+    ///
+    /// # Invariant
+    /// The ref is the package's exported pair, which the checker materializes: the
+    /// payload itself stays in the package's static arena, so the IR carries the
+    /// ref and not the value.
+    pub fn static_ref(&self, name: &str, export: lichen_lowlevel::StaticNodeId) -> ExprId {
+        self.named(name, ExprKind::Static { export })
+    }
+
     /// `name = [v1, @shallow v2, @shallow(2) v3]`, each element carrying its
     /// `~` depth.
     ///
