@@ -314,7 +314,7 @@ fn a_second_buffer_records_under_the_in_group_and_does_not_beside_it() {
     );
     assert!(
         !records(&chain(MISPLACED_BUFFER)),
-        "a buffer outside `.in`/`.out` has no place in the parameter, and the step does \
+        "a buffer outside `.in` has no place in the parameter, and the step does \
          not record — unread or not, this is where the buffer sits"
     );
 }
@@ -342,7 +342,7 @@ fn a_buffer_beside_the_in_group_is_refused_by_the_line_that_names_it() {
     );
     let refusal = &lines[0];
     assert!(
-        refusal.contains("a buffer outside `.in`/`.out`"),
+        refusal.contains("a buffer outside `.in`"),
         "the line names the buffer and the rule it broke:\n  {refusal}"
     );
     assert!(
@@ -393,7 +393,7 @@ fn a_declared_buffer_beside_the_in_group_fails_the_build_and_never_runs() {
     );
     assert_eq!(
         lines[0],
-        "compute.graph: a parallel kernel's parameter holds a buffer outside `.in`/`.out` at \
+        "compute.graph: a parallel kernel's parameter holds a buffer outside `.in` at \
          position 2.0, and the ABI has no place for it",
         "the check's refusal is the one sentence the rule already had, filed under the graph"
     );
@@ -435,7 +435,7 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(
-        !joined.contains("outside `.in`/`.out`"),
+        !joined.contains("outside `.in`"),
         "and the check itself says nothing about it: {joined}"
     );
     let (run_lines, value) = reported_run(&chain(UNANNOTATED));
@@ -451,7 +451,7 @@ fn an_unannotated_step_is_never_refused_by_the_rule() {
          a container whose type the step never names — never this one: {run}"
     );
     assert!(
-        !run.contains("outside `.in`/`.out`"),
+        !run.contains("outside `.in`"),
         "and never the buffer rule, which would blame a declaration this step did not make: {run}"
     );
     println!("the unannotated step is judged by the read rule alone:\n  {run}");
