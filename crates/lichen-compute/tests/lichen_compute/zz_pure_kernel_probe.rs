@@ -243,7 +243,7 @@ fn probe_two_outputs() {
 /// from that value's fields?
 const SPELLING: &str = r#"
 --- compute = import "compute.lichen" ---
-Param = _ => struct{.type _, .length _}
+Param = _x => struct{.type _, .length _}
 BufT = x : (Param _) => struct{.type x.type, .length x.length}
 buf = (x : (Param _)) => (BufT x)(.type x.type, .length x.length)
 e = buf _(.type Float, .length 192)
