@@ -2254,13 +2254,30 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
-            // **The parameter's `Buf T` states the element class**, not a body node; an
-            // open cell states nothing.
-            let element = struct_fields_of_slot(module, field)
-                .and_then(|(_, shape)| field_types_of(module, shape))
-                .and_then(|fields| fields.get(1).copied())
-                .and_then(|element| low_type_of_slot(module, element))
-                .map(|shape| scalar_class_of(&shape));
+            // **The parameter's `Buf` states the element class**, not a body node; an
+            // open cell states nothing. The value-indexed wrapper keeps it in `.native`'s
+            // `$buf(type, length)` term, whose first shape position is the element type; the
+            // older wrapper keeps it in `.element`'s field type.
+            let fields = struct_fields_of_slot(module, field)
+                .and_then(|(_, shape)| field_types_of(module, shape));
+            let mut element = None;
+            if let Some(fields) = &fields {
+                if let Some(native) = fields.first()
+                    && let Some(ty) = shape::slot_type(module, *native)
+                    && let Some((element_type, _length)) =
+                        shape::buffer_shape(module, shape::TypeRef::Term(ty))
+                {
+                    element =
+                        low_type_of_slot(module, element_type).map(|shape| scalar_class_of(&shape));
+                }
+                if element.is_none() {
+                    element = fields
+                        .get(1)
+                        .copied()
+                        .and_then(|slot| low_type_of_slot(module, slot))
+                        .map(|shape| scalar_class_of(&shape));
+                }
+            }
             // The path is the `Buf` field, as the checker resolves it for the
             // source's read; the payload is one step in.
             return match role {
