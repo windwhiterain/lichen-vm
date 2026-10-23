@@ -115,6 +115,65 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 13: what a repeated apply costs, and what a plan cache would be worth
+
+The question: one function applied many times — a recursion, or a `@loop`'s host loop, which
+calls `instantiate` once per iteration — re-walks its template on every call. Could the walk's
+answer be cached? A temporary counter-and-clock probe in `function.rs` and `apply.rs` measured
+three shapes, with its counters reset at `evaluate_raw` and only the
+outermost window counted (an import re-enters `evaluate_raw`, so a naive probe reads a window
+that a nested compile zeroed mid-run — the first reading of these numbers was wrong for
+exactly that reason).
+
+| shape | applies | walk visits | clones/apply | wildcard cells/apply |
+|---|---|---|---|---|
+| `recursion.lichen` (`fib 10`) | 187 | 42 887 | 85.5 | 91 |
+| a `@loop` summing 200 down (`20100: Int`) | 411 | 96 857 | 121.7 | 57 |
+| `mathlib.lichen` | 137 | 20 417 | 45.3 | 32 |
+
+**Applies never nest**: the probe counted `instantiate` entries inside another `instantiate`
+and read **0** on all three shapes, so the recursion descends through the body's evaluation
+and the windows are flat. Shares of each program's own window (30.4 / 52.3 / 46.2 ms):
+
+| reading | `fib 10` | the `@loop` | `mathlib` |
+|---|---|---|---|
+| inside `instantiate` | 10.43 ms (34.3 %) | 22.86 (43.7 %) | 4.27 (9.2 %) |
+| the clone walk | 5.09 (16.7 %) | 15.37 (29.4 %) | 3.57 (7.7 %) |
+| — of it, value mapping | 4.97 (16.4 %) | 15.12 (28.9 %) | 3.51 (7.6 %) |
+| the clone verdict | 4.32 (14.2 %) | 12.72 (24.3 %) | 3.37 (7.3 %) |
+| `apply_parameter_check` | 7.00 (23.0 %) | 6.44 (12.3 %) | 1.01 (2.2 %) |
+| — forcing the argument | 5.10 (16.8 %) | 2.57 (4.9 %) | 0.47 (1.0 %) |
+| clone-group unification | 0.90 (3.0 %) | 4.96 (9.5 %) | 0.34 (0.7 %) |
+| identity value mappings | 180 / 10 314 | 0 / 25 822 | 412 / 4 940 |
+
+The **clone verdict** is what a plan would replace: template membership, the template-root
+walk, and the `depends_on_parameter` answer. It is cacheable in principle — **the decision set
+is stable after the first calls**: 3 distinct sets per function over the whole run, two flips,
+both inside the first ten applies. The flips name their own cause: a template node's
+`evaluated_deep` goes undecided → decided as the deep pass settles the template, which turns
+"clones" into "shared" (and `member` changes for nodes next to the parameter).
+
+Three measured reasons the win is bounded. **The walk's clock is value mapping**: the carried
+answer's array is re-allocated with this call's cells, and it is an identity mapping in 1.7 %,
+0 % and 8.3 % of mappings — so sharing the template's payload instead of rebuilding it buys
+nothing. **The per-call cells are not removable** (the clones plus the wildcard cells above).
+And **the verdict is ~106 ns of work per visit, of which ~50 ns is cacheable**: the
+membership chain walk (~25 ns) and the origin chain walk (~23 ns) go, while
+`class_low_shape` (~24 ns, the clone's own seed) and `value_holds_foreign_function` (~22 ns,
+the carry rule) stay. That is 2.3 ms (7.7 %) of `fib 10` and 6.6 ms (12.6 %) of the loop
+shape, plus the per-visit `remap` hash lookup a plan would turn into an index.
+
+The same probe names two items that are *not* the traversal: `apply_parameter_check`'s forcing
+of the argument costs 5.1 ms on `fib 10` (16.8 %) for 187 applies — 31 µs each, with no apply
+nested inside it, so it is evaluation and class work; and the clone-group unification is
+4.96 ms (9.5 %) on the loop shape, where the template's classes are big.
+
+Verdict: a plan cache is feasible but bounded by the mapping and the cell creation it cannot
+skip, and it needs a second execution path for a walk whose rules (owner tag, block images,
+one closure per call, the two carry gates) are the whole subject of
+[`apply-clone-ownership.md`](apply-clone-ownership.md). Its invalidation would have to track
+the very thing the probe shows moving: a template node's `value`/`evaluated_deep`. Not built.
+
 ## Round 12: the allocations, finished — and the one that cannot be finished
 
 Three allocation wins landed after round 11, all behaviour-preserving and all without a
