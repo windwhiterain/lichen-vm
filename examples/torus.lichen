@@ -43,7 +43,8 @@
     (`docs/notes/graph-recording-rounds.md`). A fold carrying the `GOut` **struct** never resolves at \
     all (`raw none`); a buffer threads through and needs no `collect` inside the step, so the loop \
     pays one readback for the whole run instead of one per step. `march` still carries \
-    `tuple{Int, compute.Buf Float} -> compute.Buf Float`: a recursive function's type follows from its \
+    `tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 9))} -> compute.Buf \
+    ((compute.BufParam _)(.type Float, .length 9))`: a recursive function's type follows from its \
     annotation (`language-spec.md` §3's `f : f` rule), and stating it is what an example should do — \
     though a buffer state is the one shape that also resolves without it, unlike an array state, which \
     prints `raw[raw …]: ?a` unannotated.\n\n\
@@ -52,12 +53,14 @@
     wrong answer measured on `examples/kvcache.lichen`'s append before the guard landed. The sweep \
     `crates/lichen-tools/examples/operators_on_device.rs` answers `agrees, 18 of 18 element(s)` \
     on the RTX 3060 for both chains, so the four `Select`s, the computed `rows` and the guard are \
-    all right on the device."
+    all right on the device. The host's data is built by **fill kernels**: the surface has no \
+    array-to-buffer conversion (`docs/notes/kernel-buffer-declarations.md`), so the plane is a third \
+    kernel and this file now runs three."
   output = "([1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], [0.5, 0.75, 1.5, 1.5, 0.75, 0.5, 0.75, 1.0, 0.75]): tuple{array{Float, 9}, array{Float, 9}}"
 ---
-GIn  = struct{.x (compute.Buf Float)}
-GOut = struct{.y (compute.Buf Float)}
-GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn, .out GOut}
+GIn  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 9)))}
+GOut = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 9)))}
+GPar = struct{.n Int, .cols Int, .alpha Float, .in GIn}
 GArg = struct{.n Int, .cols Int, .alpha Float, .I GIn}
 grid_raw = (c : GPar) => {
   i = compute.range c.n
@@ -68,7 +71,8 @@ grid_raw = (c : GPar) => {
   below = (compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))) : Float)
   left = if col == 0 then 0.0 else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
   right = if col == (c.cols - 1) then 0.0 else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((GOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre)))))))
 }
 grid = compute.parallel grid_raw "cpu" GOut
 torus_raw = (c : GPar) => {
@@ -81,13 +85,22 @@ torus_raw = (c : GPar) => {
   below = if row == (rows - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at col)) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at ((row + 1) * c.cols + col))) : Float))
   left = if col == 0 then ((compute.read ((compute.Read _)(.from c.in.x, .at (i + c.cols - 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i - 1))) : Float))
   right = if col == (c.cols - 1) then ((compute.read ((compute.Read _)(.from c.in.x, .at (i - c.cols + 1))) : Float)) else ((compute.read ((compute.Read _)(.from c.in.x, .at (i + 1))) : Float))
-  compute.write ((compute.Write _)(.to c.out.y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length c.n))
+  ((GOut)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (centre + c.alpha * ((above + below + left + right) - 4.0 * centre)))))))
 }
 torus = compute.parallel torus_raw "cpu" GOut
-plane = (compute.buffer ([0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 9}) : (compute.Buf Float))
+Fill = struct{.n Int}
+fill_plane_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 9))
+  v = (if i == 2 then 4.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((GIn)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_plane = compute.parallel fill_plane_raw "cpu" GIn
+plane = (compute.plrun fill_plane ((Fill)(.n 9)) : GIn).x
 stepped = (compute.plrun grid ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 wrapped = (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x plane))) : GOut)
 seed = wrapped.y
-@loop march = (((s : tuple{Int, compute.Buf Float}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf Float} -> compute.Buf Float)
+@loop march = (((s : tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 9))}) => if s(0) == 0 then s(1) else march (s(0) - 1, (compute.plrun torus ((GArg)(.n 9, .cols 3, .alpha 0.25, .I GIn(.x s(1)))) : GOut).y)) : tuple{Int, compute.Buf ((compute.BufParam _)(.type Float, .length 9))} -> compute.Buf ((compute.BufParam _)(.type Float, .length 9)))
 solved = march (1, seed)
 (compute.collect stepped.y : array{Float, 9}, (compute.collect solved : array{Float, 9}))
