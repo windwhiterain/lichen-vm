@@ -13,8 +13,8 @@ use super::common;
 /// The program: one kernel builds its input, another declares its output.
 const PROGRAM: &str = r#"
 --- compute = import "compute.lichen" ---
-In  = struct{.unused (compute.Buf Float)}
-Out = struct{.y (compute.Buf Float)}
+In  = struct{.unused (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 2)))}
 Fill = struct{.n Int}
 FillArg = struct{.n Int}
 fill = (c : Fill) => {
@@ -61,7 +61,7 @@ fn probe_a_kernel_that_declares_its_output() {
 /// reachable from the return and does not survive the freeze.
 const LENGTH: &str = r#"
 --- compute = import "compute.lichen" ---
-OutThree = struct{.y (compute.Buf Float)}
+OutThree = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
@@ -97,7 +97,7 @@ fn probe_a_declared_length_is_the_allocation() {
 /// step (`docs/notes/kernel-buffer-declarations.md`).
 const LOOPED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out = struct{.y (compute.Buf Float)}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 LPar = struct{.n Int, .taps Int}
 fill = (c : LPar) => {
   i = compute.range c.n
@@ -134,7 +134,7 @@ fn probe_the_codomain_may_hold_a_loops_result() {
 /// compiles (`docs/notes/kernel-buffer-declarations.md`).
 const SELECTED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out = struct{.y (compute.Buf Float)}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
@@ -169,7 +169,7 @@ fn probe_a_literal_selected_by_the_index() {
 /// (`docs/notes/kernel-buffer-declarations.md`).
 const NESTED: &str = r#"
 --- compute = import "compute.lichen" ---
-Out = struct{.y (compute.Buf Float)}
+Out = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 3)))}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
@@ -204,7 +204,7 @@ fn probe_a_nested_chain_in_the_body() {
 /// whether `collect` reaches the second field (`docs/notes/kernel-buffer-declarations.md`).
 const TWO: &str = r#"
 --- compute = import "compute.lichen" ---
-Out = struct{.c (compute.Buf Int), .s (compute.Buf Int)}
+Out = struct{.c (compute.Buf ((compute.BufParam _)(.type Int, .length 2))), .s (compute.Buf ((compute.BufParam _)(.type Int, .length 2)))}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
