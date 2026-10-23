@@ -1058,6 +1058,11 @@ where
     /// produced. A buffer the *parameter* named answers `None` here and falls back to the
     /// parameter path.
     fn declared_ordinal(&self, target: NodeId) -> Option<usize> {
+        // **The target may be the declaration itself**: a body lowers a declaration at the
+        // node it names, so the registry answers before any peel.
+        if let Some(ordinal) = self.declared.get(&target) {
+            return Some(*ordinal);
+        }
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
         let node = peeled.dynamic()?;
         let value = self.module.pair_value_half(node).unwrap_or(node);

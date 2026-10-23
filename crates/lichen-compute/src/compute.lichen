@@ -7,7 +7,7 @@ A = I => struct{.n Int, .I I}
 P = T: KT _ => struct{.n Int, .in T.I}
 S = T: KT _ => A T.I -> T.O
 BufParam = _x => struct{.type _, .length _}
-Buf = x : (BufParam _) => struct{.native $buf_type(x.type, x.length), .type x.type, .length x.length}
+Buf = x : (BufParam _) => struct{.native $buf_type(x.type, x.length), .type x.type : Type, .length x.length : Int}
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I # _ => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I # _ => {r = $call(k.native, a); r: k.O; r}
