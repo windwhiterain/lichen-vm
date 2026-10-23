@@ -34,40 +34,41 @@ const DATA: [f32; 3] = [2.0, 4.0, 6.0];
 /// No parameter carries an `.out` group: the body declares its buffer with
 /// `compute.slice`, and the write is the codomain's value.
 fn chain() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutR = struct{.r (compute.Buf Float)}
-Par  = struct{.n Int, .in In}
-producer_raw = (k : Par) => {
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par  = struct{{.n Int, .in In}}
+producer_raw = (k : Par) => {{
   i = compute.range k.n
-  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  r = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
-}
+}}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-consumer_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+consumer_raw = (k : Par2) => {{
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
-}
+}}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
-}
+}}
 built = compute.graph step
 (producer, consumer, built)
 "#
-    .to_string()
+    )
 }
 
 /// The chain with its recording run over the data the fill kernel writes, which is what a
@@ -105,11 +106,11 @@ fn datum() -> String {
 fn filled() -> String {
     format!(
         r#"
-Data = struct{{.d (compute.Buf Float)}}
+Data = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
 Fill = struct{{.n Int}}
 fill = (c : Fill) => {{
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length {COUNT}))
   v = {datum}
   ((Data)(.d (compute.write ((compute.Write _)(.to y, .at i, .value v)))))
 }}
@@ -142,39 +143,40 @@ fn with_run(source: String) -> String {
 /// `compute.jit … "claim:Reduction(element)"` rather than a role of the consumer's own claim — so
 /// the role rule cannot see it and only the graph's edge says the value is not a datum.
 fn bare_consumer() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.d (compute.Buf Float)}
-OutR = struct{.r (compute.Buf Float)}
-Par  = struct{.n Int, .in In}
-producer_raw = (k : Par) => {
+In   = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutR = struct{{.r (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par  = struct{{.n Int, .in In}}
+producer_raw = (k : Par) => {{
   i = compute.range k.n
-  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  r = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
   ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
-}
+}}
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-consumer_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+consumer_raw = (k : Par2) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float))) ~ "combine"))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (i + 1, 0.0 ~ "identity"))))))
-}
+}}
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun producer ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutR)
   compute.plrun consumer ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.r)))
-}
+}}
 built = compute.graph step
 (producer, consumer, built)
 "#
-    .to_string()
+    )
 }
 
 /// One program as the guard's test reads it.
