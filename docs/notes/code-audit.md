@@ -893,8 +893,7 @@ mismatch surfaces as a lookup miss (`P1-45`).
 
 What the ruling changes: an instantiation whose callee struct type is not determined
 at normalize is **refused** where it stands (the callee is force-evaluated first, so
-"undetermined" means genuinely so — a `_` hole or a parameter; a placeholder callee is
-already refused as `the callee of an instantiation must be a struct type`). The
+"undetermined" means genuinely so — a `_` hole or a parameter). The
 lazy-reorder route and the reads it builds are **retired**, not extended: the refusal
 removes `P1-44`'s and `P1-46`'s silent acceptances, and `P1-45`'s and `P1-47`'s
 sentences become unreachable from source (kept until the machinery is deleted, then
@@ -911,6 +910,15 @@ returns, so nothing downstream builds a reorder for an undetermined callee.
 sentences that read them (`P1-45`'s field-naming miss and `P1-47`'s argument-name
 sentence) — their rows are `retired:P1-49`.
 
+**A placeholder callee is the one callee the context decides.** The ruling refuses a
+callee that is *not determined* at the normalize. A placeholder callee
+(`_(.type Float, .length 192)`) is determined there by the **expected type** the
+context states — at a call, the parameter's type — so `check_app` pins the
+placeholder's own pair to that struct type before the argument is checked, and the
+instantiation is checked against it as a named callee's. Where the context states no
+expected type, nothing is pinned and the refusal above stands. A callee that is a
+*parameter* is untouched: no context states its type, so it stays refused.
+
 **The residual audit**, because the ruling says the lazy checking is retired and a
 reader must know what stays: the seven remaining `lazy_index_path` sites
 (`indexing.rs`'s array/tuple kind reads, `structs.rs`'s container-kind and name-table
@@ -924,7 +932,8 @@ container, and only the instantiation form is refused. The boundary is recorded 
 
 Measured: `g = c => c(.a 1, .b 2)` and the positional `g = c => c(1, 2)` are refused at
 the definition; `S(.a 1, .b 2)` and `(S(.a 1)).a` are unchanged; a placeholder callee
-still answers `the callee of an instantiation must be a struct type`. `D3`'s smallest
+without an expected type still answers `the callee of an instantiation is not
+determined here — name the struct type where the instantiation is written`. `D3`'s smallest
 test is `pipeline::an_instantiation_through_an_undetermined_callee_is_refused`. The
 owner permitted deleting the tests that encoded the retired behaviour (13 in
 `lichen-language`, 2 in `lichen-highlevel`). Suites: language 261/1 (the `gc_block`

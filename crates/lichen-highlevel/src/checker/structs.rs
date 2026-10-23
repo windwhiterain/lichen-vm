@@ -492,12 +492,11 @@ where
     /// A placeholder callee takes the struct type the **context requires**.
     ///
     /// # Invariant
-    /// Only a **placeholder** callee is resolved here: an undetermined callee (a
-    /// parameter) is not determined at the normalize and stays refused
-    /// (`docs/notes/function-normalization.md` §3.7). The expected type must be
-    /// decided; an undecided one decides nothing, so the instantiation refuses
-    /// itself by name. The pin is the same one an undetermined callee carries —
-    /// the callee's own pair takes the struct type the context requires.
+    /// Only a **placeholder** callee is resolved here: an undetermined callee
+    /// (a parameter) stays refused
+    /// (`docs/notes/function-normalization.md` §3.7).  The expected type must
+    /// be decided; an undecided one decides nothing, so the instantiation
+    /// refuses itself by name.
     pub(super) fn pin_placeholder_callee(&mut self, function: ExprId, argument: ExprId) {
         let ExprKind::Instantiate { type_expr, .. } = self.ir[argument].kind else {
             return;
@@ -523,7 +522,9 @@ where
         // The placeholder's own pair is the callee: pinning it to the expected
         // type makes the instantiation that type.
         self.check_expr(type_expr);
-        let pair = self.state[type_expr].term.expect("the placeholder is compiled");
+        let pair = self.state[type_expr]
+            .term
+            .expect("the placeholder is compiled");
         // The expected side leads, so the expected type's own value is the one
         // the pair keeps.
         let (_, errors) = self.module.try_unify(expected, pair);

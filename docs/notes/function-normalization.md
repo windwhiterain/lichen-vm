@@ -114,6 +114,16 @@ the parameter check and the result/codomain wiring (`static_module/apply.rs`'s
    re-evaluated per apply clone, which is the language's runtime checking (the apply's
    subject is the user's own predicate), not a type check the checker deferred.
 
+   **A placeholder callee is decided at the normalize, not deferred.** The ruling
+   refuses an instantiation whose callee is *not determined* there. A placeholder
+   callee (`_(.type Float, .length 192)`) is determined there by the **expected type**
+   the context states — at a call, the parameter's type — so the placeholder's pair is
+   pinned to that struct type and the check proceeds against it. Where the context
+   states no expected type (a bare `_(…)`, a call whose parameter carries no
+   annotation), nothing is pinned and the instantiation is refused by name. Only the
+   placeholder is resolved this way: a callee that is a *parameter* stays refused,
+   because no context states its type.
+
 ## 4. What this corrected
 
 The class-read investigation called the decide "an apply clone's run-time

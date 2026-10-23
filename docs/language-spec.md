@@ -748,7 +748,15 @@ maps every span back to the original file.
   at the instantiation, with the check's own kind — rather than through the
   apply's argument unify; a
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
-  so the static checks see the concrete struct type.  An instance's fields are
+  so the static checks see the concrete struct type.  A **placeholder** callee
+  (`_(.type Float, .length 192)`) is decided by the **expected type** the
+  context states: at a call, the parameter's type pins the placeholder's pair
+  to that struct type, so the instantiation is checked against it as a named
+  callee's.  A context that states no expected type pins nothing, and the
+  instantiation is refused by name (`the callee of an instantiation is not
+  determined here — name the struct type where the instantiation is written`);
+  a callee that is a *parameter* is refused the same way, because no context
+  states its type.  An instance's fields are
   read **by name**: `a.x` resolves `x` through the struct's name→index table to
   the field's positional index, and the read's type is that field's type (a
   `a.x` on a struct without that field is a `NamedField` diagnostic at the read,
@@ -780,8 +788,8 @@ maps every span back to the original file.
   is not a silent gap.  The tree still accepts the undetermined form with a lazy
   reorder and compares nothing there: `S = struct{.a 5 : Int}` ; `g = c => c(.a 6)` ;
   `g S` is accepted with `6` (measured; `P1-44`, retired with the reorder by
-  `P1-49`).  A placeholder callee is refused earlier (`the callee of an
-  instantiation must be a struct type`).
+  `P1-49`).  A placeholder callee is decided by the expected type where the
+  context states one, and refused by name where it states none.
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct{…}` definition
   uses: `S = struct{.x Int, .y Type}; S(.y Int, .x 1)`.  The names ride the
