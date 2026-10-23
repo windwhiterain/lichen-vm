@@ -54,18 +54,16 @@ fn closed_form() -> f32 {
 /// A program whose one kernel declares a reduction over a **runtime** extent.
 ///
 /// # Invariant
-/// The fold's bound is `i + 1`, the lane's own index plus one, so the program's own body is the
-/// per-lane schedule this pass replaces.
+/// The fold's bound is `i + 1`, the lane's index plus one, so the body is the per-lane schedule
+/// the pass replaces.
 ///
-/// The **seed** is the marked literal, because both halves of the algebra have to survive
-/// lowering (`docs/notes/graph-fusion.md` §3).
+/// The **seed** is the marked literal: the algebra's halves must survive lowering
+/// (`docs/notes/graph-fusion.md` §3).
 ///
-/// The parameter carries no `.out` group: the body declares the buffer it writes with
-/// `compute.slice` and returns the write as the codomain field's value
+/// The graph's own parameter carries the buffer in.
+///
+/// The body declares its buffer and returns that write
 /// (`docs/notes/kernel-buffer-declarations.md`).
-///
-/// The buffer reaches the kernel through the graph's own parameter, which is the one way a
-/// recording may name one.
 fn declared() -> String {
     format!(
         r#"
@@ -101,10 +99,9 @@ out
 /// The fill kernel that builds the launch's input data, and the run that hands its buffer back.
 ///
 /// # Invariant
-/// One lane per element and each writes the datum at its own lane, so the buffer holds
-/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
-/// backend, because a host builds its data before a device ever sees it, and its parameter
-/// declares no `.in` group at all.
+/// One lane per element, each writing the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
+/// before a device ever sees it, and its parameter declares no `.in` group.
 fn filled() -> String {
     r#"
 Data = struct{.b (compute.Buf Float)}

@@ -51,8 +51,7 @@ fn lifted() -> f32 {
 /// `shift`'s at `.q`, and each kernel's other buffer is the recording's own `d`. So the region is a
 /// chain and nothing else, and `BIAS` appears in `lift`'s element alone.
 ///
-/// The parameter carries no `.out` group: each body declares the buffer it writes with
-/// `compute.slice` and returns the write as the codomain field's value
+/// The body declares its buffer and returns that write
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program(step: &str) -> String {
     format!(
@@ -119,10 +118,9 @@ fn recording() -> String {
 /// The fill kernel that builds the chain's input data, and the run that hands its buffer back.
 ///
 /// # Invariant
-/// One lane per element and each writes the datum at its own lane, so the buffer holds
-/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
-/// backend, because a host builds its data before a device ever sees it, and its parameter
-/// declares no `.in` group at all.
+/// One lane per element, each writing the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
+/// before a device ever sees it, and its parameter declares no `.in` group.
 fn filled() -> String {
     r#"
 Data = struct{.d (compute.Buf Float)}

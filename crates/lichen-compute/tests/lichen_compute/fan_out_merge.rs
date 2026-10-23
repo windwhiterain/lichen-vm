@@ -35,11 +35,10 @@ const PACK: &str = "elementwise-fan-out";
 /// # Invariant
 /// Both consumers are the **same claimed kernel**, so the region holds three instances of two
 /// kernels and a pack must name a hash only this shape has. Each body reads at its own invocation
-/// index and returns from its entry block, which is what lets `compose_fan_out` append the second
-/// consumer's body where the first one's leaves.
+/// index and returns from its entry block, so `compose_fan_out` appends the second consumer's
+/// body.
 ///
-/// The parameter carries no `.out` group: each body declares the buffer it writes with
-/// `compute.slice` and returns the write as the codomain field's value
+/// The body declares its buffer and returns that write
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
     r#"
@@ -87,10 +86,9 @@ fn recording() -> String {
 /// The fill kernel that builds the diamond's input data, and the run that hands its buffer back.
 ///
 /// # Invariant
-/// One lane per element and each writes the datum at its own lane, so the buffer holds
-/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
-/// backend, because a host builds its data before a device ever sees it, and its parameter
-/// declares no `.in` group at all.
+/// One lane per element, each writing the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT`. The kernel runs on the host's own backend, because a host builds its data
+/// before a device ever sees it, and its parameter declares no `.in` group.
 fn filled() -> String {
     r#"
 Data = struct{.d (compute.Buf Float)}
