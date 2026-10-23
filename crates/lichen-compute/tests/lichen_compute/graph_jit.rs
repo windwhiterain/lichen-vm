@@ -140,31 +140,52 @@ fn fail(source: &str) -> Vec<String> {
 
 /// Two kernels, one with no inputs and one with one, so which node a value
 /// reached is visible in the numbers.
+///
+/// # Invariant
+/// Neither parameter carries an `.out` group: each body declares its buffer with `compute.slice`
+/// and the write is the codomain field's value (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
 In1  = struct{.a Int}
-Out1 = struct{.z (compute.Buf _)}
-Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+Out1 = struct{.z (compute.Buf Int)}
+Par1 = struct{.n Int, .in In1}
 f1 = (k : Par1) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i + 10)))))
 }
 k1 = compute.parallel f1 "gpu" Out1
-In2  = struct{.b (compute.Buf _)}
-Out2 = struct{.w (compute.Buf _)}
-Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+In2  = struct{.b (compute.Buf Int)}
+Out2 = struct{.w (compute.Buf Int)}
+Par2 = struct{.n Int, .in In2}
 f2 = (k : Par2) => {
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a + a)))))
 }
 k2 = compute.parallel f2 "gpu" Out2
+"#;
+
+/// The kernel that builds the host's own data, and the launch that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and every lane writes the same value, so the buffer holds the list the
+/// old `compute.buffer` call held: a host builds its data with a kernel, because there is no
+/// array-to-buffer conversion any more (`docs/notes/kernel-buffer-declarations.md`).
+const FILL: &str = r#"
+Fill = struct{.n Int}
+fill_raw = (c : Fill) => {
+  i = compute.range c.n
+  y = compute.slice ((compute.Slice _)(.count c.n, .element Int))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value 1)))))
+}
+filler = compute.parallel fill_raw "cpu" Out1
 "#;
 
 /// A body that dispatches twice, the second over the first's output.
 const CHAIN: &str = r#"
 InS  = struct{.a Int}
-OutS = struct{.unused (compute.Buf _)}
-ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+ParS = struct{.n Int, .in InS}
 step = (s : ParS) => {
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
@@ -174,18 +195,19 @@ built = compute.graph step
 
 #[test]
 fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
-    // `captured` is a live host buffer the body reaches as a free variable.
+    // The host's data is built by a kernel, so the step closes over a
+    // live buffer the parameter did not carry.
     let messages = fail(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
 {KERNELS}
-captured = (compute.buffer ([1, 1, 1] : array{{Int, 3}}) : (compute.Buf Int))
+{FILL}
+captured = (compute.plrun filler ((Fill)(.n 3)) : Out1)
 InS  = struct{{.a Int}}
-OutS = struct{{.unused (compute.Buf _)}}
-ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+ParS = struct{{.n Int, .in InS}}
 step = (s : ParS) => {{
-  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b captured)))
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b captured.z)))
 }}
 built = compute.graph step
 compute.collect (compute.graphrun built 3)
@@ -225,8 +247,7 @@ fn a_dispatch_the_body_closed_over_is_refused_rather_than_recorded() {
 {KERNELS}
 held = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
 InS  = struct{{.a Int}}
-OutS = struct{{.unused (compute.Buf _)}}
-ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+ParS = struct{{.n Int, .in InS}}
 step = (s : ParS) => {{
   first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
   compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b held.z)))
@@ -265,6 +286,8 @@ compute.collect (compute.graphrun built 3)
 /// is as much a subject as the two inside the step.
 #[test]
 fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one() {
+    // The dispatch outside the step runs on the device, so the slot is held for it.
+    let (_stub, _guard) = common::stub();
     // Only the count role is wrong, and the count filter is read first.
     let messages = fail(&format!(
         r#"---
@@ -426,20 +449,22 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
   compute = import "compute.lichen"
 ---
 In1  = struct{.a Int}
-Out1 = struct{.z (compute.Buf _)}
-Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+Out1 = struct{.z (compute.Buf Int)}
+Par1 = struct{.n Int, .in In1}
 f1 = (k : Par1) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i)))))
 }
 k1 = compute.parallel f1 "gpu" Out1
-In2  = struct{.b (compute.Buf _)}
-Out2 = struct{.w (compute.Buf _)}
-Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+In2  = struct{.b (compute.Buf Int)}
+Out2 = struct{.w (compute.Buf Int)}
+Par2 = struct{.n Int, .in In2}
 f2 = (k : Par2) => {
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a)))))
 }
 k2 = compute.parallel f2 "cpu" Out2
 GArg = struct{.n Int, .in In1}
@@ -524,20 +549,22 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
   compute = import "compute.lichen"
 ---
 In1  = struct{{.a Int}}
-Out1 = struct{{.z (compute.Buf _)}}
-Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+Out1 = struct{{.z (compute.Buf Int)}}
+Par1 = struct{{.n Int, .in In1}}
 f1 = (k : Par1) => {{
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out1)(.z (compute.write ((compute.Write _)(.to y, .at i, .value i + 10)))))
 }}
 k1 = compute.parallel f1 "{backend}" Out1
-In2  = struct{{.b (compute.Buf _)}}
-Out2 = struct{{.w (compute.Buf _)}}
-Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+In2  = struct{{.b (compute.Buf Int)}}
+Out2 = struct{{.w (compute.Buf Int)}}
+Par2 = struct{{.n Int, .in In2}}
 f2 = (k : Par2) => {{
   i = compute.range k.n
   a = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Int))
+  ((Out2)(.w (compute.write ((compute.Write _)(.to y, .at i, .value a + a)))))
 }}
 k2 = compute.parallel f2 "{backend}" Out2
 GArg = struct{{.n Int, .in In1}}
