@@ -6,7 +6,10 @@
    the one that **does not run the way the row describes**. It is two kernels, not one: a `scores` \
    kernel with the `j` fold inside a lane, then an `attend` kernel that is **one lane per output \
    element** and recomputes the softmax's row maximum and its denominator **inside the lane** by \
-   looping over the keys with `@loop`, exactly as `examples/softmax.lichen` does. **This is a \
+   looping over the keys with `@loop`, exactly as `examples/softmax.lichen` does. The program's \
+   other three kernels are **fill kernels**: the surface has no array-to-buffer conversion, so the \
+   host builds `Q`, `K` and `V` by running kernels that write them \
+   (`docs/notes/kernel-buffer-declarations.md`). **This is a \
    demonstration of what the surface can express today, not a schedule anyone would ship**: there \
    is no shared-memory staging, no tiling and no `k`-blocking, and the one-kernel form the ladder's \
    row really asks for — the score recomputed per lane, so `O(n·dim)` work per lane per fold — \
@@ -130,37 +133,64 @@
    by `1` across the head dimension — a transposition of either matrix would change every entry."
   output = "[2.5101643, 3.5101643, 4.5101643, 5.5101643, 3.924232, 4.924232, 5.9242315, 6.924232]: array{Float, 8}"
 ---
-QK = struct{.q (compute.Buf Float), .k (compute.Buf Float)}
-Scored = struct{.s (compute.Buf Float)}
-ParS = struct{.n Int, .keys Int, .dim Int, .in QK, .out Scored}
+QK = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 8))), .k (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+Scored = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParS = struct{.n Int, .keys Int, .dim Int, .in QK}
 ArgS = struct{.n Int, .keys Int, .dim Int, .I QK}
 scores_raw = (k : ParS) => {
   i = compute.range k.n
   query = compute.row k
   key = compute.col k
+  sc = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.k, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")))
+  ((Scored)(.s (compute.write ((compute.Write _)(.to sc, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element"))))))
 }
 scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Scored
-QSV = struct{.s (compute.Buf Float), .v (compute.Buf Float)}
-OutA = struct{.o (compute.Buf Float)}
-ParA = struct{.n Int, .dim Int, .keys Int, .in QSV, .out OutA}
+QSV = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+OutA = struct{.o (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+ParA = struct{.n Int, .dim Int, .keys Int, .in QSV}
 ArgA = struct{.n Int, .dim Int, .keys Int, .I QSV}
 attend_raw = (k : ParA) => {
   i = compute.range k.n
   query = compute.row k
   column = compute.col k
+  o = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop top = s => if s(0) == 0 then s(1) else top (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) ~ "element")) ~ "combine")
   m = top (k.keys, ((0.0 - 1.0) / 0.0) ~ "identity")
   @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
   denominator = den (k.keys, 0.0 ~ "identity")
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
-  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")))
+  ((OutA)(.o (compute.write ((compute.Write _)(.to o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element"))))))
 }
 attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "cpu" OutA
-qm = (compute.buffer ([2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 1.0] : array{Float, 8}) : (compute.Buf Float))
-kk = (compute.buffer ([1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0] : array{Float, 8}) : (compute.Buf Float))
-vv = (compute.buffer ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0] : array{Float, 8}) : (compute.Buf Float))
-scale = (compute.plrun scores ((ArgS)(.n 4, .keys 2, .dim 4, .I QK(.q qm, .k kk))) : Scored)
-out = (compute.plrun attend ((ArgA)(.n 8, .dim 4, .keys 2, .I QSV(.s scale.s, .v vv))) : OutA)
+QBuf = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+KBuf = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+VBuf = struct{.v (compute.Buf ((compute.BufParam _)(.type Float, .length 8)))}
+Fill = struct{.n Int}
+fill_q_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 2.0 else 0.0) + (if i == 2 then 1.0 else 0.0) + (if i == 3 then 1.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then 1.0 else 0.0)
+  ((QBuf)(.q (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_k_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 1.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 1.0 else 0.0)
+  ((KBuf)(.k (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_v_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 8))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 6.0 else 0.0) + (if i == 6 then 7.0 else 0.0) + (if i == 7 then 8.0 else 0.0)
+  ((VBuf)(.v (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_q = compute.parallel fill_q_raw "cpu" QBuf
+fill_k = compute.parallel fill_k_raw "cpu" KBuf
+fill_v = compute.parallel fill_v_raw "cpu" VBuf
+qm = (compute.plrun fill_q ((Fill)(.n 8)) : QBuf)
+kk = (compute.plrun fill_k ((Fill)(.n 8)) : KBuf)
+vv = (compute.plrun fill_v ((Fill)(.n 8)) : VBuf)
+scale = (compute.plrun scores ((ArgS)(.n 4, .keys 2, .dim 4, .I QK(.q qm.q, .k kk.k))) : Scored)
+out = (compute.plrun attend ((ArgA)(.n 8, .dim 4, .keys 2, .I QSV(.s scale.s, .v vv.v))) : OutA)
 compute.collect out.o : array{Float, 8}
