@@ -34,7 +34,7 @@ const PADDED_COUNT: u64 = 200;
 /// accumulation and the identity the bridged value of the marked seed, so what the test tiles is
 /// the program's own algebra and never a copy of it (`docs/notes/graph-fusion.md` §3).
 fn declared_reduction() -> (Reduction, KernelFragment) {
-    let (module, _value, _root) = common::run(source());
+    let (module, _value, _root) = common::run(&source());
     let (interface, fragment) = dispatched(&module);
     let combine = projection_of(&fragment, &interface, "combine");
     let identity = projection_of(&fragment, &interface, "identity");
@@ -99,23 +99,25 @@ fn combine_operator(expr: &Expr) -> Option<BinaryOp> {
 /// undecided and the emitter lowers it: only then is the marked seed visited and `identity`
 /// published (`docs/notes/graph-fusion.md` §3). The parameter carries no `.out` group
 /// (`docs/notes/kernel-buffer-declarations.md`).
-fn source() -> &'static str {
-    r#"
+fn source() -> String {
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.b (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
-Par = struct{.n Int, .in In}
-reduction = (k : Par) => {
+In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {PADDED_COUNT})))}}
+Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {PADDED_COUNT})))}}
+Par = struct{{.n Int, .in In}}
+reduction = (k : Par) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1)) : Float)) ~ "combine" ~ "accumulator"))
   ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
-}
+}}
 k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k
 "#
+    )
 }
 
 /// The data one launch folds: `1 ..= count`, then the declared identity `0` up to `extent`.
