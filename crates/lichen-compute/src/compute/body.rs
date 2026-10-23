@@ -869,7 +869,16 @@ where
             // first, so the `$buf` op inside it is the definition the walk wants
             // (`docs/notes/kernel-buffer-declarations.md`).
             if let Some(payload) = self.instance_payload(node) {
-                return self.lower_definition(payload);
+                // **The identity is the node the body bound**: the instance is registered
+                // beside the payload the walk declares, so a write naming its own `y` finds
+                // this declaration through the registry and not through a peel.
+                let before = self.declarations.len();
+                let value = self.lower_definition(payload)?;
+                if self.declarations.len() > before {
+                    let ordinal = self.declarations.len() - 1;
+                    self.declared.insert(node, ordinal);
+                }
+                return Ok(value);
             }
             return self.opaque(node);
         };
