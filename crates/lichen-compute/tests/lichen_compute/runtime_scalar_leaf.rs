@@ -121,7 +121,7 @@ fn step() -> &'static str {
 /// `program` as a recording: the three kernels and the graph they recorded, nothing run.
 ///
 /// # Invariant
-/// Each body declares its buffer with `compute.slice` and returns the write as the codomain
+/// Each body declares its buffer with `compute.buf` and returns the write as the codomain
 /// field's value (`docs/notes/kernel-buffer-declarations.md`).
 fn recording(bias: Option<f32>) -> String {
     format!(

@@ -31,7 +31,7 @@ const SUM: usize = 2;
 /// **A diamond, and irreducibly one**: the normalise reads the maximum at `.m` **and** the sum at
 /// `.s`, and the maximum is also read by the sum, so a node has two edges leave and two arrive.
 /// The normalise claims `Reduction(element)` alone, and its `element` names **both** producers.
-/// Each body declares its output with `compute.slice`
+/// Each body declares its output with `compute.buf`
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
     format!(

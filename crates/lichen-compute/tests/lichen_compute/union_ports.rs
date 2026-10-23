@@ -23,7 +23,7 @@ const COUNT: usize = 8;
 /// The consumer's parameter struct names **only** the buffer it absorbs, so the merged node has
 /// one port and it is the producer's. This is the program the old numbering refused, and the one
 /// `fuse_licence.rs` worked around by declaring an input its consumer never reads. Each body
-/// declares its output with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
+/// declares its output with `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 fn natural() -> String {
     format!(
         r#"

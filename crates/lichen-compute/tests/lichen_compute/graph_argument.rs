@@ -20,7 +20,7 @@ const COUNT: usize = 8;
 /// The two kernels and their claims are `fuse_licence.rs`'s byte for byte except that
 /// `offset` also reads the buffer it was handed at `.d`, so an answer moves with whichever
 /// argument buffers the step names rather than with the chain's shape alone. Each body declares
-/// its buffer with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
+/// its buffer with `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 fn head() -> String {
     format!(
         r#"

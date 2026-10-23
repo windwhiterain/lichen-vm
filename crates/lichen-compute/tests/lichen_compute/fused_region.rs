@@ -58,7 +58,7 @@ fn answer(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> {
 /// and the `element` projection's `Producer` read name the same input.
 ///
 /// No parameter carries an `.out` group: each body declares its own buffer with
-/// `compute.slice` and returns the write as its codomain field's value
+/// `compute.buf` and returns the write as its codomain field's value
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn program(step: &str) -> String {
     format!(

@@ -32,7 +32,7 @@ const DATA: [f32; 3] = [2.0, 4.0, 6.0];
 /// without dispatching: a dispatch needs a device.
 ///
 /// No parameter carries an `.out` group: the body declares its buffer with
-/// `compute.slice`, and the write is the codomain's value.
+/// `compute.buf`, and the write is the codomain's value.
 fn chain() -> String {
     format!(
         r#"

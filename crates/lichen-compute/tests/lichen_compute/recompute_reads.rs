@@ -74,7 +74,7 @@ built = compute.graph step
 /// The chain as a recording: the two kernels and the graph they recorded, nothing run.
 ///
 /// # Invariant
-/// Each body declares its buffer with `compute.slice` and returns the write as the codomain
+/// Each body declares its buffer with `compute.buf` and returns the write as the codomain
 /// field's value (`docs/notes/kernel-buffer-declarations.md`).
 fn recording() -> String {
     format!("{}(scale, pair, built)\n", program())

@@ -10,7 +10,7 @@ use lichen_lowlevel::AnyNodeId;
 ///
 /// # Invariant
 /// Neither parameter carries an `.out` group: each body declares its buffer with
-/// `compute.slice` and the write is the codomain field's value
+/// `compute.buf` and the write is the codomain field's value
 /// (`docs/notes/kernel-buffer-declarations.md`). The root reads the second launch's buffer
 /// through `compute.collect`, the outbound boundary, because a buffer's payload is not
 /// readable as a value: that read is refused by name.

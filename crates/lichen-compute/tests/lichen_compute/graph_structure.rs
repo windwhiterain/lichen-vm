@@ -157,7 +157,7 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 /// that parameter. That is what makes `s` a parameter and `doubler`/`data` free
 /// ones.
 ///
-/// Each body declares its own buffer with `compute.slice` (`docs/notes/kernel-buffer-declarations.md`).
+/// Each body declares its own buffer with `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---

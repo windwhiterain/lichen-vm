@@ -142,7 +142,7 @@ fn fail(source: &str) -> Vec<String> {
 /// reached is visible in the numbers.
 ///
 /// # Invariant
-/// Neither parameter carries an `.out` group: each body declares its buffer with `compute.slice`
+/// Neither parameter carries an `.out` group: each body declares its buffer with `compute.buf`
 /// and the write is the codomain field's value (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
 In1  = struct{.a Int}

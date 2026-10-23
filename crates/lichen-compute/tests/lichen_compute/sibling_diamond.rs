@@ -104,7 +104,7 @@ fn derived(
 /// # Invariant
 /// **The one-pass LayerNorm shape of `examples/layernorm.lichen`**, which records rather than
 /// runs: the second producer reads no value the first produced, so the two are siblings and only
-/// the normalise joins them. Each body declares its output with `compute.slice`
+/// the normalise joins them. Each body declares its output with `compute.buf`
 /// (`docs/notes/kernel-buffer-declarations.md`).
 fn layernorm() -> String {
     format!(
