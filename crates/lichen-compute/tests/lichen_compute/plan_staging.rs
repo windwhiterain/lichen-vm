@@ -92,23 +92,25 @@ fn words(data: ScalarData) -> Vec<i64> {
 ///
 /// The body declares its output and returns the write
 /// (`docs/notes/kernel-buffer-declarations.md`).
-fn source() -> &'static str {
-    r#"
+fn source() -> String {
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.b (compute.Buf Float)}
-Out = struct{.z (compute.Buf Float)}
-Par = struct{.n Int, .in In}
-reduction = (k : Par) => {
+In  = struct{{.b (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
+Out = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {BOUND})))}}
+Par = struct{{.n Int, .in In}}
+reduction = (k : Par) => {{
   i = compute.range k.n
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   @loop fold = s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)) ~ "combine"))
   ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (0, 0.0 ~ "identity"))))))
-}
+}}
 k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k
 "#
+    )
 }
 
 /// The reduction the program's own kernel declares, and the name the logic published for it.
@@ -119,7 +121,7 @@ k
 /// case's constant: `projection(…, ReadRoles::DATUM_ONLY)` answers `0` where the marks name `+`.
 /// The name is the **logic's own published text**, never one this test invents.
 fn declared_reduction_and_name() -> (Reduction, String) {
-    let (module, _value, _root) = common::run(source());
+    let (module, _value, _root) = common::run(&source());
     let (interface, fragment) = dispatched(&module)
         .unwrap_or_else(|refusal| panic!("the program dispatched one claimed kernel: {refusal}"));
     assert_eq!(
