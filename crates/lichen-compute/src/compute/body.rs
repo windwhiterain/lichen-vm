@@ -890,9 +890,18 @@ where
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
         // A clone emits its origin's definition, not its own.
+        // A write or a declaration emits its origin's definition, so a clone of one emits
+        // nothing; other clones (a kernel value's, a jit wrapper's) keep their own.
         if let Some(origin) = self.module.node_origin(node)
             && origin != node
+            && !self.origins.contains(&origin)
             && self.origins.insert(node)
+            && matches!(
+                self.module
+                    .node_operation(node)
+                    .and_then(|operation| AsEnum::<ComputeOperator>::as_enum(&operation.operator)),
+                Some(ComputeOperator::Write | ComputeOperator::WriteAtomic | ComputeOperator::Buf)
+            )
         {
             let value = self.value(origin)?;
             self.origins.remove(&node);
