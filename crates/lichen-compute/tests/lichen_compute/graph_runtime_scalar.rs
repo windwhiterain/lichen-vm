@@ -19,6 +19,9 @@ use lichen_utils::extend::AsEnum;
 /// element longer than the largest index the body reads, which is the tail-lane
 /// obligation the device states: a lane of the last workgroup reads past `count`
 /// whether or not the body looks.
+///
+/// The programs declare the same count as their own `L`, so the buffer's declared
+/// length and the launch's extent are one number.
 const N: usize = 6;
 const COLS: usize = 3;
 
@@ -28,23 +31,28 @@ const ELEMENTS: [usize; N] = [1, 2, 3, 4, 5, 6];
 /// The head every case here declares: a kernel parameter carrying **two** extents.
 ///
 /// # Invariant
-/// `.n` and `.cols` are both ordinary scalar leaves of one parameter, and the body
-/// splits the invocation itself with a `Div` and a `Rem` — so what this file measures is
-/// the plumbing that carries `.cols`, not a spelling for the split.
+/// `.n` and `.cols` are ordinary scalar leaves of one parameter, and the body splits
+/// the invocation itself with a `Div` and a `Rem` — so what this file measures is the
+/// plumbing that carries `.cols`, not a spelling for the split.
+///
+/// No parameter carries an `.out` group: the body declares its buffer with
+/// `compute.buf` (`docs/notes/kernel-buffer-declarations.md`).
 const HEAD: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In   = struct{.a (compute.Buf Int)}
-Out  = struct{.b (compute.Buf Int)}
-Par  = struct{.n Int, .cols Int, .in In, .out Out}
+L    = 6
+In   = struct{.a (compute.Buf ((compute.BufParam _)(.type Int, .length L)))}
+Out  = struct{.b (compute.Buf ((compute.BufParam _)(.type Int, .length L)))}
+Par  = struct{.n Int, .cols Int, .in In}
 Arg  = struct{.n Int, .cols Int, .I In}
 strip_raw = (k : Par) => {
   i = compute.range k.n
   r = i / k.cols
   c = i % k.cols
   v = (compute.read ((compute.Read _)(.from k.in.a, .at (r * 2 + c))) : Int)
-  compute.write ((compute.Write _)(.to k.out.b, .at i, .value (v ~ "element")))
+  b = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (v ~ "element"))))))
 }
 "#;
 
@@ -53,9 +61,10 @@ const CONTROL: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
-In2   = struct{.a (compute.Buf Int), .b (compute.Buf Int)}
-Out2  = struct{.z (compute.Buf Int)}
-Par2  = struct{.n Int, .cols Int, .in In2, .out Out2}
+L    = 6
+In2   = struct{.a (compute.Buf ((compute.BufParam _)(.type Int, .length L))), .b (compute.Buf ((compute.BufParam _)(.type Int, .length L)))}
+Out2  = struct{.z (compute.Buf ((compute.BufParam _)(.type Int, .length L)))}
+Par2  = struct{.n Int, .cols Int, .in In2}
 Arg2  = struct{.n Int, .cols Int, .I In2}
 "#;
 
@@ -76,25 +85,38 @@ fn recording() -> String {
     )
 }
 
-/// The input buffer's elements as the literals a `compute.buffer` call takes.
-fn elements() -> String {
-    ELEMENTS
+/// The fill kernel that builds the launch's input data.
+///
+/// # Invariant
+/// One lane per element and each lane writes the element at its own index, so the
+/// buffer holds the table; the table is a **sum** of one-level `if`s, because a
+/// nested chain is refused (`docs/notes/kernel-buffer-declarations.md`).
+fn fill() -> String {
+    let table = ELEMENTS
         .iter()
-        .map(|value| value.to_string())
+        .enumerate()
+        .map(|(lane, element)| format!("(if i == {lane} then {element} else 0)"))
         .collect::<Vec<String>>()
-        .join(", ")
+        .join(" + ");
+    format!(
+        "Data = struct{{.a (compute.Buf ((compute.BufParam _)(.type Int, .length L)))}}\n\
+         Fill = struct{{.n Int}}\nfill = (c : Fill) => {{\n  i = compute.range c.n\n  \
+         y = compute.buf ((compute.BufParam _)(.type Int, .length L))\n  v = {table}\n  \
+         ((Data)(.a (compute.write ((compute.Write _)(.to y, .at i, .value v)))))\n}}\n\
+         filler = compute.parallel fill \"cpu\" Data\n",
+        table = table,
+    )
 }
 
 /// `recording()`, run over the two extents and the buffer.
 fn running() -> String {
     format!(
-        "{}\ncount = ({n})\ncols = ({cols})\na = (compute.buffer ([{elements}] : \
-         array{{Int, {n}}}) : (compute.Buf Int))\ncompute.collect (compute.graphrun built \
-         (count, cols, a))\n",
+        "{}\ncount = ({n})\ncols = ({cols})\n{fill}data = (compute.plrun filler ((Fill)(.n {n})) : Data)\n\
+         compute.collect (compute.graphrun built (count, cols, data.a))\n",
         recording(),
+        fill = fill(),
         n = N,
         cols = COLS,
-        elements = elements(),
     )
 }
 
@@ -210,12 +232,12 @@ fn the_two_extent_launch_runs_on_the_device_through_the_graph() {
     let (stub, _guard) = common::stub();
     let direct = format!(
         "{HEAD}\nstrip = compute.parallel (strip_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
-         a = (compute.buffer ([{elements}] : array{{Int, {n}}}) : (compute.Buf Int))\n\
-         out = (compute.plrun strip ((Arg)(.n {n}, .cols {cols}, .I In(.a a))) : Out)\n\
+         {fill}data = (compute.plrun filler ((Fill)(.n {n})) : Data)\n\
+         out = (compute.plrun strip ((Arg)(.n {n}, .cols {cols}, .I In(.a data.a))) : Out)\n\
          compute.collect out.b\n",
+        fill = fill(),
         n = N,
         cols = COLS,
-        elements = elements(),
     );
     // A stub computes nothing, so the claim is the **dispatch** each leg makes.
     let before = stub.calls().len();
@@ -251,20 +273,23 @@ both_raw = (k : Par2) => {
   i = compute.range k.n
   x = (compute.read ((compute.Read _)(.from k.in.a, .at i)) : Int)
   y = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value ((x + y) ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out2)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((x + y) ~ "element"))))))
 }
 "#;
     let only_b = r#"
 only_b_raw = (k : Par2) => {
   i = compute.range k.n
   y = (compute.read ((compute.Read _)(.from k.in.b, .at i)) : Int)
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (y ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out2)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (y ~ "element"))))))
 }
 "#;
     let neither = r#"
 neither_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (k.cols ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type Int, .length k.n))
+  ((Out2)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (k.cols ~ "element"))))))
 }
 "#;
     let step = || {
@@ -311,11 +336,12 @@ neither_raw = (k : Par2) => {
 #[test]
 fn a_second_runtime_scalar_is_carried_beside_the_extent() {
     let source = format!(
-        "{HEAD}\nPar3 = struct{{.n Int, .cols Int, .rows Int, .in In, .out Out}}\n\
+        "{HEAD}\nPar3 = struct{{.n Int, .cols Int, .rows Int, .in In}}\n\
          Arg3 = struct{{.n Int, .cols Int, .rows Int, .I In}}\n\
          three_raw = (k : Par3) => {{\n  i = compute.range k.n\n  \
          v = (compute.read ((compute.Read _)(.from k.in.a, .at (i / k.cols))) : Int)\n  \
-         compute.write ((compute.Write _)(.to k.out.b, .at i, .value ((v + k.rows) ~ \"element\")))\n}}\n\
+         b = compute.buf ((compute.BufParam _)(.type Int, .length k.n))\n  \
+         ((Out)(.b (compute.write ((compute.Write _)(.to b, .at i, .value ((v + k.rows) ~ \"element\"))))))\n}}\n\
          three = compute.parallel (three_raw ~ \"claim:Elementwise(element)\") \"gpu\" Out\n\
          GA = struct{{.n Int, .cols Int, .rows Int, .in In}}\nstep = (s : GA) => {{\n  \
          compute.plrun three ((Arg3)(.n s.n, .cols s.cols, .rows s.rows, .I In(.a s.in.a))) : Out\n}}\n\

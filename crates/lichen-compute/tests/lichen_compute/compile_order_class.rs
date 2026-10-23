@@ -26,22 +26,27 @@ use lichen_utils::extend::AsEnum;
 /// control and the test comparable at all — a difference between the two fragments
 /// is a difference between the two compilations, never a difference the program
 /// asked for.
+///
+/// No parameter carries an `.out` group: each body declares its buffer with
+/// `compute.buf` and the write is the codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 const KERNELS: &str = r#"
-QK = struct{.q (compute.Buf Float)}
-Scored = struct{.s (compute.Buf Float)}
-ParS = struct{.n Int, .keys Int, .dim Int, .in QK, .out Scored}
+QK = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
+Scored = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
+ParS = struct{.n Int, .keys Int, .dim Int, .in QK}
 ArgS = struct{.n Int, .keys Int, .dim Int, .I QK}
 scores_raw = (k : ParS) => {
   i = compute.range k.n
   query = compute.row k
   key = compute.col k
   @loop dot = s => if s(0) == 0 then s(1) else dot (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from k.in.q, .at (query * k.dim + s(0) - 1))) : Float) * (compute.read ((compute.Read _)(.from k.in.q, .at (key * k.dim + s(0) - 1))) : Float)) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.s, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Scored)(.s (compute.write ((compute.Write _)(.to z, .at i, .value ((dot (k.dim, 0.0 ~ "identity") / sqrt (int2float k.dim)) ~ "element"))))))
 }
 scores = compute.parallel (scores_raw ~ "claim:Reduction(combine,identity,element)") "gpu" Scored
-QSV = struct{.s (compute.Buf Float), .v (compute.Buf Float)}
-OutA = struct{.o (compute.Buf Float)}
-ParA = struct{.n Int, .dim Int, .keys Int, .in QSV, .out OutA}
+QSV = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
+OutA = struct{.o (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
+ParA = struct{.n Int, .dim Int, .keys Int, .in QSV}
 ArgA = struct{.n Int, .dim Int, .keys Int, .I QSV}
 attend_raw = (k : ParA) => {
   i = compute.range k.n
@@ -52,7 +57,8 @@ attend_raw = (k : ParA) => {
   @loop den = s => if s(0) == 0 then s(1) else den (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element")) ~ "combine")
   denominator = den (k.keys, 0.0 ~ "identity")
   @loop acc = s => if s(0) == 0 then s(1) else acc (s(0) - 1, (s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.s, .at (query * k.keys + s(0) - 1))) : Float) - m) ~ "element") * (compute.read ((compute.Read _)(.from k.in.v, .at ((s(0) - 1) * k.dim + column))) : Float)) ~ "combine", s(2))
-  compute.write ((compute.Write _)(.to k.out.o, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element")))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutA)(.o (compute.write ((compute.Write _)(.to z, .at i, .value ((acc (k.keys, 0.0 ~ "identity", m) / denominator) ~ "element"))))))
 }
 attend = compute.parallel (attend_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutA
 "#;
@@ -73,14 +79,15 @@ const CONTROL: &str = "(scores, attend)\n";
 /// `step` names `attend` in its body and `compute.graph` forces both kernels while
 /// the recording is open, so this module compiles them in the opposite order to
 /// [`CONTROL`] over byte-identical kernel declarations.
-const STEP: &str = "QKV = struct{.q (compute.Buf Float), .k (compute.Buf Float), .v (compute.Buf Float)}\n\
-                     GArg = struct{.lanes Int, .on Int, .keys Int, .dim Int, .in QKV}\n\
-                     step = (a : GArg) => {\n  \
-                       scale = (compute.plrun scores ((ArgS)(.n a.lanes, .keys a.keys, .dim a.dim, \
-                       .I QK(.q a.in.q))) : Scored)\n  \
-                       (compute.plrun attend ((ArgA)(.n a.on, .dim a.dim, .keys a.keys, \
-                       .I QSV(.s scale.s, .v a.in.v))) : OutA)\n}\n\
-                     built = compute.graph step\nbuilt\n";
+const STEP: &str = r#"QKV = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .k (compute.Buf ((compute.BufParam _)(.type Float, .length 192))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 192)))}
+GArg = struct{.lanes Int, .on Int, .keys Int, .dim Int, .in QKV}
+step = (a : GArg) => {
+  scale = (compute.plrun scores ((ArgS)(.n a.lanes, .keys a.keys, .dim a.dim, .I QK(.q a.in.q))) : Scored)
+  (compute.plrun attend ((ArgA)(.n a.on, .dim a.dim, .keys a.keys, .I QSV(.s scale.s, .v a.in.v))) : OutA)
+}
+built = compute.graph step
+built
+"#;
 
 /// The classes a module's own nodes name for every kernel it holds, sorted.
 ///
@@ -196,12 +203,12 @@ fn the_recorded_consumer_carries_the_programs_float_class() {
     assert_eq!(
         kernel.fragment.output_classes,
         vec![ScalarClass::Float],
-        "`attend` writes a `compute.Buf Float`, so the recorded node says Float whatever order \
+        "`attend` writes a `Float` buffer, so the recorded node says Float whatever order \
          the module compiled the two kernels in"
     );
     assert_eq!(
         kernel.fragment.input_classes,
         vec![ScalarClass::Float, ScalarClass::Float],
-        "and it reads two `compute.Buf Float` buffers, the scores and `V`"
+        "and it reads two `Float` buffers, the scores and `V`"
     );
 }
