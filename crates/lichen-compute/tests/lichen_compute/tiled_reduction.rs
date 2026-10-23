@@ -123,6 +123,9 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
 /// # Invariant
 /// The `@loop` is the reduction's own, and what it declares is the **algebra** — the combine and
 /// the identity — because its bound is a literal.
+///
+/// The body declares its output and returns the write
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn source() -> &'static str {
     r#"
 ---
@@ -130,11 +133,12 @@ fn source() -> &'static str {
 ---
 In  = struct{.b (compute.Buf Float)}
 Out = struct{.z (compute.Buf Float)}
-Par = compute.P (compute.KT Float)(.I In, .O Out)
+Par = struct{.n Int, .in In}
 reduction = (k : Par) => {
   i = compute.range k.n
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) >= 7 then s(1) else fold (s(0) + 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.b, .at 0)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (0, 0.0 ~ "identity")))
+  ((Out)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (0, 0.0 ~ "identity"))))))
 }
 k = compute.parallel (reduction ~ "claim:Reduction(combine,identity)") "gpu" Out
 k
