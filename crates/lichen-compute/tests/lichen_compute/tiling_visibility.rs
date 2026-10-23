@@ -23,6 +23,9 @@ const COUNT: usize = LANES as usize;
 /// The consumer reads the producer's output buffer at input position 1, which is what the region
 /// derivation reads as an edge, and the recording is the root's third element: a test reads the
 /// graph and the two claimed kernels without a device.
+///
+/// Each body declares its own output and returns the write
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn chain() -> String {
     r#"
 ---
@@ -30,21 +33,23 @@ fn chain() -> String {
 ---
 In   = struct{.d (compute.Buf Float)}
 OutR = struct{.r (compute.Buf Float)}
-Par  = compute.P (compute.KT Float)(.I In, .O OutR)
+Par  = struct{.n Int, .in In}
 producer_raw = (k : Par) => {
   i = compute.range k.n
+  r = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutR)(.r (compute.write ((compute.Write _)(.to r, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 producer = compute.parallel (producer_raw ~ "claim:Reduction(combine,identity)") "gpu" OutR
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (k : Par2) => {
   i = compute.range k.n
   r = (compute.read ((compute.Read _)(.from k.in.p, .at 0)) : Float)
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) - r) ~ "element")) ~ "combine")
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity")))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value fold (k.n, (0.0 - 1000000.0) ~ "identity"))))))
 }
 consumer = compute.parallel (consumer_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
