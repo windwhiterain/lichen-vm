@@ -36,38 +36,39 @@ const PACK: &str = "two-reads";
 /// `k.in.d` beside the buffer it absorbs because the merged node's one surviving input is the
 /// producer's, and the port check reads the two lists position for position.
 fn program() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-In  = struct{.d (compute.Buf Float)}
-OutE = struct{.e (compute.Buf Float)}
-ParE = struct{.n Int, .in In}
-scale_raw = (k : ParE) => {
+In  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {ELEMENTS})))}}
+OutE = struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParE = struct{{.n Int, .in In}}
+scale_raw = (k : ParE) => {{
   i = compute.range k.n
-  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  e = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
-}
+}}
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
-In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
-OutZ = struct{.z (compute.Buf Float)}
-Par2 = struct{.n Int, .in In2}
-pair_raw = (k : Par2) => {
+In2  = struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length {ELEMENTS}))), .p (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+OutZ = struct{{.z (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+Par2 = struct{{.n Int, .in In2}}
+pair_raw = (k : Par2) => {{
   i = compute.range k.n
   left = (compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float)
   right = (compute.read ((compute.Read _)(.from k.in.p, .at i + 1)) : Float)
-  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  z = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value ((left + right) ~ "element"))))))
-}
+}}
 pair = compute.parallel (pair_raw ~ "claim:Elementwise(element)") "gpu" OutZ
-GArg = struct{.n Int, .in In}
-step = (s : GArg) => {
+GArg = struct{{.n Int, .in In}}
+step = (s : GArg) => {{
   first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
   compute.plrun pair ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e)))
-}
+}}
 built = compute.graph step
 "#
-    .to_string()
+    )
 }
 
 /// The chain as a recording: the two kernels and the graph they recorded, nothing run.
@@ -103,7 +104,7 @@ fn fill(elements: usize) -> String {
 Fill = struct{{.n Int}}
 fill_raw = (c : Fill) => {{
   i = compute.range c.n
-  y = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  y = compute.buf ((compute.BufParam _)(.type Float, .length {elements}))
   ((In)(.d (compute.write ((compute.Write _)(.to y, .at i, .value {table})))))
 }}
 filler = compute.parallel fill_raw "cpu" In
