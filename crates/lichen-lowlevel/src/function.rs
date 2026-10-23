@@ -505,7 +505,7 @@ impl<P: Program> Module<P> {
         // `docs/notes/apply-clone-ownership.md`.
 
         // The clone computes the same thing, so the source's class low type seeds it.
-        let low_shape = self.class_low_type(node).cloned();
+        let low_shape = self.class_low_shape(node);
         // The template root a clone instantiates, whose block may still be a scope.
         let template_root = {
             let mut root = node;
@@ -604,9 +604,7 @@ impl<P: Program> Module<P> {
         self.stamp_node_ran_if(clone, carried_answer);
         self.nodes[clone].operation = operation;
         // A clone is a singleton class here, so the slot write *is* the class write.
-        if let Some(low_shape) = low_shape {
-            self.nodes[clone].low_shape = Some(Box::new(low_shape));
-        }
+        self.nodes[clone].low_shape = low_shape;
         // A mark is **not** copied onto the clone: the anchor handoff is
         // `Module::marks_of`, which reads the clone's origin.
         clone

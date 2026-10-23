@@ -139,6 +139,15 @@ impl<P: Program> Module<P> {
         self.nodes.get(self.class_root(node))?.low_shape.as_deref()
     }
 
+    /// The class's low type as the **shared** shape a clone may adopt.
+    ///
+    /// # Invariant
+    /// A shape is written once and only replaced, never mutated in place, so a clone that
+    /// computes the same thing can share its source's shape instead of copying it.
+    pub fn class_low_shape(&self, node: NodeId) -> Option<std::sync::Arc<LowShape>> {
+        self.nodes.get(self.class_root(node))?.low_shape.clone()
+    }
+
     /// The value the node's **class** holds, read through the representative.
     ///
     /// # Invariant
@@ -195,7 +204,8 @@ impl<P: Program> Module<P> {
         };
         match current {
             None => {
-                self.nodes.get_mut(root).expect("a live class").low_shape = Some(Box::new(shape));
+                self.nodes.get_mut(root).expect("a live class").low_shape =
+                    Some(std::sync::Arc::new(shape));
                 true
             }
             Some(current) => {

@@ -878,10 +878,11 @@ pub struct Node<P: Program> {
     /// The node's low-type slot, behind the same private gate. See docs/notes/lowlevel-low-types.md.
     ///
     /// # Invariant
-    /// A **box**, so a node costs one pointer and not the shape's 24 bytes: the slot is
+    /// A **shared pointer**, so a node costs one pointer and not the shape's 24 bytes, and
+    /// a clone adopts its source's shape by refcount rather than copying it: the slot is
     /// None on nearly every node, and a shape lives in docs/notes/lowlevel-low-types.md's
     /// class-routed slot rather than per member.
-    low_shape: Option<Box<LowShape>>,
+    low_shape: Option<std::sync::Arc<LowShape>>,
     /// The node's computation (operator plus one operand), or `None` for a value node; private.
     operation: Option<Operation<P>>,
     /// The function whose body owns this node, or `None`; private, read via `node_function`.
