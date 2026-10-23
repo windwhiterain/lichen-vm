@@ -35,17 +35,15 @@ const SHAPE_COLS: usize = 3;
 /// and a shorter buffer would make this measure an out-of-bounds read instead.
 const ELEMENTS: usize = 64;
 
-/// The nested config: scalar leaves and buffer leaves at different depths.
+/// The nested config: `kind` is the class, `ga` the step's parameter, `cols` what it passes.
 ///
 /// # Invariant
 /// `.meta` is a group outside `.in`, so both its leaves are scalars and the extent is the
-/// **first** of them, whatever depth the walk reached it at; `.in` holds the buffers, one
-/// level down. `kind` is the class of every leaf past the extent, `ga` the step's own
-/// parameter, `cols` what it passes for `.meta.cols`.
+/// **first** of them, whatever depth the walk reached it at; `.in` holds the buffers one level
+/// down.
 ///
-/// No parameter carries an `.out` group: the body declares its own buffer with
-/// `compute.buf` and returns the write as its codomain field's value
-/// (`docs/notes/kernel-buffer-declarations.md`).
+/// No parameter carries an `.out` group: the body declares its buffer with `compute.buf` and
+/// returns the write as the codomain field's value.
 fn nested(kind: &str, ga: &str, cols: &str) -> String {
     format!(
         r#"
