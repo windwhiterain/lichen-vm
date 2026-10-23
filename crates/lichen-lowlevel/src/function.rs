@@ -475,20 +475,28 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
+        // One read of the node's own facts: this walk asks for them several times, and each
+        // ask is a slot-table lookup.
+        let (value, operation, evaluated_deep, function, block, origin) = {
+            let source = &self.nodes[node];
+            (
+                source.value,
+                source.operation,
+                source.evaluated_deep,
+                source.function,
+                source.block,
+                source.origin,
+            )
+        };
         // One shared node: each reach mints its own undecided cell, never a cached one.
-        let wildcard = self.nodes[node].value.or_else(|| self.nodes[node].value);
-        if matches!(
-            wildcard.and_then(|value| value.as_enum()),
-            Some(LowValue::Any)
-        ) {
+        if matches!(value.and_then(|value| value.as_enum()), Some(LowValue::Any)) {
             return self.add_node(ctx.target, None, None);
         }
         // A closure is instantiated from its template, whose body a clone never names.
         let anchor_template = self.functions[ctx.anchor].template;
-        let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
-            || anchor_template.is_some_and(|template| {
-                self.function_descends_from(self.nodes[node].function, template)
-            })
+        let member = self.function_descends_from(function, ctx.anchor)
+            || anchor_template
+                .is_some_and(|template| self.function_descends_from(function, template))
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
@@ -498,20 +506,18 @@ impl<P: Program> Module<P> {
 
         // The clone computes the same thing, so the source's class low type seeds it.
         let low_shape = self.class_low_type(node).cloned();
-        let (value, operation, evaluated_deep) = {
-            let source = &self.nodes[node];
-            (source.value, source.operation, source.evaluated_deep)
-        };
         // The template root a clone instantiates, whose block may still be a scope.
         let template_root = {
             let mut root = node;
+            let mut next = origin;
             let mut hops = 0;
-            while let Some(origin) = self.nodes[root].origin {
+            while let Some(origin) = next {
                 root = origin;
                 hops += 1;
                 if hops > 64 {
                     break;
                 }
+                next = self.nodes[root].origin;
             }
             root
         };
@@ -526,7 +532,7 @@ impl<P: Program> Module<P> {
             && value.is_none_or(|value| !self.answer_elements_are_undecided(value))
             && template_decided;
         // A scope's content is this call's; a clone of a scope's node is scoped too.
-        let scoped = self.blocks[self.nodes[node].block].parent.is_some()
+        let scoped = self.blocks[block].parent.is_some()
             || self.blocks[self.nodes[template_root].block]
                 .parent
                 .is_some();
@@ -540,7 +546,7 @@ impl<P: Program> Module<P> {
             return node;
         }
         // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
-        let scope = self.nodes[node].block;
+        let scope = block;
         let target = self.clone_target(scope, ctx);
         let clone = self.add_node(target, None, None);
         // A scope ends at its root, so the clone ends the image it landed in:
@@ -555,7 +561,7 @@ impl<P: Program> Module<P> {
         // takes the fresh id.
         self.nodes[clone].function = match ctx.closure_scope {
             Some(scope) if scope.contains(&node) => ctx.tag,
-            Some(_) => self.nodes[node].function,
+            Some(_) => function,
             None => ctx.tag,
         };
         ctx.remap.insert(node, clone);

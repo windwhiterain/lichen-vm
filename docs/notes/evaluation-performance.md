@@ -115,6 +115,38 @@ deep pass forcing the program. Node counts identical means the graphs built are 
 graphs — this is a walk that stops paying for what it already knew, not a change of
 semantics.
 
+## Round 5: the clone walk reads a node once, and the class walk makes one pass
+
+Timing `node_apply`'s segments rather than guessing found the opposite of what the
+inclusive totals suggested: the per-visit *bookkeeping* is cheap — membership test 24–26 ns
+(36 187 calls for `fib 10`), class low type 24 ns, the `origin` chain walk 23 ns,
+`value_holds_foreign_function` 165 ns (5 738 calls) — and what the walk actually pays for
+is the node's own facts read one lookup at a time. `node_apply` asked the slot table for
+`self.nodes[node].value` twice in a row (a duplicated `or_else`), then again for
+`.function`, `.operation`, `.evaluated_deep`, `.block` and `.origin`: six to eight lookups
+per visit, 60 881 visits. They are now one read into locals.
+
+`evaluate_class_first` had the same shape: a `class_members` walk to build a snapshot, then
+a second pass over it re-reading every member. A member that does not owe an answer when
+the snapshot is taken never owes one later — `value` is never cleared and `runned` only
+grows — so the pass now pushes only the owing members, and the turn still re-reads
+`visiting`, the one fact a nested read can change. One pass instead of two.
+
+| reading | round 4 | round 5 | vs. the original |
+|---|---|---|---|
+| `recursion.lichen` | 33.5 ms | **32.9 ms** (median of 4) | 174 → 32.9 ms (5.3×) |
+| its allocations | 34 681 | **34 671** | 754 827 → 34 671 (21.8×) |
+| `mathlib.lichen` | 22.0 ms | **21.6 ms** | |
+| corpus (46 programs) | ~488 ms | **~486 ms** | |
+
+The corpus is flat: it is dominated by the compute examples, whose check is the checker's
+graph construction, not the apply walk. The two readings that move are the apply-heavy
+ones, which is where the lookups were.
+
+Where `fib 10`'s remaining 33 ms goes, measured: `unify` 18 841 calls of which only 2 338
+(12 %) are same-class; `add_node` 66 548 calls at ~85 ns; the class-first walk's ~400 000
+member reads at 15–25 ns; the walk's own per-visit arithmetic under 6 ms in total.
+
 ## Round 4: the apply tail stops building two buffers per call
 
 `apply_parameter_check` compared a wide pair by **collecting both sides into a fresh
@@ -268,10 +300,16 @@ materialization and the checker's own graph, not the array-pair walk this round 
   frozen ref, which materializes a fresh leaf each time. Sharing a *decided* static read
   would cut most of that and the peak with it, but a leaf is a cell a unification writes,
   so it is a semantic change and is not taken.
-- **The clone walk itself** is the remaining time: `node_apply` runs 60 881 times for
-  `fib 10` across 185 applies, and its inclusive time dwarfs every leaf measured here. A
-  per-visit membership walk (`Function::parent` chain) and the `origin` chain are the
-  candidates; neither has been measured in isolation yet.
+- **The class walk is the last compressible item, and it needs a counter.** `fib 10`
+  reads ~400 000 class members across 2 092 class-first walks — 15–25 ns each, because
+  every member is a slot-table read of facts that mostly say "this member owes nothing".
+  Skipping a walk whose class cannot owe needs a per-class flag maintained on creation and
+  merge (the shape round 3 used for holes), and it only pays if most classes that are read
+  hold no operation-bearing member; that has not been measured.
+- **The clone walk itself** is no longer a mystery: its per-visit bookkeeping is under
+  6 ms of `fib 10`'s 33 (round 5), so what is left of it is `add_node` (66 548 calls at
+  ~85 ns) and the volume of nodes the representation creates. That volume is the same
+  question as the peak above: sharing would change cell identity.
 - **The upstream `gc.lichen` panic is not this note's, and it no longer reproduces.**
   `examples/gc.lichen` panicked with `invalid SlotMap key used` at
   `evaluate_pattern_argument_inner`, from a dynamic pattern id that was never in the slot
