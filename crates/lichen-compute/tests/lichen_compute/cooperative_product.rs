@@ -40,39 +40,56 @@ fn product(a: &[i64], b: &[i64], c: &[i64]) -> Vec<i64> {
 }
 
 /// The program: `compute.mma` over three buffers, collected back to an array.
+///
+/// # Invariant
+/// The operands are a host's own buffers, so a fill kernel builds each one and writes the
+/// table the oracle spells (`index % 4`, `index % 3`, `index % 5`). The `Mma` type states the
+/// matrix's fixed lengths, so a buffer's **type** carries the shape's edge and its
+/// **allocation** is the launch's own element count, which is the flattened matrix
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
-    let array = |values: &[i64]| {
-        values
-            .iter()
-            .map(|value| value.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut source =
-        String::from("---\n  order = \"30\"\n  compute = import \"compute.lichen\"\n---\n");
-    source.push_str(&format!(
-        "a = (compute.buffer ([{}] : array{{Int, {}}}))\n",
-        array(a),
-        a.len()
-    ));
-    source.push_str(&format!(
-        "b = (compute.buffer ([{}] : array{{Int, {}}}))\n",
-        array(b),
-        b.len()
-    ));
-    source.push_str(&format!(
-        "c = (compute.buffer ([{}] : array{{Int, {}}}))\n",
-        array(c),
-        c.len()
-    ));
-    source.push_str(&format!(
-        "product = (compute.mma (compute.Mma Int)(.s \"{backend}\", .a a, .b b, .c c))\n"
-    ));
-    source.push_str(&format!(
-        "compute.collect product : array{{Int, {}}}\n",
-        ROWS * COLUMNS
-    ));
-    source
+    format!(
+        r#"
+---
+  order = "30"
+  compute = import "compute.lichen"
+---
+A = struct{{.a (compute.Buf ((compute.BufParam _)(.type Int, .length {rows})))}}
+B = struct{{.b (compute.Buf ((compute.BufParam _)(.type Int, .length {steps})))}}
+C = struct{{.c (compute.Buf ((compute.BufParam _)(.type Int, .length {columns})))}}
+Fill = struct{{.n Int}}
+fill_a = (c : Fill) => {{
+  i = compute.range c.n
+  a = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((A)(.a (compute.write ((compute.Write _)(.to a, .at i, .value (i % 4))))))
+}}
+fill_b = (c : Fill) => {{
+  i = compute.range c.n
+  b = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((B)(.b (compute.write ((compute.Write _)(.to b, .at i, .value (i % 3))))))
+}}
+fill_c = (c : Fill) => {{
+  i = compute.range c.n
+  cbuf = compute.buf ((compute.BufParam _)(.type Int, .length c.n))
+  ((C)(.c (compute.write ((compute.Write _)(.to cbuf, .at i, .value (i % 5))))))
+}}
+ka = compute.parallel fill_a "cpu" A
+kb = compute.parallel fill_b "cpu" B
+kc = compute.parallel fill_c "cpu" C
+a = (compute.plrun ka ((Fill)(.n {a_len})) : A)
+b = (compute.plrun kb ((Fill)(.n {b_len})) : B)
+c = (compute.plrun kc ((Fill)(.n {c_len})) : C)
+product = (compute.mma (compute.Mma Int)(.s "{backend}", .a a.a, .b b.b, .c c.c))
+compute.collect product : array{{Int, {product_len}}}
+"#,
+        rows = ROWS,
+        steps = STEPS,
+        columns = COLUMNS,
+        a_len = a.len(),
+        b_len = b.len(),
+        c_len = c.len(),
+        product_len = ROWS * COLUMNS,
+    )
 }
 
 /// The program with the product's value under `requirement`.
@@ -81,7 +98,7 @@ fn source(backend: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
 /// The requirement is spelled on the product's own annotation, so it is checked
 /// against the certificate `compute.mma` states — not against the buffers.
 fn source_with_requirement(requirement: &str, a: &[i64], b: &[i64], c: &[i64]) -> String {
-    let plain = "(compute.mma (compute.Mma Int)(.s \"cpu\", .a a, .b b, .c c))";
+    let plain = "(compute.mma (compute.Mma Int)(.s \"cpu\", .a a.a, .b b.b, .c c.c))";
     let program = source("cpu", a, b, c);
     let annotated = format!("({plain} # {requirement})");
     assert!(
@@ -106,6 +123,7 @@ fn words(
 fn the_cpu_product_matches_the_host() {
     let (a, b, c) = operands();
     let expected = product(&a, &b, &c);
+    let _slot = common::slot();
     let (module, value, _root) = common::run(&source("cpu", &a, &b, &c));
     assert_eq!(words(&module, &value), expected);
 }
@@ -148,7 +166,7 @@ fn the_product_is_warp_uniform_not_wider() {
 fn a_lane_varying_operand_is_refused() {
     let (a, b, c) = operands();
     // The tile descriptors are warp-uniform (`# warp`); a lane-varying claim is refused.
-    let program = source("cpu", &a, &b, &c).replace(".a a", ".a (a # 1)");
+    let program = source("cpu", &a, &b, &c).replace(".a a.a", ".a (a.a # 1)");
     let report = common::check(&program);
     assert!(!report.ok(), "a lane-varying operand must not check");
     let messages: Vec<String> = report
