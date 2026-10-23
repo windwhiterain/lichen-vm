@@ -798,6 +798,23 @@ where
         }
     }
 
+    /// The node `node` is attributed through, followed to its template.
+    ///
+    /// # Invariant
+    /// A clone records the template node it instantiates, so a declaration's identity is that
+    /// node and not the clone a lowering happened to meet
+    /// (`docs/notes/kernel-buffer-declarations.md`). Bounded, not recursive.
+    fn canonical(&self, node: NodeId) -> NodeId {
+        let mut node = node;
+        for _ in 0..16 {
+            match self.module.node_origin(node) {
+                Some(origin) if origin != node => node = origin,
+                _ => break,
+            }
+        }
+        node
+    }
+
     /// The `.native` slot's value node when `node` is a `Buf`-shaped instance.
     ///
     /// # Invariant
@@ -876,7 +893,8 @@ where
                 let value = self.lower_definition(payload)?;
                 if self.declarations.len() > before {
                     let ordinal = self.declarations.len() - 1;
-                    self.declared.insert(node, ordinal);
+                    let identity = self.canonical(node);
+                    self.declared.insert(identity, ordinal);
                 }
                 return Ok(value);
             }
@@ -1013,7 +1031,8 @@ where
         let ordinal = self.declarations.len();
         self.declarations.push(count);
         self.tally.output_extents.push(extent);
-        self.declared.insert(node, ordinal);
+        let identity = self.canonical(node);
+        self.declared.insert(identity, ordinal);
         // The declaration's value is the version token; its node is the identity.
         Ok(self.version_token())
     }
@@ -1069,7 +1088,8 @@ where
     fn declared_ordinal(&self, target: NodeId) -> Option<usize> {
         // **The target may be the declaration itself**: a body lowers a declaration at the
         // node it names, so the registry answers before any peel.
-        if let Some(ordinal) = self.declared.get(&target) {
+        let identity = self.canonical(target);
+        if let Some(ordinal) = self.declared.get(&identity) {
             return Some(*ordinal);
         }
         let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target)).ok()?;
