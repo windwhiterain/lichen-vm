@@ -326,7 +326,8 @@ impl<P: Program> Module<P> {
             remap: &mut remap,
             minted: &mut minted,
         };
-        // Walked before the return pair, so a nested closure captures this call's cells.
+        // The parameter is a walk entry point: its unify fires even when the body
+        // never references it.  Idempotent.
         let applied = self.node_apply(r#return, &mut ctx);
         self.node_apply(parameter, &mut ctx);
         // The body's asserts come from the function's own registry, instantiated through the
@@ -886,4 +887,3 @@ impl<P: Program> Module<P> {
         false
     }
 }
-
