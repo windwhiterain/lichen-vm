@@ -130,21 +130,31 @@
     runs and answers the same number, so nothing forbids it, and one lane per row is chosen \
     because it is one slot per lane with no redundancy. **The rule underneath all three** is \
     `code-audit.md` P1-42's `wontfix:D17`, that a `compute.write` is **the value of an output \
-    position and not an effect** — which is why this body is one lane per output with exactly one \
-    write, and why the top-2 spelling returns its two writes as a tuple in field order."
+    position and not an effect** — which is why this body is one lane per output with exactly one \ The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+    conversion (`docs/notes/kernel-buffer-declarations.md`)."
   output = "[3.0, 2.0, 3.0, 0.0, 3.0]: array{Float, 5}"
 ---
-Row  = struct{.x (compute.Buf Float)}
-Pick = struct{.p (compute.Buf Float)}
-Par  = struct{.n Int, .w Int, .in Row, .out Pick}
+Row  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
+Pick = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+Par  = struct{.n Int, .w Int, .in Row}
 Arg  = struct{.n Int, .w Int, .I Row}
 greedy_raw = (k : Par) => {
   lane = compute.range k.n
   base = lane * k.w
   @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Pick)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0))))))))
 }
 greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
-scores = (compute.buffer ([3.0, 9.0, 4.0, 9.0, 5.0, 1.0, 5.0, 2.0, 7.0, 7.0, 7.0, 7.0, 8.0, 6.0, 4.0, 2.0, 1.0, 2.0, 3.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
+Fill = struct{.n Int}
+scoresBuf = struct{.scores (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
+fill_scores_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 20))
+  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 9.0 else 0.0) + (if i == 2 then 4.0 else 0.0) + (if i == 3 then 9.0 else 0.0) + (if i == 4 then 5.0 else 0.0) + (if i == 5 then 1.0 else 0.0) + (if i == 6 then 5.0 else 0.0) + (if i == 7 then 2.0 else 0.0) + (if i == 8 then 7.0 else 0.0) + (if i == 9 then 7.0 else 0.0) + (if i == 10 then 7.0 else 0.0) + (if i == 11 then 7.0 else 0.0) + (if i == 12 then 8.0 else 0.0) + (if i == 13 then 6.0 else 0.0) + (if i == 14 then 4.0 else 0.0) + (if i == 15 then 2.0 else 0.0) + (if i == 16 then 1.0 else 0.0) + (if i == 17 then 2.0 else 0.0) + (if i == 18 then 3.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
+  ((scoresBuf)(.scores (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_scores = compute.parallel fill_scores_raw "cpu" scoresBuf
+scores = (compute.plrun fill_scores ((Fill)(.n 20)) : scoresBuf).scores
 out = (compute.plrun greedy ((Arg)(.n 5, .w 4, .I Row(.x scores))) : Pick)
 compute.collect out.p : array{Float, 5}
