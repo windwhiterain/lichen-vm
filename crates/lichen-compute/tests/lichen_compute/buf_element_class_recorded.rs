@@ -1,12 +1,12 @@
-//! A `compute.Buf Float` element class read from a cell nothing has filled yet.
+//! A `compute.Buf` element class read from a cell nothing has filled yet.
 //! See `docs/notes/compile-order-class.md`.
 //!
 //! # Invariant
 //!
-//! **The element class is a fact about the parameter's declaration, not about what
-//! the module evaluated first.** `Par` names `.in In` and `.out OutE`, and both name
-//! a `compute.Buf Float`, so the fragment is `Float` on every side. The program text
-//! is `buf_element_class_recorded.lichen`, which the compiler CLI runs unchanged.
+//! **The element class is a fact about the declaration, not about what the module
+//! evaluated first.** `Par` names `.in In` and the codomain names `OutE`, and both
+//! hold a `Float` buffer, so the fragment is `Float` on every side. The program text is
+//! `buf_element_class_recorded.lichen`, which the compiler CLI runs unchanged.
 
 use super::common;
 
@@ -24,7 +24,7 @@ const PROGRAM: &str = include_str!("buf_element_class_recorded.lichen");
 ///
 /// # Invariant
 ///
-/// The program declares `compute.Buf Float` twice, so a decided `Float` type value and a
+/// The program declares a `Float` buffer twice, so a decided `Float` type value and a
 /// decided class for it exist in the module whatever the fragment says. This is the
 /// *known* side of the propagation gap; the fragment tests below are the *needed* side.
 #[test]
@@ -43,9 +43,10 @@ fn the_module_holds_a_decided_float_element_type() {
         .count();
     assert!(
         decided > 0,
-        "`compute.Buf Float` is declared, so the module holds a decided `Float` type value"
+        "a `Float` buffer is declared, so the module holds a decided `Float` type value"
     );
-    // `.element` states its type: a type constant, or nothing for a `_` argument.
+    // The wrapper's second field states its type: a type constant, or nothing for a
+    // `_` argument.
     let reads = common::buf_element_reads(&module);
     assert!(
         !reads.is_empty(),
@@ -66,20 +67,20 @@ fn the_module_holds_a_decided_float_element_type() {
         if let Some(value) = value {
             assert!(
                 AsEnum::<TypeValue>::as_enum(&value).is_some(),
-                "`{id:?}`'s `.element` names a type or nothing, not a value: {value:?}"
+                "`{id:?}`'s element field names a type or nothing, not a value: {value:?}"
             );
         }
     }
 }
 
-/// The compiled fragment names the element class the parameter declares.
+/// The compiled fragment names the element class the declaration states.
 ///
 /// # Invariant
 ///
-/// **This fails on `dev`, and its output is the defect.** `walk_role` reads the element
-/// through `low_type_of_slot`, which is the class the parameter's own `Buf Float` states.
-/// The cell it reads belongs to the type term `static_node_apply` cloned out of the frozen
-/// `compute.lichen`, and nothing has merged that cell into a decided `Float` class yet.
+/// The buffer's type carries its element type, its length and its payload, so the
+/// element class is that type's first shape position — `Float` here on both sides.
+/// Nothing about the declaration changed between the two programs of the pair, so a
+/// compiler that reads the element from the declaration answers `Float` for both.
 #[test]
 fn the_compiled_fragment_names_the_declared_element_class() {
     let (module, _value, _root) = common::run(PROGRAM);
@@ -87,12 +88,12 @@ fn the_compiled_fragment_names_the_declared_element_class() {
     assert_eq!(
         (fragment.inputs, fragment.input_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`Par` declares `.in In` and `In` is `struct{{.d (compute.Buf Float)}}`"
+        "`Par` declares `.in In` and `In` is `struct{{.d (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
     );
     assert_eq!(
         (fragment.outputs, fragment.output_classes.clone()),
         (1, vec![ScalarClass::Float]),
-        "`Par` declares `.out OutE` and `OutE` is `struct{{.e (compute.Buf Float)}}`"
+        "`OutE` is the codomain and it is `struct{{.e (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}}`"
     );
 }
 
@@ -120,11 +121,11 @@ fn the_recorded_node_carries_the_declared_element_class() {
     assert_eq!(
         kernel.fragment.input_classes,
         vec![ScalarClass::Float],
-        "the recorded node reads the one `compute.Buf Float` the dispatch passes"
+        "the recorded node reads the one `Float` buffer the dispatch passes"
     );
     assert_eq!(
         kernel.fragment.output_classes,
         vec![ScalarClass::Float],
-        "and writes the one `compute.Buf Float` the dispatch returns"
+        "and writes the one `Float` buffer the dispatch returns"
     );
 }

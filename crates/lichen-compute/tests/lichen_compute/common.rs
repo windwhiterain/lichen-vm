@@ -74,8 +74,12 @@ pub fn sole_fragment(module: &Module<LangProgram>) -> lichen_kernel_ir::KernelFr
 ///
 /// # Invariant
 ///
-/// This is `walk_role`'s read restated: a `Buf`-shaped type term's `.element` field
+/// This is `walk_role`'s read restated: a `Buf`-shaped type term's element field
 /// through `low_type_of_slot`, which is the call the element class is taken by.
+///
+/// The wrapper's fields are `native`, `type` and `length`
+/// (`docs/notes/kernel-buffer-declarations.md`); the older `native`/`element` pair is
+/// still recognised, so a module that holds both shapes is read for both.
 pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> {
     use lichen_highlevel::shape::{TypeRef, field_names, field_type, low_type_of_slot};
     use lichen_lowlevel::AnyNodeId;
@@ -89,11 +93,13 @@ pub fn buf_element_reads(module: &Module<LangProgram>) -> Vec<(NodeId, String)> 
         else {
             continue;
         };
-        if !field_names(module, ty)
+        let names: Vec<&str> = field_names(module, ty)
             .unwrap_or_default()
             .iter()
             .filter_map(|name| *name)
-            .eq(["native", "element"])
+            .collect();
+        if names.as_slice() != ["native", "type", "length"]
+            && names.as_slice() != ["native", "element"]
         {
             continue;
         }
