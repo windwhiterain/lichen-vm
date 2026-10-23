@@ -908,8 +908,6 @@ where
             if let Some(inner) = lichen_highlevel::shape::pair_value(self.module, node) {
                 return self.value(inner);
             }
-            // **A parameter's buffer is its entry leaf**: the wrapper's `.native` slot holds
-            // the value the host passed, and the path walk names it.
             if let Some(slot) = self.parameter_path_of(node)? {
                 return self.parameter(slot);
             }
