@@ -5525,10 +5525,12 @@ where
     }
     let mut fields: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(placed.len());
     for (position, placed) in placed.iter().enumerate() {
-        let Some(inner) = roles.outputs.get(position).and_then(|path| path.get(1..)) else {
+        // The paths are the codomain's own: `P` no longer carries an `.out` group to drop
+        // (`docs/notes/kernel-buffer-declarations.md`).
+        let Some(path) = roles.outputs.get(position) else {
             refuse(
                 module,
-                format!("output {position} has no path in the parameter's `.out` group"),
+                format!("output {position} has no path in the codomain"),
             );
             return None;
         };
@@ -5546,7 +5548,7 @@ where
         let Some(buf) = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class) else {
             return None;
         };
-        fields.push((inner.to_vec(), buf));
+        fields.push((path.clone(), buf));
     }
     match assemble_result::<P>(module, block, &fields, &[], 0) {
         Some(root) => module.node_value(AnyNodeId::Dynamic(root)),
