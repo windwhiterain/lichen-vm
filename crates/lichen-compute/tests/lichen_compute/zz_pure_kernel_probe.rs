@@ -54,20 +54,23 @@ fn probe_a_kernel_that_declares_its_output() {
     }
 }
 
-/// The declared length is the allocation: one lane fills a three-element buffer.
+/// The declared length is the allocation: three lanes fill a three-element buffer.
+///
+/// # Invariant
+/// The write is the codomain position's value, which is the form the graph keeps
+/// (`docs/notes/kernel-buffer-declarations.md`): a write that is only a statement is not
+/// reachable from the return and does not survive the freeze.
 const LENGTH: &str = r#"
 --- compute = import "compute.lichen" ---
-Three = struct{.y (compute.Buf Float)}
+OutThree = struct{.y (compute.Buf Float)}
 Fill = struct{.n Int}
 fill = (c : Fill) => {
+  i = compute.range c.n
   y = compute.buffer ((compute.Buffer _)(.count 3, .element Float))
-  compute.write ((compute.Write _)(.to y, .at 0, .value 8.0))
-  compute.write ((compute.Write _)(.to y, .at 1, .value 9.0))
-  compute.write ((compute.Write _)(.to y, .at 2, .value 10.0))
-  ((Three)(.y y))
+  ((OutThree)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (int2float i + 1.0))))))
 }
-fk = compute.parallel fill "cpu" Three
-data = (compute.plrun fk ((Fill)(.n 1)) : Three)
+fk = compute.parallel fill "cpu" OutThree
+data = (compute.plrun fk ((Fill)(.n 3)) : OutThree)
 compute.collect data.y : array{Float, 3}
 "#;
 
