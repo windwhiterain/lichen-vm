@@ -2,11 +2,10 @@
 //!
 //! # Invariant
 //! A body's output elements are written where the body's own code writes them, a loop
-//! body included: the author's ruling withdrew the refusal that a write inside a loop
-//! relied on, so a lane that never runs the loop leaves its element as the allocation
-//! held (`docs/notes/loop-conversion.md` §6). Why this is hand-written, the two passes a
-//! module's section order forces, the one place this target disagrees with the wasm
-//! backend, and the per-buffer element class: `docs/notes/lichen-compute-gpu.md`.
+//! body included: the ruling withdrew the refusal a loop write relied on, so a lane
+//! that never runs the loop leaves its element as the allocation held
+//! (`docs/notes/loop-conversion.md` §6). Why this is hand-written, and where it
+//! disagrees with the wasm backend: `docs/notes/lichen-compute-gpu.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -3089,8 +3088,8 @@ fn plan_body(
         depth_first(nodes.len(), &targets, entry).ok_or_else(|| SpirvRefusal::ControlFlow {
             detail: "a block of the emitted graph is unreachable, so it has no arrival".to_string(),
         })?;
-    // A write inside a loop body is emitted where the body writes it: the ruling that
-    // withdrew the refusal is `docs/notes/loop-conversion.md` §6.
+    // A write inside a loop body is emitted where the body writes it
+    // (`docs/notes/loop-conversion.md` §6).
     let mut labels = vec![0u32; nodes.len()];
     labels[entry] = entry_label;
     let mut fresh_labels = 0u32;

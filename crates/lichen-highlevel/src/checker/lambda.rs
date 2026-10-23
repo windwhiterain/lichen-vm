@@ -446,10 +446,7 @@ where
         self.node_edges
             .insert(argument_value, self.loc(argument, 0));
         let argument_type = self.state[argument].ty.unwrap();
-        // The pair's attribute position is the argument's **provided** slot, so the
-        // callee's cell binds the caller's there.
-        // **A parameter that states nothing takes the caller's own attribute**: the cell
-        // is undecided, and undecided is what the pair carries
+        // The pair's attribute position is the argument's **provided** slot
         // (`docs/notes/array-attribute-view.md`).
         let caller_marker = match parameter_marker {
             Some(marker) => Some(marker),
@@ -501,7 +498,7 @@ where
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // **The body's own requirements are replayed here**, where the caller's slot
-        // exists (`docs/notes/array-attribute-view.md`).
+        // is (`docs/notes/array-attribute-view.md`).
         if let Some(AnyFunctionId::Dynamic(fid)) = callee
             && let Some(required) = self.deferred_requirements.get(&fid).cloned()
         {

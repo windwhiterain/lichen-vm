@@ -2663,9 +2663,8 @@ where
     // Read through the slots like the emission ([`node_class_in`]), or a consumer
     // would refuse the chain.
 
-    // **The class a buffer read is declared in**: the parameter's own `.out` declaration
-    // where it states one, else the first write's element. A loop's output is a carried
-    // version, so the declaration is the only reader of it before any index runs.
+    // **The class a buffer read is declared in**: the parameter's `.out` declaration,
+    // else the first write's element.
     let class = match roles
         .output_classes
         .iter()
@@ -2704,8 +2703,8 @@ where
             ),
             _ => false,
         };
-        // **A `@loop`'s result is left to the walk too**: the write is inside the loop's
-        // step, and the walk emits it there (`docs/notes/loop-conversion.md` §6).
+        // **A `@loop`'s result is left to the walk too**: the write is in the
+        // loop's step (`docs/notes/loop-conversion.md` §6).
         let looping = is_loop_position(module, *output);
         if !conditional && !looping && write_value_node(module, *output).is_none() {
             return Err(format!(

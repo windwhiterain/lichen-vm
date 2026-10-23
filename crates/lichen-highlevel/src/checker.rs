@@ -749,9 +749,7 @@ where
         if !checker.gc_scopes.is_empty() {
             checker.prune_released();
         }
-        // **Every failed unify asks its own attribute's order**: an error whose pair
-        // position belongs to an attribute is pardoned when that attribute's `is_subtype`
-        // admits the found side (`docs/notes/array-attribute-view.md`).
+        // **Every failed unify asks its attribute's order** (`docs/notes/array-attribute-view.md`).
         let mut pardoned = Vec::new();
         for index in 0..checker.module.unify_errors.len() {
             let error = &checker.module.unify_errors[index];

@@ -301,9 +301,8 @@ where
         if self.node_value(declared).is_none() {
             return;
         }
-        // **A requirement on a parameter is replayed at the apply**: the read that states
-        // it consumes it here, where the parameter's cell is still a hole
-        // (`docs/notes/array-attribute-view.md`).
+        // **A parameter's requirement is replayed at the apply**: the cell is a
+        // hole (`docs/notes/array-attribute-view.md`).
         if matches!(self.ir[argument].kind, ExprKind::Parameter)
             && let Some(function) = self.current_function()
         {
@@ -313,9 +312,8 @@ where
                 .push((*marker, declared));
         }
         let found = self.provided_slot(argument, marker, ext);
-        // **A failure the order admits leaves no error**: otherwise the runtime apply stops
-        // at it, the body never runs, and the result stays undecided
-        // (`docs/notes/array-attribute-view.md`).
+        // **A failure the order admits leaves no error**: the apply would stop
+        // at it (`docs/notes/array-attribute-view.md`).
         let before = self.module.unify_errors.len();
         ext.unify_slots(self, found, declared, loc);
         if self.module.unify_errors.len() > before && ext.is_subtype(self, declared, found) {

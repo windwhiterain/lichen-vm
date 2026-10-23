@@ -483,7 +483,7 @@ where
 }
 
 /// Whether `ty` is a TypeStruct **kind** rather than a struct *type* — the
-/// struct-kind requirement a field read's container states.
+/// requirement a field read's container states.
 pub fn is_type_struct_kind_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,

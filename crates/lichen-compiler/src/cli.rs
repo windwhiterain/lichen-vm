@@ -197,8 +197,8 @@ where
     };
     let mut diags = stage_depends::<P>(&mut store, source);
     for &(virtual_path, wrapper, native_ops) in native {
-        // Deferred: a program that imports none of these never compiles them, and a
-        // broken wrapper is still reported once, at the import that names it.
+        // Deferred: an unimported package is never compiled, and a broken wrapper is
+        // reported once, at the import that names it.
         store.register_native_deferred(virtual_path, wrapper, native_ops);
     }
     (store, diags)
