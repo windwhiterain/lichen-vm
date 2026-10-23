@@ -37,6 +37,10 @@ const PACK: &str = "elementwise-fan-out";
 /// kernels and a pack must name a hash only this shape has. Each body reads at its own invocation
 /// index and returns from its entry block, which is what lets `compose_fan_out` append the second
 /// consumer's body where the first one's leaves.
+///
+/// The parameter carries no `.out` group: each body declares the buffer it writes with
+/// `compute.slice` and returns the write as the codomain field's value
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
     r#"
 ---
@@ -44,25 +48,29 @@ fn program() -> String {
 ---
 In  = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-ParE = compute.P (compute.KT Float)(.I In, .O OutE)
+ParE = struct{.n Int, .in In}
+ArgE = struct{.n Int, .I In}
 scale_raw = (k : ParE) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element")))
+  e = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at i, .value (((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) * 2.0) ~ "element"))))))
 }
 scale = compute.parallel (scale_raw ~ "claim:Elementwise(element)") "gpu" OutE
 In2  = struct{.d (compute.Buf Float), .p (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT Float)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
+Arg2 = struct{.n Int, .I In2}
 offset_raw = (k : Par2) => {
   i = compute.range k.n
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element")))
+  z = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at i, .value (((compute.read ((compute.Read _)(.from k.in.p, .at i)) : Float) + 1.0) ~ "element"))))))
 }
 offset = compute.parallel (offset_raw ~ "claim:Elementwise(element)") "gpu" OutZ
 GArg = struct{.n Int, .in In}
 step = (s : GArg) => {
-  first = (compute.plrun scale ((compute.A In)(.n s.n, .I In(.d s.in.d))) : OutE)
-  left = (compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
-  right = (compute.plrun offset ((compute.A In2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
+  first = (compute.plrun scale ((ArgE)(.n s.n, .I In(.d s.in.d))) : OutE)
+  left = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
+  right = (compute.plrun offset ((Arg2)(.n s.n, .I In2(.d s.in.d, .p first.e))) : OutZ)
   (left, right)
 }
 built = compute.graph step
@@ -76,6 +84,27 @@ fn recording() -> String {
     program()
 }
 
+/// The fill kernel that builds the diamond's input data, and the run that hands its buffer back.
+///
+/// # Invariant
+/// One lane per element and each writes the datum at its own lane, so the buffer holds
+/// `1.0 … COUNT` — the list the old `compute.buffer` held. The kernel runs on the host's own
+/// backend, because a host builds its data before a device ever sees it, and its parameter
+/// declares no `.in` group at all.
+fn filled() -> String {
+    r#"
+Data = struct{.d (compute.Buf Float)}
+Fill = struct{.n Int}
+fill = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.slice ((compute.Slice _)(.count c.n, .element Float))
+  ((Data)(.d (compute.write ((compute.Write _)(.to d, .at i, .value (int2float i + 1.0))))))
+}
+filler = compute.parallel fill "cpu" Data
+"#
+    .to_string()
+}
+
 /// The diamond as a program that runs its recording and answers it.
 ///
 /// # Invariant
@@ -84,21 +113,13 @@ fn recording() -> String {
 /// an observation rather than an inference.
 fn running() -> String {
     format!(
-        "{}\ncount = ({count})\ndata = (compute.buffer ([{elements}] : array{{Float, {count}}}) : \
-         (compute.Buf Float))\nr = (compute.graphrun built (count, data) : array{{(compute.Buf Float), 2}})\n\
+        "{head}\n{fill}count = ({count})\ndata = (compute.plrun filler ((Fill)(.n count)) : Data)\n\
+         r = (compute.graphrun built (count, data.d) : array{{(compute.Buf Float), 2}})\n\
          (compute.collect (r[0]), compute.collect (r[1]))\n",
-        recording(),
+        head = recording(),
+        fill = filled(),
         count = COUNT,
-        elements = elements(),
     )
-}
-
-/// The elements the launch reads: `1.0 … COUNT`.
-fn elements() -> String {
-    (1..=COUNT)
-        .map(|position| format!("{position}.0"))
-        .collect::<Vec<String>>()
-        .join(", ")
 }
 
 /// The answer `z[i] = 2 d[i] + bias` has over `d = 1 … COUNT`.
