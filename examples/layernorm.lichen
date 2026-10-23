@@ -52,31 +52,33 @@
    integers the order changes nothing and it is stated because it is the order the body has. \
    **The RTX 3060 answers `[-3.0, -2.0, 1.0, 6.0]` for the same three kernels through \
    `graphrun`, element for element with the `cpu` path**, so the Newton `sqrt` above did not \
-   drift on a device — which it might, since this device does not round `f32` division \
-   correctly (`docs/notes/floating-point.md` §7) and the iteration is built on it."
+   drift on a device — which it might, since this device does not round `f32` division \ The host's data is built by **fill kernels**: the surface has no array-to-buffer \
+   conversion (`docs/notes/kernel-buffer-declarations.md`). The fold's trip count is the launch's extent read as `k.n + 0`: the extent's own node cannot carry a loop's count (`docs/notes/loop-conversion.md`), and the arithmetic leaves it the same number."
   output = "[-3.0, -2.0, 1.0, 6.0]: array{Float, 4}"
 ---
-Row   = struct{.x (compute.Buf Float)}
-Sums  = struct{.s (compute.Buf Float)}
-ParS  = compute.P (compute.KT Float)(.I Row, .O Sums)
+Row   = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Sums  = struct{.s (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParS  = struct{.n Int, .in Row}
 row_sum_raw = (k : ParS) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.s, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+  b_s = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Sums)(.s (compute.write ((compute.Write _)(.to b_s, .at i, .value (fold (k.n + 0, 0.0 ~ "identity")))))))
 }
 row_sum = compute.parallel (row_sum_raw ~ "claim:Reduction(combine,identity)") "cpu" Sums
-Sumsq = struct{.q (compute.Buf Float)}
-ParQ  = compute.P (compute.KT Float)(.I Row, .O Sumsq)
+Sumsq = struct{.q (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParQ  = struct{.n Int, .in Row}
 row_sumsq_raw = (k : ParQ) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at s(0) - 1)) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.q, .at i, .value (fold (k.n, 0.0 ~ "identity"))))
+  b_q = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Sumsq)(.q (compute.write ((compute.Write _)(.to b_q, .at i, .value (fold (k.n + 0, 0.0 ~ "identity")))))))
 }
 row_sumsq = compute.parallel (row_sumsq_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Sumsq
-Moments = struct{.x (compute.Buf Float), .w (compute.Buf Float), .s (compute.Buf Float), .q (compute.Buf Float)}
-OutY    = struct{.y (compute.Buf Float)}
+Moments = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .w (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .s (compute.Buf ((compute.BufParam _)(.type Float, .length 4))), .q (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+OutY    = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
 ArgY    = struct{.n Int, .eps Float, .I Moments}
-ParY    = struct{.n Int, .eps Float, .in Moments, .out OutY}
+ParY    = struct{.n Int, .eps Float, .in Moments}
 normalise_raw = (k : ParY) => {
   i = compute.range k.n
   count = int2float k.n
@@ -85,11 +87,29 @@ normalise_raw = (k : ParY) => {
   d = sqrt (v + k.eps)
   x = (compute.read ((compute.Read _)(.from k.in.x, .at i)) : Float)
   w = (compute.read ((compute.Read _)(.from k.in.w, .at i)) : Float)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((x - m) / d * w) ~ "element")))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (((x - m) / d * w) ~ "element"))))))
 }
 normalise = compute.parallel (normalise_raw ~ "claim:Reduction(element)") "cpu" OutY
-x = (compute.buffer ([1.0, 2.0, 3.0, 4.0] : array{Float, 4}) : (compute.Buf Float))
-w = (compute.buffer ([3.0, 6.0, 3.0, 6.0] : array{Float, 4}) : (compute.Buf Float))
+Fill = struct{.n Int}
+xBuf = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+fill_x_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 4.0 else 0.0)
+  ((xBuf)(.x (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_x = compute.parallel fill_x_raw "cpu" xBuf
+x = (compute.plrun fill_x ((Fill)(.n 4)) : xBuf).x
+wBuf = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+fill_w_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
+  v = (if i == 0 then 3.0 else 0.0) + (if i == 1 then 6.0 else 0.0) + (if i == 2 then 3.0 else 0.0) + (if i == 3 then 6.0 else 0.0)
+  ((wBuf)(.w (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_w = compute.parallel fill_w_raw "cpu" wBuf
+w = (compute.plrun fill_w ((Fill)(.n 4)) : wBuf).w
 sm = (compute.plrun row_sum ((compute.A Row)(.n 4, .I Row(.x x))) : Sums)
 sq = (compute.plrun row_sumsq ((compute.A Row)(.n 4, .I Row(.x x))) : Sumsq)
 out = (compute.plrun normalise ((ArgY)(.n 4, .eps 1.0, .I Moments(.x x, .w w, .s sm.s, .q sq.q))) : OutY)
