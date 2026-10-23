@@ -54,6 +54,16 @@ struct ApplyCtx<'a> {
     /// The membership anchor: the applied function.  A node belongs to it iff its
     /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
+    /// [`Self::anchor`]'s own template, which the membership test also accepts; read once
+    /// per pass, because a slot lookup per visit is the walk's largest bookkeeping cost.
+    anchor_template: Option<FunctionId>,
+    /// The chain half of the membership verdict for the last `Node::function` tested.
+    ///
+    /// # Invariant
+    /// The chain verdict is a function of the node's own function and the pass's two
+    /// anchors alone, so one entry answers a run of nodes of one function; the
+    /// closure-scope hit stays per-node and is never cached here.
+    last_member: Option<(Option<FunctionId>, bool)>,
     /// The branch stack top: the id a freshly cloned closure hangs under
     /// ([`Function::parent`]).
     ///
@@ -316,6 +326,8 @@ impl<P: Program> Module<P> {
             blocks: HashMap::new(),
             // Membership is the chain test, not a scope snapshot.
             anchor: function,
+            anchor_template: self.functions[function].template,
+            last_member: None,
             branch_top: function,
             closure_scope: None,
             applied: function,
@@ -414,20 +426,18 @@ impl<P: Program> Module<P> {
         if !seen.insert((pattern, argument)) {
             return;
         }
-        // The argument goes through `evaluate_node` (a static ref resolves); the pattern is a
-        // dynamic clone, read raw.
-        self.evaluate_node(argument, Some(block));
+        // One force answers both reads: it fills the pattern's slot when the two are one
+        // class, and nothing between the reads writes the argument.
+        let forced = self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
             AnyNodeId::Static(pattern) => {
                 self.static_read(pattern).and_then(|value| value.as_enum())
             }
         };
-        let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) = (
-            pattern_value,
-            self.evaluate_node(argument, Some(block))
-                .and_then(|value| value.as_enum()),
-        ) else {
+        let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) =
+            (pattern_value, forced.and_then(|value| value.as_enum()))
+        else {
             return;
         };
         // SAFETY: both are live payloads of reachable nodes; the descent releases no block.
@@ -493,10 +503,7 @@ impl<P: Program> Module<P> {
             return self.add_node(ctx.target, None, None);
         }
         // A closure is instantiated from its template, whose body a clone never names.
-        let anchor_template = self.functions[ctx.anchor].template;
-        let member = self.function_descends_from(function, ctx.anchor)
-            || anchor_template
-                .is_some_and(|template| self.function_descends_from(function, template))
+        let member = self.template_member(function, ctx)
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
@@ -724,6 +731,8 @@ impl<P: Program> Module<P> {
                     target,
                     blocks: HashMap::new(),
                     anchor: ctx.anchor,
+                    anchor_template: ctx.anchor_template,
+                    last_member: None,
                     branch_top: fresh,
                     closure_scope: Some(&scope),
                     applied: function,
@@ -801,6 +810,22 @@ impl<P: Program> Module<P> {
             None => Self::copy_ext(self, value, target),
             _ => value,
         }
+    }
+
+    /// Whether `function`'s chain reaches the pass's anchor or the anchor's template — the
+    /// chain half of the membership test, answered from [`ApplyCtx::last_member`].
+    fn template_member(&self, function: Option<FunctionId>, ctx: &mut ApplyCtx<'_>) -> bool {
+        if let Some((tested, verdict)) = ctx.last_member
+            && tested == function
+        {
+            return verdict;
+        }
+        let verdict = self.function_descends_from(function, ctx.anchor)
+            || ctx
+                .anchor_template
+                .is_some_and(|template| self.function_descends_from(function, template));
+        ctx.last_member = Some((function, verdict));
+        verdict
     }
 
     /// Whether `function`'s chain of lexical parents reaches `anchor` — the template
