@@ -2724,8 +2724,8 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel2(.x sco
     its last step, whose largest is the sentinel at position `3`. **So the answer states the \
     sequence, its length, and the row the length came from**, and the third is checkable by hand \
     in one line of the derivation at the end.\n\n\
-    **Three of the four kernels are another example's body, unchanged.** `append_raw` is \
-    `examples/kvcache.lichen`'s **verbatim**, all twelve lines, including the column-major lane \
+    **Three of the eight kernels are another example's body, unchanged.** `append_raw` is \
+    `examples/kvcache.lichen`'s **verbatim**, all fifteen lines, including the column-major lane \
     enumeration and the `position == k.t` freshness test. `greedy_raw` is \
     `examples/sample.lichen`'s **verbatim**, with its `(counter, best value, best position)` \
     fold and its `1 *` anchor. `logits_raw` is `examples/decode_loop.lichen`'s `score_raw` \
@@ -2886,12 +2886,17 @@ r2 = (compute.plrun rank2 ((Arg2)(.n 15, .w 4, .rows 5, .ranks 3, .I Sel2(.x sco
     the GEMV would then read stale keys through, and **rebuilding the row on the host from the \
     collected token** gives up decision (2) — the sampler's own output named as the next input — and \
     adds a host round trip per step for nothing. \
-    `docs/notes/device-leg-of-the-ladder.md` carries the rows."
+    `docs/notes/device-leg-of-the-ladder.md` carries the rows. The host's data is built by **fill \
+    kernels**: the surface has no array-to-buffer conversion \
+    (`docs/notes/kernel-buffer-declarations.md`), so the weights, the cache, the value row and the \
+    blank log are five more kernels and this file now runs eight, and the recursion's state is \
+    annotated `tuple{Int, KVOut, Gout}` because a read inside a `@loop` body needs the state's type \
+    decided."
   output = "([1.0, 2.0, 2.0, 0.0, 3.0], 3, [-1.0, -4.0, -7.0, 3.0]): tuple{array{Float, 5}, Int, array{Float, 4}}"
 ---
-KVIn  = struct{.k (compute.Buf Float), .v (compute.Buf Float), .nk (compute.Buf Float), .nv (compute.Buf Float)}
-KVOut = struct{.k (compute.Buf Float), .v (compute.Buf Float)}
-ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn, .out KVOut}
+KVIn  = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 5))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 5))), .nk (compute.Buf ((compute.BufParam _)(.type Float, .length 1))), .nv (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+KVOut = struct{.k (compute.Buf ((compute.BufParam _)(.type Float, .length 5))), .v (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+ParK  = struct{.n Int, .cap Int, .dim Int, .t Int, .in KVIn}
 ArgK  = struct{.n Int, .cap Int, .dim Int, .t Int, .I KVIn}
 append_raw = (k : ParK) => {
   column = compute.row k
@@ -2899,40 +2904,87 @@ append_raw = (k : ParK) => {
   slot = position * k.dim + column
   old_k = (compute.read ((compute.Read _)(.from k.in.k, .at slot)) : Float)
   old_v = (compute.read ((compute.Read _)(.from k.in.v, .at slot)) : Float)
+  row_k = (compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)
+  row_v = (compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)
   fresh = position == k.t
-  new_k = if fresh then ((compute.read ((compute.Read _)(.from k.in.nk, .at column)) : Float)) else old_k
-  new_v = if fresh then ((compute.read ((compute.Read _)(.from k.in.nv, .at column)) : Float)) else old_v
-  (compute.write ((compute.Write _)(.to k.out.k, .at slot, .value (new_k ~ "element"))), compute.write ((compute.Write _)(.to k.out.v, .at slot, .value (new_v ~ "element"))))
+  new_k = old_k + ((row_k - old_k) * (if fresh then 1.0 else 0.0))
+  new_v = old_v + ((row_v - old_v) * (if fresh then 1.0 else 0.0))
+  b_k = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  b_v = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((KVOut)(.k (compute.write ((compute.Write _)(.to b_k, .at slot, .value (new_k ~ "element")))), .v (compute.write ((compute.Write _)(.to b_v, .at slot, .value (new_v ~ "element"))))))
 }
 append = compute.parallel (append_raw ~ "claim:Reduction(element)") "cpu" KVOut
-Gin  = struct{.w (compute.Buf Float), .x (compute.Buf Float)}
-Gout = struct{.y (compute.Buf Float)}
-ParS = struct{.n Int, .kdim Int, .in Gin, .out Gout}
+Gin  = struct{.w (compute.Buf ((compute.BufParam _)(.type Float, .length 20))), .x (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+Gout = struct{.y (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+ParS = struct{.n Int, .kdim Int, .in Gin}
 ArgS = struct{.n Int, .kdim Int, .I Gin}
 logits_raw = (k : ParS) => {
   i = compute.range k.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + ((compute.read ((compute.Read _)(.from k.in.w, .at (i * k.kdim + (s(0) - 1)))) : Float) * (compute.read ((compute.Read _)(.from k.in.x, .at (s(0) - 1))) : Float))) ~ "combine" ~ "element"))
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (fold (k.kdim, 0.0 ~ "identity"))))
+  b_y = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Gout)(.y (compute.write ((compute.Write _)(.to b_y, .at i, .value (fold (k.kdim, 0.0 ~ "identity")))))))
 }
 logits = compute.parallel (logits_raw ~ "claim:Reduction(combine,identity,element)") "cpu" Gout
-Row  = struct{.x (compute.Buf Float)}
-Pick = struct{.p (compute.Buf Float)}
-Par  = struct{.n Int, .w Int, .in Row, .out Pick}
+Row  = struct{.x (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+Pick = struct{.p (compute.Buf ((compute.BufParam _)(.type Float, .length 1)))}
+Par  = struct{.n Int, .w Int, .in Row}
 Arg  = struct{.n Int, .w Int, .I Row}
 greedy_raw = (k : Par) => {
   lane = compute.range k.n
   base = lane * k.w
   @loop fold = s => if s(0) == 0 then s(2) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float)) ~ "combine"), (s(2) + ((1 * (((compute.read ((compute.Read _)(.from k.in.x, .at (base + s(0) - 1))) : Float) > s(1))) * ((s(0) - 1) - s(2)))) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0)))))
+  b_p = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
+  ((Pick)(.p (compute.write ((compute.Write _)(.to b_p, .at lane, .value (int2float (fold (k.w, ((0.0 - 1.0) / 0.0) ~ "identity", 0))))))))
 }
 greedy = compute.parallel (greedy_raw ~ "claim:Reduction(combine,identity)") "cpu" Pick
-weights = (compute.buffer ([2.0, 2.0, (0.0 - 3.0), 3.0, 1.0, 4.0, 2.0, (0.0 - 5.0), 3.0, 2.0, 0.0, 4.0, (0.0 - 6.0), 3.0, 3.0, 5.0, 4.0, (0.0 - 3.0), 8.0, 4.0] : array{Float, 20}) : (compute.Buf Float))
-kbuf = (compute.buffer ([1.0, 2.0, (0.0 - 1.0), (0.0 - 1.0), (0.0 - 1.0)] : array{Float, 5}) : (compute.Buf Float))
-vbuf = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
-nv = (compute.buffer ([0.0, 0.0, 0.0, 0.0, 0.0] : array{Float, 5}) : (compute.Buf Float))
-blank = (compute.buffer ([0.0, 0.0, 0.0, 0.0] : array{Float, 4}) : (compute.Buf Float))
+Fill = struct{.n Int}
+weightsBuf = struct{.weights (compute.Buf ((compute.BufParam _)(.type Float, .length 20)))}
+fill_weights_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 20))
+  v = (if i == 0 then 2.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then (0.0 - 3.0) else 0.0) + (if i == 3 then 3.0 else 0.0) + (if i == 4 then 1.0 else 0.0) + (if i == 5 then 4.0 else 0.0) + (if i == 6 then 2.0 else 0.0) + (if i == 7 then (0.0 - 5.0) else 0.0) + (if i == 8 then 3.0 else 0.0) + (if i == 9 then 2.0 else 0.0) + (if i == 10 then 0.0 else 0.0) + (if i == 11 then 4.0 else 0.0) + (if i == 12 then (0.0 - 6.0) else 0.0) + (if i == 13 then 3.0 else 0.0) + (if i == 14 then 3.0 else 0.0) + (if i == 15 then 5.0 else 0.0) + (if i == 16 then 4.0 else 0.0) + (if i == 17 then (0.0 - 3.0) else 0.0) + (if i == 18 then 8.0 else 0.0) + (if i == 19 then 4.0 else 0.0)
+  ((weightsBuf)(.weights (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_weights = compute.parallel fill_weights_raw "cpu" weightsBuf
+weights = (compute.plrun fill_weights ((Fill)(.n 20)) : weightsBuf).weights
+kbufBuf = struct{.kbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+fill_kbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 5))
+  v = (if i == 0 then 1.0 else 0.0) + (if i == 1 then 2.0 else 0.0) + (if i == 2 then (0.0 - 1.0) else 0.0) + (if i == 3 then (0.0 - 1.0) else 0.0) + (if i == 4 then (0.0 - 1.0) else 0.0)
+  ((kbufBuf)(.kbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_kbuf = compute.parallel fill_kbuf_raw "cpu" kbufBuf
+kbuf = (compute.plrun fill_kbuf ((Fill)(.n 5)) : kbufBuf).kbuf
+vbufBuf = struct{.vbuf (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+fill_vbuf_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 5))
+  v = 0.0
+  ((vbufBuf)(.vbuf (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_vbuf = compute.parallel fill_vbuf_raw "cpu" vbufBuf
+vbuf = (compute.plrun fill_vbuf ((Fill)(.n 5)) : vbufBuf).vbuf
+nvBuf = struct{.nv (compute.Buf ((compute.BufParam _)(.type Float, .length 5)))}
+fill_nv_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 5))
+  v = 0.0
+  ((nvBuf)(.nv (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_nv = compute.parallel fill_nv_raw "cpu" nvBuf
+nv = (compute.plrun fill_nv ((Fill)(.n 5)) : nvBuf).nv
+blankBuf = struct{.blank (compute.Buf ((compute.BufParam _)(.type Float, .length 4)))}
+fill_blank_raw = (c : Fill) => {
+  i = compute.range c.n
+  d = compute.buf ((compute.BufParam _)(.type Float, .length 4))
+  v = 0.0
+  ((blankBuf)(.blank (compute.write ((compute.Write _)(.to d, .at i, .value v)))))
+}
+fill_blank = compute.parallel fill_blank_raw "cpu" blankBuf
+blank = (compute.plrun fill_blank ((Fill)(.n 4)) : blankBuf).blank
 sentinel = 3.0
-@loop generate = s => {
+@loop generate = (s : tuple{Int, KVOut, Gout}) => {
   scored = (compute.plrun logits ((ArgS)(.n 4, .kdim 5, .I Gin(.w weights, .x s(1).k))) : Gout)
   tok = (compute.plrun greedy ((Arg)(.n 1, .w 4, .I Row(.x scored.y))) : Pick)
   cached = (compute.plrun append ((ArgK)(.n 5, .cap 5, .dim 1, .t (s(0) + 2), .I KVIn(.k s(1).k, .v s(1).v, .nk tok.p, .nv nv))) : KVOut)
