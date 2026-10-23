@@ -10,6 +10,12 @@ use lichen_fusion_bridge::{ReadRoles, projection};
 use lichen_kernel_ir::KernelFragment;
 use lichen_lowlevel::{AnyNodeId, LowValue, Module};
 
+/// The extent the program's buffer types state.
+///
+/// # Invariant
+/// The kernel is never launched - the program's root is the kernel - so the length is nominal:
+/// it names the extent the kernel would run at, and the runtime takes the count from the launch.
+const COUNT: usize = 8;
 /// `silu`'s producer alone, the mark riding the whole quotient.
 ///
 /// # Invariant
@@ -18,23 +24,24 @@ use lichen_lowlevel::{AnyNodeId, LowValue, Module};
 /// value rather than at its root — and about nothing else. The parameter carries no `.out`
 /// group: the body declares its output and returns the write.
 fn producer() -> String {
-    r#"
+    format!(
+        r#"
 ---
   compute = import "compute.lichen"
 ---
-Gate  = struct{.g (compute.Buf Float)}
-SiluA = struct{.a (compute.Buf Float)}
-ParA  = struct{.n Int, .in Gate}
-silu_raw = (k : ParA) => {
+Gate  = struct{{.g (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+SiluA = struct{{.a (compute.Buf ((compute.BufParam _)(.type Float, .length {COUNT})))}}
+ParA  = struct{{.n Int, .in Gate}}
+silu_raw = (k : ParA) => {{
   i = compute.range k.n
   g = (compute.read ((compute.Read _)(.from k.in.g, .at i)) : Float)
-  a = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  a = compute.buf ((compute.BufParam _)(.type Float, .length k.n))
   ((SiluA)(.a (compute.write ((compute.Write _)(.to a, .at i, .value ((g / (1.0 + exp (0.0 - g))) ~ "element"))))))
-}
+}}
 silu = compute.parallel (silu_raw ~ "claim:Elementwise(element)") "cpu" SiluA
 silu
 "#
-    .to_string()
+    )
 }
 
 /// The producer's own fragment, the one the dispatcher registered.
