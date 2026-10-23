@@ -22,7 +22,7 @@ FillArg = struct{.n Int}
 fill = (c : Fill) => {
   i = compute.range c.n
   y = compute.buffer ((compute.Buffer _)(.count c.n, .element Float))
-  ((Out)(.y (compute.write ((compute.Write _)(.to y, .at i, .value 1.0)))))
+  ((Out)(.y y))
 }
 fk = compute.parallel fill "cpu" Out
 filled = (compute.plrun fk ((FillArg)(.n 2)) : Out)

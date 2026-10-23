@@ -2715,50 +2715,13 @@ where
     tally.element_class = Some(class);
     // **A conditional is left to the walk**, which knows *why* it did not reduce the
     // write.
-    for (position, output) in outputs.iter().enumerate() {
-        let conditional = match module.define_in(fid, *output) {
-            lichen_lowlevel::Define::Computed(definition) => matches!(
-                module.selection_of(definition),
-                Some(lichen_lowlevel::Selection::Computed)
-            ),
-            _ => false,
-        };
-        // **A `@loop`'s result is left to the walk too**: the write is in the
-        // loop's step (`docs/notes/loop-conversion.md` §6).
-        let looping = is_loop_position(module, *output);
-        if !conditional && !looping && write_value_node(module, *output).is_none() {
-            return Err(format!(
-                "output {position} of the parallel index function is not a `compute.write` \
-                 (an index function must write every output it declares)"
-            )
-            .into());
-        }
-        // **A write fills the output it names**, not the position it is walked at. A
-        // declared target is the codomain's own order by construction, so it names the
-        // position the declaration was lowered at and needs no parameter path.
-        let declared_target = write_target_node(module, *output)
-            .and_then(|target| target.dynamic())
-            .is_some_and(|target| is_declared_position(module, fid, target));
-        if !conditional && !looping && !declared_target {
-            let named = write_chain_output_pos(module, &params, AnyNodeId::Dynamic(*output))?;
-            if named != Some(position) {
-                return Err(match named {
-                    Some(other) => format!(
-                        "output {position} of the parallel index function is a `compute.write` \
-                         to output {other}: a write fills the output its `.to` names, and the \
-                         codomain's order is not that name"
-                    ),
-                    None => format!(
-                        "output {position} of the parallel index function is a `compute.write` \
-                         whose `.to` names no output buffer of the parameter (the parameter's \
-                         outputs are {:?})",
-                        roles.outputs
-                    ),
-                }
-                .into());
-            }
-        }
-    }
+    // **Any buffer an output position names is accepted** (`docs/notes/kernel-buffer-declarations.md`):
+    // a declaration, a write, a loop result or a selection arm. The walk lowers it, and the
+    // declaration order is the position; the checks that rejected a non-write position are
+    // gone, so a store is validated where it is emitted instead.
+    //
+    // **The body statements are lowered too** (`Lower::lower_statements`): a write the
+    // codomain does not demand is still a store the program wrote.
     let mut body_instr = Lower::lower_index_function(
         module,
         &params,

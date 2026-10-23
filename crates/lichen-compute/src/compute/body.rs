@@ -304,6 +304,10 @@ where
             // The value a write leaves is discarded on purpose: see the doc.
             lower.value(*output)?;
         }
+        // **The body's statements are lowered as well**: a write the codomain does not
+        // demand is still a store the program wrote
+        // (`docs/notes/kernel-buffer-declarations.md`).
+        lower.lower_statements(function)?;
         let dummy = lower.emit_const(class, const_bits(class, 0));
         lower.body.set_terminator(
             lower.block,
@@ -2156,6 +2160,37 @@ where
                 )
             });
         apply.then_some(defined)
+    }
+
+    /// Emit the body's own writes, whatever the codomain demands.
+    ///
+    /// # Invariant
+    /// The body **names** its buffers and writes them; a write is a statement unless the
+    /// codomain holds it, and a store must be emitted either way
+    /// (`docs/notes/kernel-buffer-declarations.md`). Only this function's own nodes are
+    /// walked — a nested closure's writes belong to the walk that enters it — and
+    /// [`Self::value`] is idempotent, so a write an output already demanded is not emitted
+    /// twice.
+    fn lower_statements(&mut self, function: FunctionId) -> Result<(), String> {
+        let nodes: Vec<NodeId> = self.module.functions[function]
+            .nodes
+            .iter()
+            .copied()
+            .filter(|node| self.module.node_function(*node) == Some(function))
+            .collect();
+        for node in nodes {
+            let Some(operation) = self.module.node_operation(node) else {
+                continue;
+            };
+            if !matches!(
+                AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+                Some(ComputeOperator::Write | ComputeOperator::WriteAtomic)
+            ) {
+                continue;
+            }
+            self.value(node)?;
+        }
+        Ok(())
     }
 
     /// The entering node a `@loop` state read stands for: the call's own value at that slot.

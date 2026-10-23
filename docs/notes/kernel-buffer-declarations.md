@@ -48,6 +48,15 @@ raw = (c : Par) => {
 }
 ```
 
+**The codomain accepts any buffer**, not a write specifically: `((Out)(.y y))`
+(the declared buffer, with the write a statement) and
+`((Out)(.y (compute.write …)))` (the write as the position's value) are both
+accepted, because the rule is that **whatever flows out is a buffer**
+(`docs/notes/kernel-buffer-declarations.md`). The body's statements are lowered
+by the fragment (`Lower::lower_statements`), so a write the codomain does not
+demand is still a store the program wrote; `value` is idempotent, so a write an
+output already demanded is not emitted twice.
+
 The signature is `A I -> O`, the codomain `O` holds the declared buffers, and
 the perspective is spelled at the declaration.
 
