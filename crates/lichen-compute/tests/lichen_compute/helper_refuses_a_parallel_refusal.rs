@@ -51,7 +51,9 @@ fn a_compute_parallel_refusal_fails_the_helper() {
         .expect("the helper refuses a program whose parallel kernel wrote the wrong output");
     assert!(
         message.contains("compute.parallel")
-            && message.contains("a kernel body's index cannot be placed"),
+            && message.contains(
+                "write's buffer argument is neither a declared buffer nor an output buffer"
+            ),
         "the refusal is named by the helper's own gate: {message}"
     );
 }

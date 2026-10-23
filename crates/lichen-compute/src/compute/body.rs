@@ -2411,6 +2411,18 @@ where
                 self.values.insert(target, value);
             }
             None => {
+                // **A write to an input buffer is refused by name**: a write fills an output,
+                // and an input has no ordinal to fill.
+                if let Ok(Some(_)) = parallel_buffer_pos(self.module, self.params, peeled) {
+                    let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
+                        Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
+                        None => "the parameter declares no inputs".to_string(),
+                    };
+                    return Err(format!(
+                        "write's buffer argument is neither a declared buffer nor an output \
+                         buffer of the parallel parameter ({seen})"
+                    ));
+                }
                 self.value(target)?;
             }
         }

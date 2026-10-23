@@ -52,7 +52,9 @@ fn a_refusal_reaches_an_answer_that_is_a_tuple() {
     );
     assert!(
         messages[0].contains("compute.parallel")
-            && messages[0].contains("a kernel body's index cannot be placed"),
+            && messages[0].contains(
+                "write's buffer argument is neither a declared buffer nor an output buffer"
+            ),
         "the refusal must name the write it could not place: {messages:?}"
     );
 }
@@ -75,7 +77,9 @@ fn a_refusal_is_reported_even_when_the_answer_arrived() {
     );
     assert!(
         messages[0].contains("compute.parallel")
-            && messages[0].contains("a kernel body's index cannot be placed"),
+            && messages[0].contains(
+                "write's buffer argument is neither a declared buffer nor an output buffer"
+            ),
         "the refusal must name the write it could not place: {messages:?}"
     );
 }
