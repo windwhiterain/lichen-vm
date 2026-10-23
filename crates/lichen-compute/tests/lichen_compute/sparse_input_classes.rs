@@ -20,26 +20,29 @@ const ABSORBED: usize = 1;
 /// # Invariant
 /// The consumer's body names `lane.in.e` and **never** `lane.in.d`, so the parameter declares
 /// two float inputs while the body reads position 1 alone: the case where a class list built in
-/// emission order and a list read by position part company.
+/// emission order and a list read by position part company. Neither parameter carries an `.out`
+/// group: each body declares its output and returns the write.
 const SOURCE: &str = r#"
 ---
   compute = import "compute.lichen"
 ---
 In   = struct{.d (compute.Buf Float)}
 OutE = struct{.e (compute.Buf Float)}
-Par  = compute.P (compute.KT _)(.I In, .O OutE)
+Par  = struct{.n Int, .in In}
 producer_raw = (lane : Par) => {
   at = compute.range lane.n
-  compute.write ((compute.Write _)(.to lane.out.e, .at at, .value (2.0 * (compute.read ((compute.Read _)(.from lane.in.d, .at at)) : Float))))
+  e = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
+  ((OutE)(.e (compute.write ((compute.Write _)(.to e, .at at, .value (2.0 * (compute.read ((compute.Read _)(.from lane.in.d, .at at)) : Float)))))))
 }
 producer = compute.parallel producer_raw "cpu" OutE
 In2  = struct{.d (compute.Buf Float), .e (compute.Buf Float)}
 OutZ = struct{.z (compute.Buf Float)}
-Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
+Par2 = struct{.n Int, .in In2}
 consumer_raw = (lane : Par2) => {
   at = compute.range lane.n
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + (compute.read ((compute.Read _)(.from lane.in.e, .at s(0) - 1)) : Float)))
-  compute.write ((compute.Write _)(.to lane.out.z, .at at, .value fold (lane.n, 0.0)))
+  z = compute.slice ((compute.Slice _)(.count lane.n, .element Float))
+  ((OutZ)(.z (compute.write ((compute.Write _)(.to z, .at at, .value fold (lane.n, 0.0))))))
 }
 consumer = compute.parallel consumer_raw "cpu" OutZ
 GArg = struct{.n Int, .in In}
