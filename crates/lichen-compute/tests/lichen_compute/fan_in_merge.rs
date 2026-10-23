@@ -31,6 +31,8 @@ const SUM: usize = 2;
 /// **A diamond, and irreducibly one**: the normalise reads the maximum at `.m` **and** the sum at
 /// `.s`, and the maximum is also read by the sum, so a node has two edges leave and two arrive.
 /// The normalise claims `Reduction(element)` alone, and its `element` names **both** producers.
+/// Each body declares its output with `compute.slice`
+/// (`docs/notes/kernel-buffer-declarations.md`).
 fn program() -> String {
     r#"
 ---
@@ -38,31 +40,34 @@ fn program() -> String {
 ---
 In   = struct{.d (compute.Buf Float)}
 OutM = struct{.m (compute.Buf Float)}
-ParM = compute.P (compute.KT Float)(.I In, .O OutM)
+ParM = struct{.n Int, .in In}
 rowmax_raw = (k : ParM) => {
   i = compute.range k.n
+  m = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (max s(1) ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float)) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity")))
+  ((OutM)(.m (compute.write ((compute.Write _)(.to m, .at i, .value fold (k.n, ((0.0 - 1.0) / 0.0) ~ "identity"))))))
 }
 rowmax = compute.parallel (rowmax_raw ~ "claim:Reduction(combine,identity)") "gpu" OutM
 Soft = struct{.d (compute.Buf Float), .m (compute.Buf Float)}
 OutS = struct{.s (compute.Buf Float)}
-ParS = compute.P (compute.KT Float)(.I Soft, .O OutS)
+ParS = struct{.n Int, .in Soft}
 shifted_raw = (k : ParS) => {
   i = compute.range k.n
   m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
   @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, ((s(1) + (exp ((compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) : Float) - m) ~ "element")) ~ "combine"))
-  compute.write ((compute.Write _)(.to k.out.s, .at i, .value fold (k.n, 0.0 ~ "identity")))
+  ((OutS)(.s (compute.write ((compute.Write _)(.to y, .at i, .value fold (k.n, 0.0 ~ "identity"))))))
 }
 shifted = compute.parallel (shifted_raw ~ "claim:Reduction(combine,identity,element)") "gpu" OutS
 Norm = struct{.d (compute.Buf Float), .m (compute.Buf Float), .s (compute.Buf Float)}
 OutY = struct{.y (compute.Buf Float)}
-ParY = compute.P (compute.KT Float)(.I Norm, .O OutY)
+ParY = struct{.n Int, .in Norm}
 norm_raw = (k : ParY) => {
   i = compute.range k.n
   m = (compute.read ((compute.Read _)(.from k.in.m, .at 0)) : Float)
   s = (compute.read ((compute.Read _)(.from k.in.s, .at 0)) : Float)
-  compute.write ((compute.Write _)(.to k.out.y, .at i, .value (((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m)) / s) ~ "element")))
+  y = compute.slice ((compute.Slice _)(.count k.n, .element Float))
+  ((OutY)(.y (compute.write ((compute.Write _)(.to y, .at i, .value (((exp ((compute.read ((compute.Read _)(.from k.in.d, .at i)) : Float) - m)) / s) ~ "element"))))))
 }
 norm = compute.parallel (norm_raw ~ "claim:Reduction(element)") "gpu" OutY
 GArg = struct{.n Int, .in In}
