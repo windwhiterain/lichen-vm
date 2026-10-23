@@ -111,7 +111,11 @@ slice; the ruling above is what the earlier slices build toward.
    cpu and compiles for the gpu; **every other program is red on the branch
    until slice 2**.
 2. **The migration**: every `compute.P …(.I In, .O Out)` and every
-   `compute.buffer (array)` / `compute.buffer (count, element)` in the tests and examples — 46 files — moves to the
-   declared form and to a kernel-built input where it needs data.
+   `compute.buffer (array)` / `compute.buffer (count, element)` in the tests and examples — 46 files, 11 done — moves to the
+   declared form and to a kernel-built input where it needs data. **A fill kernel
+   builds data of at most two distinct values**: a two-arm `if` answers, a nested
+   three-arm chain is refused by the template blocker (measured,
+   `zz_pure_kernel_probe`), so a file whose data has more than two values waits
+   for that fix or changes its data.
 3. **The pack**: the file format, its reader, the space/slot mapping, and the
    perspective constraint enforced against it.
