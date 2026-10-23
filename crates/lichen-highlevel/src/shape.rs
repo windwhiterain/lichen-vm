@@ -65,6 +65,11 @@ macro_rules! for_each_kind_marker {
             /// The kind marker of set type expressions: the **element type alone**, so
             /// `set(a)` and `set(a, b)` share one type.
             TypeSet { 10, "SetType", set_type_marker, set_type_marker_node }
+            /// The kind marker of a **native buffer** type: the shape is
+            /// `[element type, length]`, the shape an array type carries, and the
+            /// payload is the native value of that kind
+            /// (`docs/notes/kernel-buffer-declarations.md`).
+            TypeBuffer { 11, "$buf", buffer_marker, buffer_marker_node }
         }
     };
 }
@@ -459,6 +464,46 @@ where
             .get(ARRAY_TYPE_LENGTH_SLOT)?
             .node,
     )
+}
+
+/// Whether `ty` is a **native buffer type** `[shape, [marker, K]]`, its kind carrying
+/// the buffer marker.
+///
+/// # Invariant
+/// The shape is `[element type, length]`, the shape an array type carries, so a buffer
+/// type and an array type differ only in the marker their kind holds.
+pub fn is_buffer_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
+        return false;
+    };
+    items.len() >= 2
+        && kind_marker_is_any(
+            module,
+            universe,
+            items[TYPE_KIND_SLOT].node,
+            P::Value::buffer_marker(),
+        )
+}
+
+/// A native buffer's **element type and length**: its shape's two positions.
+pub fn buffer_shape<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<(AnyNodeId, AnyNodeId)>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let shape = field_list(module, ty)?;
+    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, shape) }?;
+    Some((items.first()?.node, items.get(1)?.node))
 }
 
 /// Whether a value is a struct marker: the pair `[payload, TypeStruct]`.
